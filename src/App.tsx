@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import Navbar from "./components/Navbar";
 import Hero from "./components/Hero";
 import { Marquee, Footer } from "./components/Extras";
@@ -5,8 +6,22 @@ import Guarantees from "./components/Guarantees";
 import ChatDemo from "./components/ChatDemo";
 import Pricing from "./components/Pricing";
 import FAQ from "./components/FAQ";
+import Dashboard from "./pages/Dashboard";
 
 export default function App() {
+  const [route, setRoute] = useState(() => window.location.hash);
+
+  useEffect(() => {
+    const onHash = () => setRoute(window.location.hash);
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+
+  /* لوحة التحكم: #/dashboard */
+  if (route.startsWith("#/dashboard")) {
+    return <Dashboard />;
+  }
+
   return (
     <div className="relative min-h-screen bg-night text-bone font-body overflow-x-clip">
       {/* خلفية محيطية ثابتة */}

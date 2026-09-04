@@ -51,6 +51,22 @@ body {
   transform: none;
 }
 
+/* ---------- شريط تمرير محرر الأسئلة ---------- */
+.qa-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(46, 194, 126, 0.3) transparent;
+}
+.qa-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+.qa-scroll::-webkit-scrollbar-thumb {
+  background: rgba(46, 194, 126, 0.25);
+  border-radius: 99px;
+}
+.qa-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
 /* ---------- line-mask headline reveal ---------- */
 .mask-line {
   display: block;
