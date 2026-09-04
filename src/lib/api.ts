@@ -7,6 +7,18 @@ const RAW = ((import.meta as any).env?.VITE_API_URL as string | undefined) ?? ""
 const API = RAW.replace(/\/+$/, "");
 
 export const apiEnabled = API.length > 0;
+export const apiBase = API;
+
+/** طلبات لوحة التحكم الموثقة (توكن Supabase Auth) */
+export async function apiAuthFetch<T>(token: string, path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(`${API}${path}`, {
+    headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+    ...init,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((data as any)?.error ?? `HTTP ${res.status}`);
+  return data as T;
+}
 
 export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API}${path}`, {

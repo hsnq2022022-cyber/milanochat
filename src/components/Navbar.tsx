@@ -53,6 +53,12 @@ export default function Navbar() {
 
         <div className="flex items-center gap-3">
           <a
+            href="#/dashboard"
+            className="hidden sm:inline-flex items-center gap-2 border border-verde/30 text-mist font-semibold text-sm px-4 py-2.5 rounded-full hover:border-oro/60 hover:text-oro transition-all duration-300 active:scale-95"
+          >
+            لوحة التحكم
+          </a>
+          <a
             href="#start"
             className="hidden sm:inline-flex items-center gap-2 bg-verde text-ink font-semibold text-sm px-5 py-2.5 rounded-full hover:bg-oro transition-colors duration-300 hover:shadow-[0_8px_30px_-8px_rgba(232,178,75,0.5)] active:scale-95"
           >
@@ -87,6 +93,15 @@ export default function Navbar() {
               </a>
             </li>
           ))}
+          <li>
+            <a
+              href="#/dashboard"
+              onClick={() => setOpen(false)}
+              className="block text-center border border-verde/30 text-mist font-semibold px-4 py-3 rounded-xl mt-2 hover:border-oro/60 hover:text-oro transition-colors"
+            >
+              لوحة التحكم
+            </a>
+          </li>
           <li>
             <a
               href="#start"

@@ -132,7 +132,7 @@ dashboardRouter.get("/unresolved", async (req, res) => {
   if (!tenant) return res.status(404).json({ error: "لا يوجد حساب مرتبط" });
   const { data } = await db
     .from("unresolved_questions")
-    .select("id, question_encrypted, status, manual_answer, added_to_kb, created_at, conversation_id")
+    .select("id, question_encrypted, status, manual_answer, added_to_kb, created_at, conversation_id, best_similarity")
     .eq("tenant_id", tenant.id)
     .order("created_at", { ascending: false })
     .limit(100);
@@ -145,6 +145,7 @@ dashboardRouter.get("/unresolved", async (req, res) => {
       addedToKb: q.added_to_kb,
       createdAt: q.created_at,
       conversationId: q.conversation_id,
+      bestSimilarity: q.best_similarity ?? null,
     }))
   );
 });
