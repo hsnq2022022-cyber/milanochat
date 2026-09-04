@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import confetti from "canvas-confetti";
 import { useCountUp, useInView, useReveal } from "../hooks/useReveal";
 import { api, apiEnabled, apiFetch } from "../lib/api";
@@ -64,6 +64,7 @@ function Wizard() {
   });
   const [payUrl, setPayUrl] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const reconnects = useRef(0);
 
   const manualText = () =>
     [
@@ -115,6 +116,14 @@ function Wizard() {
           }
           return s;
         });
+        // انقطاع بعد الربط أو فقدان الجلسة → إعادة توليد QR تلقائياً (بحد أقصى)
+        if (
+          (s.status === "disconnected" || s.status === "idle") &&
+          reconnects.current < 3
+        ) {
+          reconnects.current += 1;
+          api.connectWa(tenantId).catch(() => {});
+        }
       } catch {
         /* إعادة المحاولة في الدورة التالية */
       }
@@ -175,6 +184,7 @@ function Wizard() {
   /* بدء جلسة واتساب الحقيقية وعرض شاشة الربط */
   const startLink = async () => {
     if (!tenantId) return;
+    reconnects.current = 0;
     setBusy(true);
     try {
       await api.connectWa(tenantId);
@@ -210,6 +220,7 @@ function Wizard() {
     setWorkStep(0);
     setApiResult(null);
     setPayUrl(null);
+    reconnects.current = 0;
     setQr({ status: "idle", qrDataUrl: null, phone: null });
   };
 
@@ -553,6 +564,9 @@ function Wizard() {
               </div>
             )}
 
+            <p className="text-[11px] text-verde/90 leading-5 mb-1.5">
+              صلاحية الرمز قصيرة — يُجدَّد هنا تلقائياً كل ~20 ثانية، اترك الصفحة مفتوحة.
+            </p>
             <p className="text-[11px] text-sage/70 leading-5 mb-4">
               الربط عبر «الأجهزة المرتبطة» — ليست قناة رسمية من Meta، وقد تقيّد واتساب الرقم وفق تقديرها.
             </p>
