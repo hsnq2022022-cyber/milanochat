@@ -15,6 +15,7 @@ create table public.tenants (
   source_type     text not null check (source_type in ('gmaps','website','manual')),
   source_url      text,
   phone_encrypted text,                 -- رقم واتساب المشروع (مشفر AES-GCM عند الراحة)
+  business_phone_encrypted text,        -- رقم التواصل بصيغة E.164 (مشفر عند الراحة)
   credits_remaining integer not null default 0,
   is_active       boolean not null default false,  -- تتفعل بعد تأكيد الدفع من الـ webhook
   activated_at    timestamptz,

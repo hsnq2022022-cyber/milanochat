@@ -45,10 +45,15 @@ export type SemanticTestRes = {
 };
 
 export const api = {
-  createTenant: (businessName: string, sourceType: "gmaps" | "website" | "manual", sourceUrl?: string) =>
+  createTenant: (
+    businessName: string,
+    sourceType: "gmaps" | "website" | "manual",
+    sourceUrl?: string,
+    phoneE164?: string
+  ) =>
     apiFetch<CreateTenantRes>("/api/tenants", {
       method: "POST",
-      body: JSON.stringify({ businessName, sourceType, sourceUrl }),
+      body: JSON.stringify({ businessName, sourceType, sourceUrl, phoneE164 }),
     }),
 
   ingestUrl: (tenantId: string, url: string) =>

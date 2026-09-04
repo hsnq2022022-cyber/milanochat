@@ -5,6 +5,7 @@
 import { Router } from "express";
 import QRCode from "qrcode";
 import { db } from "../db.js";
+import { encryptField } from "../crypto.js";
 import { rateLimit } from "../middleware/rateLimit.js";
 import { ingestSource } from "../rag/ingest.js";
 import { answerFromKnowledge, extractQAPairs, saveQAPairs } from "../rag/qa.js";
@@ -22,16 +23,19 @@ const qrLimiter = rateLimit({ windowMs: 1_000, max: 2 });
 
 /** إنشاء عميل جديد (غير مفعل حتى يؤكد الـ webhook الدفع) */
 tenantsRouter.post("/", createLimiter, async (req, res) => {
-  const { businessName, sourceType, sourceUrl } = req.body ?? {};
+  const { businessName, sourceType, sourceUrl, phoneE164 } = req.body ?? {};
   if (!businessName?.trim() || !["gmaps", "website", "manual"].includes(sourceType)) {
     return res.status(400).json({ error: "بيانات ناقصة" });
   }
+  // الرقم يصل بصيغة E.164 كاملة (+964...) — يُخزَّن مشفرًا
+  const phone = typeof phoneE164 === "string" && /^\+\d{7,15}$/.test(phoneE164) ? phoneE164 : null;
   const { data, error } = await db
     .from("tenants")
     .insert({
       business_name: businessName.trim().slice(0, 120),
       source_type: sourceType,
       source_url: sourceUrl ?? null,
+      business_phone_encrypted: phone ? encryptField(phone) : null,
       credits_remaining: 0,
       is_active: false,
     })
