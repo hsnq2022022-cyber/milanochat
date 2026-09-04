@@ -103,9 +103,65 @@ server/
 │   │   ├── ingest.ts          # استخراج ← تقطيع ← تخزين دلالي
 │   │   └── reply.ts           # محرك الرد + سياسات منع الاختلاق والتحويل
 │   ├── routes/
-│   │   ├── tenants.ts         # إنشاء + فهرسة + QR حقيقي
+│   │   ├── tenants.ts         # إنشاء + فهرسة + أسئلة وأجوبة
+│   │   ├── whatsapp.ts        # جلسات واتساب + SSE + صلاحيات
 │   │   ├── dashboard.ts       # Supabase Auth + محادثات + عالقة + معرفة
 │   │   └── payments.ts        # Moyasar + webhook موقّع
-│   └── wa/sessionManager.ts   # Baileys: جلسات دائمة + أحداث
+│   └── wa/sessionManager.ts   # Baileys: آلة حالات + ناشر أحداث + جلسات دائمة
 └── PRIVACY_POLICY_ar.md
+```
+
+---
+
+## ربط واتساب الحقيقي — WhatsApp Session API
+
+الواجهة (React) **لا تنشئ أي جلسة** — فقط تعرض ما يبثه الخادم. الجلسة ومفتاحاها يعيشان في الخادم.
+
+### المسارات (كلها محمية: توكن Supabase أو توكن جلسة المعالج، ومعرف الجلسة يجب أن يطابق Tenant المصرح به)
+
+| الطريقة | المسار | الوصف |
+|---|---|---|
+| POST | `/api/whatsapp/session` | إنشاء/استرجاع جلسة (تنشئ مقبس Baileys فعليًا) |
+| GET | `/api/whatsapp/session/:sessionId` | الحالة الحالية |
+| GET | `/api/whatsapp/session/:sessionId/qr` | آخر QR حقيقي (PNG data URL) |
+| POST | `/api/whatsapp/session/:sessionId/logout` | فصل الجهاز ومسح المفاتيح نهائيًا |
+| GET | `/api/whatsapp/session/:sessionId/events` | **بث SSE لحظي**: لقطة فورية ثم كل تغيّر حالة وكل QR جديد فور صدوره (نبض 25 ث) |
+
+هنا `sessionId = tenantId` — لكل Agent/Workspace جلسة Baileys مستقلة تمامًا (مقبس ومفاتيح ومستستمعون منفصلون).
+
+### آلة الحالات
+
+`QR_REQUIRED → CONNECTING → CONNECTED` مع `DISCONNECTED` (إعادة وصل تلقائية بتأخير متدرج 2/4/8/16/30 ث)، `LOGGED_OUT` (فُصل من الجوال → تُمسح المفاتيح ويُصدر رمز جديد)، و`ERROR` (تعذر إنشاء الجلسة). انتهاء صلاحية QR يعالج نفسه: Baileys يصدر رمزًا جديدًا كل ~20 ثانية ويُبث فورًا عبر SSE دون تحديث الصفحة.
+
+### من أين يأتي QR؟
+
+الرمز **يُصدر من جلسة واتساب نفسها** (الحدث `connection.update` في Baileys يحمل النص الخام الذي تولّده خوادم WhatsApp Web)، ومكتبة `qrcode` لا تفعل أكثر من رسمه PNG — هذا هو الربط الفعلي الوحيد الممكن عبر الأجهزة المرتبطة.
+
+### أين يُشغَّل الخادم؟ (مهم)
+
+الواجهة تُبنى إلى `dist/` ثابت — **GitHub Pages وأي استضافة ثابتة لا تشغّل Node.js**. إذًا:
+- الواجهة: أي استضافة ثابتة (GitHub Pages / Netlify / Vercel static).
+- الخادم: VPS أو Railway/Fly/Docker — شغّله بـ `npm run dev` (تطوير) أو عبر pm2/Docker (إنتاج)، ثم اجعل `VITE_API_URL` في الواجهة يشير إليه، و`PUBLIC_URL` و`FRONTEND_ORIGIN` في `.env` الخادم يطابقان الواقع.
+
+### قائمة الاختبار اليدوي
+
+```bash
+TOK=<claim_token من إنشاء العميل>   # أو توكن Supabase
+API=http://localhost:4000
+
+# 1) إنشاء جلسة → تعود الحالة (تبدأ بـ QR_REQUIRED بعد لحظة)
+curl -X POST $API/api/whatsapp/session -H "content-type: application/json" \
+  -H "x-tenant-token: $TOK" -d '{"tenantId":"<ID>"}'
+
+# 2) البث اللحظي — راقب QR يتغير كل ~20 ثانية والحالة تتنقل
+curl -N "$API/api/whatsapp/session/<ID>/events?token=$TOK"
+
+# 3) مسح QR من الجوال → تظهر CONNECTING ثم CONNECTED مع رقم مقنّع
+# 4) أعد تحميل الصفحة → نفس الحالة (البث يعيد اللقطة فور الفتح)
+# 5) أعد تشغيل الخادم → يعود CONNECTED بدون QR (المفاتيح في data/auth/<ID>)
+# 6) افصل الجهاز من الجوال → LOGGED_OUT ثم QR جديد تلقائيًا
+# 7) تسجيل الخروج:
+curl -X POST $API/api/whatsapp/session/<ID>/logout -H "x-tenant-token: $TOK"
+# 8) أنشئ عميلين واربطهما معًا → جلستان مستقلتان لا تتداخلان
+# 9) جرّب توكن عميل آخر على جلسة لا يملكها → 403
 ```

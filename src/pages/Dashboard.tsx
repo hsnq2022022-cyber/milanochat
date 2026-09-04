@@ -4,7 +4,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import confetti from "canvas-confetti";
-import { apiAuthFetch, apiBase, apiEnabled, api, type QrRes } from "../lib/api";
+import { apiAuthFetch, apiBase, apiEnabled, api, type WaSnapshot } from "../lib/api";
 import { getSupabase, getStoredClaim, clearStoredClaim } from "../lib/supabase";
 import {
   Logo, IconWhatsapp, IconCheck, IconX, IconPlus, IconTrash, IconSend,
@@ -76,48 +76,7 @@ const cls = {
     "inline-flex items-center justify-center gap-2 border border-verde/25 text-mist font-semibold text-sm px-4 py-2.5 rounded-xl hover:border-oro/60 hover:text-oro transition-all duration-300 active:scale-[0.97]",
 };
 
-/* رمز QR محاكى لوضع العرض (شبكة حتمية من البذور) */
-function mulberry32(a: number) {
-  return () => {
-    a |= 0; a = (a + 0x6d2b79f5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-function FakeQR({ seed }: { seed: string }) {
-  const cells = useMemo(() => {
-    let h = 0;
-    for (const c of seed) h = (h * 31 + c.charCodeAt(0)) | 0;
-    const rnd = mulberry32(h);
-    const N = 21;
-    const grid: boolean[][] = Array.from({ length: N }, () => Array.from({ length: N }, () => rnd() > 0.52));
-    const finder = (r: number, c: number) => {
-      for (let i = 0; i < 7; i++)
-        for (let j = 0; j < 7; j++) {
-          const edge = i === 0 || i === 6 || j === 0 || j === 6;
-          const core = i >= 2 && i <= 4 && j >= 2 && j <= 4;
-          grid[r + i][c + j] = edge || core;
-        }
-      for (let i = -1; i < 8; i++)
-        for (let j = -1; j < 8; j++) {
-          const rr = r + i, cc = c + j;
-          if (rr >= 0 && rr < N && cc >= 0 && cc < N && (i === -1 || i === 7 || j === -1 || j === 7))
-            grid[rr][cc] = false;
-        }
-    };
-    finder(0, 0); finder(0, 14); finder(14, 0);
-    return grid;
-  }, [seed]);
-  return (
-    <svg viewBox="0 0 21 21" className="w-52 h-52" shapeRendering="crispEdges" aria-label="رمز ربط (عرض)">
-      <rect width="21" height="21" fill="#eff3ea" />
-      {cells.map((row, r) =>
-        row.map((on, c) => (on ? <rect key={`${r}-${c}`} x={c} y={r} width="1" height="1" fill="#06201a" /> : null))
-      )}
-    </svg>
-  );
-}
+/* لا يوجد أي QR تجريبي في هذا الملف — الربط يتم حصراً عبر جلسة Baileys حقيقية في الخادم */
 
 /* ═══════════════ بيانات العرض ═══════════════ */
 
@@ -1224,38 +1183,127 @@ export default function Dashboard() {
 /* ═══════════ نافذة QR ═══════════ */
 
 function QrModal({ demo, tenantId, token, onClose, onState }: { demo: boolean; tenantId: string; token: string | null; onClose: () => void; onState: (s: string) => void }) {
-  const [qr, setQr] = useState<QrRes | null>(null);
-  const [demoDone, setDemoDone] = useState(false);
+  const [snap, setSnap] = useState<WaSnapshot | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
+  const retries = useRef(0);
+  const esRef = useRef<EventSource | null>(null);
+  const pollRef = useRef<number | null>(null);
+  const busyRef = useRef(false);
+
+  const stopStreams = () => {
+    esRef.current?.close();
+    esRef.current = null;
+    if (pollRef.current) {
+      window.clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  };
+
+  const apply = (s: WaSnapshot) => {
+    setSnap(s);
+    onState(s.state === "CONNECTED" ? "connected" : s.state === "QR_REQUIRED" ? "qr" : "disconnected");
+    // فُصل من الجوال → جلسة جديدة ورمز جديد تلقائياً دون تحديث الصفحة
+    if (s.state === "LOGGED_OUT" && retries.current < 2 && !busyRef.current) {
+      retries.current += 1;
+      window.setTimeout(() => connect(), 1000);
+    }
+  };
+
+  const connect = async () => {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    setFailed(false);
+    try {
+      const s = await api.wa.createSession(tenantId, token);
+      stopStreams();
+      let failures = 0;
+      const es = new EventSource(api.wa.eventsUrl(s.sessionId, token));
+      esRef.current = es;
+      es.onmessage = (m) => {
+        try {
+          failures = 0;
+          apply(JSON.parse(m.data) as WaSnapshot);
+        } catch {
+          /* تجاهل */
+        }
+      };
+      es.onerror = () => {
+        failures += 1;
+        if (failures >= 3) {
+          es.close();
+          esRef.current = null;
+          pollRef.current = window.setInterval(async () => {
+            try {
+              apply(await api.wa.getQr(s.sessionId, token));
+            } catch {
+              /* إعادة المحاولة لاحقاً */
+            }
+          }, 2500);
+        }
+      };
+    } catch {
+      setFailed(true);
+    }
+    busyRef.current = false;
+  };
 
   useEffect(() => {
-    if (demo) {
-      const t = window.setTimeout(() => setDemoDone(true), 6000);
-      return () => window.clearTimeout(t);
-    }
-    if (!token) return;
-    let stopped = false;
-    // بدء جلسة Baileys لهذا العميل ثم استطلاع الرمز
-    apiAuthFetch(token, "/api/dashboard/wa/connect", { method: "POST", body: JSON.stringify({ tenantId }) }).catch(() => {});
-    const tick = async () => {
-      try {
-        const s = await api.getQr(tenantId);
-        if (!stopped) {
-          setQr(s);
-          onState(s.status);
-        }
-      } catch {
-        /* تجاهل — إعادة المحاولة في الدورة التالية */
-      }
-    };
-    tick();
-    const iv = window.setInterval(tick, 2000);
-    return () => {
-      stopped = true;
-      window.clearInterval(iv);
-    };
-  }, [demo, tenantId, token, onState]);
+    if (demo) return; // وضع العرض: لا جلسة حقيقية ولا QR — رسالة خطأ فقط
+    connect();
+    return stopStreams;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [demo]);
 
-  const connected = demo ? demoDone : qr?.status === "connected";
+  const logoutDevice = async () => {
+    if (!snap) return;
+    setLoggingOut(true);
+    try {
+      await api.wa.logout(snap.sessionId, token);
+      onState("disconnected");
+    } catch {
+      /* تجاهل */
+    }
+    setLoggingOut(false);
+  };
+
+  /* بدون خادم: لا نعرض أي رمز — رسالة واضحة فقط */
+  if (demo || failed) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true">
+        <button className="absolute inset-0 bg-night/80 backdrop-blur-sm" onClick={onClose} aria-label="إغلاق" />
+        <div className="relative w-full max-w-sm bg-pine border border-oro/30 rounded-3xl p-6 text-center msg-in shadow-[0_40px_120px_-30px_rgba(0,0,0,0.9)]">
+          <button onClick={onClose} className="absolute top-4 left-4 text-sage hover:text-bone transition-colors" aria-label="إغلاق">
+            <IconX className="w-5 h-5" />
+          </button>
+          <div className="py-4">
+            <span className="inline-flex w-14 h-14 rounded-full bg-oro/10 border border-oro/35 items-center justify-center text-oro mb-4">
+              <IconWhatsapp className="w-7 h-7" />
+            </span>
+            <h3 className="font-display font-bold text-lg text-bone mb-2">
+              تعذر إنشاء جلسة واتساب، تحقق من اتصال الخادم.
+            </h3>
+            <p className="text-[11.5px] text-sage leading-5 mb-5">
+              {demo
+                ? "وضع العرض لا يربط واتساب حقيقياً — شغّل الخادم (server/) واضبط VITE_API_URL ثم أعد المحاولة."
+                : "الخادم لا يستجيب أو الجلسة رُفضت — تأكد من تشغيل الخادم ثم أعد المحاولة."}
+            </p>
+            {!demo && (
+              <button onClick={connect} className={`${cls.btn} w-full py-3 mb-3`}>
+                <IconRefresh className="w-4.5 h-4.5" />
+                إعادة المحاولة
+              </button>
+            )}
+            <button onClick={onClose} className="text-xs text-sage hover:text-bone underline underline-offset-4 transition-colors">
+              إغلاق
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const st = snap?.state ?? "CONNECTING";
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true">
@@ -1264,14 +1312,24 @@ function QrModal({ demo, tenantId, token, onClose, onState }: { demo: boolean; t
         <button onClick={onClose} className="absolute top-4 left-4 text-sage hover:text-bone transition-colors" aria-label="إغلاق">
           <IconX className="w-5 h-5" />
         </button>
-        {connected ? (
-          <div className="py-6">
+
+        {st === "CONNECTED" ? (
+          <div className="py-4">
             <span className="inline-flex w-16 h-16 rounded-full bg-verde/15 border border-verde/40 items-center justify-center text-verde mb-4 msg-in">
               <IconCheck className="w-8 h-8" />
             </span>
-            <h3 className="font-display font-bold text-xl text-bone mb-1.5">تم الربط{qr?.phone ? ` — ${qr.phone}` : ""}</h3>
+            <h3 className="font-display font-bold text-xl text-bone mb-1.5">
+              تم الربط بنجاح{snap?.phone ? ` — ${snap.phone}` : ""}
+            </h3>
             <p className="text-xs text-sage leading-5 mb-5">الموظف يرد الآن من معلومات مشروعك فقط.</p>
-            <button onClick={onClose} className={`${cls.btn} w-full py-3`}>ممتاز</button>
+            <button onClick={onClose} className={`${cls.btn} w-full py-3 mb-2.5`}>ممتاز</button>
+            <button
+              onClick={logoutDevice}
+              disabled={loggingOut}
+              className="w-full text-[11.5px] text-sage hover:text-oro underline underline-offset-4 transition-colors disabled:opacity-50"
+            >
+              {loggingOut ? "جارٍ الفصل…" : "فصل الجهاز (تسجيل خروج)"}
+            </button>
           </div>
         ) : (
           <>
@@ -1280,18 +1338,33 @@ function QrModal({ demo, tenantId, token, onClose, onState }: { demo: boolean; t
               واتساب ← الإعدادات ← الأجهزة المرتبطة ← ربط جهاز، ثم امسح الرمز
             </p>
             <div className="bg-bone rounded-2xl p-3 inline-block mb-3">
-              {demo ? (
-                <FakeQR seed="milano-demo-tenant" />
-              ) : qr?.qrDataUrl ? (
-                <img src={qr.qrDataUrl} alt="رمز ربط واتساب" className="w-52 h-52" />
+              {st === "QR_REQUIRED" && snap?.qrDataUrl ? (
+                <img key={snap.qrDataUrl.length} src={snap.qrDataUrl} alt="رمز ربط واتساب" className="w-52 h-52" />
               ) : (
-                <div className="w-52 h-52 flex items-center justify-center">
-                  <span className="text-[13px] font-semibold" style={{ color: "#1c5c41" }}>جارٍ توليد الرمز…</span>
+                <div className="w-52 h-52 flex flex-col items-center justify-center gap-2.5">
+                  <span className="w-6 h-6 rounded-full border-2 border-[#1c5c41]/25 border-t-[#1c5c41] animate-spin" />
+                  <span className="text-[13px] font-semibold" style={{ color: "#1c5c41" }}>
+                    {st === "CONNECTING"
+                      ? "جاري الاتصال…"
+                      : st === "DISCONNECTED"
+                        ? "انقطع الاتصال — إعادة المحاولة تلقائياً"
+                        : st === "LOGGED_OUT"
+                          ? "انتهت صلاحية الجلسة — رمز جديد خلال لحظات"
+                          : st === "ERROR"
+                            ? "تعذر إنشاء الجلسة"
+                            : "جارٍ توليد الرمز…"}
+                  </span>
                 </div>
               )}
             </div>
-            <p className="text-[10.5px] text-verde/90 leading-5">يتجدد الرمز تلقائيًا كل ~20 ثانية — اترك النافذة مفتوحة.</p>
-            {demo && <p className="mt-2 text-[10px] text-oro-soft">رمز محاكى — في الوضع الحقيقي يظهر رمز قابل للمسح من جوالك.</p>}
+            {st === "QR_REQUIRED" && (
+              <p className="text-[10.5px] text-verde/90 leading-5">يتجدد الرمز تلقائياً فور صدور رمز جديد — اترك النافذة مفتوحة.</p>
+            )}
+            {st === "ERROR" && (
+              <p className="text-[10.5px] text-oro-soft leading-5">
+                {snap?.error ?? "تعذر إنشاء جلسة واتساب، تحقق من اتصال الخادم."}
+              </p>
+            )}
           </>
         )}
       </div>

@@ -22,8 +22,8 @@ export async function apiAuthFetch<T>(token: string, path: string, init?: Reques
 
 export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API}${path}`, {
-    headers: { "content-type": "application/json" },
     ...init,
+    headers: { "content-type": "application/json", ...(init?.headers ?? {}) },
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error((data as any)?.error ?? `HTTP ${res.status}`);
@@ -43,6 +43,31 @@ export type QrRes = {
   status: "idle" | "starting" | "qr" | "connecting" | "connected" | "disconnected";
   qrDataUrl: string | null;
   phone: string | null;
+};
+
+/* ─── جلسات واتساب الحقيقية (الميزة: ربط فعلي) ─── */
+export type WAState =
+  | "QR_REQUIRED"
+  | "CONNECTING"
+  | "CONNECTED"
+  | "DISCONNECTED"
+  | "LOGGED_OUT"
+  | "ERROR";
+
+export type WaSnapshot = {
+  sessionId: string;
+  state: WAState;
+  qrDataUrl: string | null;
+  phone: string | null;
+  error: string | null;
+};
+
+/** توكن Supabase (JWT) يُرسل كـ Bearer، وتوكن جلسة المعالج كرأس خاص */
+const authHeaders = (token?: string | null): Record<string, string> => {
+  if (!token) return {};
+  return token.split(".").length === 3
+    ? { authorization: `Bearer ${token}` }
+    : { "x-tenant-token": token };
 };
 
 /* ─── عمليات الإعداد ─── */
@@ -80,10 +105,31 @@ export const api = {
       body: JSON.stringify({ text }),
     }),
 
-  connectWa: (tenantId: string) =>
-    apiFetch<{ status: string }>(`/api/tenants/${tenantId}/wa/connect`, { method: "POST" }),
+  /* جلسات واتساب حقيقية: الجلسة تُنشأ في الخادم (Baileys) والواجهة تعرض فقط */
+  wa: {
+    createSession: (tenantId: string, token?: string | null) =>
+      apiFetch<WaSnapshot>("/api/whatsapp/session", {
+        method: "POST",
+        headers: authHeaders(token),
+        body: JSON.stringify({ tenantId }),
+      }),
 
-  getQr: (tenantId: string) => apiFetch<QrRes>(`/api/tenants/${tenantId}/wa/qr`),
+    getSession: (sessionId: string, token?: string | null) =>
+      apiFetch<WaSnapshot>(`/api/whatsapp/session/${sessionId}`, { headers: authHeaders(token) }),
+
+    getQr: (sessionId: string, token?: string | null) =>
+      apiFetch<WaSnapshot>(`/api/whatsapp/session/${sessionId}/qr`, { headers: authHeaders(token) }),
+
+    logout: (sessionId: string, token?: string | null) =>
+      apiFetch<{ ok: true }>(`/api/whatsapp/session/${sessionId}/logout`, {
+        method: "POST",
+        headers: authHeaders(token),
+      }),
+
+    /** رابط بث SSE اللحظي (الحالة + كل QR جديد فور صدوره) */
+    eventsUrl: (sessionId: string, token?: string | null) =>
+      `${API}/api/whatsapp/session/${sessionId}/events?token=${encodeURIComponent(token ?? "")}`,
+  },
 
   /* ── الميزة 2: أسئلة وأجوبة من الرابط ── */
   extractQA: (tenantId: string, url: string) =>
