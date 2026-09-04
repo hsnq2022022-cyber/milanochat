@@ -43,4 +43,9 @@ export const config = {
 
   baseCredits: Number(opt("BASE_CREDITS", "1000")),
   dataDir: opt("DATA_DIR", "./data"),
+
+  /** الميزة 3: عتبة التشابه الدلالي — ما دونها يُسجَّل السؤال عالقًا بدل إجبار رد ضعيف */
+  ragThreshold: Number(opt("SIMILARITY_THRESHOLD", "0.25")),
+  /** عدد أقرب النتائج الممررة كسياق للموديل */
+  ragTopK: Number(opt("RAG_TOP_K", "5")),
 } as const;

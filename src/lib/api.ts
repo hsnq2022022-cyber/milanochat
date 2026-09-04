@@ -36,6 +36,14 @@ export type QrRes = {
 /* ─── عمليات الإعداد ─── */
 export type QAPair = { question: string; answer: string };
 
+export type SemanticTestRes = {
+  confident: boolean;
+  bestSimilarity: number;
+  threshold: number;
+  matches: { id: string; content: string; similarity: number }[];
+  answer: string | null;
+};
+
 export const api = {
   createTenant: (businessName: string, sourceType: "gmaps" | "website" | "manual", sourceUrl?: string) =>
     apiFetch<CreateTenantRes>("/api/tenants", {
@@ -71,5 +79,12 @@ export const api = {
     apiFetch<{ saved: number; sourceId: string }>(`/api/tenants/${tenantId}/qa/save`, {
       method: "POST",
       body: JSON.stringify({ pairs, sourceUrl: sourceUrl ?? null }),
+    }),
+
+  /* ── الميزة 3: مختبر الفهم الدلالي ── */
+  testQA: (tenantId: string, text: string) =>
+    apiFetch<SemanticTestRes>(`/api/tenants/${tenantId}/qa/test`, {
+      method: "POST",
+      body: JSON.stringify({ text }),
     }),
 };

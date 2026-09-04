@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import confetti from "canvas-confetti";
 import { useCountUp, useInView, useReveal } from "../hooks/useReveal";
-import { api, apiEnabled, apiFetch, type QAPair } from "../lib/api";
+import { api, apiEnabled, apiFetch, type QAPair, type SemanticTestRes } from "../lib/api";
 import {
   IconArrowStart,
   IconBolt,
@@ -75,6 +75,13 @@ function Wizard() {
   const [qaTitle, setQaTitle] = useState("");
   const [qaSaving, setQaSaving] = useState(false);
   const [suggestManual, setSuggestManual] = useState(false);
+
+  /* ── الميزة 3: مختبر الفهم الدلالي ── */
+  const [testerQuery, setTesterQuery] = useState("");
+  const [testerBusy, setTesterBusy] = useState(false);
+  const [testerResult, setTesterResult] = useState<SemanticTestRes | null>(null);
+  const [testerErr, setTesterErr] = useState("");
+  const [barsIn, setBarsIn] = useState(false);
 
   const manualText = () =>
     [
@@ -272,6 +279,23 @@ function Wizard() {
       setErrors((prev) => ({ ...prev, qa: err?.message || "تعذر الحفظ — أعد المحاولة" }));
     }
     setQaSaving(false);
+  };
+
+  /* الميزة 3: تجربة صياغة مختلفة عبر المسار الدلالي الكامل */
+  const runTest = async () => {
+    if (!tenantId || !testerQuery.trim() || testerBusy) return;
+    setTesterBusy(true);
+    setTesterErr("");
+    setTesterResult(null);
+    setBarsIn(false);
+    try {
+      const res = await api.testQA(tenantId, testerQuery.trim());
+      setTesterResult(res);
+      requestAnimationFrame(() => setTimeout(() => setBarsIn(true), 40));
+    } catch (err: any) {
+      setTesterErr(err?.message || "تعذر الاختبار — تأكد من تشغيل الخادم");
+    }
+    setTesterBusy(false);
   };
 
   const reset = () => {

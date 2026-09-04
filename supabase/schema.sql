@@ -87,6 +87,7 @@ create table public.unresolved_questions (
   status            text not null default 'open' check (status in ('open','resolved')),
   manual_answer     text,
   added_to_kb       boolean not null default false,
+  best_similarity   real,               -- أعلى درجة تشابه دلالي حققها السؤال (تشخيص العتبة)
   created_at        timestamptz not null default now(),
   resolved_at       timestamptz
 );

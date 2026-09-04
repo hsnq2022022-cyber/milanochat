@@ -7,7 +7,7 @@ import QRCode from "qrcode";
 import { db } from "../db.js";
 import { rateLimit } from "../middleware/rateLimit.js";
 import { ingestSource } from "../rag/ingest.js";
-import { extractQAPairs, saveQAPairs } from "../rag/qa.js";
+import { answerFromKnowledge, extractQAPairs, saveQAPairs } from "../rag/qa.js";
 import {
   getSession,
   startSession,
@@ -97,6 +97,37 @@ tenantsRouter.post(
       res.json(result);
     } catch (e: any) {
       res.status(500).json({ error: e?.message ?? "تعذر الحفظ" });
+    }
+  }
+);
+
+/**
+ * الميزة 3: مختبر الفهم الدلالي —
+ * يمر بنفس مسار محرك الرد (استرجاع + عتبة + توليد) ويعيد النتائج للتجربة
+ * دون إرسال أي رسالة واتساب.
+ */
+tenantsRouter.post(
+  "/:id/qa/test",
+  rateLimit({ windowMs: 60_000, max: 20 }),
+  async (req, res) => {
+    const { text } = req.body ?? {};
+    if (typeof text !== "string" || !text.trim()) {
+      return res.status(400).json({ error: "اكتب صياغة لتجربتها" });
+    }
+    const {  tenant } = await db
+      .from("tenants")
+      .select("business_name")
+      .eq("id", req.params.id)
+      .maybeSingle();
+    try {
+      const result = await answerFromKnowledge(
+        req.params.id,
+        tenant?.business_name ?? "المشروع",
+        text.trim()
+      );
+      res.json(result);
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message ?? "تعذر الاختبار" });
     }
   }
 );

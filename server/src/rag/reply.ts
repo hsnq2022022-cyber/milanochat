@@ -4,8 +4,8 @@
  * توليد رد مُقيّد بالسياق ← سياسة منع الاختلاق ← إرسال ← خصم ذرّي
  */
 import { db, type Conversation, type Tenant } from "../db.js";
-import { chatCompletion, embed, toPgVector } from "../llm.js";
 import { decryptField, encryptField } from "../crypto.js";
+import { answerFromKnowledge } from "./qa.js";
 import { sendText } from "../wa/sessionManager.js";
 
 const REFUSAL_TEXT =
@@ -18,18 +18,6 @@ const HANDOFF_PATTERN =
   /(بشري|إنسان|موظف|مسؤول|مدير|شكوى|شكاوى|استرجاع|استرداد|تعويض|مشكلة كبيرة)/;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-function systemPrompt(businessName: string): string {
-  return [
-    `أنت موظف خدمة عملاء ودود لمشروع «${businessName}» يرد على العملاء عبر واتساب.`,
-    "قواعد صارمة لا استثناء فيها:",
-    "1) تجيب فقط من المعلومات الواردة داخل <context>. أي معلومة غير موجودة فيه = غير مؤكدة.",
-    "2) ممنوع التخمين أو الاختراع إطلاقًا: لا أسعار ولا مواعيد ولا عناوين ولا وعود غير موجودة نصًا في السياق.",
-    "3) إن كان السؤال لا يمكن التأكد منه من السياق، أعد grounded=false ولا تكتب إجابة تخمينية.",
-    "4) الرد قصير (جملتان بحد أقصى) وبلهجة سعودية مهذبة، بدون رموز تعبيرية كثيرة.",
-    "أعد JSON فقط بهذا الشكل: {\"answer\":\"...\",\"grounded\":true|false}",
-  ].join("\n");
-}
 
 export async function handleIncomingMessage(
   tenantId: string,
@@ -91,38 +79,20 @@ export async function handleIncomingMessage(
   let kind: "answer" | "refusal" | "handoff" = "answer";
   let replyText = "";
 
+  let bestScore = 0;
   if (wantsHuman) {
     kind = "handoff";
     replyText = HANDOFF_TEXT;
   } else {
-    // بحث دلالي داخل معرفة هذا العميل فقط
-    const [qv] = await embed([customerText]);
-    const { data: hits } = await db.rpc("match_knowledge", {
-      p_tenant_id: tenantId,
-      p_query: toPgVector(qv),
-      p_limit: 6,
-      p_threshold: 0.25,
-    });
-    const context = (hits ?? []).map((h: any, i: number) => `[${i + 1}] ${h.content}`).join("\n");
-
-    const raw = await chatCompletion(
-      systemPrompt(t.business_name),
-      `<context>\n${context || "(لا توجد معلومات متوفرة عن هذا المشروع بعد)"}\n</context>\n\nسؤال العميل:\n${customerText}`,
-      { json: true }
-    );
-
-    let parsed: { answer?: string; grounded?: boolean } = {};
-    try {
-      parsed = JSON.parse(raw.match(/\{[\s\S]*\}/)?.[0] ?? "{}");
-    } catch {
-      parsed = {};
-    }
-
-    if (!parsed.grounded || !parsed.answer?.trim()) {
+    // الميزة 3: استرجاع دلالي بالتشابه (وليس مطابقة كلمات) ← عتبة ثقة قابلة للتعديل ← توليد مُقيّد بالسياق
+    const result = await answerFromKnowledge(tenantId, t.business_name, customerText);
+    bestScore = result.bestSimilarity;
+    if (result.confident && result.answer) {
+      replyText = result.answer;
+    } else {
+      // دون العتبة أو غير متأكد من السياق: اعتذار رسمي + تسجيل عالق — بلا إجبار على رد ضعيف
       kind = "refusal";
       replyText = REFUSAL_TEXT;
-    } else {
-      replyText = parsed.answer.trim();
     }
   }
 
@@ -155,10 +125,11 @@ export async function handleIncomingMessage(
   }
 
   if (kind === "refusal") {
-    // تسجيل السؤال العالق بدل اختلاق إجابة
+    // تسجيل السؤال العالق بدل اختلاق إجابة — مع درجة التشابه الأعلى للتشخيص
     await db.from("unresolved_questions").insert({
       tenant_id: tenantId,
       conversation_id: conv.id,
+      best_similarity: bestScore,
       question_encrypted: encryptField(customerText),
     });
   }

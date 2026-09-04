@@ -4,6 +4,7 @@
  * توليد أزواج Q&A عبر LLM → تُعرض على المالك للمراجعة قبل الحفظ النهائي.
  * عند الحفظ: كل زوج يصبح قطعة معرفة مستقلة بـ embedding مرتبطة بالعميل.
  */
+import { config } from "../config.js";
 import { db } from "../db.js";
 import { chatCompletion, embed, toPgVector } from "../llm.js";
 import { extractFromUrl } from "./ingest.js";
@@ -98,4 +99,91 @@ export async function saveQAPairs(
   if (insErr) throw new Error("تعذر حفظ الأسئلة والأجوبة: " + insErr.message);
 
   return { saved: valid.length, sourceId: source.id };
+}
+
+/* ═══════════ الميزة 3: الفهم الدلالي (RAG) — طبقة مشتركة ═══════════ */
+
+export type SemanticMatch = { id: string; content: string; similarity: number };
+
+/**
+ * بحث دلالي بالتشابه (cosine) داخل قاعدة معرفة عميل واحد فقط.
+ * p_threshold = 0 يسترجع النتائج مرتبة بدرجاتها الخام،
+ * وحد الثقة (القابل للتعديل من env) يُطبَّق في طبقة التطبيق.
+ */
+export async function semanticSearch(
+  tenantId: string,
+  text: string,
+  topK = config.ragTopK
+): Promise<{ matches: SemanticMatch[]; best: number }> {
+  const [qv] = await embed([text]);
+  const { data: hits, error } = await db.rpc("match_knowledge", {
+    p_tenant_id: tenantId,
+    p_query: toPgVector(qv),
+    p_limit: topK,
+    p_threshold: 0,
+  });
+  if (error) throw new Error("فشل البحث الدلالي: " + error.message);
+  const matches = ((hits ?? []) as { id: string; content: string; similarity: number }[]).map(
+    (h) => ({ id: h.id, content: h.content, similarity: Math.round(h.similarity * 1000) / 1000 })
+  );
+  return { matches, best: matches[0]?.similarity ?? 0 };
+}
+
+/** توليد رد مُقيّد بالسياق المسترجع — لا معلومة خارجه إطلاقًا */
+export async function generateGroundedAnswer(
+  businessName: string,
+  context: string,
+  question: string
+): Promise<{ answer: string; grounded: boolean }> {
+  const system = [
+    `أنت موظف خدمة عملاء لمشروع «${businessName}» يرد عبر واتساب.`,
+    "التعليمات الصارمة:",
+    "أجب بناءً على السياق المرفق فقط، وبنفس لهجة وأسلوب المحتوى المتوفر.",
+    "إذا لم تجد إجابة كافية في السياق، قل صراحة إنك غير متأكد ولا تختلق معلومة.",
+    "ممنوع التخمين: لا أسعار ولا مواعيد ولا عناوين غير موجودة نصًا في السياق.",
+    "الرد قصير (جملتان بحد أقصى) بلهجة سعودية مهذبة.",
+    'أعد JSON فقط: {"answer":"...","grounded":true|false}',
+  ].join("\n");
+
+  const raw = await chatCompletion(
+    system,
+    `<context>\n${context}\n</context>\n\nسؤال العميل:\n${question}`,
+    { json: true }
+  );
+  try {
+    const parsed = JSON.parse(raw.match(/\{[\s\S]*\}/)?.[0] ?? "{}");
+    return { answer: String(parsed.answer ?? "").trim(), grounded: Boolean(parsed.grounded) };
+  } catch {
+    return { answer: "", grounded: false };
+  }
+}
+
+export type SemanticAnswerResult = {
+  confident: boolean;
+  bestSimilarity: number;
+  threshold: number;
+  matches: SemanticMatch[];
+  answer: string | null;
+};
+
+/**
+ * المسار الدلالي الكامل: استرجاع ← فحص العتبة ← توليد مُقيّد.
+ * دون حد الثقة: بدون استدعاء LLM وبدون إجابة (يُسجَّل السؤال عالقًا).
+ */
+export async function answerFromKnowledge(
+  tenantId: string,
+  businessName: string,
+  text: string
+): Promise<SemanticAnswerResult> {
+  const { matches, best } = await semanticSearch(tenantId, text);
+  const threshold = config.ragThreshold;
+
+  if (matches.length === 0 || best < threshold) {
+    return { confident: false, bestSimilarity: best, threshold, matches, answer: null };
+  }
+
+  const context = matches.map((m, i) => `[${i + 1}] ${m.content}`).join("\n");
+  const { answer, grounded } = await generateGroundedAnswer(businessName, context, text);
+  const confident = grounded && answer.length > 0;
+  return { confident, bestSimilarity: best, threshold, matches, answer: confident ? answer : null };
 }
