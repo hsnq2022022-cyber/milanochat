@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import confetti from "canvas-confetti";
 import { useCountUp, useInView, useReveal } from "../hooks/useReveal";
-import { api, apiEnabled, apiFetch } from "../lib/api";
+import { api, apiEnabled, apiFetch, type QAPair } from "../lib/api";
 import {
   IconArrowStart,
   IconBolt,
@@ -10,7 +10,10 @@ import {
   IconInfinity,
   IconMapPin,
   IconPen,
+  IconPlus,
+  IconSave,
   IconShieldCheck,
+  IconTrash,
   IconSparkle,
   IconWhatsapp,
   Logo,
@@ -19,7 +22,7 @@ import {
 /* ============================ أداة الربط ============================ */
 
 type Source = "map" | "site" | "manual";
-type Phase = "form" | "working" | "done" | "pay" | "paid" | "link";
+type Phase = "form" | "working" | "qa" | "done" | "pay" | "paid" | "link";
 
 const SOURCES: { id: Source; label: string; desc: string; icon: (c: string) => JSX.Element }[] = [
   { id: "map", label: "قوقل ماب", desc: "محل له موقع على الخريطة", icon: (c) => <IconMapPin className={c} /> },
@@ -66,6 +69,13 @@ function Wizard() {
   const [busy, setBusy] = useState(false);
   const reconnects = useRef(0);
 
+  /* ── الميزة 2: أسئلة وأجوبة مولدة من الرابط ── */
+  const [qaPairs, setQaPairs] = useState<QAPair[]>([]);
+  const [qaSourceUrl, setQaSourceUrl] = useState<string | null>(null);
+  const [qaTitle, setQaTitle] = useState("");
+  const [qaSaving, setQaSaving] = useState(false);
+  const [suggestManual, setSuggestManual] = useState(false);
+
   const manualText = () =>
     [
       bizName.trim() && `اسم المشروع: ${bizName.trim()}`,
@@ -88,19 +98,23 @@ function Wizard() {
         return;
       }
       const t = setTimeout(() => {
-        setPhase("done");
-        confetti({
-          particleCount: 130,
-          spread: 75,
-          origin: { y: 0.35 },
-          colors: ["#2ec27e", "#e8b24b", "#eff3ea", "#178a57"],
-        });
+        if (apiEnabled && qaPairs.length > 0) {
+          setPhase("qa"); // المالك يراجع الأسئلة والأجوبة المولدة قبل الحفظ
+        } else {
+          setPhase("done");
+          confetti({
+            particleCount: 130,
+            spread: 75,
+            origin: { y: 0.35 },
+            colors: ["#2ec27e", "#e8b24b", "#eff3ea", "#178a57"],
+          });
+        }
       }, 450);
       return () => clearTimeout(t);
     }
     const t = setTimeout(() => setWorkStep((s) => s + 1), 820);
     return () => clearTimeout(t);
-  }, [phase, workStep, apiResult]);
+  }, [phase, workStep, apiResult, qaPairs]);
 
   /* استطلاع حالة الربط ورمز QR الحقيقي كل ثانيتين */
   useEffect(() => {
@@ -157,6 +171,9 @@ function Wizard() {
     setPhase("working");
     setApiResult(null);
     setPayUrl(null);
+    setQaPairs([]);
+    setQaSourceUrl(null);
+    setQaTitle("");
     if (!apiEnabled) return; // وضع العرض التجريبي بدون خادم
 
     (async () => {
@@ -169,13 +186,22 @@ function Wizard() {
         );
         setTenantId(created.tenantId);
         localStorage.setItem("milano_claim", created.claimToken); // لضم الحساب للوحة التحكم لاحقاً
-        const ing =
-          source === "manual"
-            ? await api.ingestText(created.tenantId, manualText())
-            : await api.ingestUrl(created.tenantId, (source === "map" ? mapUrl : siteUrl).trim());
-        if (ing.status === "failed") throw new Error(ing.error || "تعذّر فهرسة المصدر — جرّب رابطاً آخر أو الإدخال اليدوي");
+        if (source === "manual") {
+          const ing = await api.ingestText(created.tenantId, manualText());
+          if (ing.status === "failed")
+            throw new Error(ing.error || "تعذّر فهرسة المصدر — جرّب الإدخال اليدوي");
+        } else {
+          // الميزة 2: توليد أسئلة وأجوبة من الرابط ومراجعتها قبل الحفظ
+          const srcUrl = (source === "map" ? mapUrl : siteUrl).trim();
+          const { pairs, title } = await api.extractQA(created.tenantId, srcUrl);
+          setQaPairs(pairs);
+          setQaSourceUrl(srcUrl);
+          setQaTitle(title);
+        }
+        setSuggestManual(false);
         setApiResult({ ok: true });
       } catch (err: any) {
+        setSuggestManual(source !== "manual");
         setApiResult({ ok: false, error: err?.message || "تعذر الاتصال بالخادم — تأكد أنه يعمل" });
       }
     })();
@@ -214,6 +240,40 @@ function Wizard() {
     setBusy(false);
   };
 
+  /* ── الميزة 2: مراجعة الأسئلة والأجوبة وحفظها ── */
+  const updatePair = (idx: number, field: "question" | "answer", value: string) =>
+    setQaPairs((ps) => ps.map((p, i) => (i === idx ? { ...p, [field]: value } : p)));
+  const deletePair = (idx: number) => setQaPairs((ps) => ps.filter((_, i) => i !== idx));
+  const addPair = () => setQaPairs((ps) => [...ps, { question: "", answer: "" }]);
+
+  const saveQA = async () => {
+    if (!tenantId) return;
+    const valid = qaPairs.filter((p) => p.question.trim() && p.answer.trim());
+    if (valid.length === 0) {
+      setErrors((prev) => ({ ...prev, qa: "أضف سؤالاً واحداً كاملاً على الأقل قبل الحفظ" }));
+      return;
+    }
+    setQaSaving(true);
+    setErrors((prev) => {
+      const next = { ...prev };
+      delete next.qa;
+      return next;
+    });
+    try {
+      await api.saveQA(tenantId, valid, qaSourceUrl);
+      confetti({
+        particleCount: 110,
+        spread: 80,
+        origin: { y: 0.35 },
+        colors: ["#2ec27e", "#e8b24b", "#eff3ea"],
+      });
+      setPhase("done");
+    } catch (err: any) {
+      setErrors((prev) => ({ ...prev, qa: err?.message || "تعذر الحفظ — أعد المحاولة" }));
+    }
+    setQaSaving(false);
+  };
+
   const reset = () => {
     setPhase("form");
     setErrors({});
@@ -221,6 +281,10 @@ function Wizard() {
     setApiResult(null);
     setPayUrl(null);
     reconnects.current = 0;
+    setQaPairs([]);
+    setQaSourceUrl(null);
+    setQaTitle("");
+    setSuggestManual(false);
     setQr({ status: "idle", qrDataUrl: null, phone: null });
   };
 
@@ -395,9 +459,21 @@ function Wizard() {
               </button>
 
               {errors.api && (
-                <p className="text-[11px] leading-5 text-oro-soft bg-night/60 border border-oro/25 rounded-xl px-3.5 py-2.5">
-                  {errors.api}
-                </p>
+                <div className="bg-night/60 border border-oro/25 rounded-xl px-3.5 py-2.5">
+                  <p className="text-[11px] leading-5 text-oro-soft">{errors.api}</p>
+                  {suggestManual && (
+                    <button
+                      onClick={() => {
+                        setSource("manual");
+                        setErrors({});
+                        setSuggestManual(false);
+                      }}
+                      className="mt-2 text-[11.5px] font-bold text-verde hover:text-oro underline underline-offset-4 transition-colors duration-200"
+                    >
+                      أو أدخل معلومات مشروعك يدوياً
+                    </button>
+                  )}
+                </div>
               )}
 
               <button
@@ -466,6 +542,87 @@ function Wizard() {
           </div>
         )}
 
+        {/* مرحلة الميزة 2: مراجعة الأسئلة والأجوبة المولدة */}
+        {phase === "qa" && (
+          <div className="msg-in">
+            <div className="flex items-center justify-between gap-3 mb-1.5">
+              <h2 className="font-display font-bold text-xl text-bone">راجع قاعدة المعرفة</h2>
+              <span className="text-[11px] font-bold text-verde bg-verde/10 border border-verde/30 rounded-full px-2.5 py-1 whitespace-nowrap tabular-nums">
+                {qaPairs.length} {qaPairs.length === 1 ? "زوج" : "أزواج"} سؤال وجواب
+              </span>
+            </div>
+            <p className="text-[11.5px] text-sage leading-5 mb-4">
+              مستخرجة من {qaTitle ? `«${qaTitle}»` : "الرابط"} — عدّل أو احذف أو أضف بنفسك، ثم احفظ. الموظف لن يرد إلا من هذه المعلومات.
+            </p>
+
+            <div className="qa-scroll max-h-[320px] overflow-y-auto space-y-3 pe-1 mb-4">
+              {qaPairs.map((p, i) => (
+                <div
+                  key={i}
+                  className="bg-night/60 border border-verde/15 rounded-2xl p-3.5 hover:border-verde/35 transition-colors duration-300"
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-[10.5px] font-bold text-oro-soft bg-oro/10 border border-oro/25 rounded-full px-2.5 py-0.5 tabular-nums">
+                      سؤال {i + 1}
+                    </span>
+                    <button
+                      onClick={() => deletePair(i)}
+                      title="حذف السؤال"
+                      aria-label={`حذف السؤال ${i + 1}`}
+                      className="text-sage/45 hover:text-oro transition-all duration-200 active:scale-90"
+                    >
+                      <IconTrash className="w-4 h-4" />
+                    </button>
+                  </div>
+                  <label className={labelCls}>السؤال</label>
+                  <textarea
+                    value={p.question}
+                    onChange={(e) => updatePair(i, "question", e.target.value)}
+                    rows={1}
+                    className={`${inputCls} resize-none mb-2.5 leading-6`}
+                  />
+                  <label className={labelCls}>الإجابة</label>
+                  <textarea
+                    value={p.answer}
+                    onChange={(e) => updatePair(i, "answer", e.target.value)}
+                    rows={2}
+                    className={`${inputCls} resize-none leading-6`}
+                  />
+                </div>
+              ))}
+            </div>
+
+            <button
+              onClick={addPair}
+              className="w-full flex items-center justify-center gap-2 border border-dashed border-verde/30 text-verde text-sm font-semibold rounded-2xl py-3 hover:border-oro/60 hover:text-oro hover:bg-night/40 transition-all duration-300 active:scale-[0.98] mb-4"
+            >
+              <IconPlus className="w-4 h-4" />
+              إضافة سؤال يدوي
+            </button>
+
+            {errors.qa && (
+              <p className="text-[11px] text-oro-soft bg-night/60 border border-oro/25 rounded-xl px-3.5 py-2.5 mb-3">
+                {errors.qa}
+              </p>
+            )}
+
+            <button
+              onClick={saveQA}
+              disabled={qaSaving}
+              className="w-full flex items-center justify-center gap-2.5 bg-verde text-ink font-display font-bold text-lg py-3.5 rounded-2xl hover:bg-oro transition-all duration-300 active:scale-[0.98] disabled:opacity-60"
+            >
+              <IconSave className="w-5 h-5" />
+              {qaSaving ? "جارٍ الحفظ…" : "حفظ قاعدة المعرفة"}
+            </button>
+            <button
+              onClick={reset}
+              className="mt-3 w-full text-xs text-sage hover:text-bone underline underline-offset-4 transition-colors duration-200"
+            >
+              البدء من جديد
+            </button>
+          </div>
+        )}
+
         {/* مرحلة الجاهزية */}
         {phase === "done" && (
           <div className="py-4 text-center msg-in">
@@ -478,7 +635,14 @@ function Wizard() {
             </p>
             <div className="text-right bg-night/60 border border-verde/15 rounded-2xl p-4 mb-6 space-y-2.5">
               {[
-                ["المصدر", sourceLabel + (apiEnabled ? " — تمت الفهرسة ✓".replace(" ✓", "") : "")],
+                [
+                  "المصدر",
+                  apiEnabled
+                    ? qaPairs.length > 0
+                      ? `أسئلة وأجوبة — ${qaPairs.length} سؤال محفوظ`
+                      : `${sourceLabel} — مفهرس`
+                    : sourceLabel,
+                ],
                 ["رقم الواتساب", waNumber || "—"],
                 ["الرصيد المشمول", "1,000 رد ذكي"],
                 ["التحويل للبشري", "مفعّل تلقائياً"],

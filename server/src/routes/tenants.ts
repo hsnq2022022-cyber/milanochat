@@ -7,6 +7,7 @@ import QRCode from "qrcode";
 import { db } from "../db.js";
 import { rateLimit } from "../middleware/rateLimit.js";
 import { ingestSource } from "../rag/ingest.js";
+import { extractQAPairs, saveQAPairs } from "../rag/qa.js";
 import {
   getSession,
   startSession,
@@ -60,6 +61,42 @@ tenantsRouter.post(
       res.json(result);
     } catch (e: any) {
       res.status(500).json({ error: e?.message ?? "خطأ في الفهرسة" });
+    }
+  }
+);
+
+/** الميزة 2: توليد أسئلة وأجوبة من الرابط (الجلب والتوليد في الخادم) */
+tenantsRouter.post(
+  "/:id/qa/extract",
+  rateLimit({ windowMs: 60_000, max: 6 }),
+  async (req, res) => {
+    const { url } = req.body ?? {};
+    if (typeof url !== "string" || !/^https?:\/\/\S+\.\S+/.test(url.trim())) {
+      return res.status(400).json({ error: "الرابط غير صالح" });
+    }
+    try {
+      const { pairs, title } = await extractQAPairs(url.trim());
+      res.json({ pairs, title });
+    } catch (e: any) {
+      res.status(502).json({ error: e?.message ?? "تعذر استخراج الأسئلة والأجوبة" });
+    }
+  }
+);
+
+/** الميزة 2: الحفظ النهائي للأزواج المراجَعة كقاعدة معرفة فعلية */
+tenantsRouter.post(
+  "/:id/qa/save",
+  rateLimit({ windowMs: 60_000, max: 10 }),
+  async (req, res) => {
+    const { pairs, sourceUrl } = req.body ?? {};
+    if (!Array.isArray(pairs) || pairs.length === 0) {
+      return res.status(400).json({ error: "القائمة فارغة" });
+    }
+    try {
+      const result = await saveQAPairs(req.params.id, pairs, sourceUrl ?? null);
+      res.json(result);
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message ?? "تعذر الحفظ" });
     }
   }
 );

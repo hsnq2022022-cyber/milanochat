@@ -34,6 +34,8 @@ export type QrRes = {
 };
 
 /* ─── عمليات الإعداد ─── */
+export type QAPair = { question: string; answer: string };
+
 export const api = {
   createTenant: (businessName: string, sourceType: "gmaps" | "website" | "manual", sourceUrl?: string) =>
     apiFetch<CreateTenantRes>("/api/tenants", {
@@ -57,4 +59,17 @@ export const api = {
     apiFetch<{ status: string }>(`/api/tenants/${tenantId}/wa/connect`, { method: "POST" }),
 
   getQr: (tenantId: string) => apiFetch<QrRes>(`/api/tenants/${tenantId}/wa/qr`),
+
+  /* ── الميزة 2: أسئلة وأجوبة من الرابط ── */
+  extractQA: (tenantId: string, url: string) =>
+    apiFetch<{ pairs: QAPair[]; title: string }>(`/api/tenants/${tenantId}/qa/extract`, {
+      method: "POST",
+      body: JSON.stringify({ url }),
+    }),
+
+  saveQA: (tenantId: string, pairs: QAPair[], sourceUrl?: string | null) =>
+    apiFetch<{ saved: number; sourceId: string }>(`/api/tenants/${tenantId}/qa/save`, {
+      method: "POST",
+      body: JSON.stringify({ pairs, sourceUrl: sourceUrl ?? null }),
+    }),
 };
