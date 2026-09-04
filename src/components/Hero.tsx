@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import confetti from "canvas-confetti";
 import { useCountUp, useInView, useReveal } from "../hooks/useReveal";
+import { api, apiEnabled, apiFetch } from "../lib/api";
 import {
   IconArrowStart,
   IconBolt,
@@ -18,7 +19,7 @@ import {
 /* ============================ أداة الربط ============================ */
 
 type Source = "map" | "site" | "manual";
-type Phase = "form" | "working" | "done" | "pay" | "paid";
+type Phase = "form" | "working" | "done" | "pay" | "paid" | "link";
 
 const SOURCES: { id: Source; label: string; desc: string; icon: (c: string) => JSX.Element }[] = [
   { id: "map", label: "قوقل ماب", desc: "محل له موقع على الخريطة", icon: (c) => <IconMapPin className={c} /> },
@@ -53,10 +54,38 @@ function Wizard() {
   const [waNumber, setWaNumber] = useState("");
   const [errors, setErrors] = useState<Record<string, string>>({});
 
-  /* تقدم خطوات الإنشاء */
+  /* ── حالة الخادم الحقيقي (تعمل فقط عند ضبط VITE_API_URL) ── */
+  const [tenantId, setTenantId] = useState<string | null>(null);
+  const [apiResult, setApiResult] = useState<null | { ok: true } | { ok: false; error: string }>(null);
+  const [qr, setQr] = useState<{ status: string; qrDataUrl: string | null; phone: string | null }>({
+    status: "idle",
+    qrDataUrl: null,
+    phone: null,
+  });
+  const [payUrl, setPayUrl] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const manualText = () =>
+    [
+      bizName.trim() && `اسم المشروع: ${bizName.trim()}`,
+      bizActivity.trim() && `النشاط: ${bizActivity.trim()}`,
+      bizAddress.trim() && `العنوان: ${bizAddress.trim()}`,
+      bizHours.trim() && `أوقات العمل: ${bizHours.trim()}`,
+      waNumber.trim() && `رقم الواتساب: ${waNumber.trim()}`,
+    ]
+      .filter(Boolean)
+      .join("\n");
+
+  /* تقدم خطوات الإنشاء — ينتظر اكتمال الخادم الفعلي قبل الانتقال */
   useEffect(() => {
     if (phase !== "working") return;
     if (workStep >= WORK_STEPS.length) {
+      if (apiEnabled && !apiResult) return; // ننتظر رد الخادم
+      if (apiEnabled && apiResult && !apiResult.ok) {
+        setErrors({ api: apiResult.error });
+        setPhase("form");
+        return;
+      }
       const t = setTimeout(() => {
         setPhase("done");
         confetti({
@@ -70,7 +99,33 @@ function Wizard() {
     }
     const t = setTimeout(() => setWorkStep((s) => s + 1), 820);
     return () => clearTimeout(t);
-  }, [phase, workStep]);
+  }, [phase, workStep, apiResult]);
+
+  /* استطلاع حالة الربط ورمز QR الحقيقي كل ثانيتين */
+  useEffect(() => {
+    if (phase !== "link" || !tenantId) return;
+    let stopped = false;
+    const tick = async () => {
+      try {
+        const s = await api.getQr(tenantId);
+        if (stopped) return;
+        setQr((prev) => {
+          if (s.status === "connected" && prev.status !== "connected") {
+            confetti({ particleCount: 90, spread: 80, origin: { y: 0.4 }, colors: ["#2ec27e", "#e8b24b"] });
+          }
+          return s;
+        });
+      } catch {
+        /* إعادة المحاولة في الدورة التالية */
+      }
+    };
+    tick();
+    const iv = setInterval(tick, 2000);
+    return () => {
+      stopped = true;
+      clearInterval(iv);
+    };
+  }, [phase, tenantId]);
 
   const urlOk = (v: string) => /^https?:\/\/\S+\.\S+/.test(v.trim());
 
@@ -87,16 +142,75 @@ function Wizard() {
     const digits = waNumber.replace(/[\s-]/g, "");
     if (!/^\+?\d{9,15}$/.test(digits)) e.waNumber = "اكتب رقم الواتساب بالأرقام (9 خانات على الأقل)";
     setErrors(e);
-    if (Object.keys(e).length === 0) {
-      setWorkStep(0);
-      setPhase("working");
+    if (Object.keys(e).length !== 0) return;
+
+    setWorkStep(0);
+    setPhase("working");
+    setApiResult(null);
+    setPayUrl(null);
+    if (!apiEnabled) return; // وضع العرض التجريبي بدون خادم
+
+    (async () => {
+      try {
+        const fallbackName = (source === "map" ? mapUrl : siteUrl).replace(/^https?:\/\//, "").split("/")[0];
+        const created = await api.createTenant(
+          bizName.trim() || fallbackName || "مشروع جديد",
+          source === "map" ? "gmaps" : source === "site" ? "website" : "manual",
+          source === "map" ? mapUrl.trim() : siteUrl.trim()
+        );
+        setTenantId(created.tenantId);
+        localStorage.setItem("milano_claim", created.claimToken); // لضم الحساب للوحة التحكم لاحقاً
+        const ing =
+          source === "manual"
+            ? await api.ingestText(created.tenantId, manualText())
+            : await api.ingestUrl(created.tenantId, (source === "map" ? mapUrl : siteUrl).trim());
+        if (ing.status === "failed") throw new Error(ing.error || "تعذّر فهرسة المصدر — جرّب رابطاً آخر أو الإدخال اليدوي");
+        setApiResult({ ok: true });
+      } catch (err: any) {
+        setApiResult({ ok: false, error: err?.message || "تعذر الاتصال بالخادم — تأكد أنه يعمل" });
+      }
+    })();
+  };
+
+  /* بدء جلسة واتساب الحقيقية وعرض شاشة الربط */
+  const startLink = async () => {
+    if (!tenantId) return;
+    setBusy(true);
+    try {
+      await api.connectWa(tenantId);
+    } catch {
+      /* الحالة ستظهر عبر الاستطلاع */
     }
+    setPhase("link");
+    setBusy(false);
+  };
+
+  /* إنشاء فاتورة Moyasar وفتح صفحة الدفع — التفعيل يتم من الـ webhook */
+  const startPay = async () => {
+    if (!tenantId) return;
+    setBusy(true);
+    try {
+      const res = await apiFetch<{ paymentUrl: string | null }>("/api/payments/create", {
+        method: "POST",
+        body: JSON.stringify({ tenantId, packageId: "starter" }),
+      });
+      if (res.paymentUrl) {
+        window.open(res.paymentUrl, "_blank", "noopener");
+        setPayUrl(res.paymentUrl);
+      }
+    } catch (err: any) {
+      setErrors((prev) => ({ ...prev, pay: err?.message || "تعذر إنشاء الفاتورة" }));
+    }
+    setBusy(false);
   };
 
   const reset = () => {
     setPhase("form");
     setErrors({});
     setWorkStep(0);
+    setApiResult(null);
+    setPayUrl(null);
+    setQr({ status: "idle", qrDataUrl: null, phone: null });
   };
 
   const sourceLabel = SOURCES.find((s) => s.id === source)?.label ?? "";
@@ -269,6 +383,12 @@ function Wizard() {
                 </span>
               </button>
 
+              {errors.api && (
+                <p className="text-[11px] leading-5 text-oro-soft bg-night/60 border border-oro/25 rounded-xl px-3.5 py-2.5">
+                  {errors.api}
+                </p>
+              )}
+
               <button
                 onClick={submit}
                 className="w-full group flex items-center justify-center gap-2.5 bg-verde text-ink font-display font-bold text-lg py-3.5 rounded-2xl hover:bg-oro transition-all duration-300 active:scale-[0.98] hover:shadow-[0_16px_40px_-12px_rgba(232,178,75,0.45)]"
@@ -347,7 +467,7 @@ function Wizard() {
             </p>
             <div className="text-right bg-night/60 border border-verde/15 rounded-2xl p-4 mb-6 space-y-2.5">
               {[
-                ["المصدر", sourceLabel],
+                ["المصدر", sourceLabel + (apiEnabled ? " — تمت الفهرسة ✓".replace(" ✓", "") : "")],
                 ["رقم الواتساب", waNumber || "—"],
                 ["الرصيد المشمول", "1,000 رد ذكي"],
                 ["التحويل للبشري", "مفعّل تلقائياً"],
@@ -358,14 +478,92 @@ function Wizard() {
                 </div>
               ))}
             </div>
-            <button
-              onClick={() => setPhase("pay")}
-              className="w-full bg-verde text-ink font-display font-bold text-lg py-3.5 rounded-2xl hover:bg-oro transition-all duration-300 active:scale-[0.98]"
-            >
-              أكمل الدفع — 99 ريال
-            </button>
+
+            {apiEnabled ? (
+              <>
+                <button
+                  onClick={startLink}
+                  disabled={busy}
+                  className="w-full flex items-center justify-center gap-2.5 bg-verde text-ink font-display font-bold text-lg py-3.5 rounded-2xl hover:bg-oro transition-all duration-300 active:scale-[0.98] disabled:opacity-60"
+                >
+                  <IconWhatsapp className="w-5 h-5" />
+                  اربط واتساب الآن — الأجهزة المرتبطة
+                </button>
+                <button
+                  onClick={startPay}
+                  disabled={busy}
+                  className="mt-3 w-full bg-oro text-ink font-display font-bold py-3 rounded-2xl hover:bg-verde transition-all duration-300 active:scale-[0.98] disabled:opacity-60"
+                >
+                  {busy ? "جارٍ…" : "ادفع الآن — 99 ريال"}
+                </button>
+                {payUrl && (
+                  <p className="mt-2.5 text-[11px] text-verde leading-5">
+                    فُتحت صفحة الدفع — التفعيل يتم تلقائياً فور تأكيد البوابة.
+                    <a href={payUrl} target="_blank" rel="noreferrer" className="underline underline-offset-2 text-oro-soft">
+                      {" "}إعادة فتح الرابط
+                    </a>
+                  </p>
+                )}
+                {errors.pay && <p className="mt-2 text-[11px] text-oro-soft">{errors.pay}</p>}
+              </>
+            ) : (
+              <button
+                onClick={() => setPhase("pay")}
+                className="w-full bg-verde text-ink font-display font-bold text-lg py-3.5 rounded-2xl hover:bg-oro transition-all duration-300 active:scale-[0.98]"
+              >
+                أكمل الدفع — 99 ريال
+              </button>
+            )}
+
             <button onClick={reset} className="mt-3 text-xs text-sage hover:text-bone underline underline-offset-4 transition-colors">
               تعديل المعلومات
+            </button>
+          </div>
+        )}
+
+        {/* مرحلة الربط الفعلي بواتساب — QR حقيقي من الخادم */}
+        {phase === "link" && (
+          <div className="py-4 text-center msg-in">
+            <h2 className="font-display font-bold text-xl text-bone mb-1">اربط واتساب الآن</h2>
+            <p className="text-xs text-sage leading-5 mb-5">
+              من جوالك: واتساب ← الإعدادات ← الأجهزة المرتبطة ← ربط جهاز، ثم امسح الرمز
+            </p>
+
+            {qr.status === "connected" ? (
+              <div className="bg-night/60 border border-verde/30 rounded-2xl p-5 mb-5">
+                <div className="flex items-center justify-center gap-2 text-verde font-semibold mb-2">
+                  <span className="w-2 h-2 rounded-full bg-verde live-dot" />
+                  تم الربط{qr.phone ? ` — ${qr.phone}` : ""}
+                </div>
+                <p className="text-xs text-sage leading-5">
+                  جرّب إرسال رسالة من رقم ثاني — ميلانو يرد من معلومات مشروعك فقط، ويحوّل لك أي سؤال ما يتأكد منه.
+                </p>
+              </div>
+            ) : (
+              <div className="bg-bone rounded-2xl p-3 inline-block mb-3 shadow-[0_20px_60px_-20px_rgba(46,194,126,0.35)]">
+                {qr.qrDataUrl ? (
+                  <img src={qr.qrDataUrl} alt="رمز ربط واتساب" className="w-52 h-52" />
+                ) : (
+                  <div className="w-52 h-52 flex items-center justify-center">
+                    <span className="text-[13px] font-semibold" style={{ color: "#1c5c41" }}>
+                      {qr.status === "qr" ? "جارٍ توليد الرمز…" : "جارٍ الاتصال بالسيرفر…"}
+                    </span>
+                  </div>
+                )}
+              </div>
+            )}
+
+            <p className="text-[11px] text-sage/70 leading-5 mb-4">
+              الربط عبر «الأجهزة المرتبطة» — ليست قناة رسمية من Meta، وقد تقيّد واتساب الرقم وفق تقديرها.
+            </p>
+
+            {qr.status !== "connected" && (
+              <button onClick={startLink} className="text-xs text-sage hover:text-bone underline underline-offset-4 transition-colors">
+                إعادة توليد الرمز
+              </button>
+            )}
+            <button onClick={() => setPhase("done")} className="mt-3 block mx-auto text-xs text-sage hover:text-oro underline underline-offset-4 transition-colors">
+              العودة
             </button>
           </div>
         )}
