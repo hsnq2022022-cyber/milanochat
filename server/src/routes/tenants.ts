@@ -3,23 +3,15 @@
  * إنشاء حساب عميل، فهرسة مصدر المعرفة، ربط واتساب + QR حقيقي.
  */
 import { Router } from "express";
-import QRCode from "qrcode";
 import { db } from "../db.js";
 import { encryptField } from "../crypto.js";
 import { rateLimit } from "../middleware/rateLimit.js";
 import { ingestSource } from "../rag/ingest.js";
 import { answerFromKnowledge, extractQAPairs, saveQAPairs } from "../rag/qa.js";
-import {
-  getSession,
-  startSession,
-  stopSession,
-  waStatus,
-} from "../wa/sessionManager.js";
 
 export const tenantsRouter = Router();
 
 const createLimiter = rateLimit({ windowMs: 60_000, max: 10 });
-const qrLimiter = rateLimit({ windowMs: 1_000, max: 2 });
 
 /** إنشاء عميل جديد (غير مفعل حتى يؤكد الـ webhook الدفع) */
 tenantsRouter.post("/", createLimiter, async (req, res) => {
@@ -136,35 +128,4 @@ tenantsRouter.post(
   }
 );
 
-/** بدء جلسة واتساب (يولد QR عبر الأجهزة المرتبطة) */
-tenantsRouter.post(
-  "/:id/wa/connect",
-  rateLimit({ windowMs: 60_000, max: 6 }),
-  async (req, res) => {
-    try {
-      const status = await startSession(req.params.id);
-      res.json({ status });
-    } catch (e: any) {
-      res.status(500).json({ error: e?.message ?? "تعذر بدء الجلسة" });
-    }
-  }
-);
-
-/**
- * حالة الجلسة + QR كصورة PNG (data URL).
- * الواجهة تستطلع هذا المسار كل ثانيتين أثناء الربط.
- */
-tenantsRouter.get("/:id/wa/qr", qrLimiter, async (req, res) => {
-  const st = waStatus(req.params.id);
-  if (st.status === "qr" && st.qr) {
-    const png = await QRCode.toDataURL(st.qr, { margin: 1, width: 360 });
-    return res.json({ status: st.status, qrDataUrl: png, phone: null });
-  }
-  res.json({ status: st.status, qrDataUrl: null, phone: st.phoneMasked });
-});
-
-/** فصل / إلغاء ربط الجهاز */
-tenantsRouter.delete("/:id/wa", async (req, res) => {
-  await stopSession(req.params.id, true);
-  res.json({ ok: true });
-});
+/* ربط واتساب انتقل إلى /api/whatsapp (جلسات حقيقية + SSE + صلاحيات) — انظر routes/whatsapp.ts */

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import Navbar from "./components/Navbar";
 import Hero from "./components/Hero";
 import { Marquee, Footer } from "./components/Extras";
@@ -6,7 +6,9 @@ import Guarantees from "./components/Guarantees";
 import ChatDemo from "./components/ChatDemo";
 import Pricing from "./components/Pricing";
 import FAQ from "./components/FAQ";
-import Dashboard from "./pages/Dashboard";
+
+/* لوحة التحكم وحدة منفصلة — لا يتحمل زائر الصفحة الرئيسية حجمها */
+const Dashboard = lazy(() => import("./pages/Dashboard"));
 
 export default function App() {
   const [route, setRoute] = useState(() => window.location.hash);
@@ -19,7 +21,11 @@ export default function App() {
 
   /* لوحة التحكم: #/dashboard */
   if (route.startsWith("#/dashboard")) {
-    return <Dashboard />;
+    return (
+      <Suspense fallback={<div className="min-h-screen bg-night" />}>
+        <Dashboard />
+      </Suspense>
+    );
   }
 
   return (

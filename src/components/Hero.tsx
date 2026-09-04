@@ -10,7 +10,7 @@ import {
   type CountryCode,
 } from "libphonenumber-js";
 import { useCountUp, useInView, useReveal } from "../hooks/useReveal";
-import { api, apiEnabled, apiFetch, type QAPair, type SemanticTestRes } from "../lib/api";
+import { api, apiEnabled, apiFetch, type QAPair, type SemanticTestRes, type WaSnapshot } from "../lib/api";
 import {
   IconArrowStart,
   IconBolt,
@@ -232,11 +232,13 @@ function Wizard() {
   /* ── حالة الخادم الحقيقي (تعمل فقط عند ضبط VITE_API_URL) ── */
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [apiResult, setApiResult] = useState<null | { ok: true } | { ok: false; error: string }>(null);
-  const [qr, setQr] = useState<{ status: string; qrDataUrl: string | null; phone: string | null }>({
-    status: "idle",
-    qrDataUrl: null,
-    phone: null,
-  });
+  /* ربط واتساب الحقيقي: الحالة تأتي من جلسة Baileys في الخادم عبر SSE */
+  const EMPTY_WA: WaSnapshot = { sessionId: "", state: "DISCONNECTED", qrDataUrl: null, phone: null, error: null };
+  const [waSnap, setWaSnap] = useState<WaSnapshot>(EMPTY_WA);
+  const [claimTok, setClaimTok] = useState<string | null>(null);
+  const sseRef = useRef<EventSource | null>(null);
+  const pollRef = useRef<number | null>(null);
+  const waBusyRef = useRef(false);
   const [payUrl, setPayUrl] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const reconnects = useRef(0);
@@ -296,39 +298,85 @@ function Wizard() {
     return () => clearTimeout(t);
   }, [phase, workStep, apiResult, qaPairs]);
 
-  /* استطلاع حالة الربط ورمز QR الحقيقي كل ثانيتين */
+  const stopWaStreams = () => {
+    sseRef.current?.close();
+    sseRef.current = null;
+    if (pollRef.current) {
+      window.clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  };
+
+  /* إغلاق البث عند مغادرة شاشة الربط أو فك المكوّن */
   useEffect(() => {
-    if (phase !== "link" || !tenantId) return;
-    let stopped = false;
-    const tick = async () => {
+    if (phase === "link") return;
+    stopWaStreams();
+  }, [phase]);
+  useEffect(() => stopWaStreams, []);
+
+  /* تطبيق حدث قادم من جلسة واتساب (SSE أو الاستطلاع الاحتياطي) */
+  const applyWaEvent = (snap: WaSnapshot) => {
+    setWaSnap((prev) => {
+      if (snap.state === "CONNECTED" && prev.state !== "CONNECTED") {
+        confetti({ particleCount: 90, spread: 80, origin: { y: 0.4 }, colors: ["#2ec27e", "#e8b24b"] });
+      }
+      return snap;
+    });
+    // انتهى الربط من الجوال (LOGGED_OUT) → جلسة جديدة وQR جديد تلقائياً دون تحديث الصفحة
+    if (snap.state === "LOGGED_OUT" && reconnects.current < 3 && !waBusyRef.current) {
+      reconnects.current += 1;
+      window.setTimeout(() => relink(), 1200);
+    }
+  };
+
+  /* فتح بث SSE للجلسة، مع استطلاع احتياطي إن تعذّر البث */
+  const connectWaStream = (sessionId: string, tok: string | null) => {
+    stopWaStreams();
+    let failures = 0;
+    const es = new EventSource(api.wa.eventsUrl(sessionId, tok));
+    sseRef.current = es;
+    es.onmessage = (m) => {
       try {
-        const s = await api.getQr(tenantId);
-        if (stopped) return;
-        setQr((prev) => {
-          if (s.status === "connected" && prev.status !== "connected") {
-            confetti({ particleCount: 90, spread: 80, origin: { y: 0.4 }, colors: ["#2ec27e", "#e8b24b"] });
-          }
-          return s;
-        });
-        // انقطاع بعد الربط أو فقدان الجلسة → إعادة توليد QR تلقائياً (بحد أقصى)
-        if (
-          (s.status === "disconnected" || s.status === "idle") &&
-          reconnects.current < 3
-        ) {
-          reconnects.current += 1;
-          api.connectWa(tenantId).catch(() => {});
-        }
+        failures = 0;
+        applyWaEvent(JSON.parse(m.data) as WaSnapshot);
       } catch {
-        /* إعادة المحاولة في الدورة التالية */
+        /* رسالة غير صالحة — نتجاهلها */
       }
     };
-    tick();
-    const iv = setInterval(tick, 2000);
-    return () => {
-      stopped = true;
-      clearInterval(iv);
+    es.onerror = () => {
+      failures += 1;
+      if (failures >= 3) {
+        es.close();
+        sseRef.current = null;
+        pollRef.current = window.setInterval(async () => {
+          try {
+            applyWaEvent(await api.wa.getQr(sessionId, tok));
+          } catch {
+            /* إعادة المحاولة في الدورة التالية */
+          }
+        }, 2500);
+      }
     };
-  }, [phase, tenantId]);
+  };
+
+  /* إنشاء جلسة حقيقية في الخادم وفتح البث — React لا ينشئ أي جلسة بنفسه */
+  const relink = async () => {
+    if (!tenantId || waBusyRef.current) return;
+    waBusyRef.current = true;
+    setWaSnap({ ...EMPTY_WA, state: "CONNECTING" });
+    const tok = claimTok ?? localStorage.getItem("milano_claim");
+    try {
+      const snap = await api.wa.createSession(tenantId, tok);
+      connectWaStream(snap.sessionId, tok);
+    } catch {
+      setWaSnap({
+        ...EMPTY_WA,
+        state: "ERROR",
+        error: "تعذر إنشاء جلسة واتساب، تحقق من اتصال الخادم.",
+      });
+    }
+    waBusyRef.current = false;
+  };
 
   const urlOk = (v: string) => /^https?:\/\/\S+\.\S+/.test(v.trim());
 
@@ -371,6 +419,7 @@ function Wizard() {
           e164
         );
         setTenantId(created.tenantId);
+        setClaimTok(created.claimToken); // يصرّح لجلسة واتساب الخاصة بهذا المشروع فقط
         localStorage.setItem("milano_claim", created.claimToken); // لضم الحساب للوحة التحكم لاحقاً
         if (source === "manual") {
           const ing = await api.ingestText(created.tenantId, manualText());
@@ -398,12 +447,8 @@ function Wizard() {
     if (!tenantId) return;
     reconnects.current = 0;
     setBusy(true);
-    try {
-      await api.connectWa(tenantId);
-    } catch {
-      /* الحالة ستظهر عبر الاستطلاع */
-    }
     setPhase("link");
+    await relink();
     setBusy(false);
   };
 
@@ -488,7 +533,8 @@ function Wizard() {
     setQaSourceUrl(null);
     setQaTitle("");
     setSuggestManual(false);
-    setQr({ status: "idle", qrDataUrl: null, phone: null });
+    stopWaStreams();
+    setWaSnap(EMPTY_WA);
   };
 
   const sourceLabel = SOURCES.find((s) => s.id === source)?.label ?? "";
@@ -971,7 +1017,7 @@ function Wizard() {
           </div>
         )}
 
-        {/* مرحلة الربط الفعلي بواتساب — QR حقيقي من الخادم */}
+        {/* مرحلة الربط الفعلي بواتساب — QR حقيقي صادر من جلسة Baileys في الخادم */}
         {phase === "link" && (
           <div className="py-4 text-center msg-in">
             <h2 className="font-display font-bold text-xl text-bone mb-1">اربط واتساب الآن</h2>
@@ -979,38 +1025,65 @@ function Wizard() {
               من جوالك: واتساب ← الإعدادات ← الأجهزة المرتبطة ← ربط جهاز، ثم امسح الرمز
             </p>
 
-            {qr.status === "connected" ? (
+            {waSnap.state === "CONNECTED" ? (
               <div className="bg-night/60 border border-verde/30 rounded-2xl p-5 mb-5">
                 <div className="flex items-center justify-center gap-2 text-verde font-semibold mb-2">
                   <span className="w-2 h-2 rounded-full bg-verde live-dot" />
-                  تم الربط{qr.phone ? ` — ${qr.phone}` : ""}
+                  تم الربط بنجاح{waSnap.phone ? ` — ${waSnap.phone}` : ""}
                 </div>
                 <p className="text-xs text-sage leading-5">
                   جرّب إرسال رسالة من رقم ثاني — ميلانو يرد من معلومات مشروعك فقط، ويحوّل لك أي سؤال ما يتأكد منه.
                 </p>
               </div>
-            ) : (
-              <div className="bg-bone rounded-2xl p-3 inline-block mb-3 shadow-[0_20px_60px_-20px_rgba(46,194,126,0.35)]">
-                {qr.qrDataUrl ? (
-                  <img src={qr.qrDataUrl} alt="رمز ربط واتساب" className="w-52 h-52" />
-                ) : (
-                  <div className="w-52 h-52 flex items-center justify-center">
-                    <span className="text-[13px] font-semibold" style={{ color: "#1c5c41" }}>
-                      {qr.status === "qr" ? "جارٍ توليد الرمز…" : "جارٍ الاتصال بالسيرفر…"}
-                    </span>
-                  </div>
-                )}
+            ) : waSnap.state === "ERROR" ? (
+              <div className="bg-night/60 border border-oro/35 rounded-2xl p-5 mb-5">
+                <p className="text-sm font-semibold text-oro-soft mb-1">{waSnap.error ?? "تعذر إنشاء جلسة واتساب، تحقق من اتصال الخادم."}</p>
+                <p className="text-[11px] text-sage leading-5 mb-3.5">
+                  تأكد أن الخادم يعمل وأن VITE_API_URL يشير إليه، ثم أعد المحاولة.
+                </p>
+                <button onClick={startLink} className="text-xs font-bold text-verde hover:text-oro underline underline-offset-4 transition-colors">
+                  إعادة المحاولة
+                </button>
               </div>
+            ) : (
+              <>
+                <div className="bg-bone rounded-2xl p-3 inline-block mb-3 shadow-[0_20px_60px_-20px_rgba(46,194,126,0.35)]">
+                  {waSnap.qrDataUrl ? (
+                    <img key={waSnap.qrDataUrl.length} src={waSnap.qrDataUrl} alt="رمز ربط واتساب" className="w-52 h-52" />
+                  ) : (
+                    <div className="w-52 h-52 flex flex-col items-center justify-center gap-2.5">
+                      <span className="w-6 h-6 rounded-full border-2 border-[#1c5c41]/25 border-t-[#1c5c41] animate-spin" />
+                      <span className="text-[13px] font-semibold" style={{ color: "#1c5c41" }}>
+                        {waSnap.state === "CONNECTING"
+                          ? "جاري الاتصال…"
+                          : waSnap.state === "DISCONNECTED"
+                            ? "انقطع الاتصال — إعادة المحاولة تلقائياً"
+                            : waSnap.state === "LOGGED_OUT"
+                              ? "انتهت صلاحية الجلسة — رمز جديد خلال لحظات"
+                              : "جارٍ إنشاء الجلسة…"}
+                      </span>
+                    </div>
+                  )}
+                </div>
+
+                {waSnap.state === "QR_REQUIRED" && (
+                  <p className="text-[11px] text-verde/90 leading-5 mb-1.5">
+                    صلاحية الرمز قصيرة — يُجدَّد هنا تلقائياً فور صدور رمز جديد، اترك الصفحة مفتوحة.
+                  </p>
+                )}
+                {waSnap.state === "CONNECTING" && (
+                  <p className="text-[11px] text-verde/90 leading-5 mb-1.5">
+                    تم المسح — جاري إتمام الاتصال بجلسة واتساب…
+                  </p>
+                )}
+              </>
             )}
 
-            <p className="text-[11px] text-verde/90 leading-5 mb-1.5">
-              صلاحية الرمز قصيرة — يُجدَّد هنا تلقائياً كل ~20 ثانية، اترك الصفحة مفتوحة.
-            </p>
             <p className="text-[11px] text-sage/70 leading-5 mb-4">
               الربط عبر «الأجهزة المرتبطة» — ليست قناة رسمية من Meta، وقد تقيّد واتساب الرقم وفق تقديرها.
             </p>
 
-            {qr.status !== "connected" && (
+            {waSnap.state !== "CONNECTED" && (
               <button onClick={startLink} className="text-xs text-sage hover:text-bone underline underline-offset-4 transition-colors">
                 إعادة توليد الرمز
               </button>

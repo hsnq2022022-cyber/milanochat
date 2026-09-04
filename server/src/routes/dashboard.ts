@@ -8,7 +8,7 @@ import { authClient, db } from "../db.js";
 import { decryptField } from "../crypto.js";
 import { addKnowledgeSnippet, ingestSource } from "../rag/ingest.js";
 import { readConversationMessages, sendManualReply } from "../rag/reply.js";
-import { waStatus, startSession } from "../wa/sessionManager.js";
+import { waStatus, ensureSession } from "../wa/sessionManager.js";
 
 export const dashboardRouter = Router();
 
@@ -217,10 +217,10 @@ dashboardRouter.delete("/knowledge/:sourceId", async (req, res) => {
   res.json({ ok: true });
 });
 
-/** إعادة وصل واتساب من اللوحة */
+/** إعادة وصل واتساب من اللوحة — يُفضَّل استخدام /api/whatsapp/session (مع SSE) */
 dashboardRouter.post("/wa/connect", async (req, res) => {
   const tenant = await ownedTenant((req as AuthedRequest).userId!, req.body?.tenantId);
   if (!tenant) return res.status(404).json({ error: "لا يوجد حساب مرتبط" });
-  const status = await startSession(tenant.id);
-  res.json({ status });
+  const snap = await ensureSession(tenant.id);
+  res.json({ status: snap.state });
 });

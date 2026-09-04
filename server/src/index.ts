@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { config } from "./config.js";
 import { tenantsRouter } from "./routes/tenants.js";
 import { dashboardRouter } from "./routes/dashboard.js";
+import { whatsappRouter } from "./routes/whatsapp.js";
 import { paymentsRouter, webhooksRouter } from "./routes/payments.js";
 import { handleIncomingMessage } from "./rag/reply.js";
 import { initWa, restorePersistedSessions } from "./wa/sessionManager.js";
@@ -38,6 +39,7 @@ app.get("/privacy", (_req, res) =>
 
 app.use("/api/tenants", tenantsRouter);
 app.use("/api/dashboard", dashboardRouter);
+app.use("/api/whatsapp", whatsappRouter);
 app.use("/api/payments", paymentsRouter);
 app.use("/api/webhooks", webhooksRouter);
 
