@@ -4,9 +4,8 @@
   "private": true,
   "type": "module",
   "description": "Milano backend: Baileys WhatsApp bridge + Supabase/pgvector RAG + credits + payments",
- "engines": {
-  "node": "22.x"
-}
+  "engines": {
+    "node": "22.x"
   },
   "scripts": {
     "dev": "tsx watch src/index.ts",
@@ -23,7 +22,7 @@
     "pino": "^9.4.0",
     "qrcode": "^1.5.4",
     "tsx": "^4.19.0",
-    "typescript": "^5.5.4"
+    "typescript": "^5.5.4",
     "ws": "^8.18.0"
   },
   "devDependencies": {
