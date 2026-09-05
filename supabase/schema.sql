@@ -42,7 +42,8 @@ create table public.knowledge_chunks (
   source_id   uuid references public.knowledge_sources(id) on delete cascade,
   chunk_index integer not null default 0,
   content     text not null,
-  embedding   vector(1536),             -- عدّل البعد إن استخدمت موديل embeddings آخر
+  -- بلا بُعد ثابت: يقبل أي موديل embeddings (Gemini=768، OpenAI=1536) بدون تعديل
+  embedding   vector,
   created_at  timestamptz not null default now()
 );
 create index if not exists knowledge_chunks_embedding_idx
