@@ -3,10 +3,10 @@
  * التشغيل: cd server && npm install && cp .env.example .env && npm run dev
  */
 import express from "express";
-import cors from "cors";
+import cors, { type CorsOptions } from "cors";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { config } from "./config.js";
+import { config, corsOrigins, corsOriginPatterns } from "./config.js";
 import { tenantsRouter } from "./routes/tenants.js";
 import { dashboardRouter } from "./routes/dashboard.js";
 import { whatsappRouter } from "./routes/whatsapp.js";
@@ -18,7 +18,30 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 
 app.disable("x-powered-by");
-app.use(cors({ origin: config.frontendOrigin, credentials: false }));
+
+// CORS متعدد الأصول: قائمة صريحة + نمط للمعاينات السحابية + الطلبات بلا Origin (Postman/webhooks)
+const corsOptions: CorsOptions = {
+  origin: (origin, callback) => {
+    if (
+      !origin ||
+      corsOrigins.includes(origin) ||
+      corsOriginPatterns.some((re) => re.test(origin))
+    ) {
+      return callback(null, true);
+    }
+    callback(new Error(`CORS: الأصل غير مسموح: ${origin}`));
+  },
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: [
+    "Content-Type",
+    "Authorization",
+    "X-Tenant-Token",
+    "X-Requested-With",
+    "Apikey",
+  ],
+};
+app.use(cors(corsOptions));
 
 // نحتفظ بالنص الخام للتحقق من توقيع الـ webhooks
 app.use(
