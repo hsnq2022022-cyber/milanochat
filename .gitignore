@@ -3,3 +3,10 @@ node_modules/
 dist/
 build/
 *.log
+
+# المفاتيح — ممنوع رفعها إلى Git
+.env
+.env.local
+.env.*.local
+server/.env
+server/data/

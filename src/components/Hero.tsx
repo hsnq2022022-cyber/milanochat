@@ -10,7 +10,7 @@ import {
   type CountryCode,
 } from "libphonenumber-js";
 import { useCountUp, useInView, useReveal } from "../hooks/useReveal";
-import { api, apiEnabled, apiFetch, type QAPair, type SemanticTestRes, type WaSnapshot } from "../lib/api";
+import { api, apiEnabled, apiFetch, backendMode, type QAPair, type SemanticTestRes, type WaSnapshot } from "../lib/api";
 import {
   IconArrowStart,
   IconBolt,
@@ -236,6 +236,28 @@ function Wizard() {
   const EMPTY_WA: WaSnapshot = { sessionId: "", state: "DISCONNECTED", qrDataUrl: null, phone: null, error: null };
   const [waSnap, setWaSnap] = useState<WaSnapshot>(EMPTY_WA);
   const [claimTok, setClaimTok] = useState<string | null>(null);
+  /* نمط Supabase (Cloud API): ربط رقم المنصة بدلاً من مسح QR */
+  const [phoneIdInput, setPhoneIdInput] = useState("");
+  const [bindErr, setBindErr] = useState("");
+  const [bindBusy, setBindBusy] = useState(false);
+
+  const bindPhone = async () => {
+    if (!tenantId || bindBusy) return;
+    const pid = phoneIdInput.trim();
+    if (!/^\d{6,20}$/.test(pid)) {
+      setBindErr("أدخل Phone Number ID الرقمي من Meta → WhatsApp → API Setup");
+      return;
+    }
+    setBindBusy(true);
+    setBindErr("");
+    try {
+      await api.wa.bindNumber(tenantId, pid);
+      setWaSnap({ ...EMPTY_WA, sessionId: tenantId, state: "CONNECTED", phone: pid, qrDataUrl: null, error: null });
+    } catch (e: any) {
+      setBindErr(e?.message ?? "تعذر الربط — تأكد من نشر دوال Edge");
+    }
+    setBindBusy(false);
+  };
   const sseRef = useRef<EventSource | null>(null);
   const pollRef = useRef<number | null>(null);
   const waBusyRef = useRef(false);
@@ -332,8 +354,10 @@ function Wizard() {
   /* فتح بث SSE للجلسة، مع استطلاع احتياطي إن تعذّر البث */
   const connectWaStream = (sessionId: string, tok: string | null) => {
     stopWaStreams();
+    const url = api.wa.eventsUrl(sessionId, tok);
+    if (!url) return; // نمط Supabase: لا بث — الحالة تُجلب مباشرة
     let failures = 0;
-    const es = new EventSource(api.wa.eventsUrl(sessionId, tok));
+    const es = new EventSource(url);
     sseRef.current = es;
     es.onmessage = (m) => {
       try {
@@ -367,12 +391,20 @@ function Wizard() {
     const tok = claimTok ?? localStorage.getItem("milano_claim");
     try {
       const snap = await api.wa.createSession(tenantId, tok);
-      connectWaStream(snap.sessionId, tok);
+      if (backendMode === "supabase") {
+        // Cloud API: لا جلسة ولا QR — الحالة لحظية (مرتبط / يحتاج ربط الرقم)
+        applyWaEvent(snap);
+      } else {
+        connectWaStream(snap.sessionId, tok);
+      }
     } catch {
       setWaSnap({
         ...EMPTY_WA,
         state: "ERROR",
-        error: "تعذر إنشاء جلسة واتساب، تحقق من اتصال الخادم.",
+        error:
+          backendMode === "supabase"
+            ? "تعذر الاتصال بـ Supabase — تأكد من نشر دوال Edge Functions."
+            : "تعذر إنشاء جلسة واتساب، تحقق من اتصال الخادم.",
       });
     }
     waBusyRef.current = false;
@@ -1029,11 +1061,37 @@ function Wizard() {
               <div className="bg-night/60 border border-verde/30 rounded-2xl p-5 mb-5">
                 <div className="flex items-center justify-center gap-2 text-verde font-semibold mb-2">
                   <span className="w-2 h-2 rounded-full bg-verde live-dot" />
-                  تم الربط بنجاح{waSnap.phone ? ` — ${waSnap.phone}` : ""}
+                  تم الربط بنجاح
+                  {backendMode === "supabase" ? "" : waSnap.phone ? ` — ${waSnap.phone}` : ""}
                 </div>
                 <p className="text-xs text-sage leading-5">
-                  جرّب إرسال رسالة من رقم ثاني — ميلانو يرد من معلومات مشروعك فقط، ويحوّل لك أي سؤال ما يتأكد منه.
+                  {backendMode === "supabase"
+                    ? "عبر منصة واتساب الرسمية — بلا مسح رمز وبلا خطر حظر. جرّب إرسال رسالة من رقمك المضاف كمتلقٍ تجريبي."
+                    : "جرّب إرسال رسالة من رقم ثاني — ميلانو يرد من معلومات مشروعك فقط، ويحوّل لك أي سؤال ما يتأكد منه."}
                 </p>
+              </div>
+            ) : backendMode === "supabase" && waSnap.state === "UNBOUND" ? (
+              <div className="bg-night/60 border border-verde/20 rounded-2xl p-5 mb-5 text-right">
+                <p className="text-sm font-bold text-bone mb-1.5">اربط رقم المنصة الرسمية</p>
+                <p className="text-[11.5px] text-sage leading-5 mb-3.5">
+                  في وضع Supabase يعمل واتساب عبر <span className="text-bone font-semibold">Cloud API الرسمية من Meta</span> — لا مسح رمز ولا خطر حظر.
+                  انسخ <span dir="ltr" className="text-oro-soft font-semibold">Phone Number ID</span> من لوحة Meta (WhatsApp ← API Setup) والصقه هنا:
+                </p>
+                <input
+                  dir="ltr"
+                  value={phoneIdInput}
+                  onChange={(e) => setPhoneIdInput(e.target.value)}
+                  placeholder="106342958987654"
+                  className="w-full bg-night/70 border border-verde/20 rounded-xl px-4 py-2.5 text-sm text-bone placeholder:text-sage/45 focus:outline-none focus:border-oro/70 focus:ring-2 focus:ring-oro/20 text-left tabular-nums mb-2"
+                />
+                {bindErr && <p className="text-[11px] text-oro-soft mb-2">{bindErr}</p>}
+                <button
+                  onClick={bindPhone}
+                  disabled={bindBusy}
+                  className="w-full bg-verde text-ink font-display font-bold py-2.5 rounded-xl hover:bg-oro transition-all duration-300 active:scale-[0.98] disabled:opacity-60"
+                >
+                  {bindBusy ? "جارٍ الربط…" : "ربط الرقم"}
+                </button>
               </div>
             ) : waSnap.state === "ERROR" ? (
               <div className="bg-night/60 border border-oro/35 rounded-2xl p-5 mb-5">

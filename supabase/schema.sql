@@ -160,6 +160,13 @@ begin
 end;
 $$;
 
+-- ربط أرقام منصة واتساب (Cloud API) بالعملاء —multi-tenant
+create table if not exists public.wa_bindings (
+  phone_id    text primary key,
+  tenant_id   uuid not null references public.tenants (id) on delete cascade,
+  created_at  timestamptz not null default now()
+);
+
 -- بحث دلالي معزول لكل عميل
 create or replace function public.match_knowledge(
   p_tenant_id uuid,
