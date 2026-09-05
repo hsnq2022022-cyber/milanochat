@@ -33,6 +33,12 @@ jobs:
 
       - name: Build
         run: npm run build
+        # متغيرات البناء (VITE_*) — تُخبز داخل الموقع عند البناء.
+        # المفتاح anon عام ومخصص للمتصفح، فلا مشكلة من وجوده هنا.
+        env:
+          VITE_API_URL: https://milanochat-production.up.railway.app
+          VITE_SUPABASE_URL: https://bjcflubrgswfqhufiwub.supabase.co
+          VITE_SUPABASE_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJqY2ZsdWJyZ3N3ZnFodWZpd3ViIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg1NDkwMjgsImV4cCI6MjEwNDEyNTAyOH0.9x5A8AsmyecXFbW8nn-oP8vO07cOJhDiga0WYCzzN7w
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
