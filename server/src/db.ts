@@ -1,19 +1,50 @@
+```ts
 import { createClient } from "@supabase/supabase-js";
+import ws from "ws";
 import { config } from "./config.js";
 
 /**
- * عميل خدمة (service role) — يتجاوز RLS لأن العزل متعدد المستأجرين
- * يُفرض في طبقة التطبيق: كل استعلام يحمل tenant_id صراحةً.
+ * إعدادات Supabase المشتركة
+ *
+ * Node.js 20 لا يوفر WebSocket بشكل أصلي بالطريقة
+ * التي يحتاجها Supabase Realtime، لذلك نستخدم مكتبة ws.
  */
-export const db = createClient(config.supabaseUrl, config.supabaseServiceKey, {
-  auth: { persistSession: false, autoRefreshToken: false },
-});
+const supabaseOptions = {
+  auth: {
+    persistSession: false,
+    autoRefreshToken: false,
+  },
+  realtime: {
+    transport: ws,
+  },
+};
 
-/** للتحقق من توكنات Supabase Auth في مسارات لوحة التحكم */
-export const authClient = createClient(config.supabaseUrl, config.supabaseServiceKey, {
-  auth: { persistSession: false, autoRefreshToken: false },
-});
+/**
+ * عميل خدمة (service role)
+ *
+ * يستخدم مفتاح Supabase Service Role ويتجاوز RLS.
+ * العزل متعدد المستأجرين يتم فرضه في طبقة التطبيق
+ * من خلال tenant_id في الاستعلامات.
+ */
+export const db = createClient(
+  config.supabaseUrl,
+  config.supabaseServiceKey,
+  supabaseOptions
+);
 
+/**
+ * عميل Supabase للتحقق من توكنات Supabase Auth
+ * في مسارات لوحة التحكم.
+ */
+export const authClient = createClient(
+  config.supabaseUrl,
+  config.supabaseServiceKey,
+  supabaseOptions
+);
+
+/**
+ * بيانات المستأجر / المشروع.
+ */
 export type Tenant = {
   id: string;
   user_id: string | null;
@@ -28,6 +59,9 @@ export type Tenant = {
   created_at: string;
 };
 
+/**
+ * بيانات المحادثة.
+ */
 export type Conversation = {
   id: string;
   tenant_id: string;
@@ -38,3 +72,4 @@ export type Conversation = {
   last_message_at: string;
   created_at: string;
 };
+```
