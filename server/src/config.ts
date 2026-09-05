@@ -10,6 +10,27 @@ const req = (name: string, fallback?: string): string => {
 
 const opt = (name: string, fallback = ""): string => process.env[name] ?? fallback;
 
+/**
+ * الأصول المسموحة (CORS):
+ *  - FRONTEND_ORIGIN + أصول افتراضية تغطي الإنتاج والتطوير المحلي
+ *  - أي أصول إضافية عبر CORS_ORIGINS (مفصولة بفواصل) من Railway Variables
+ *  - نطاقات المعاينة السحابية تُقبل بنمط (كل UUID جديد يعمل تلقائيًا)
+ */
+const extraOrigins = opt("CORS_ORIGINS")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+export const corsOrigins: string[] = [
+  opt("FRONTEND_ORIGIN", "http://localhost:5173"),
+  "https://hsnq2022022-cyber.github.io",
+  "http://localhost:5173",
+  "http://localhost:3000",
+  ...extraOrigins,
+].filter(Boolean);
+
+export const corsOriginPatterns: RegExp[] = [/\.preview\.qwenlm\.io$/, /\.qwenlm\.io$/];
+
 export const config = {
   port: Number(opt("PORT", "4000")),
   frontendOrigin: opt("FRONTEND_ORIGIN", "http://localhost:5173"),
