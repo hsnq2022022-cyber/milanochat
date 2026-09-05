@@ -42,12 +42,15 @@ create table public.knowledge_chunks (
   source_id   uuid references public.knowledge_sources(id) on delete cascade,
   chunk_index integer not null default 0,
   content     text not null,
-  -- بلا بُعد ثابت: يقبل أي موديل embeddings (Gemini=768، OpenAI=1536) بدون تعديل
+  -- بلا بُعد ثابت: يقبل أي موديل embeddings (Gemini, OpenAI...) بأي بُعد بدون تعديل.
   embedding   vector,
   created_at  timestamptz not null default now()
 );
-create index if not exists knowledge_chunks_embedding_idx
-  on public.knowledge_chunks using hnsw (embedding vector_cosine_ops);
+-- ملاحظة: فهرس HNSW يتطلب بُعدًا ثابتًا، لذا لا يُنشأ على عمود بلا بُعد.
+-- البحث يتم بمسح جيب التمام الدقيق (exact cosine) المرشَّح بـ tenant_id — سريع جدًا
+-- على حجم قاعدة المعرفة لكل عميل (مئات إلى آلاف القطع).
+-- إن ثبّتَّ بُعدًا لاحقًا (مثل 768) وأردت HNSW للأحجام الكبيرة، نفّذ:
+--   create index on public.knowledge_chunks using hnsw (embedding vector_cosine_ops);
 create index if not exists knowledge_chunks_tenant_idx
   on public.knowledge_chunks (tenant_id);
 
@@ -168,10 +171,10 @@ create table if not exists public.wa_bindings (
   created_at  timestamptz not null default now()
 );
 
--- بحث دلالي معزول لكل عميل
+-- بحث دلالي معزول لكل عميل — p_query بلا بُعد ثابت ليطابق أي موديل embeddings
 create or replace function public.match_knowledge(
   p_tenant_id uuid,
-  p_query     vector(1536),
+  p_query     vector,
   p_limit     integer default 6,
   p_threshold real    default 0.25
 )
