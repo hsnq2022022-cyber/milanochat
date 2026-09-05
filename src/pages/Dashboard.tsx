@@ -4,7 +4,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import confetti from "canvas-confetti";
-import { apiAuthFetch, apiBase, apiEnabled, api, type WaSnapshot } from "../lib/api";
+import { apiAuthFetch, apiEnabled, api, backendMode, type WaSnapshot } from "../lib/api";
 import { getSupabase, getStoredClaim, clearStoredClaim } from "../lib/supabase";
 import {
   Logo, IconWhatsapp, IconCheck, IconX, IconPlus, IconTrash, IconSend,
@@ -506,16 +506,12 @@ export default function Dashboard() {
       return;
     }
     try {
-      const res = await fetch(`${apiBase}/api/payments/create`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ tenantId: "", packageId: pkgId }),
-      }).then((r) => r.json());
+      const res = await api.createPayment(st?.tenantId ?? "", pkgId, token);
       if (res.paymentUrl) window.open(res.paymentUrl, "_blank", "noopener");
       showToast("فُتحت صفحة الدفع — التفعيل تلقائي بعد التأكيد");
       setPayOpen(false);
-    } catch {
-      showToast("تعذر إنشاء الفاتورة");
+    } catch (e: any) {
+      showToast(e?.message ?? "تعذر إنشاء الفاتورة");
     }
   };
 
@@ -1186,6 +1182,28 @@ function QrModal({ demo, tenantId, token, onClose, onState }: { demo: boolean; t
   const [snap, setSnap] = useState<WaSnapshot | null>(null);
   const [failed, setFailed] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
+  const [pid, setPid] = useState("");
+  const [pidErr, setPidErr] = useState("");
+  const [pidBusy, setPidBusy] = useState(false);
+
+  const bindPid = async () => {
+    if (pidBusy) return;
+    const v = pid.trim();
+    if (!/^\d{6,20}$/.test(v)) {
+      setPidErr("أدخل Phone Number ID الرقمي من Meta → WhatsApp → API Setup");
+      return;
+    }
+    setPidBusy(true);
+    setPidErr("");
+    try {
+      await api.wa.bindNumber(tenantId, v);
+      setSnap({ sessionId: tenantId, state: "CONNECTED", qrDataUrl: null, phone: v, error: null });
+      onState("connected");
+    } catch (e: any) {
+      setPidErr(e?.message ?? "تعذر الربط");
+    }
+    setPidBusy(false);
+  };
   const retries = useRef(0);
   const esRef = useRef<EventSource | null>(null);
   const pollRef = useRef<number | null>(null);
@@ -1216,6 +1234,12 @@ function QrModal({ demo, tenantId, token, onClose, onState }: { demo: boolean; t
     setFailed(false);
     try {
       const s = await api.wa.createSession(tenantId, token);
+      if (backendMode === "supabase") {
+        // Cloud API: لا جلسة ولا بث — الحالة لحظية
+        apply(s);
+        busyRef.current = false;
+        return;
+      }
       stopStreams();
       let failures = 0;
       const es = new EventSource(api.wa.eventsUrl(s.sessionId, token));
@@ -1319,16 +1343,42 @@ function QrModal({ demo, tenantId, token, onClose, onState }: { demo: boolean; t
               <IconCheck className="w-8 h-8" />
             </span>
             <h3 className="font-display font-bold text-xl text-bone mb-1.5">
-              تم الربط بنجاح{snap?.phone ? ` — ${snap.phone}` : ""}
+              تم الربط بنجاح{backendMode === "server" && snap?.phone ? ` — ${snap.phone}` : ""}
             </h3>
-            <p className="text-xs text-sage leading-5 mb-5">الموظف يرد الآن من معلومات مشروعك فقط.</p>
+            <p className="text-xs text-sage leading-5 mb-5">
+              {backendMode === "supabase"
+                ? "عبر منصة واتساب الرسمية — الردود تصل من رقمك المرتبط."
+                : "الموظف يرد الآن من معلومات مشروعك فقط."}
+            </p>
             <button onClick={onClose} className={`${cls.btn} w-full py-3 mb-2.5`}>ممتاز</button>
-            <button
-              onClick={logoutDevice}
-              disabled={loggingOut}
-              className="w-full text-[11.5px] text-sage hover:text-oro underline underline-offset-4 transition-colors disabled:opacity-50"
-            >
-              {loggingOut ? "جارٍ الفصل…" : "فصل الجهاز (تسجيل خروج)"}
+            {backendMode === "server" && (
+              <button
+                onClick={logoutDevice}
+                disabled={loggingOut}
+                className="w-full text-[11.5px] text-sage hover:text-oro underline underline-offset-4 transition-colors disabled:opacity-50"
+              >
+                {loggingOut ? "جارٍ الفصل…" : "فصل الجهاز (تسجيل خروج)"}
+              </button>
+            )}
+          </div>
+        ) : st === "UNBOUND" ? (
+          <div className="py-2 text-right">
+            <h3 className="font-display font-bold text-lg text-bone mb-1.5">اربط رقم المنصة الرسمية</h3>
+            <p className="text-[11.5px] text-sage leading-5 mb-3.5">
+              في وضع Supabase يعمل واتساب عبر Cloud API الرسمية من Meta — انسخ
+              <span dir="ltr" className="text-oro-soft font-semibold"> Phone Number ID </span>
+              من لوحة Meta والصقه هنا:
+            </p>
+            <input
+              dir="ltr"
+              value={pid}
+              onChange={(e) => setPid(e.target.value)}
+              placeholder="106342958987654"
+              className={`${cls.input} text-left tabular-nums mb-2`}
+            />
+            {pidErr && <p className="text-[11px] text-oro-soft mb-2">{pidErr}</p>}
+            <button onClick={bindPid} disabled={pidBusy} className={`${cls.btn} w-full py-3`}>
+              {pidBusy ? "جارٍ الربط…" : "ربط الرقم"}
             </button>
           </div>
         ) : (
