@@ -1,75 +1,145 @@
 /**
- * الميزة 2: توليد أسئلة وأجوبة تلقائياً من رابط الموقع
- * جلب الصفحة (من السيرفر لتفادي CORS) → استخراج النص المفيد (cheerio) →
- * توليد أزواج Q&A عبر LLM → تُعرض على المالك للمراجعة قبل الحفظ النهائي.
- * عند الحفظ: كل زوج يصبح قطعة معرفة مستقلة بـ embedding مرتبطة بالعميل.
+ * Milano RAG / Knowledge Engine
+ *
+ * الوظائف:
+ * 1) استخراج محتوى الموقع.
+ * 2) توليد Q&A من الموقع.
+ * 3) حفظ Q&A كمعرفة.
+ * 4) البحث الدلالي باستخدام pgvector.
+ * 5) توليد إجابة مقيدة بالمعلومات المسترجعة فقط.
  */
+
 import { config } from "../config.js";
 import { db } from "../db.js";
-import { chatCompletion, embed, toPgVector } from "../llm.js";
+import {
+  chatCompletion,
+  embed,
+  toPgVector,
+} from "../llm.js";
 import { extractFromUrl } from "./ingest.js";
 
-export type QAPair = { question: string; answer: string };
+export type QAPair = {
+  question: string;
+  answer: string;
+};
 
 const QA_SYSTEM = [
-  "أنت محلل محتوى لنشاط تجاري. مهمتك توليد قائمة أسئلة وأجوبة تغطي ما قد يسأل عنه عميل حقيقي عبر واتساب.",
+  "أنت محلل محتوى لنشاط تجاري.",
+  "مهمتك توليد قائمة أسئلة وأجوبة تغطي ما قد يسأل عنه عميل حقيقي عبر واتساب.",
+
   "قواعد صارمة:",
-  "1) الأسئلة بصيغة عميل حقيقي يسأل (قصيرة وبسيطة).",
-  "2) الأجوبة من المحتوى المرفق فقط — لا تخترع أي سعر أو موعد أو معلومة غير موجودة فيه.",
-  "3) غطِّ ما توفر من: الأسعار، أوقات العمل، الموقع والعنوان، الخدمات والمنتجات، التوصيل، طرق الدفع، الاسترجاع، التواصل.",
-  "4) أعد من 5 إلى 12 زوجاً حسب غنى المحتوى.",
-  '5) أعد مصفوفة JSON فقط بهذا الشكل: [{"question":"...","answer":"..."}] بدون أي نص خارجها.',
+  "1) الأسئلة بصيغة عميل حقيقي يسأل، قصيرة وبسيطة.",
+  "2) الأجوبة من المحتوى المرفق فقط.",
+  "3) ممنوع اختراع أي سعر أو موعد أو عنوان أو خدمة أو منتج.",
+  "4) غطِّ ما توفر من الأسعار، أوقات العمل، الموقع، العنوان، الخدمات، المنتجات، التوصيل، الدفع، الاسترجاع والتواصل.",
+  "5) أعد من 5 إلى 12 زوجاً حسب غنى المحتوى.",
+  '6) أعد JSON فقط بهذا الشكل: [{"question":"...","answer":"..."}]',
 ].join("\n");
 
-/** جلب الصفحة + استخراج النص + توليد أزواج Q&A */
-export async function extractQAPairs(url: string): Promise<{ pairs: QAPair[]; title: string }> {
+/**
+ * جلب الصفحة + استخراج النص + توليد Q&A.
+ */
+export async function extractQAPairs(
+  url: string
+): Promise<{ pairs: QAPair[]; title: string }> {
   const { text, title } = await extractFromUrl(url);
+
   if (text.length < 40) {
-    throw new Error("تعذر استخراج محتوى كافٍ من الصفحة — تأكد من الرابط أو أدخلها يدوياً");
+    throw new Error(
+      "تعذر استخراج محتوى كافٍ من الصفحة — تأكد من الرابط أو أدخلها يدوياً"
+    );
   }
 
   const raw = await chatCompletion(
     QA_SYSTEM,
-    `عنوان الصفحة: ${title}\n\nالمحتوى:\n${text.slice(0, 9000)}`,
-    { json: true, maxTokens: 2200 }
+    `عنوان الصفحة: ${title}\n\nالمحتوى:\n${text.slice(
+      0,
+      9000
+    )}`,
+    {
+      json: true,
+      maxTokens: 2200,
+    }
   );
 
-  const cleaned = raw.replace(/```(?:json)?/g, "").trim();
+  const cleaned = raw
+    .replace(/```(?:json)?/gi, "")
+    .replace(/```/g, "")
+    .trim();
+
   const match = cleaned.match(/\[[\s\S]*\]/);
-  if (!match) throw new Error("لم نتمكن من فهم النتيجة المولدة — أعد المحاولة");
+
+  if (!match) {
+    throw new Error(
+      "لم نتمكن من فهم النتيجة المولدة — أعد المحاولة"
+    );
+  }
 
   let list: unknown;
+
   try {
     list = JSON.parse(match[0]);
   } catch {
-    throw new Error("تعذر تحليل النتيجة المولدة — أعد المحاولة");
+    throw new Error(
+      "تعذر تحليل النتيجة المولدة — أعد المحاولة"
+    );
   }
 
   const pairs = (Array.isArray(list) ? list : [])
-    .filter((p: any) => p && typeof p.question === "string" && typeof p.answer === "string")
-    .map((p: any) => ({ question: p.question.trim(), answer: p.answer.trim() }))
-    .filter((p: QAPair) => p.question.length > 0 && p.answer.length > 0)
+    .filter(
+      (p: any) =>
+        p &&
+        typeof p.question === "string" &&
+        typeof p.answer === "string"
+    )
+    .map((p: any) => ({
+      question: p.question.trim(),
+      answer: p.answer.trim(),
+    }))
+    .filter(
+      (p: QAPair) =>
+        p.question.length > 0 &&
+        p.answer.length > 0
+    )
     .slice(0, 20);
 
   if (pairs.length === 0) {
-    throw new Error("لم نستخرج أسئلة وأجوبة مفيدة من المحتوى — جرّب رابطاً آخر أو أدخلها يدوياً");
+    throw new Error(
+      "لم نستخرج أسئلة وأجوبة مفيدة من المحتوى — جرّب رابطاً آخر أو أدخلها يدوياً"
+    );
   }
-  return { pairs, title };
+
+  return {
+    pairs,
+    title,
+  };
 }
 
 /**
- * الحفظ النهائي: الأزواج المراجَعة تصبح قاعدة المعرفة الفعلية.
- * كل زوج يُخزَّن كقطعة مستقلة (سؤال + جواب) مع متجه دلالي.
+ * الحفظ النهائي لـ Q&A.
  */
 export async function saveQAPairs(
   tenantId: string,
   pairs: QAPair[],
   sourceUrl: string | null
-): Promise<{ saved: number; sourceId: string }> {
+): Promise<{
+  saved: number;
+  sourceId: string;
+}> {
   const valid = pairs
-    .map((p) => ({ question: p.question.trim(), answer: p.answer.trim() }))
-    .filter((p) => p.question.length > 0 && p.answer.length > 0);
-  if (valid.length === 0) throw new Error("لا توجد أسئلة صالحة للحفظ");
+    .map((p) => ({
+      question: p.question.trim(),
+      answer: p.answer.trim(),
+    }))
+    .filter(
+      (p) =>
+        p.question.length > 0 &&
+        p.answer.length > 0
+    );
+
+  if (valid.length === 0) {
+    throw new Error("لا توجد أسئلة صالحة للحفظ");
+  }
 
   const { data: source, error: srcErr } = await db
     .from("knowledge_sources")
@@ -77,84 +147,284 @@ export async function saveQAPairs(
       tenant_id: tenantId,
       kind: sourceUrl ? "url" : "text",
       url: sourceUrl,
-      status: "indexed",
-      chunks_count: valid.length,
+      status: "pending",
+      chunks_count: 0,
     })
     .select()
     .single();
-  if (srcErr || !source) throw new Error("تعذر إنشاء سجل المصدر: " + srcErr?.message);
 
-  const texts = valid.map((p) => `س: ${p.question}\nج: ${p.answer}`);
-  const vectors = await embed(texts);
+  if (srcErr || !source) {
+    throw new Error(
+      "تعذر إنشاء سجل المصدر: " +
+        (srcErr?.message ?? "unknown error")
+    );
+  }
 
-  const rows = texts.map((content, i) => ({
-    tenant_id: tenantId,
-    source_id: source.id,
-    chunk_index: i,
-    content,
-    embedding: toPgVector(vectors[i]),
-  }));
+  try {
+    const texts = valid.map(
+      (p) => `س: ${p.question}\nج: ${p.answer}`
+    );
 
-  const { error: insErr } = await db.from("knowledge_chunks").insert(rows);
-  if (insErr) throw new Error("تعذر حفظ الأسئلة والأجوبة: " + insErr.message);
+    const vectors = await embed(texts);
 
-  return { saved: valid.length, sourceId: source.id };
+    if (vectors.length !== texts.length) {
+      throw new Error(
+        `[RAG] عدد embeddings (${vectors.length}) لا يطابق عدد النصوص (${texts.length})`
+      );
+    }
+
+    const rows = texts.map((content, i) => ({
+      tenant_id: tenantId,
+      source_id: source.id,
+      chunk_index: i,
+      content,
+      embedding: toPgVector(vectors[i]),
+    }));
+
+    const { error: insErr } = await db
+      .from("knowledge_chunks")
+      .insert(rows);
+
+    if (insErr) {
+      throw new Error(
+        "تعذر حفظ الأسئلة والأجوبة: " +
+          insErr.message
+      );
+    }
+
+    await db
+      .from("knowledge_sources")
+      .update({
+        status: "indexed",
+        chunks_count: rows.length,
+      })
+      .eq("id", source.id);
+
+    return {
+      saved: valid.length,
+      sourceId: source.id,
+    };
+  } catch (error) {
+    await db
+      .from("knowledge_sources")
+      .update({
+        status: "failed",
+        error: String(
+          (error as any)?.message ?? error
+        ),
+      })
+      .eq("id", source.id);
+
+    throw error;
+  }
 }
 
-/* ═══════════ الميزة 3: الفهم الدلالي (RAG) — طبقة مشتركة ═══════════ */
+/* =========================================================
+   Semantic Search / RAG
+   ========================================================= */
 
-export type SemanticMatch = { id: string; content: string; similarity: number };
+export type SemanticMatch = {
+  id: string;
+  content: string;
+  similarity: number;
+};
 
 /**
- * بحث دلالي بالتشابه (cosine) داخل قاعدة معرفة عميل واحد فقط.
- * p_threshold = 0 يسترجع النتائج مرتبة بدرجاتها الخام،
- * وحد الثقة (القابل للتعديل من env) يُطبَّق في طبقة التطبيق.
+ * البحث الدلالي داخل معرفة tenant واحد فقط.
  */
 export async function semanticSearch(
   tenantId: string,
   text: string,
   topK = config.ragTopK
-): Promise<{ matches: SemanticMatch[]; best: number }> {
-  const [qv] = await embed([text]);
-  const { data: hits, error } = await db.rpc("match_knowledge", {
-    p_tenant_id: tenantId,
-    p_query: toPgVector(qv),
-    p_limit: topK,
-    p_threshold: 0,
-  });
-  if (error) throw new Error("فشل البحث الدلالي: " + error.message);
-  const matches = ((hits ?? []) as { id: string; content: string; similarity: number }[]).map(
-    (h) => ({ id: h.id, content: h.content, similarity: Math.round(h.similarity * 1000) / 1000 })
+): Promise<{
+  matches: SemanticMatch[];
+  best: number;
+}> {
+  if (!tenantId) {
+    throw new Error("[RAG] tenantId مفقود");
+  }
+
+  if (!text.trim()) {
+    return {
+      matches: [],
+      best: 0,
+    };
+  }
+
+  console.log(
+    `[RAG] semantic search tenant=${tenantId} text="${text.slice(
+      0,
+      80
+    )}"`
   );
-  return { matches, best: matches[0]?.similarity ?? 0 };
+
+  /**
+   * إنشاء embedding لسؤال العميل.
+   */
+  const vectors = await embed([text]);
+
+  if (!vectors[0]) {
+    throw new Error(
+      "[RAG] لم يتم إنشاء embedding لسؤال العميل"
+    );
+  }
+
+  console.log(
+    `[RAG] query embedding dimension=${vectors[0].length}`
+  );
+
+  /**
+   * استدعاء match_knowledge الموجود في Supabase.
+   */
+  const { data: hits, error } = await db.rpc(
+    "match_knowledge",
+    {
+      p_tenant_id: tenantId,
+      p_query: toPgVector(vectors[0]),
+      p_limit: Math.max(
+        1,
+        Math.min(topK, 20)
+      ),
+      p_threshold: 0,
+    }
+  );
+
+  if (error) {
+    throw new Error(
+      "[RAG] فشل البحث الدلالي match_knowledge: " +
+        error.message
+    );
+  }
+
+  const matches = (
+    (hits ?? []) as {
+      id: string;
+      content: string;
+      similarity: number;
+    }[]
+  )
+    .filter(
+      (h) =>
+        h &&
+        typeof h.content === "string" &&
+        Number.isFinite(Number(h.similarity))
+    )
+    .map((h) => ({
+      id: h.id,
+      content: h.content,
+      similarity:
+        Math.round(
+          Number(h.similarity) * 1000
+        ) / 1000,
+    }));
+
+  const best =
+    matches.length > 0
+      ? matches[0].similarity
+      : 0;
+
+  console.log(
+    `[RAG] matches=${matches.length} best=${best}`
+  );
+
+  return {
+    matches,
+    best,
+  };
 }
 
-/** توليد رد مُقيّد بالسياق المسترجع — لا معلومة خارجه إطلاقًا */
+/**
+ * توليد جواب مقيد بالسياق.
+ *
+ * النموذج ممنوع من استخدام معلومات خارج context.
+ */
 export async function generateGroundedAnswer(
   businessName: string,
   context: string,
   question: string
-): Promise<{ answer: string; grounded: boolean }> {
+): Promise<{
+  answer: string;
+  grounded: boolean;
+}> {
+  if (!context.trim()) {
+    return {
+      answer: "",
+      grounded: false,
+    };
+  }
+
   const system = [
     `أنت موظف خدمة عملاء لمشروع «${businessName}» يرد عبر واتساب.`,
+
     "التعليمات الصارمة:",
-    "أجب بناءً على السياق المرفق فقط، وبنفس لهجة وأسلوب المحتوى المتوفر.",
-    "إذا لم تجد إجابة كافية في السياق، قل صراحة إنك غير متأكد ولا تختلق معلومة.",
-    "ممنوع التخمين: لا أسعار ولا مواعيد ولا عناوين غير موجودة نصًا في السياق.",
-    "الرد قصير (جملتان بحد أقصى) بلهجة سعودية مهذبة.",
-    'أعد JSON فقط: {"answer":"...","grounded":true|false}',
+    "1) استخدم المعلومات الموجودة داخل <context> فقط.",
+    "2) لا تستخدم معرفتك العامة أو أي معلومات خارج السياق.",
+    "3) ممنوع اختلاق الأسعار أو المنتجات أو المواعيد أو العناوين أو الخدمات.",
+    "4) إذا كان السياق لا يحتوي إجابة مؤكدة، اجعل grounded=false.",
+    "5) إذا وجدت الإجابة في السياق، أجب عنها مباشرة.",
+    "6) الرد قصير ومناسب لرسالة واتساب.",
+    "7) استخدم العربية ولهجة عراقية/عربية طبيعية ومهذبة.",
+    '8) أعد JSON فقط: {"answer":"...","grounded":true|false}',
   ].join("\n");
 
   const raw = await chatCompletion(
     system,
-    `<context>\n${context}\n</context>\n\nسؤال العميل:\n${question}`,
-    { json: true }
+    `<context>
+${context}
+</context>
+
+سؤال العميل:
+${question}`,
+    {
+      json: true,
+      maxTokens: 400,
+    }
   );
+
   try {
-    const parsed = JSON.parse(raw.match(/\{[\s\S]*\}/)?.[0] ?? "{}");
-    return { answer: String(parsed.answer ?? "").trim(), grounded: Boolean(parsed.grounded) };
-  } catch {
-    return { answer: "", grounded: false };
+    const jsonMatch = raw.match(
+      /\{[\s\S]*\}/
+    );
+
+    if (!jsonMatch) {
+      return {
+        answer: "",
+        grounded: false,
+      };
+    }
+
+    const parsed = JSON.parse(
+      jsonMatch[0]
+    );
+
+    const answer = String(
+      parsed?.answer ?? ""
+    ).trim();
+
+    const grounded =
+      parsed?.grounded === true;
+
+    if (!answer || !grounded) {
+      return {
+        answer: "",
+        grounded: false,
+      };
+    }
+
+    return {
+      answer,
+      grounded: true,
+    };
+  } catch (error) {
+    console.error(
+      "[RAG] فشل تحليل جواب Gemini:",
+      error
+    );
+
+    return {
+      answer: "",
+      grounded: false,
+    };
   }
 }
 
@@ -167,23 +437,86 @@ export type SemanticAnswerResult = {
 };
 
 /**
- * المسار الدلالي الكامل: استرجاع ← فحص العتبة ← توليد مُقيّد.
- * دون حد الثقة: بدون استدعاء LLM وبدون إجابة (يُسجَّل السؤال عالقًا).
+ * المسار الكامل:
+ *
+ * سؤال العميل
+ * ↓
+ * embedding
+ * ↓
+ * match_knowledge
+ * ↓
+ * similarity threshold
+ * ↓
+ * Gemini grounded answer
  */
 export async function answerFromKnowledge(
   tenantId: string,
   businessName: string,
   text: string
 ): Promise<SemanticAnswerResult> {
-  const { matches, best } = await semanticSearch(tenantId, text);
   const threshold = config.ragThreshold;
 
-  if (matches.length === 0 || best < threshold) {
-    return { confident: false, bestSimilarity: best, threshold, matches, answer: null };
+  const { matches, best } =
+    await semanticSearch(
+      tenantId,
+      text,
+      config.ragTopK
+    );
+
+  /**
+   * لا توجد معرفة مناسبة.
+   */
+  if (
+    matches.length === 0 ||
+    best < threshold
+  ) {
+    console.log(
+      `[RAG] below threshold: best=${best} threshold=${threshold}`
+    );
+
+    return {
+      confident: false,
+      bestSimilarity: best,
+      threshold,
+      matches,
+      answer: null,
+    };
   }
 
-  const context = matches.map((m, i) => `[${i + 1}] ${m.content}`).join("\n");
-  const { answer, grounded } = await generateGroundedAnswer(businessName, context, text);
-  const confident = grounded && answer.length > 0;
-  return { confident, bestSimilarity: best, threshold, matches, answer: confident ? answer : null };
+  /**
+   * إرسال أفضل النتائج فقط إلى Gemini.
+   */
+  const context = matches
+    .map(
+      (m, i) =>
+        `[${i + 1}] ${m.content}`
+    )
+    .join("\n");
+
+  const {
+    answer,
+    grounded,
+  } =
+    await generateGroundedAnswer(
+      businessName,
+      context,
+      text
+    );
+
+  const confident =
+    grounded && answer.length > 0;
+
+  console.log(
+    `[RAG] grounded=${grounded} confident=${confident}`
+  );
+
+  return {
+    confident,
+    bestSimilarity: best,
+    threshold,
+    matches,
+    answer: confident
+      ? answer
+      : null,
+  };
 }
