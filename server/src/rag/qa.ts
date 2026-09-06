@@ -1,21 +1,7 @@
-/**
- * Milano RAG / Knowledge Engine
- *
- * الوظائف:
- * 1) استخراج محتوى الموقع.
- * 2) توليد Q&A من الموقع.
- * 3) حفظ Q&A كمعرفة.
- * 4) البحث الدلالي باستخدام pgvector.
- * 5) توليد إجابة مقيدة بالمعلومات المسترجعة فقط.
- */
-
+````ts
 import { config } from "../config.js";
 import { db } from "../db.js";
-import {
-  chatCompletion,
-  embed,
-  toPgVector,
-} from "../llm.js";
+import { chatCompletion, embed, toPgVector } from "../llm.js";
 import { extractFromUrl } from "./ingest.js";
 
 export type QAPair = {
@@ -26,19 +12,20 @@ export type QAPair = {
 const QA_SYSTEM = [
   "أنت محلل محتوى لنشاط تجاري.",
   "مهمتك توليد قائمة أسئلة وأجوبة تغطي ما قد يسأل عنه عميل حقيقي عبر واتساب.",
-
+  "",
   "قواعد صارمة:",
   "1) الأسئلة بصيغة عميل حقيقي يسأل، قصيرة وبسيطة.",
   "2) الأجوبة من المحتوى المرفق فقط.",
-  "3) ممنوع اختراع أي سعر أو موعد أو عنوان أو خدمة أو منتج.",
-  "4) غطِّ ما توفر من الأسعار، أوقات العمل، الموقع، العنوان، الخدمات، المنتجات، التوصيل، الدفع، الاسترجاع والتواصل.",
-  "5) أعد من 5 إلى 12 زوجاً حسب غنى المحتوى.",
+  "3) ممنوع اختراع أي سعر أو موعد أو عنوان أو سياسة أو معلومة غير موجودة في المحتوى.",
+  "4) غطِّ ما توفر من الأسعار، أوقات العمل، الموقع والعنوان، الخدمات والمنتجات، التوصيل، الدفع، الاسترجاع والتواصل.",
+  "5) أعد من 5 إلى 12 زوجًا حسب غنى المحتوى.",
   '6) أعد JSON فقط بهذا الشكل: [{"question":"...","answer":"..."}]',
 ].join("\n");
 
-/**
- * جلب الصفحة + استخراج النص + توليد Q&A.
- */
+/* =========================================================
+   استخراج Q&A من رابط
+   ========================================================= */
+
 export async function extractQAPairs(
   url: string
 ): Promise<{ pairs: QAPair[]; title: string }> {
@@ -52,10 +39,7 @@ export async function extractQAPairs(
 
   const raw = await chatCompletion(
     QA_SYSTEM,
-    `عنوان الصفحة: ${title}\n\nالمحتوى:\n${text.slice(
-      0,
-      9000
-    )}`,
+    `عنوان الصفحة: ${title}\n\nالمحتوى:\n${text.slice(0, 9000)}`,
     {
       json: true,
       maxTokens: 2200,
@@ -63,7 +47,7 @@ export async function extractQAPairs(
   );
 
   const cleaned = raw
-    .replace(/```(?:json)?/gi, "")
+    .replace(/```json/gi, "")
     .replace(/```/g, "")
     .trim();
 
@@ -115,17 +99,15 @@ export async function extractQAPairs(
   };
 }
 
-/**
- * الحفظ النهائي لـ Q&A.
- */
+/* =========================================================
+   حفظ Q&A في قاعدة المعرفة
+   ========================================================= */
+
 export async function saveQAPairs(
   tenantId: string,
   pairs: QAPair[],
   sourceUrl: string | null
-): Promise<{
-  saved: number;
-  sourceId: string;
-}> {
+): Promise<{ saved: number; sourceId: string }> {
   const valid = pairs
     .map((p) => ({
       question: p.question.trim(),
@@ -147,8 +129,8 @@ export async function saveQAPairs(
       tenant_id: tenantId,
       kind: sourceUrl ? "url" : "text",
       url: sourceUrl,
-      status: "pending",
-      chunks_count: 0,
+      status: "indexed",
+      chunks_count: valid.length,
     })
     .select()
     .single();
@@ -156,71 +138,43 @@ export async function saveQAPairs(
   if (srcErr || !source) {
     throw new Error(
       "تعذر إنشاء سجل المصدر: " +
-        (srcErr?.message ?? "unknown error")
+        (srcErr?.message ?? "خطأ غير معروف")
     );
   }
 
-  try {
-    const texts = valid.map(
-      (p) => `س: ${p.question}\nج: ${p.answer}`
+  const texts = valid.map(
+    (p) => `س: ${p.question}\nج: ${p.answer}`
+  );
+
+  const vectors = await embed(texts);
+
+  const rows = texts.map((content, i) => ({
+    tenant_id: tenantId,
+    source_id: source.id,
+    chunk_index: i,
+    content,
+    embedding: toPgVector(vectors[i]),
+  }));
+
+  const { error: insErr } = await db
+    .from("knowledge_chunks")
+    .insert(rows);
+
+  if (insErr) {
+    throw new Error(
+      "تعذر حفظ الأسئلة والأجوبة: " +
+        insErr.message
     );
-
-    const vectors = await embed(texts);
-
-    if (vectors.length !== texts.length) {
-      throw new Error(
-        `[RAG] عدد embeddings (${vectors.length}) لا يطابق عدد النصوص (${texts.length})`
-      );
-    }
-
-    const rows = texts.map((content, i) => ({
-      tenant_id: tenantId,
-      source_id: source.id,
-      chunk_index: i,
-      content,
-      embedding: toPgVector(vectors[i]),
-    }));
-
-    const { error: insErr } = await db
-      .from("knowledge_chunks")
-      .insert(rows);
-
-    if (insErr) {
-      throw new Error(
-        "تعذر حفظ الأسئلة والأجوبة: " +
-          insErr.message
-      );
-    }
-
-    await db
-      .from("knowledge_sources")
-      .update({
-        status: "indexed",
-        chunks_count: rows.length,
-      })
-      .eq("id", source.id);
-
-    return {
-      saved: valid.length,
-      sourceId: source.id,
-    };
-  } catch (error) {
-    await db
-      .from("knowledge_sources")
-      .update({
-        status: "failed",
-        error: String(
-          (error as any)?.message ?? error
-        ),
-      })
-      .eq("id", source.id);
-
-    throw error;
   }
+
+  return {
+    saved: valid.length,
+    sourceId: source.id,
+  };
 }
 
 /* =========================================================
-   Semantic Search / RAG
+   RAG - البحث الدلالي
    ========================================================= */
 
 export type SemanticMatch = {
@@ -229,9 +183,6 @@ export type SemanticMatch = {
   similarity: number;
 };
 
-/**
- * البحث الدلالي داخل معرفة tenant واحد فقط.
- */
 export async function semanticSearch(
   tenantId: string,
   text: string,
@@ -240,51 +191,28 @@ export async function semanticSearch(
   matches: SemanticMatch[];
   best: number;
 }> {
-  if (!tenantId) {
-    throw new Error("[RAG] tenantId مفقود");
-  }
-
-  if (!text.trim()) {
-    return {
-      matches: [],
-      best: 0,
-    };
-  }
-
   console.log(
-    `[RAG] semantic search tenant=${tenantId} text="${text.slice(
-      0,
-      80
-    )}"`
+    `[RAG] semantic search tenant=${tenantId} text="${text}"`
   );
 
-  /**
-   * إنشاء embedding لسؤال العميل.
-   */
-  const vectors = await embed([text]);
+  const [qv] = await embed([text]);
 
-  if (!vectors[0]) {
+  console.log(
+    `[RAG] query embedding dimension=${qv.length}`
+  );
+
+  if (!qv || qv.length !== 3072) {
     throw new Error(
-      "[RAG] لم يتم إنشاء embedding لسؤال العميل"
+      `[RAG] embedding dimension غير صحيح: ${qv?.length ?? 0}`
     );
   }
 
-  console.log(
-    `[RAG] query embedding dimension=${vectors[0].length}`
-  );
-
-  /**
-   * استدعاء match_knowledge الموجود في Supabase.
-   */
   const { data: hits, error } = await db.rpc(
     "match_knowledge",
     {
       p_tenant_id: tenantId,
-      p_query: toPgVector(vectors[0]),
-      p_limit: Math.max(
-        1,
-        Math.min(topK, 20)
-      ),
+      p_query: toPgVector(qv),
+      p_limit: topK,
       p_threshold: 0,
     }
   );
@@ -307,25 +235,39 @@ export async function semanticSearch(
       (h) =>
         h &&
         typeof h.content === "string" &&
-        Number.isFinite(Number(h.similarity))
+        typeof h.similarity === "number"
     )
     .map((h) => ({
       id: h.id,
       content: h.content,
       similarity:
-        Math.round(
-          Number(h.similarity) * 1000
-        ) / 1000,
+        Math.round(h.similarity * 1000) / 1000,
     }));
 
-  const best =
-    matches.length > 0
-      ? matches[0].similarity
-      : 0;
+  const best = matches[0]?.similarity ?? 0;
 
   console.log(
     `[RAG] matches=${matches.length} best=${best}`
   );
+
+  /*
+   * مهم جدًا للتشخيص:
+   * نسجل محتوى النتائج التي اختارها البحث.
+   *
+   * لا نطبع كامل المحتوى حتى لا تصبح Logs ضخمة.
+   */
+  if (matches.length > 0) {
+    console.log(
+      "[RAG] retrieved chunks:",
+      matches.map((m, i) => ({
+        index: i + 1,
+        similarity: m.similarity,
+        content: m.content.slice(0, 700),
+      }))
+    );
+  } else {
+    console.log("[RAG] no chunks retrieved");
+  }
 
   return {
     matches,
@@ -333,11 +275,10 @@ export async function semanticSearch(
   };
 }
 
-/**
- * توليد جواب مقيد بالسياق.
- *
- * النموذج ممنوع من استخدام معلومات خارج context.
- */
+/* =========================================================
+   توليد إجابة مبنية على المعرفة
+   ========================================================= */
+
 export async function generateGroundedAnswer(
   businessName: string,
   context: string,
@@ -346,79 +287,105 @@ export async function generateGroundedAnswer(
   answer: string;
   grounded: boolean;
 }> {
-  if (!context.trim()) {
+  const system = [
+    `أنت موظف خدمة عملاء لمشروع «${businessName}» يرد عبر واتساب.`,
+    "",
+    "أنت لا تملك أي معلومات عن المشروع خارج <context>.",
+    "المعلومات الموجودة داخل <context> هي المصدر الوحيد المسموح لك باستخدامه.",
+    "",
+    "القواعد الإلزامية:",
+    "1) أجب عن سؤال العميل باستخدام المعلومات الموجودة في <context> فقط.",
+    "2) لا تستخدم معرفتك العامة ولا معلومات سابقة ولا تخمينات.",
+    "3) إذا كانت الإجابة موجودة بشكل مباشر أو يمكن استخلاصها بوضوح من context، أجب عنها.",
+    "4) إذا كانت المعلومات الموجودة في context غير كافية للإجابة، اجعل grounded=false.",
+    "5) لا تجعل grounded=false لمجرد أن السؤال ليس مطابقًا حرفيًا للنص؛ استخدم المعنى والسياق.",
+    "6) إذا كان السؤال عن شروط الشراء وكانت الشروط موجودة في context، يجب الإجابة عنها مباشرة.",
+    "7) لا تضف أسعارًا أو شروطًا أو مواعيد أو سياسات غير موجودة في context.",
+    "8) الرد قصير ومناسب لواتساب.",
+    "9) استخدم العربية وبلهجة عراقية/عربية طبيعية ومهذبة.",
+    "10) grounded=true فقط عندما تستطيع دعم الإجابة من context.",
+    "",
+    'أعد JSON صالحًا فقط بهذا الشكل: {"answer":"...","grounded":true}',
+    'أو عند عدم توفر الإجابة: {"answer":"لا أملك معلومات مؤكدة عن ذلك من مصادر المعرفة.","grounded":false}',
+  ].join("\n");
+
+  const userPrompt = [
+    "<context>",
+    context,
+    "</context>",
+    "",
+    "<customer_question>",
+    question,
+    "</customer_question>",
+    "",
+    "أجب الآن اعتمادًا على context فقط.",
+  ].join("\n");
+
+  console.log(
+    `[RAG] generating grounded answer question="${question}"`
+  );
+
+  const raw = await chatCompletion(
+    system,
+    userPrompt,
+    {
+      json: true,
+      maxTokens: 500,
+    }
+  );
+
+  console.log(
+    `[RAG] grounded raw response=${raw.slice(0, 1000)}`
+  );
+
+  /*
+   * نحاول استخراج JSON حتى لو أعاد الموديل
+   * مسافات أو تغليفًا غير ضروري.
+   */
+  const jsonMatch = raw.match(/\{[\s\S]*\}/);
+
+  if (!jsonMatch) {
+    console.log(
+      "[RAG] grounded JSON parsing failed: no JSON object"
+    );
+
     return {
       answer: "",
       grounded: false,
     };
   }
 
-  const system = [
-    `أنت موظف خدمة عملاء لمشروع «${businessName}» يرد عبر واتساب.`,
-
-    "التعليمات الصارمة:",
-    "1) استخدم المعلومات الموجودة داخل <context> فقط.",
-    "2) لا تستخدم معرفتك العامة أو أي معلومات خارج السياق.",
-    "3) ممنوع اختلاق الأسعار أو المنتجات أو المواعيد أو العناوين أو الخدمات.",
-    "4) إذا كان السياق لا يحتوي إجابة مؤكدة، اجعل grounded=false.",
-    "5) إذا وجدت الإجابة في السياق، أجب عنها مباشرة.",
-    "6) الرد قصير ومناسب لرسالة واتساب.",
-    "7) استخدم العربية ولهجة عراقية/عربية طبيعية ومهذبة.",
-    '8) أعد JSON فقط: {"answer":"...","grounded":true|false}',
-  ].join("\n");
-
-  const raw = await chatCompletion(
-    system,
-    `<context>
-${context}
-</context>
-
-سؤال العميل:
-${question}`,
-    {
-      json: true,
-      maxTokens: 400,
-    }
-  );
-
   try {
-    const jsonMatch = raw.match(
-      /\{[\s\S]*\}/
-    );
+    const parsed = JSON.parse(jsonMatch[0]);
 
-    if (!jsonMatch) {
-      return {
-        answer: "",
-        grounded: false,
-      };
-    }
+    const answer =
+      typeof parsed.answer === "string"
+        ? parsed.answer.trim()
+        : "";
 
-    const parsed = JSON.parse(
-      jsonMatch[0]
-    );
-
-    const answer = String(
-      parsed?.answer ?? ""
-    ).trim();
-
+    /*
+     * لا نعتمد على قيمة grounded وحدها.
+     * يجب أن يكون هناك جواب فعلي أيضًا.
+     */
     const grounded =
-      parsed?.grounded === true;
+      parsed.grounded === true &&
+      answer.length > 0;
 
-    if (!answer || !grounded) {
-      return {
-        answer: "",
-        grounded: false,
-      };
-    }
+    console.log(
+      `[RAG] parsed grounded=${grounded} answer="${answer.slice(
+        0,
+        500
+      )}"`
+    );
 
     return {
       answer,
-      grounded: true,
+      grounded,
     };
-  } catch (error) {
-    console.error(
-      "[RAG] فشل تحليل جواب Gemini:",
-      error
+  } catch (err) {
+    console.log(
+      "[RAG] grounded JSON parsing exception:",
+      err
     );
 
     return {
@@ -427,6 +394,10 @@ ${question}`,
     };
   }
 }
+
+/* =========================================================
+   الإجابة النهائية من قاعدة المعرفة
+   ========================================================= */
 
 export type SemanticAnswerResult = {
   confident: boolean;
@@ -436,42 +407,32 @@ export type SemanticAnswerResult = {
   answer: string | null;
 };
 
-/**
- * المسار الكامل:
- *
- * سؤال العميل
- * ↓
- * embedding
- * ↓
- * match_knowledge
- * ↓
- * similarity threshold
- * ↓
- * Gemini grounded answer
- */
 export async function answerFromKnowledge(
   tenantId: string,
   businessName: string,
   text: string
 ): Promise<SemanticAnswerResult> {
+  console.log(
+    `[RAG] starting for tenant=${tenantId}`
+  );
+
+  const { matches, best } = await semanticSearch(
+    tenantId,
+    text
+  );
+
   const threshold = config.ragThreshold;
 
-  const { matches, best } =
-    await semanticSearch(
-      tenantId,
-      text,
-      config.ragTopK
-    );
-
-  /**
-   * لا توجد معرفة مناسبة.
+  /*
+   * لا نرسل سؤالًا إلى الـLLM إذا لم نجد
+   * أي معرفة ذات صلة بدرجة كافية.
    */
   if (
     matches.length === 0 ||
     best < threshold
   ) {
     console.log(
-      `[RAG] below threshold: best=${best} threshold=${threshold}`
+      `[RAG] below threshold best=${best} threshold=${threshold}`
     );
 
     return {
@@ -483,28 +444,35 @@ export async function answerFromKnowledge(
     };
   }
 
-  /**
-   * إرسال أفضل النتائج فقط إلى Gemini.
+  /*
+   * نرسل فقط النتائج المسترجعة.
+   *
+   * إضافة أرقام للـchunks تساعد الموديل
+   * على فصل المصادر عن بعضها.
    */
   const context = matches
     .map(
       (m, i) =>
-        `[${i + 1}] ${m.content}`
+        `[مصدر ${i + 1} | similarity=${m.similarity}]\n${m.content}`
     )
-    .join("\n");
+    .join("\n\n");
+
+  console.log(
+    `[RAG] context length=${context.length}`
+  );
 
   const {
     answer,
     grounded,
-  } =
-    await generateGroundedAnswer(
-      businessName,
-      context,
-      text
-    );
+  } = await generateGroundedAnswer(
+    businessName,
+    context,
+    text
+  );
 
   const confident =
-    grounded && answer.length > 0;
+    grounded &&
+    answer.length > 0;
 
   console.log(
     `[RAG] grounded=${grounded} confident=${confident}`
@@ -515,8 +483,7 @@ export async function answerFromKnowledge(
     bestSimilarity: best,
     threshold,
     matches,
-    answer: confident
-      ? answer
-      : null,
+    answer: confident ? answer : null,
   };
 }
+````
