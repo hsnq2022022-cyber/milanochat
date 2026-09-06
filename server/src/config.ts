@@ -1,11 +1,10 @@
-```ts
 import "dotenv/config";
 
 const req = (name: string, fallback?: string): string => {
   const v = process.env[name] ?? fallback;
 
   if (v === undefined || v === "") {
-    throw new Error(`[config] المتغير البيئي المطلوب غير موجود: ${name}`);
+    throw new Error(`[config] Required environment variable is missing: ${name}`);
   }
 
   return v;
@@ -15,9 +14,6 @@ const opt = (name: string, fallback = ""): string => {
   return process.env[name] ?? fallback;
 };
 
-/**
- * الأصول المسموحة (CORS)
- */
 const extraOrigins = opt("CORS_ORIGINS")
   .split(",")
   .map((s) => s.trim())
@@ -52,54 +48,18 @@ export const config = {
   supabaseUrl: req("SUPABASE_URL"),
   supabaseServiceKey: req("SUPABASE_SERVICE_ROLE_KEY"),
 
-  /**
-   * مفتاح AES-256 لتشفير الحقول الحساسة عند الراحة.
-   */
   fieldEncryptionKey: req("FIELD_ENCRYPTION_KEY"),
 
-  /**
-   * إعدادات Gemini.
-   *
-   * يمكن وضع GEMINI_API_KEY مباشرة في Railway.
-   * LLM_API_KEY يبقى كـ fallback للتوافق مع الإعداد القديم.
-   */
   llm: {
     provider: "gemini" as const,
-
-    apiKey: opt(
-      "GEMINI_API_KEY",
-      opt("LLM_API_KEY")
-    ),
-
-    model: opt(
-      "GEMINI_MODEL",
-      opt("LLM_MODEL", "gemini-2.5-flash")
-    ),
+    apiKey: req("GEMINI_API_KEY"),
+    model: opt("GEMINI_MODEL", "gemini-2.5-flash"),
   },
 
-  /**
-   * إعدادات Gemini Embeddings.
-   *
-   * gemini-embedding-001 يدعم outputDimensionality.
-   * نستخدم 768 لتقليل حجم المتجهات والتخزين.
-   *
-   * إذا كانت لديك بيانات قديمة بأبعاد مختلفة فلا تخلط
-   * المتجهات القديمة مع الجديدة.
-   */
   embed: {
-    apiKey: opt(
-      "GEMINI_API_KEY",
-      opt("EMBED_API_KEY", opt("LLM_API_KEY"))
-    ),
-
-    model: opt(
-      "GEMINI_EMBED_MODEL",
-      opt("EMBED_MODEL", "gemini-embedding-001")
-    ),
-
-    dim: Number(
-      opt("GEMINI_EMBED_DIM", opt("EMBED_DIM", "768"))
-    ),
+    apiKey: req("GEMINI_API_KEY"),
+    model: opt("GEMINI_EMBED_MODEL", "gemini-embedding-001"),
+    dim: Number(opt("GEMINI_EMBED_DIM", "768")),
   },
 
   moyasar: {
@@ -111,18 +71,11 @@ export const config = {
   baseCredits: Number(opt("BASE_CREDITS", "1000")),
   dataDir: opt("DATA_DIR", "./data"),
 
-  /**
-   * عتبة التشابه الدلالي.
-   */
   ragThreshold: Number(
     opt("SIMILARITY_THRESHOLD", "0.25")
   ),
 
-  /**
-   * عدد النتائج التي تمرر إلى الموديل.
-   */
   ragTopK: Number(
     opt("RAG_TOP_K", "5")
   ),
 } as const;
-```
