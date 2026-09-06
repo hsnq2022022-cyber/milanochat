@@ -1,80 +1,250 @@
-/**
- * طبقة LLM قابلة للتبديل:
- *  - openai: أي مزوّد متوافق مع OpenAI Chat Completions (OpenAI, Azure, Groq, موديلات محلية)
- *  - anthropic: Anthropic Messages API
- * التبديل يتم بالكامل من متغيرات البيئة بدون تغيير كود.
- */
+```ts
 import { config } from "./config.js";
 
+/**
+ * Gemini API
+ *
+ * نستخدم Gemini API مباشرة بدل OpenAI-compatible API.
+ */
+const GEMINI_BASE_URL =
+  "https://generativelanguage.googleapis.com/v1beta";
+
+/**
+ * التحقق من وجود مفتاح Gemini.
+ */
+function requireGeminiKey(): string {
+  const key = config.llm.apiKey || config.embed.apiKey;
+
+  if (!key) {
+    throw new Error(
+      "[Gemini] GEMINI_API_KEY غير موجود في متغيرات البيئة"
+    );
+  }
+
+  return key;
+}
+
+/**
+ * تنفيذ طلب Gemini generateContent.
+ */
 export async function chatCompletion(
   system: string,
   user: string,
-  opts: { json?: boolean; maxTokens?: number } = {}
+  opts: {
+    json?: boolean;
+    maxTokens?: number;
+  } = {}
 ): Promise<string> {
-  const { provider, apiKey, baseUrl, model } = config.llm;
+  const apiKey = requireGeminiKey();
+  const model = config.llm.model;
 
-  if (provider === "anthropic") {
-    const res = await fetch(`${baseUrl.replace(/\/$/, "")}/v1/messages`, {
+  const url =
+    `${GEMINI_BASE_URL}/models/${encodeURIComponent(model)}:generateContent` +
+    `?key=${encodeURIComponent(apiKey)}`;
+
+  const generationConfig: Record<string, unknown> = {
+    temperature: 0.3,
+    maxOutputTokens: opts.maxTokens ?? 400,
+  };
+
+  /**
+   * JSON mode.
+   */
+  if (opts.json) {
+    generationConfig.responseMimeType = "application/json";
+  }
+
+  const body = {
+    systemInstruction: {
+      parts: [
+        {
+          text: system,
+        },
+      ],
+    },
+
+    contents: [
+      {
+        role: "user",
+        parts: [
+          {
+            text: user,
+          },
+        ],
+      },
+    ],
+
+    generationConfig,
+  };
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  const raw = await res.text();
+
+  if (!res.ok) {
+    throw new Error(
+      `[Gemini] ${res.status}: ${raw}`
+    );
+  }
+
+  let data: any;
+
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    throw new Error(
+      `[Gemini] استجابة غير صالحة: ${raw}`
+    );
+  }
+
+  const text =
+    data?.candidates?.[0]?.content?.parts
+      ?.map((part: any) => part?.text ?? "")
+      .join("") ?? "";
+
+  if (!text) {
+    const finishReason =
+      data?.candidates?.[0]?.finishReason ?? "UNKNOWN";
+
+    throw new Error(
+      `[Gemini] لم يتم إرجاع نص. finishReason=${finishReason}`
+    );
+  }
+
+  return text;
+}
+
+/**
+ * إنشاء Embeddings باستخدام Gemini.
+ *
+ * يستخدم batchEmbedContents لتوليد عدة vectors
+ * في طلب واحد.
+ */
+export async function embed(
+  texts: string[]
+): Promise<number[][]> {
+  if (!texts.length) {
+    return [];
+  }
+
+  const apiKey = config.embed.apiKey;
+
+  if (!apiKey) {
+    throw new Error(
+      "[Gemini Embeddings] GEMINI_API_KEY غير موجود"
+    );
+  }
+
+  const model = config.embed.model;
+  const dim = config.embed.dim;
+
+  /**
+   * Gemini Batch Embeddings.
+   *
+   * نستخدم دفعات صغيرة لتجنب إرسال كمية كبيرة
+   * في طلب واحد.
+   */
+  const BATCH = 32;
+
+  const out: number[][] = [];
+
+  for (let i = 0; i < texts.length; i += BATCH) {
+    const batch = texts.slice(i, i + BATCH);
+
+    const url =
+      `${GEMINI_BASE_URL}/models/${encodeURIComponent(model)}:batchEmbedContents` +
+      `?key=${encodeURIComponent(apiKey)}`;
+
+    const requests = batch.map((text) => ({
+      model: `models/${model}`,
+
+      content: {
+        parts: [
+          {
+            text,
+          },
+        ],
+      },
+
+      outputDimensionality: dim,
+    }));
+
+    const res = await fetch(url, {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
-        model,
-        max_tokens: opts.maxTokens ?? 400,
-        system,
-        messages: [{ role: "user", content: user }],
+        requests,
       }),
     });
-    if (!res.ok) throw new Error(`[llm] Anthropic ${res.status}: ${await res.text()}`);
-    const data: any = await res.json();
-    return data?.content?.[0]?.text ?? "";
+
+    const raw = await res.text();
+
+    if (!res.ok) {
+      throw new Error(
+        `[Gemini Embeddings] ${res.status}: ${raw}`
+      );
+    }
+
+    let data: any;
+
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      throw new Error(
+        `[Gemini Embeddings] استجابة غير صالحة: ${raw}`
+      );
+    }
+
+    const embeddings = data?.embeddings ?? [];
+
+    if (embeddings.length !== batch.length) {
+      throw new Error(
+        `[Gemini Embeddings] عدد النتائج (${embeddings.length}) لا يطابق عدد المدخلات (${batch.length})`
+      );
+    }
+
+    for (const item of embeddings) {
+      const values = item?.values;
+
+      if (!Array.isArray(values) || values.length === 0) {
+        throw new Error(
+          "[Gemini Embeddings] تم استلام embedding فارغ أو غير صالح"
+        );
+      }
+
+      out.push(values as number[]);
+    }
   }
 
-  // openai-compatible
-  const res = await fetch(`${baseUrl.replace(/\/$/, "")}/chat/completions`, {
-    method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({
-      model,
-      temperature: 0.3,
-      max_tokens: opts.maxTokens ?? 400,
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: user },
-      ],
-      ...(opts.json ? { response_format: { type: "json_object" } } : {}),
-    }),
-  });
-  if (!res.ok) throw new Error(`[llm] OpenAI-compatible ${res.status}: ${await res.text()}`);
-  const data: any = await res.json();
-  return data?.choices?.[0]?.message?.content ?? "";
-}
-
-/** embeddings متوافقة مع OpenAI — تُرسل على دفعات */
-export async function embed(texts: string[]): Promise<number[][]> {
-  const { apiKey, baseUrl, model } = config.embed;
-  const out: number[][] = [];
-  const BATCH = 32;
-  for (let i = 0; i < texts.length; i += BATCH) {
-    const batch = texts.slice(i, i + BATCH);
-    const res = await fetch(`${baseUrl.replace(/\/$/, "")}/embeddings`, {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify({ model, input: batch }),
-    });
-    if (!res.ok) throw new Error(`[embed] ${res.status}: ${await res.text()}`);
-    const data: any = await res.json();
-    const sorted = (data.data ?? []).sort((a: any, b: any) => a.index - b.index);
-    out.push(...sorted.map((d: any) => d.embedding as number[]));
+  if (out.length !== texts.length) {
+    throw new Error(
+      `[Gemini Embeddings] عدد النتائج النهائي (${out.length}) لا يطابق المدخلات (${texts.length})`
+    );
   }
-  if (out.length !== texts.length) throw new Error("[embed] عدد النتائج لا يطابق المدخلات");
+
   return out;
 }
 
-/** تحويل مصفوفة إلى صيغة pgvector النصية: [0.1,0.2,...] */
+/**
+ * تحويل مصفوفة الأرقام إلى صيغة pgvector:
+ *
+ * [0.1,0.2,0.3,...]
+ */
 export function toPgVector(v: number[]): string {
+  if (!Array.isArray(v) || v.length === 0) {
+    throw new Error(
+      "[pgvector] لا يمكن تحويل embedding فارغ"
+    );
+  }
+
   return `[${v.join(",")}]`;
 }
+```
