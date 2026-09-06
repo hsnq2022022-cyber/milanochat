@@ -7,7 +7,7 @@
  * - توليد إجابة مبنية على المعرفة فقط
  */
 
-import { config } from "../config.js";
+import { config } from "./config.js";
 import { db } from "../db.js";
 import { chatCompletion, embed, toPgVector } from "../llm.js";
 import { extractFromUrl } from "./ingest.js";
