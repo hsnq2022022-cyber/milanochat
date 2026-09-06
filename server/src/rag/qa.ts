@@ -10,15 +10,9 @@ answer: string;
 
 const QA_SYSTEM = [
 "أنت محلل محتوى لنشاط تجاري.",
-"مهمتك توليد أسئلة وأجوبة اعتمادًا على المحتوى المرفق فقط.",
-"",
-"القواعد:",
-"1) الأسئلة قصيرة وطبيعية مثل أسئلة العملاء الحقيقية.",
-"2) الإجابات يجب أن تكون مبنية على المحتوى المرفق فقط.",
-"3) ممنوع اختراع أي سعر أو موعد أو عنوان أو شرط أو سياسة.",
-"4) غطِّ الأسعار والخدمات والمنتجات والتوصيل والدفع والاسترجاع والشروط وأوقات العمل والتواصل إذا كانت موجودة.",
-"5) أعد من 5 إلى 12 زوجًا حسب كمية المعلومات.",
-'6) أعد JSON فقط بهذا الشكل: [{"question":"...","answer":"..."}]',
+"أنشئ أسئلة وأجوبة اعتمادًا على المحتوى المرفق فقط.",
+"ممنوع اختراع أي معلومات غير موجودة في المحتوى.",
+"أعد JSON فقط بهذا الشكل: [{"question":"...","answer":"..."}]",
 ].join("\n");
 
 export async function extractQAPairs(
@@ -28,7 +22,7 @@ const { text, title } = await extractFromUrl(url);
 
 if (text.length < 40) {
 throw new Error(
-"تعذر استخراج محتوى كافٍ من الصفحة — تأكد من الرابط أو أدخلها يدوياً"
+"تعذر استخراج محتوى كافٍ من الصفحة"
 );
 }
 
@@ -50,7 +44,7 @@ const match = cleaned.match(/\([\s\S]*\)/);
 
 if (!match) {
 throw new Error(
-"لم نتمكن من فهم النتيجة المولدة — أعد المحاولة"
+"لم نتمكن من فهم النتيجة المولدة"
 );
 }
 
@@ -60,7 +54,7 @@ try {
 list = JSON.parse(match[0]);
 } catch {
 throw new Error(
-"تعذر تحليل النتيجة المولدة — أعد المحاولة"
+"تعذر تحليل النتيجة المولدة"
 );
 }
 
@@ -84,7 +78,7 @@ p.answer.length > 0
 
 if (pairs.length === 0) {
 throw new Error(
-"لم نستخرج أسئلة وأجوبة مفيدة من المحتوى — جرّب رابطاً آخر أو أدخلها يدوياً"
+"لم نستخرج أسئلة وأجوبة مفيدة من المحتوى"
 );
 }
 
@@ -186,7 +180,7 @@ const [qv] = await embed([text]);
 
 if (!qv) {
 throw new Error(
-"[RAG] فشل إنشاء query embedding"
+"[RAG] فشل إنشاء embedding"
 );
 }
 
@@ -243,18 +237,9 @@ console.log(
 `[RAG] matches=${matches.length} best=${best}`
 );
 
-if (matches.length > 0) {
+for (let i = 0; i < matches.length; i++) {
 console.log(
-"[RAG] retrieved chunks:",
-matches.map((m, i) => ({
-index: i + 1,
-similarity: m.similarity,
-content: m.content.slice(0, 1000),
-}))
-);
-} else {
-console.log(
-"[RAG] no chunks retrieved"
+`[RAG] chunk ${i + 1} similarity=${matches[i].similarity} content="${matches[i].content.slice(0, 700)}"`
 );
 }
 
@@ -273,55 +258,47 @@ answer: string;
 grounded: boolean;
 }> {
 const system = [
-`أنت موظف خدمة عملاء لمشروع «${businessName}» يرد عبر واتساب.`,
+`أنت موظف خدمة عملاء لمشروع «${businessName}».`,
 "",
-"IMPORTANT: المصدر الوحيد للمعلومات هو النص الموجود داخل <context>.",
-"لا تستخدم أي معرفة خارجية عن المشروع.",
+"المعلومات الوحيدة التي يمكنك استخدامها هي المعلومات الموجودة داخل context.",
+"لا تستخدم معرفتك العامة ولا تخمن.",
 "",
-"قواعد الإجابة:",
-"1) اقرأ جميع أجزاء context قبل الإجابة.",
-"2) ابحث عن المعلومة المطلوبة حتى لو كانت مكتوبة بصياغة مختلفة عن سؤال العميل.",
-"3) إذا كانت الإجابة موجودة في context بشكل مباشر أو يمكن استنتاجها بوضوح من context، يجب أن تجيب عنها.",
-"4) لا تقل إنك لا تعرف إذا كانت الإجابة موجودة بوضوح في context.",
-"5) إذا كان السؤال عن شروط شراء الحسابات، ابحث تحديدًا عن شروط الشراء والحسابات والدفع والتفعيل والضمان والاسترجاع إذا كانت موجودة.",
-"6) لا تخترع أي معلومة غير موجودة في context.",
-"7) لا تستخدم معلومات عامة من الإنترنت أو من معرفتك السابقة.",
-"8) إذا كانت المعلومات غير موجودة فعلًا، عندها فقط استخدم grounded=false.",
-"9) الرد قصير ومناسب لواتساب.",
-"10) أجب بالعربية وبأسلوب طبيعي ومهذب.",
+"إذا كانت إجابة سؤال العميل موجودة في context أو يمكن استخلاصها بوضوح منه، أجب عنها مباشرة.",
+"لا ترفض الإجابة إذا كانت المعلومة موجودة في context.",
+"إذا كانت المعلومة غير موجودة فعلًا، فقط عندها اجعل grounded=false.",
 "",
-"إذا كانت الإجابة مدعومة من context:",
-'{"answer":"الإجابة المستندة إلى المصدر","grounded":true}',
+"إذا كان السؤال عن شروط شراء الحسابات، ابحث عن شروط الشراء والحسابات والدفع والتفعيل والضمان والاسترجاع داخل context.",
 "",
-"إذا لم تكن الإجابة موجودة في context:",
-'{"answer":"لا أملك معلومات مؤكدة عن ذلك من مصادر المعرفة.","grounded":false}',
+"الرد يجب أن يكون قصيرًا ومناسبًا لواتساب.",
+"استخدم العربية الطبيعية.",
 "",
-"أعد JSON فقط ولا تكتب أي شيء خارج JSON.",
+"أعد JSON فقط.",
+"عند وجود الإجابة:",
+"{"answer":"الإجابة","grounded":true}",
+"",
+"عند عدم وجود الإجابة:",
+"{"answer":"لا أملك معلومات مؤكدة عن ذلك من مصادر المعرفة.","grounded":false}",
 ].join("\n");
 
-const userPrompt = [
+const prompt = [
 "<context>",
 context,
 "</context>",
 "",
-"<customer_question>",
+"<question>",
 question,
-"</customer_question>",
+"</question>",
 "",
-"حلل context أولاً ثم أجب عن سؤال العميل.",
+"أجب اعتمادًا على context فقط.",
 ].join("\n");
 
 console.log(
 `[RAG] generating grounded answer question="${question}"`
 );
 
-console.log(
-`[RAG] context length=${context.length}`
-);
-
 const raw = await chatCompletion(
 system,
-userPrompt,
+prompt,
 {
 json: true,
 maxTokens: 600,
@@ -332,28 +309,23 @@ console.log(
 `[RAG] grounded raw response=${raw.slice(0, 1500)}`
 );
 
-const jsonMatch = raw.match(/{[\s\S]*}/);
-
-if (!jsonMatch) {
-console.log(
-"[RAG] grounded JSON parsing failed: no JSON object"
-);
+try {
+const match = raw.match(/{[\s\S]*}/);
 
 ```
-return {
-  answer: "",
-  grounded: false,
-};
-```
+if (!match) {
+  console.log(
+    "[RAG] no JSON object returned"
+  );
 
+  return {
+    answer: "",
+    grounded: false,
+  };
 }
 
-try {
-const parsed = JSON.parse(
-jsonMatch[0]
-);
+const parsed = JSON.parse(match[0]);
 
-```
 const answer =
   typeof parsed.answer === "string"
     ? parsed.answer.trim()
@@ -364,10 +336,7 @@ const grounded =
   answer.length > 0;
 
 console.log(
-  `[RAG] parsed grounded=${grounded} answer="${answer.slice(
-    0,
-    700
-  )}"`
+  `[RAG] parsed grounded=${grounded} answer="${answer.slice(0, 700)}"`
 );
 
 return {
@@ -378,7 +347,7 @@ return {
 
 } catch (error) {
 console.log(
-"[RAG] grounded JSON parsing exception:",
+"[RAG] JSON parsing failed:",
 error
 );
 
@@ -446,32 +415,28 @@ return {
 const context = matches
 .map(
 (m, i) =>
-`[مصدر ${i + 1} | درجة الصلة ${m.similarity}]\n${m.content}`
+`[المعلومة ${i + 1}]\n${m.content}`
 )
 .join("\n\n");
 
-const {
-answer,
-grounded,
-} = await generateGroundedAnswer(
+console.log(
+`[RAG] context length=${context.length}`
+);
+
+const result =
+await generateGroundedAnswer(
 businessName,
 context,
 text
 );
 
 const confident =
-grounded &&
-answer.length > 0;
+result.grounded &&
+result.answer.length > 0;
 
 console.log(
-`[RAG] grounded=${grounded} confident=${confident}`
+`[RAG] grounded=${result.grounded} confident=${confident}`
 );
-
-if (!confident) {
-console.log(
-"[RAG] model did not produce a grounded answer"
-);
-}
 
 return {
 confident,
@@ -479,7 +444,7 @@ bestSimilarity: best,
 threshold,
 matches,
 answer: confident
-? answer
+? result.answer
 : null,
 };
 }
