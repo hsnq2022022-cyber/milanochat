@@ -1,579 +1,285 @@
-/**
- * qa.ts
- *
- * - توليد أسئلة وأجوبة من رابط الموقع
- * - حفظ Q&A في قاعدة المعرفة
- * - البحث الدلالي RAG عبر match_knowledge
- * - توليد إجابة مبنية على المعرفة فقط
- */
-
 import { config } from "./config.js";
-import { db } from "../db.js";
-import { chatCompletion, embed, toPgVector } from "../llm.js";
-import { extractFromUrl } from "./ingest.js";
 
-export type QAPair = {
-  question: string;
-  answer: string;
-};
+const GEMINI_BASE_URL =
+  "https://generativelanguage.googleapis.com/v1beta";
 
-const QA_SYSTEM = [
-  "أنت محلل محتوى لنشاط تجاري. مهمتك توليد قائمة أسئلة وأجوبة تغطي ما قد يسأل عنه عميل حقيقي عبر واتساب.",
-  "قواعد صارمة:",
-  "1) الأسئلة بصيغة عميل حقيقي يسأل (قصيرة وبسيطة).",
-  "2) الأجوبة من المحتوى المرفق فقط — لا تخترع أي سعر أو موعد أو معلومة غير موجودة فيه.",
-  "3) غطِّ ما توفر من: الأسعار، أوقات العمل، الموقع والعنوان، الخدمات والمنتجات، التوصيل، طرق الدفع، الاسترجاع، التواصل.",
-  "4) أعد من 5 إلى 12 زوجاً حسب غنى المحتوى.",
-  '5) أعد مصفوفة JSON فقط بهذا الشكل: [{"question":"...","answer":"..."}] بدون أي نص خارجها.',
-].join("\n");
+function requireGeminiKey(): string {
+  const key = config.llm.apiKey || config.embed.apiKey;
 
-/* ═══════════════════════════════════════════════════════════════
-   الميزة 2: توليد Q&A من الموقع
-   ═══════════════════════════════════════════════════════════════ */
-
-export async function extractQAPairs(
-  url: string
-): Promise<{ pairs: QAPair[]; title: string }> {
-  const { text, title } = await extractFromUrl(url);
-
-  if (text.length < 40) {
+  if (!key) {
     throw new Error(
-      "تعذر استخراج محتوى كافٍ من الصفحة — تأكد من الرابط أو أدخلها يدوياً"
+      "[Gemini] GEMINI_API_KEY غير موجود في متغيرات البيئة"
     );
   }
 
-  const raw = await chatCompletion(
-    QA_SYSTEM,
-    `عنوان الصفحة: ${title}\n\nالمحتوى:\n${text.slice(0, 9000)}`,
-    {
-      json: true,
-      maxTokens: 2200,
-    }
-  );
-
-  const cleaned = raw.replace(/```(?:json)?/g, "").trim();
-
-  const match = cleaned.match(/\[[\s\S]*\]/);
-
-  if (!match) {
-    throw new Error(
-      "لم نتمكن من فهم النتيجة المولدة — أعد المحاولة"
-    );
-  }
-
-  let list: unknown;
-
-  try {
-    list = JSON.parse(match[0]);
-  } catch {
-    throw new Error(
-      "تعذر تحليل النتيجة المولدة — أعد المحاولة"
-    );
-  }
-
-  const pairs = (Array.isArray(list) ? list : [])
-    .filter(
-      (p: any) =>
-        p &&
-        typeof p.question === "string" &&
-        typeof p.answer === "string"
-    )
-    .map((p: any) => ({
-      question: p.question.trim(),
-      answer: p.answer.trim(),
-    }))
-    .filter(
-      (p: QAPair) =>
-        p.question.length > 0 &&
-        p.answer.length > 0
-    )
-    .slice(0, 20);
-
-  if (pairs.length === 0) {
-    throw new Error(
-      "لم نستخرج أسئلة وأجوبة مفيدة من المحتوى — جرّب رابطاً آخر أو أدخلها يدوياً"
-    );
-  }
-
-  return {
-    pairs,
-    title,
-  };
+  return key;
 }
 
-/* ═══════════════════════════════════════════════════════════════
-   حفظ Q&A في قاعدة المعرفة
-   ═══════════════════════════════════════════════════════════════ */
+/**
+ * استدعاء Gemini للنصوص.
+ */
+export async function chatCompletion(
+  system: string,
+  user: string,
+  opts: {
+    json?: boolean;
+    maxTokens?: number;
+  } = {}
+): Promise<string> {
+  const apiKey = requireGeminiKey();
+  const model = config.llm.model;
 
-export async function saveQAPairs(
-  tenantId: string,
-  pairs: QAPair[],
-  sourceUrl: string | null
-): Promise<{ saved: number; sourceId: string }> {
-  const valid = pairs
-    .map((p) => ({
-      question: p.question.trim(),
-      answer: p.answer.trim(),
-    }))
-    .filter(
-      (p) =>
-        p.question.length > 0 &&
-        p.answer.length > 0
-    );
+  const url =
+    `${GEMINI_BASE_URL}/models/${encodeURIComponent(model)}:generateContent` +
+    `?key=${encodeURIComponent(apiKey)}`;
 
-  if (valid.length === 0) {
-    throw new Error("لا توجد أسئلة صالحة للحفظ");
+  const generationConfig: Record<string, unknown> = {
+    temperature: 0.3,
+    maxOutputTokens: opts.maxTokens ?? 400,
+  };
+
+  if (opts.json) {
+    generationConfig.responseMimeType = "application/json";
   }
 
-  const { data: source, error: srcErr } = await db
-    .from("knowledge_sources")
-    .insert({
-      tenant_id: tenantId,
-      kind: sourceUrl ? "url" : "text",
-      url: sourceUrl,
-      status: "indexed",
-      chunks_count: valid.length,
-    })
-    .select()
-    .single();
+  const body = {
+    systemInstruction: {
+      parts: [
+        {
+          text: system,
+        },
+      ],
+    },
 
-  if (srcErr || !source) {
+    contents: [
+      {
+        role: "user",
+        parts: [
+          {
+            text: user,
+          },
+        ],
+      },
+    ],
+
+    generationConfig,
+  };
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 45_000);
+
+  let res: Response;
+
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+  } catch (error: any) {
+    if (error?.name === "AbortError") {
+      throw new Error("[Gemini] انتهت مهلة طلب توليد الرد");
+    }
+
     throw new Error(
-      "تعذر إنشاء سجل المصدر: " +
-        (srcErr?.message ?? "خطأ غير معروف")
+      `[Gemini] فشل الاتصال: ${String(error?.message ?? error)}`
     );
+  } finally {
+    clearTimeout(timeout);
   }
 
-  const texts = valid.map(
-    (p) => `س: ${p.question}\nج: ${p.answer}`
-  );
+  const raw = await res.text();
 
-  const vectors = await embed(texts);
+  if (!res.ok) {
+    throw new Error(`[Gemini] ${res.status}: ${raw}`);
+  }
 
-  if (vectors.length !== texts.length) {
+  let data: any;
+
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    throw new Error(`[Gemini] استجابة غير صالحة: ${raw}`);
+  }
+
+  const text =
+    data?.candidates?.[0]?.content?.parts
+      ?.map((part: any) => part?.text ?? "")
+      .join("") ?? "";
+
+  if (!text) {
+    const finishReason =
+      data?.candidates?.[0]?.finishReason ?? "UNKNOWN";
+
     throw new Error(
-      `[RAG] عدد embeddings (${vectors.length}) لا يطابق عدد النصوص (${texts.length})`
+      `[Gemini] لم يتم إرجاع نص. finishReason=${finishReason}`
     );
   }
 
-  const rows = texts.map((content, i) => {
-    const vector = vectors[i];
+  return text.trim();
+}
 
-    if (!vector || vector.length === 0) {
+/**
+ * إنشاء embeddings باستخدام Gemini.
+ *
+ * قاعدة البيانات الحالية تستخدم 3072 dimensions.
+ */
+export async function embed(
+  texts: string[]
+): Promise<number[][]> {
+  if (!texts.length) {
+    return [];
+  }
+
+  const apiKey = config.embed.apiKey;
+
+  if (!apiKey) {
+    throw new Error(
+      "[Gemini Embeddings] GEMINI_API_KEY غير موجود"
+    );
+  }
+
+  const model = config.embed.model;
+
+  // قاعدة البيانات الحالية لديك = vector بحجم 3072
+  const dim = config.embed.dim || 3072;
+
+  if (dim !== 3072) {
+    throw new Error(
+      `[Gemini Embeddings] GEMINI_EMBED_DIM يجب أن يكون 3072، والقيمة الحالية هي ${dim}`
+    );
+  }
+
+  const BATCH = 32;
+  const out: number[][] = [];
+
+  for (let i = 0; i < texts.length; i += BATCH) {
+    const batch = texts.slice(i, i + BATCH);
+
+    const url =
+      `${GEMINI_BASE_URL}/models/${encodeURIComponent(model)}:batchEmbedContents` +
+      `?key=${encodeURIComponent(apiKey)}`;
+
+    const requests = batch.map((text) => ({
+      model: `models/${model}`,
+
+      content: {
+        parts: [
+          {
+            text,
+          },
+        ],
+      },
+
+      embedContentConfig: {
+        outputDimensionality: dim,
+      },
+    }));
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 45_000);
+
+    let res: Response;
+
+    try {
+      res = await fetch(url, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          requests,
+        }),
+        signal: controller.signal,
+      });
+    } catch (error: any) {
+      if (error?.name === "AbortError") {
+        throw new Error(
+          "[Gemini Embeddings] انتهت مهلة إنشاء embeddings"
+        );
+      }
+
       throw new Error(
-        `[RAG] embedding فارغ للقطعة رقم ${i}`
+        `[Gemini Embeddings] فشل الاتصال: ${String(
+          error?.message ?? error
+        )}`
+      );
+    } finally {
+      clearTimeout(timeout);
+    }
+
+    const raw = await res.text();
+
+    if (!res.ok) {
+      throw new Error(
+        `[Gemini Embeddings] ${res.status}: ${raw}`
       );
     }
 
-    return {
-      tenant_id: tenantId,
-      source_id: source.id,
-      chunk_index: i,
-      content,
-      embedding: toPgVector(vector),
-    };
-  });
+    let data: any;
 
-  const { error: insErr } = await db
-    .from("knowledge_chunks")
-    .insert(rows);
-
-  if (insErr) {
-    throw new Error(
-      "تعذر حفظ الأسئلة والأجوبة: " +
-        insErr.message
-    );
-  }
-
-  return {
-    saved: valid.length,
-    sourceId: source.id,
-  };
-}
-
-/* ═══════════════════════════════════════════════════════════════
-   الميزة 3: البحث الدلالي RAG
-   ═══════════════════════════════════════════════════════════════ */
-
-export type SemanticMatch = {
-  id: string;
-  content: string;
-  similarity: number;
-};
-
-export async function semanticSearch(
-  tenantId: string,
-  text: string,
-  topK = config.ragTopK
-): Promise<{
-  matches: SemanticMatch[];
-  best: number;
-}> {
-  console.log("========================================");
-  console.log("[RAG] semanticSearch START");
-  console.log("[RAG] tenantId:", tenantId);
-  console.log("[RAG] question:", text);
-  console.log("[RAG] topK:", topK);
-  console.log("========================================");
-
-  /* ---------------------------------------
-     1. إنشاء embedding لسؤال العميل
-     --------------------------------------- */
-
-  console.log("[RAG] generating query embedding...");
-
-  const [qv] = await embed([text]);
-
-  if (!qv) {
-    throw new Error(
-      "[RAG] لم يتم إنشاء query embedding"
-    );
-  }
-
-  console.log(
-    "[RAG] query embedding dimensions:",
-    qv.length
-  );
-
-  /* ---------------------------------------
-     2. التأكد من البعد المتوقع
-     --------------------------------------- */
-
-  const expectedDim = Number(
-    config.embed.dim ?? 3072
-  );
-
-  console.log(
-    "[RAG] configured embedding dimensions:",
-    expectedDim
-  );
-
-  if (qv.length !== expectedDim) {
-    throw new Error(
-      `[RAG] أبعاد query embedding غير صحيحة: ${qv.length}. المتوقع: ${expectedDim}`
-    );
-  }
-
-  /* ---------------------------------------
-     3. تحويل embedding إلى pgvector
-     --------------------------------------- */
-
-  const pgVector = toPgVector(qv);
-
-  console.log(
-    "[RAG] pgvector created successfully"
-  );
-
-  /* ---------------------------------------
-     4. استدعاء match_knowledge
-     --------------------------------------- */
-
-  const threshold = config.ragThreshold;
-
-  console.log("[RAG] calling match_knowledge...");
-  console.log("[RAG] threshold:", threshold);
-  console.log("[RAG] limit:", topK);
-
-  const { data: hits, error } = await db.rpc(
-    "match_knowledge",
-    {
-      p_tenant_id: tenantId,
-      p_query: pgVector,
-      p_limit: topK,
-      p_threshold: 0,
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      throw new Error(
+        `[Gemini Embeddings] استجابة غير صالحة: ${raw}`
+      );
     }
-  );
 
-  /* ---------------------------------------
-     5. فحص نتيجة RPC
-     --------------------------------------- */
+    const embeddings = data?.embeddings ?? [];
 
-  if (error) {
-    console.error(
-      "[RAG] match_knowledge ERROR:",
-      error
-    );
-
-    throw new Error(
-      "فشل البحث الدلالي: " +
-        error.message
-    );
-  }
-
-  console.log(
-    "[RAG] match_knowledge returned:",
-    hits?.length ?? 0,
-    "rows"
-  );
-
-  if (hits && hits.length > 0) {
-    console.log(
-      "[RAG] similarities:",
-      hits.map((h: any) => h.similarity)
-    );
-  }
-
-  /* ---------------------------------------
-     6. تجهيز النتائج
-     --------------------------------------- */
-
-  const matches = (
-    (hits ?? []) as {
-      id: string;
-      content: string;
-      similarity: number;
-    }[]
-  ).map((h) => ({
-    id: h.id,
-    content: h.content,
-    similarity:
-      Math.round(
-        Number(h.similarity) * 1000
-      ) / 1000,
-  }));
-
-  const best =
-    matches[0]?.similarity ?? 0;
-
-  console.log("[RAG] best similarity:", best);
-  console.log("[RAG] threshold:", threshold);
-  console.log(
-    "[RAG] confident candidate:",
-    best >= threshold
-  );
-
-  console.log("========================================");
-  console.log("[RAG] semanticSearch END");
-  console.log("========================================");
-
-  return {
-    matches,
-    best,
-  };
-}
-
-/* ═══════════════════════════════════════════════════════════════
-   توليد إجابة مبنية على المعرفة
-   ═══════════════════════════════════════════════════════════════ */
-
-export async function generateGroundedAnswer(
-  businessName: string,
-  context: string,
-  question: string
-): Promise<{
-  answer: string;
-  grounded: boolean;
-}> {
-  console.log("[RAG] generating grounded answer...");
-  console.log(
-    "[RAG] context length:",
-    context.length
-  );
-
-  const system = [
-    `أنت موظف خدمة عملاء لمشروع «${businessName}» يرد عبر واتساب.`,
-    "التعليمات الصارمة:",
-    "أجب بناءً على السياق المرفق فقط، وبنفس لهجة وأسلوب المحتوى المتوفر.",
-    "إذا لم تجد إجابة كافية في السياق، قل صراحة إنك غير متأكد ولا تختلق معلومة.",
-    "ممنوع التخمين: لا أسعار ولا مواعيد ولا عناوين غير موجودة نصًا في السياق.",
-    "الرد قصير (جملتان بحد أقصى) بلهجة سعودية مهذبة.",
-    'أعد JSON فقط: {"answer":"...","grounded":true|false}',
-  ].join("\n");
-
-  const raw = await chatCompletion(
-    system,
-    `<context>\n${context}\n</context>\n\nسؤال العميل:\n${question}`,
-    {
-      json: true,
+    if (embeddings.length !== batch.length) {
+      throw new Error(
+        `[Gemini Embeddings] عدد النتائج (${embeddings.length}) لا يطابق عدد المدخلات (${batch.length})`
+      );
     }
-  );
 
-  console.log(
-    "[RAG] Gemini answer received"
-  );
+    for (const item of embeddings) {
+      const values = item?.values;
 
-  try {
-    const jsonMatch =
-      raw.match(/\{[\s\S]*\}/);
+      if (!Array.isArray(values) || values.length === 0) {
+        throw new Error(
+          "[Gemini Embeddings] تم استلام embedding فارغ أو غير صالح"
+        );
+      }
 
-    const parsed = JSON.parse(
-      jsonMatch?.[0] ?? "{}"
-    );
+      if (values.length !== dim) {
+        throw new Error(
+          `[Gemini Embeddings] البُعد غير صحيح: Gemini أعاد ${values.length} بينما المطلوب ${dim}`
+        );
+      }
 
-    const answer = String(
-      parsed.answer ?? ""
-    ).trim();
-
-    const grounded =
-      Boolean(parsed.grounded);
-
-    console.log(
-      "[RAG] grounded:",
-      grounded
-    );
-
-    console.log(
-      "[RAG] answer length:",
-      answer.length
-    );
-
-    return {
-      answer,
-      grounded,
-    };
-  } catch (error) {
-    console.error(
-      "[RAG] failed to parse grounded answer:",
-      error
-    );
-
-    return {
-      answer: "",
-      grounded: false,
-    };
+      out.push(values as number[]);
+    }
   }
+
+  if (out.length !== texts.length) {
+    throw new Error(
+      `[Gemini Embeddings] عدد النتائج النهائي (${out.length}) لا يطابق المدخلات (${texts.length})`
+    );
+  }
+
+  return out;
 }
 
-/* ═══════════════════════════════════════════════════════════════
-   الإجابة النهائية من قاعدة المعرفة
-   ═══════════════════════════════════════════════════════════════ */
-
-export type SemanticAnswerResult = {
-  confident: boolean;
-  bestSimilarity: number;
-  threshold: number;
-  matches: SemanticMatch[];
-  answer: string | null;
-};
-
-export async function answerFromKnowledge(
-  tenantId: string,
-  businessName: string,
-  text: string
-): Promise<SemanticAnswerResult> {
-  console.log("########################################");
-  console.log("[RAG] answerFromKnowledge START");
-  console.log("[RAG] tenant:", tenantId);
-  console.log("[RAG] business:", businessName);
-  console.log("[RAG] question:", text);
-  console.log("########################################");
-
-  /* ---------------------------------------
-     البحث في قاعدة المعرفة
-     --------------------------------------- */
-
-  const { matches, best } =
-    await semanticSearch(
-      tenantId,
-      text
+/**
+ * تحويل vector إلى الصيغة التي يفهمها pgvector.
+ */
+export function toPgVector(v: number[]): string {
+  if (!Array.isArray(v) || v.length === 0) {
+    throw new Error(
+      "[pgvector] لا يمكن تحويل embedding فارغ"
     );
-
-  const threshold =
-    config.ragThreshold;
-
-  console.log(
-    "[RAG] search completed. matches:",
-    matches.length
-  );
-
-  console.log(
-    "[RAG] best similarity:",
-    best
-  );
-
-  console.log(
-    "[RAG] required threshold:",
-    threshold
-  );
-
-  /* ---------------------------------------
-     لا توجد مطابقة قوية
-     --------------------------------------- */
-
-  if (
-    matches.length === 0 ||
-    best < threshold
-  ) {
-    console.log(
-      "[RAG] NO CONFIDENT MATCH"
-    );
-
-    console.log(
-      "[RAG] answerFromKnowledge END"
-    );
-
-    return {
-      confident: false,
-      bestSimilarity: best,
-      threshold,
-      matches,
-      answer: null,
-    };
   }
 
-  /* ---------------------------------------
-     بناء السياق من أفضل النتائج
-     --------------------------------------- */
-
-  const context = matches
-    .map(
-      (m, i) =>
-        `[${i + 1}] ${m.content}`
-    )
-    .join("\n");
-
-  console.log(
-    "[RAG] context prepared"
-  );
-
-  console.log(
-    "[RAG] sending context to Gemini..."
-  );
-
-  /* ---------------------------------------
-     توليد الإجابة
-     --------------------------------------- */
-
-  const {
-    answer,
-    grounded,
-  } =
-    await generateGroundedAnswer(
-      businessName,
-      context,
-      text
+  if (v.length !== config.embed.dim) {
+    throw new Error(
+      `[pgvector] بُعد embedding غير صحيح: ${v.length} بدل ${config.embed.dim}`
     );
+  }
 
-  const confident =
-    grounded &&
-    answer.length > 0;
-
-  console.log(
-    "[RAG] grounded:",
-    grounded
-  );
-
-  console.log(
-    "[RAG] answer exists:",
-    answer.length > 0
-  );
-
-  console.log(
-    "[RAG] FINAL confident:",
-    confident
-  );
-
-  console.log(
-    "[RAG] answerFromKnowledge END"
-  );
-
-  return {
-    confident,
-    bestSimilarity: best,
-    threshold,
-    matches,
-    answer: confident
-      ? answer
-      : null,
-  };
+  return `[${v.join(",")}]`;
 }
