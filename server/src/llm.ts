@@ -1,17 +1,8 @@
-```ts
 import { config } from "./config.js";
 
-/**
- * Gemini API
- *
- * نستخدم Gemini API مباشرة بدل OpenAI-compatible API.
- */
 const GEMINI_BASE_URL =
   "https://generativelanguage.googleapis.com/v1beta";
 
-/**
- * التحقق من وجود مفتاح Gemini.
- */
 function requireGeminiKey(): string {
   const key = config.llm.apiKey || config.embed.apiKey;
 
@@ -24,9 +15,6 @@ function requireGeminiKey(): string {
   return key;
 }
 
-/**
- * تنفيذ طلب Gemini generateContent.
- */
 export async function chatCompletion(
   system: string,
   user: string,
@@ -47,9 +35,6 @@ export async function chatCompletion(
     maxOutputTokens: opts.maxTokens ?? 400,
   };
 
-  /**
-   * JSON mode.
-   */
   if (opts.json) {
     generationConfig.responseMimeType = "application/json";
   }
@@ -88,9 +73,7 @@ export async function chatCompletion(
   const raw = await res.text();
 
   if (!res.ok) {
-    throw new Error(
-      `[Gemini] ${res.status}: ${raw}`
-    );
+    throw new Error(`[Gemini] ${res.status}: ${raw}`);
   }
 
   let data: any;
@@ -98,9 +81,7 @@ export async function chatCompletion(
   try {
     data = JSON.parse(raw);
   } catch {
-    throw new Error(
-      `[Gemini] استجابة غير صالحة: ${raw}`
-    );
+    throw new Error(`[Gemini] استجابة غير صالحة: ${raw}`);
   }
 
   const text =
@@ -120,12 +101,6 @@ export async function chatCompletion(
   return text;
 }
 
-/**
- * إنشاء Embeddings باستخدام Gemini.
- *
- * يستخدم batchEmbedContents لتوليد عدة vectors
- * في طلب واحد.
- */
 export async function embed(
   texts: string[]
 ): Promise<number[][]> {
@@ -143,13 +118,6 @@ export async function embed(
 
   const model = config.embed.model;
   const dim = config.embed.dim;
-
-  /**
-   * Gemini Batch Embeddings.
-   *
-   * نستخدم دفعات صغيرة لتجنب إرسال كمية كبيرة
-   * في طلب واحد.
-   */
   const BATCH = 32;
 
   const out: number[][] = [];
@@ -172,7 +140,9 @@ export async function embed(
         ],
       },
 
-      outputDimensionality: dim,
+      embedContentConfig: {
+        outputDimensionality: dim,
+      },
     }));
 
     const res = await fetch(url, {
@@ -233,11 +203,6 @@ export async function embed(
   return out;
 }
 
-/**
- * تحويل مصفوفة الأرقام إلى صيغة pgvector:
- *
- * [0.1,0.2,0.3,...]
- */
 export function toPgVector(v: number[]): string {
   if (!Array.isArray(v) || v.length === 0) {
     throw new Error(
@@ -247,4 +212,3 @@ export function toPgVector(v: number[]): string {
 
   return `[${v.join(",")}]`;
 }
-```
