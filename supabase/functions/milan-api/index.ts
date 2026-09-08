@@ -39,7 +39,7 @@
  */
 
 import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2";
-import * as cheerio from "npm:@cheerio/cheerio@1";
+import * as cheerio from "npm:cheerio@1";
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
