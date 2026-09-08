@@ -78,64 +78,10 @@ const cls = {
 
 /* لا يوجد أي QR تجريبي في هذا الملف — الربط يتم حصراً عبر جلسة Baileys حقيقية في الخادم */
 
-/* ═══════════════ بيانات العرض ═══════════════ */
+/* ═══════════════ أدوات مساعدة ═══════════════ */
 
 const now = () => new Date().toISOString();
 const ago = (min: number) => new Date(Date.now() - min * 60000).toISOString();
-
-const DEMO_INITIAL: DashState = {
-  tenantId: "demo-tenant",
-  businessName: "كافيه ميلانو",
-  isActive: true,
-  credits: 642,
-  phone: "5XXXXXXX",
-  waStatus: "connected",
-  openUnresolved: 2,
-  convs: [
-    {
-      id: "c1", phone: "+966 50 ••• ••21", transferred: false, paused: null, lastAt: ago(4),
-      msgs: [
-        { id: "m1", direction: "in", body: "السلام عليكم، وش أنواع القهوة المختصة عندكم؟", kind: "customer", is_auto: false, created_at: ago(9) },
-        { id: "m2", direction: "out", body: "وعليكم السلام! عندنا V60، كيمكس، وإسبريسو من محمصة محلية — تحب أوصي لك بشي حسب ذوقك؟", kind: "answer", is_auto: true, created_at: ago(9) },
-        { id: "m3", direction: "in", body: "أحب الشيء القوي", kind: "customer", is_auto: false, created_at: ago(4) },
-        { id: "m4", direction: "out", body: "القوي يناسبك الإسبريسو المحمص الغامق أو الفلات وايت — الإسبريسو بـ 12 ريال والفلات وايت بـ 16.", kind: "answer", is_auto: true, created_at: ago(4) },
-      ],
-    },
-    {
-      id: "c2", phone: "+966 55 ••• ••87", transferred: true, paused: null, lastAt: ago(31),
-      msgs: [
-        { id: "m5", direction: "in", body: "طلبي تأخر أكثر من نص ساعة!", kind: "customer", is_auto: false, created_at: ago(35) },
-        { id: "m6", direction: "out", body: "وصلتني رسالتك، وحوّلت محادثتك لأحد الموظفين — بيرد عليك في أقرب وقت إن شاء الله.", kind: "handoff", is_auto: true, created_at: ago(35) },
-        { id: "m7", direction: "out", body: "أعتذر عن التأخير، طلبك خرج مع المندوب قبل 10 دقائق ويوصلك خلال دقائق.", kind: "manual", is_auto: false, created_at: ago(31) },
-      ],
-    },
-    {
-      id: "c3", phone: "+964 77 ••• ••03", transferred: false, paused: null, lastAt: ago(58),
-      msgs: [
-        { id: "m8", direction: "in", body: "بكم السبانش لاتيه؟", kind: "customer", is_auto: false, created_at: ago(59) },
-        { id: "m9", direction: "out", body: "السبانش لاتيه بـ 22 ريال، والحجم الكبير بـ 26.", kind: "answer", is_auto: true, created_at: ago(58) },
-      ],
-    },
-  ],
-  unresolved: [
-    { id: "u1", question: "عندكم فرع في جدة؟", createdAt: ago(120), conversationId: "c3", bestSimilarity: 0.19 },
-    { id: "u2", question: "تقبلون بطاقة مدى للشحن؟", createdAt: ago(200), conversationId: "c1", bestSimilarity: 0.14 },
-  ],
-  sources: [
-    { id: "s1", kind: "website", url: "https://milano-cafe.example", status: "indexed", chunks: 24, createdAt: ago(60 * 26) },
-    { id: "s2", kind: "gmaps", url: "https://maps.app.goo.gl/milano", status: "indexed", chunks: 9, createdAt: ago(60 * 26) },
-  ],
-};
-
-/** سيناريو محاكاة: رسائل واردة → ردود آلية (خصم رصيد، تحويل، أسئلة عالقة) */
-const DEMO_SCRIPT: { conv: number; text: string; reply: { body: string; kind: string } | "unresolved" }[] = [
-  { conv: 0, text: "عندكم توصيل للمنازل؟", reply: { body: "أكيد، التوصيل متاح داخل الرياض خلال 45 دقيقة تقريبًا — الرسوم 10 ريال ومجاني للطلبات فوق 60.", kind: "answer" } },
-  { conv: 2, text: "أبي أعرف سعر السبانش لاتيه", reply: { body: "السبانش لاتيه بـ 22 ريال، والحجم الكبير بـ 26.", kind: "answer" } },
-  { conv: 1, text: "متى تفتحون يوم الجمعة؟", reply: { body: "نفتح يوميًا من 7 صباحًا حتى 1 بعد منتصف الليل، والجمعة من 2 ظهرًا.", kind: "answer" } },
-  { conv: 2, text: "عندكم قهوة خالية من الكافيين؟", reply: "unresolved" },
-  { conv: 0, text: "أبغى أتكلم مع بشري", reply: { body: "وصلتني رسالتك، وحوّلت محادثتك لأحد الموظفين — بيرد عليك في أقرب وقت إن شاء الله.", kind: "handoff" } },
-  { conv: 1, text: "بكم الكوفي عندكم؟", reply: { body: "القهوة المقطرة بـ 18 ريال، واللاتيه بـ 16.", kind: "answer" } },
-];
 
 /* ═══════════════ المكوّن الرئيسي ═══════════════ */
 
@@ -328,56 +274,14 @@ export default function Dashboard() {
     return () => window.clearInterval(iv);
   }, [demo, activeConv, token, loadThread]);
 
-  /* ── محاكاة العرض الحيّ ── */
+  /* ── تحميل البيانات الحقيقية ── */
   useEffect(() => {
-    if (!demo) {
+    if (demo || !authed || !token) {
       setSt(null);
       return;
     }
-    if (!authed) return;
-    setSt(structuredClone(DEMO_INITIAL));
-    const iv = window.setInterval(() => {
-      setSt((prev) => {
-        if (!prev) return prev;
-        const ev = DEMO_SCRIPT[scriptIdx.current % DEMO_SCRIPT.length];
-        scriptIdx.current += 1;
-        const conv = prev.convs[ev.conv];
-        if (!conv || conv.transferred || conv.paused) return prev;
-        const inMsg: ThreadMsg = { id: `sim-in-${Date.now()}`, direction: "in", body: ev.text, kind: "customer", is_auto: false, created_at: now() };
-        let next: DashState = {
-          ...prev,
-          convs: prev.convs.map((c, i) => (i === ev.conv ? { ...c, lastAt: inMsg.created_at, msgs: [...c.msgs, inMsg] } : c)),
-        };
-        if (next.credits <= 0) {
-          return { ...next, convs: next.convs.map((c, i) => (i === ev.conv ? { ...c, paused: "credits" } : c)) };
-        }
-        const replyText =
-          ev.reply === "unresolved"
-            ? "عذرًا، ما عندي معلومات مؤكدة عن هذا الموضوع. لو تحتاج شيء ثاني أنا موجود، وأقدر أحوّلك لأحد الموظفين لو حبيت."
-            : ev.reply.body;
-        const kind = ev.reply === "unresolved" ? "refusal" : ev.reply.kind;
-        const outMsg: ThreadMsg = { id: `sim-out-${Date.now()}`, direction: "out", body: replyText, kind, is_auto: true, created_at: now() };
-        next = {
-          ...next,
-          credits: next.credits - 1,
-          convs: next.convs.map((c, i) =>
-            i === ev.conv
-              ? { ...c, transferred: kind === "handoff", lastAt: outMsg.created_at, msgs: [...c.msgs, outMsg] }
-              : c
-          ),
-        };
-        if (kind === "refusal") {
-          next = {
-            ...next,
-            openUnresolved: next.openUnresolved + 1,
-            unresolved: [{ id: `u-${Date.now()}`, question: ev.text, createdAt: now(), conversationId: conv.id, bestSimilarity: 0.17 }, ...next.unresolved],
-          };
-        }
-        return next;
-      });
-    }, 9000);
-    return () => window.clearInterval(iv);
-  }, [demo, authed]);
+    loadAll();
+  }, [demo, authed, token, loadAll]);
 
   /* تمرير تلقائي لأسفل الخيط */
   const activeThread = st?.convs.find((c) => c.id === activeConv) ?? null;

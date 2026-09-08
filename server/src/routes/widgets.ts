@@ -6,7 +6,7 @@ import type { Request, Response, NextFunction } from "express";
 import { authClient, db } from "../db.js";
 import { rateLimit } from "../middleware/rateLimit.js";
 import { answerFromKnowledge } from "../rag/qa.js";
-import { chatCompletion } from "../llm.js";
+import { chatCompletion, embed, toPgVector } from "../llm.js";
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // دوال مساعدة لتحليل المواقع
@@ -197,22 +197,53 @@ widgetsRouter.post("/dashboard", rateLimit({ windowMs: 60_000, max: 10 }), async
     // استخراج الحقول الأساسية للتوافق مع الأعمدة القديمة
     insertData.welcome_message = settings.chat?.welcomeMessage ?? "مرحباً! كيف يمكنني مساعدتك؟";
     insertData.primary_color = settings.appearance?.primaryColor ?? "#2ec27e";
+    insertData.header_color = settings.appearance?.headerColor ?? settings.appearance?.primaryColor ?? "#2ec27e";
+    insertData.text_color = settings.appearance?.textColor ?? "#ffffff";
     insertData.position = settings.appearance?.position ?? "left";
     insertData.language = settings.localization?.language ?? "ar";
     insertData.rtl = settings.localization?.rtl ?? true;
     insertData.show_branding = settings.branding?.showBranding ?? true;
     insertData.placeholder = settings.chat?.placeholder ?? "اكتب رسالتك...";
+    insertData.avatar_url = settings.avatar?.botAvatar?.url ?? null;
+    insertData.logo_url = settings.avatar?.headerLogo?.url ?? null;
+    insertData.agent_name = settings.avatar?.botName ?? name.trim();
+    insertData.agent_tagline = settings.avatar?.botTagline ?? "يرد خلال ثوانٍ";
+    insertData.border_radius = settings.appearance?.borderRadius ?? 16;
+    insertData.shadow = settings.appearance?.shadow ?? "medium";
+    insertData.window_width = settings.appearance?.width ?? 380;
+    insertData.window_height = settings.appearance?.height ?? 560;
+    insertData.launcher_size = settings.appearance?.launcher?.size ?? 60;
+    insertData.launcher_shape = settings.appearance?.launcher?.shape ?? "circle";
+    insertData.launcher_icon_url = settings.appearance?.launcher?.customIcon ?? null;
+    insertData.show_status = settings.chatWindow?.header?.showStatus ?? true;
+    insertData.show_timestamps = settings.chatWindow?.bubbles?.showTimestamp ?? true;
+    insertData.typing_indicator = settings.chat?.showTypingIndicator ?? true;
   } else {
     // التوافق مع الإصدار القديم
     insertData.welcome_message = settings?.welcomeMessage ?? "مرحباً! كيف يمكنني مساعدتك؟";
     insertData.primary_color = settings?.primaryColor ?? "#2ec27e";
+    insertData.header_color = settings?.headerColor ?? settings?.primaryColor ?? "#2ec27e";
+    insertData.text_color = settings?.textColor ?? "#ffffff";
     insertData.position = settings?.position ?? "left";
     insertData.language = settings?.language ?? "ar";
     insertData.rtl = settings?.rtl ?? true;
     insertData.avatar_url = settings?.avatarUrl ?? null;
+    insertData.logo_url = settings?.logoUrl ?? null;
+    insertData.agent_name = settings?.agentName ?? name.trim();
+    insertData.agent_tagline = settings?.agentTagline ?? "يرد خلال ثوانٍ";
     insertData.show_branding = settings?.showBranding ?? true;
     insertData.placeholder = settings?.placeholder ?? "اكتب رسالتك...";
     insertData.suggested_questions = settings?.suggestedQuestions ?? [];
+    insertData.border_radius = settings?.borderRadius ?? 16;
+    insertData.shadow = settings?.shadow ?? "medium";
+    insertData.window_width = settings?.windowWidth ?? 380;
+    insertData.window_height = settings?.windowHeight ?? 560;
+    insertData.launcher_size = settings?.launcherSize ?? 60;
+    insertData.launcher_shape = settings?.launcherShape ?? "circle";
+    insertData.launcher_icon_url = settings?.launcherIconUrl ?? null;
+    insertData.show_status = settings?.showStatus ?? true;
+    insertData.show_timestamps = settings?.showTimestamps ?? true;
+    insertData.typing_indicator = settings?.typingIndicator ?? true;
   }
 
   const { data, error } = await db
@@ -273,13 +304,28 @@ widgetsRouter.put("/dashboard/:id", async (req, res) => {
       // التوافق مع الإصدار القديم
       if (settings.welcomeMessage !== undefined) patch.welcome_message = settings.welcomeMessage;
       if (settings.primaryColor !== undefined) patch.primary_color = settings.primaryColor;
+      if (settings.headerColor !== undefined) patch.header_color = settings.headerColor;
+      if (settings.textColor !== undefined) patch.text_color = settings.textColor;
       if (settings.position !== undefined) patch.position = settings.position;
       if (settings.language !== undefined) patch.language = settings.language;
       if (settings.rtl !== undefined) patch.rtl = settings.rtl;
       if (settings.avatarUrl !== undefined) patch.avatar_url = settings.avatarUrl;
+      if (settings.logoUrl !== undefined) patch.logo_url = settings.logoUrl;
+      if (settings.agentName !== undefined) patch.agent_name = settings.agentName;
+      if (settings.agentTagline !== undefined) patch.agent_tagline = settings.agentTagline;
       if (settings.showBranding !== undefined) patch.show_branding = settings.showBranding;
       if (settings.placeholder !== undefined) patch.placeholder = settings.placeholder;
       if (settings.suggestedQuestions !== undefined) patch.suggested_questions = settings.suggestedQuestions;
+      if (settings.borderRadius !== undefined) patch.border_radius = settings.borderRadius;
+      if (settings.shadow !== undefined) patch.shadow = settings.shadow;
+      if (settings.windowWidth !== undefined) patch.window_width = settings.windowWidth;
+      if (settings.windowHeight !== undefined) patch.window_height = settings.windowHeight;
+      if (settings.launcherSize !== undefined) patch.launcher_size = settings.launcherSize;
+      if (settings.launcherShape !== undefined) patch.launcher_shape = settings.launcherShape;
+      if (settings.launcherIconUrl !== undefined) patch.launcher_icon_url = settings.launcherIconUrl;
+      if (settings.showStatus !== undefined) patch.show_status = settings.showStatus;
+      if (settings.showTimestamps !== undefined) patch.show_timestamps = settings.showTimestamps;
+      if (settings.typingIndicator !== undefined) patch.typing_indicator = settings.typingIndicator;
     }
   }
 
@@ -492,29 +538,32 @@ widgetsRouter.get("/public/:token", async (req, res) => {
     businessName: tenant?.business_name ?? "ميلانو",
     welcomeMessage: widget.welcome_message || chat.welcomeMessage || "مرحباً! كيف يمكنني مساعدتك؟",
     primaryColor: widget.primary_color || appearance.primaryColor || "#2ec27e",
+    headerColor: widget.header_color || chatWindow.header?.backgroundColor || widget.primary_color || "#2ec27e",
+    textColor: widget.text_color || chatWindow.header?.textColor || "#ffffff",
     position: widget.position || appearance.position || "left",
     language: widget.language || settings.localization?.language || "ar",
     rtl: widget.rtl !== undefined ? widget.rtl : (settings.localization?.rtl ?? true),
     avatarUrl: widget.avatar_url || avatar.botAvatar?.url || null,
-    logoUrl: avatar.headerLogo?.url || null,
-    agentName: avatar.botName || widget.name,
-    agentTagline: avatar.botTagline || tenant?.business_name || "مساعد ذكي",
-    showStatus: chatWindow.header?.showStatus !== false,
+    logoUrl: widget.logo_url || avatar.headerLogo?.url || null,
+    agentName: widget.agent_name || avatar.botName || widget.name,
+    agentTagline: widget.agent_tagline || avatar.botTagline || tenant?.business_name || "مساعد ذكي",
+    showStatus: widget.show_status !== undefined ? widget.show_status : (chatWindow.header?.showStatus !== false),
     showBranding: widget.show_branding !== undefined ? widget.show_branding : (settings.branding?.showBranding ?? true),
     placeholder: widget.placeholder || chat.placeholder || "اكتب رسالتك...",
     suggestedQuestions: widget.suggested_questions || [],
     // إعدادات المظهر المتقدمة
-    borderRadius: appearance.borderRadius ?? chatWindow.borderRadius ?? 16,
-    shadow: appearance.shadow ?? chatWindow.shadow ?? "medium",
-    windowWidth: appearance.width ?? chatWindow.width ?? 380,
-    windowHeight: appearance.height ?? chatWindow.height ?? 560,
-    headerBackgroundColor: chatWindow.header?.backgroundColor || widget.primary_color || "#2ec27e",
-    headerTextColor: chatWindow.header?.textColor || "#ffffff",
-    launcherSize: appearance.launcher?.size ?? chatWindow.launcher?.size ?? 60,
-    launcherShape: appearance.launcher?.shape ?? chatWindow.launcher?.shape ?? "circle",
-    launcherIconUrl: appearance.launcher?.customIcon || null,
+    borderRadius: widget.border_radius ?? appearance.borderRadius ?? chatWindow.borderRadius ?? 16,
+    shadow: widget.shadow ?? appearance.shadow ?? chatWindow.shadow ?? "medium",
+    windowWidth: widget.window_width ?? appearance.width ?? chatWindow.width ?? 380,
+    windowHeight: widget.window_height ?? appearance.height ?? chatWindow.height ?? 560,
+    headerBackgroundColor: widget.header_color || chatWindow.header?.backgroundColor || widget.primary_color || "#2ec27e",
+    headerTextColor: widget.text_color || chatWindow.header?.textColor || "#ffffff",
+    launcherSize: widget.launcher_size ?? appearance.launcher?.size ?? chatWindow.launcher?.size ?? 60,
+    launcherShape: widget.launcher_shape ?? appearance.launcher?.shape ?? chatWindow.launcher?.shape ?? "circle",
+    launcherIconUrl: widget.launcher_icon_url || appearance.launcher?.customIcon || null,
     launcherOffsetY: appearance.offset?.y ?? 20,
-    showTimestamp: chatWindow.bubbles?.showTimestamp !== false,
+    showTimestamp: widget.show_timestamps !== undefined ? widget.show_timestamps : (chatWindow.bubbles?.showTimestamp !== false),
+    typingIndicator: widget.typing_indicator !== undefined ? widget.typing_indicator : true,
   });
 });
 
@@ -593,6 +642,171 @@ widgetsRouter.post("/public/:token/session", rateLimit({ windowMs: 60_000, max: 
       ? [{ id: "welcome", direction: "out", body: welcomeWidget.welcome_message, kind: "answer", created_at: new Date().toISOString() }]
       : [],
   });
+});
+
+/** استخراج معلومات مرشحة من المحادثة للتعلم */
+widgetsRouter.post("/dashboard/extract-learning", rateLimit({ windowMs: 60_000, max: 10 }), async (req, res) => {
+  const userId = (req as AuthedRequest).userId!;
+  const tenant = await ownedTenant(userId, req.body?.tenantId);
+  if (!tenant) return res.status(404).json({ error: "لا يوجد حساب مرتبط" });
+
+  const { sessionId } = req.body ?? {};
+  if (!sessionId) return res.status(400).json({ error: "sessionId مطلوب" });
+
+  try {
+    // جلب جميع رسائل الجلسة
+    const { data: messages, error } = await db
+      .from("widget_messages")
+      .select("*")
+      .eq("session_id", sessionId)
+      .order("created_at", { ascending: true });
+
+    if (error || !messages || messages.length === 0) {
+      return res.status(404).json({ error: "لا توجد رسائل في هذه الجلسة" });
+    }
+
+    // بناء نص المحادثة
+    const conversationText = messages
+      .map((m) => `${m.direction === "in" ? "العميل" : "المساعد"}: ${m.body}`)
+      .join("\n");
+
+    // طلب من LLM استخراج معلومات مفيدة
+    const prompt = `حلل المحادثة التالية واستخرج المعلومات المفيدة التي يمكن إضافتها إلى قاعدة المعرفة.
+استخرج فقط المعلومات الواقعية والمفيدة التي قد يسأل عنها عملاء آخرون.
+لا تستخرج معلومات شخصية أو خاصة بالعميل.
+أعد النتيجة كمصفوفة JSON بهذا الشكل: [{"question": "السؤال المتوقع", "answer": "الإجابة المستخرجة"}]
+
+المحادثة:
+${conversationText}`;
+
+    const response = await chatCompletion(
+      "أنت مساعد في استخراج المعلومات المفيدة من المحادثات.",
+      prompt,
+      { json: true }
+    );
+
+    const cleaned = response.replace(/```(?:json)?/g, "").trim();
+    const match = cleaned.match(/\[[\s\S]*\]/);
+    if (!match) return res.json({ learnings: [] });
+
+    let learnings: any[];
+    try {
+      learnings = JSON.parse(match[0]);
+    } catch {
+      return res.json({ learnings: [] });
+    }
+
+    // حفظ المعلومات المرشحة في جدول learning_candidates
+    const candidates = learnings
+      .filter((l) => l.question && l.answer)
+      .map((l) => ({
+        tenant_id: tenant.id,
+        session_id: sessionId,
+        question: l.question.trim(),
+        answer: l.answer.trim(),
+        status: "pending",
+      }));
+
+    if (candidates.length > 0) {
+      const { error: insertError } = await db.from("learning_candidates").insert(candidates);
+      if (insertError) {
+        console.error("[widgets] insert learning candidates error:", insertError);
+      }
+    }
+
+    res.json({ learnings: candidates, count: candidates.length });
+  } catch (err: any) {
+    console.error("[widgets] extract learning error:", err);
+    res.status(500).json({ error: "تعذر استخراج المعلومات: " + err.message });
+  }
+});
+
+/** الموافقة على معلومات مرشحة وإضافتها إلى قاعدة المعرفة */
+widgetsRouter.post("/dashboard/approve-learning/:id", async (req, res) => {
+  const userId = (req as AuthedRequest).userId!;
+  const tenant = await ownedTenant(userId, req.body?.tenantId);
+  if (!tenant) return res.status(404).json({ error: "لا يوجد حساب مرتبط" });
+
+  const { id } = req.params;
+
+  try {
+    // جلب المعلومات المرشحة
+    const { data: candidate, error } = await db
+      .from("learning_candidates")
+      .select("*")
+      .eq("id", id)
+      .eq("tenant_id", tenant.id)
+      .single();
+
+    if (error || !candidate) {
+      return res.status(404).json({ error: "المعلومات المرشحة غير موجودة" });
+    }
+
+    // إنشاء embedding للمعلومات
+    const text = `س: ${candidate.question}\nج: ${candidate.answer}`;
+    const [vector] = await embed([text]);
+
+    // إضافة إلى قاعدة المعرفة
+    const { error: insertError } = await db.from("knowledge_chunks").insert({
+      tenant_id: tenant.id,
+      content: text,
+      embedding: toPgVector(vector),
+    });
+
+    if (insertError) {
+      return res.status(500).json({ error: "تعذر إضافة المعلومات إلى قاعدة المعرفة: " + insertError.message });
+    }
+
+    // تحديث حالة المعلومات المرشحة
+    await db
+      .from("learning_candidates")
+      .update({ status: "approved", approved_at: new Date().toISOString() })
+      .eq("id", id);
+
+    res.json({ success: true, message: "تمت الموافقة على المعلومات وإضافتها إلى قاعدة المعرفة" });
+  } catch (err: any) {
+    console.error("[widgets] approve learning error:", err);
+    res.status(500).json({ error: "تعذر الموافقة على المعلومات: " + err.message });
+  }
+});
+
+/** رفض معلومات مرشحة */
+widgetsRouter.post("/dashboard/reject-learning/:id", async (req, res) => {
+  const userId = (req as AuthedRequest).userId!;
+  const tenant = await ownedTenant(userId, req.body?.tenantId);
+  if (!tenant) return res.status(404).json({ error: "لا يوجد حساب مرتبط" });
+
+  const { id } = req.params;
+
+  try {
+    await db
+      .from("learning_candidates")
+      .update({ status: "rejected", rejected_at: new Date().toISOString() })
+      .eq("id", id)
+      .eq("tenant_id", tenant.id);
+
+    res.json({ success: true, message: "تم رفض المعلومات" });
+  } catch (err: any) {
+    console.error("[widgets] reject learning error:", err);
+    res.status(500).json({ error: "تعذر رفض المعلومات: " + err.message });
+  }
+});
+
+/** جلب المعلومات المرشحة للمراجعة */
+widgetsRouter.get("/dashboard/learning-candidates", async (req, res) => {
+  const userId = (req as AuthedRequest).userId!;
+  const tenant = await ownedTenant(userId, req.query.tenantId as string);
+  if (!tenant) return res.status(404).json({ error: "لا يوجد حساب مرتبط" });
+
+  const { data, error } = await db
+    .from("learning_candidates")
+    .select("*")
+    .eq("tenant_id", tenant.id)
+    .eq("status", "pending")
+    .order("created_at", { ascending: false });
+
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data ?? []);
 });
 
 /** إرسال رسالة والحصول على رد */
