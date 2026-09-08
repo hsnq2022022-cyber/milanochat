@@ -4,7 +4,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import confetti from "canvas-confetti";
-import { apiAuthFetch, apiEnabled, api, backendMode, type WaSnapshot } from "../lib/api";
+import { apiAuthFetch, apiEnabled, api, backendMode, API, type WaSnapshot } from "../lib/api";
 import { getSupabase, getStoredClaim, clearStoredClaim } from "../lib/supabase";
 import {
   Logo, IconWhatsapp, IconCheck, IconX, IconPlus, IconTrash, IconSend,
@@ -160,7 +160,7 @@ export default function Dashboard() {
   const [claimErr, setClaimErr] = useState("");
   const [claimBusy, setClaimBusy] = useState(false);
 
-  const [tab, setTab] = useState<"convs" | "unresolved" | "knowledge">("convs");
+  const [tab, setTab] = useState<"convs" | "unresolved" | "knowledge" | "widgets">("convs");
   const [activeConv, setActiveConv] = useState<string | null>(null);
   const [mobileThread, setMobileThread] = useState(false);
   const [draft, setDraft] = useState("");
@@ -171,6 +171,20 @@ export default function Dashboard() {
   const [toast, setToast] = useState("");
   const [answers, setAnswers] = useState<Record<string, { text: string; save: boolean }>>({});
   const [newSource, setNewSource] = useState<{ kind: "url" | "text"; url: string; text: string }>({ kind: "url", url: "", text: "" });
+  
+  // Widgets state
+  const [widgets, setWidgets] = useState<any[]>([]);
+  const [widgetPreview, setWidgetPreview] = useState<any>(null);
+  const [widgetForm, setWidgetForm] = useState<{ name: string; welcomeMessage: string; primaryColor: string; position: "left" | "right"; placeholder: string }>({
+    name: "",
+    welcomeMessage: "مرحباً! كيف يمكنني مساعدتك؟",
+    primaryColor: "#2ec27e",
+    position: "left",
+    placeholder: "اكتب رسالتك...",
+  });
+  const [editingWidget, setEditingWidget] = useState<string | null>(null);
+  const [copiedCode, setCopiedCode] = useState<string | null>(null);
+  
   const threadEndRef = useRef<HTMLDivElement>(null);
   const toastTimer = useRef<number | null>(null);
   const scriptIdx = useRef(0);
@@ -522,6 +536,126 @@ export default function Dashboard() {
     setToken(null);
   };
 
+  /* ═══════════ Widgets Functions ═══════════ */
+
+  const loadWidgets = useCallback(async () => {
+    if (!token) return;
+    try {
+      const data = await apiAuthFetch<any[]>(token, "/api/widgets/dashboard");
+      setWidgets(data);
+    } catch (e: any) {
+      console.error("Load widgets error:", e);
+    }
+  }, [token]);
+
+  useEffect(() => {
+    if (!demo && token) {
+      loadWidgets();
+    }
+  }, [demo, token, loadWidgets]);
+
+  const createWidget = async () => {
+    if (!widgetForm.name.trim()) {
+      showToast("أدخل اسم الـ widget");
+      return;
+    }
+    try {
+      if (demo) {
+        const newWidget = {
+          id: `w-${Date.now()}`,
+          name: widgetForm.name,
+          public_token: Math.random().toString(36).substr(2, 16),
+          enabled: true,
+          welcome_message: widgetForm.welcomeMessage,
+          primary_color: widgetForm.primaryColor,
+          position: widgetForm.position,
+          placeholder: widgetForm.placeholder,
+          created_at: new Date().toISOString(),
+        };
+        setWidgets([newWidget, ...widgets]);
+        showToast("تم إنشاء الـ widget بنجاح");
+        setWidgetForm({ name: "", welcomeMessage: "مرحباً! كيف يمكنني مساعدتك؟", primaryColor: "#2ec27e", position: "left", placeholder: "اكتب رسالتك..." });
+      } else {
+        const newWidget = await apiAuthFetch(token!, "/api/widgets/dashboard", {
+          method: "POST",
+          body: JSON.stringify({
+            name: widgetForm.name,
+            settings: {
+              welcomeMessage: widgetForm.welcomeMessage,
+              primaryColor: widgetForm.primaryColor,
+              position: widgetForm.position,
+              placeholder: widgetForm.placeholder,
+            },
+          }),
+        });
+        setWidgets([newWidget, ...widgets]);
+        showToast("تم إنشاء الـ widget بنجاح");
+        setWidgetForm({ name: "", welcomeMessage: "مرحباً! كيف يمكنني مساعدتك؟", primaryColor: "#2ec27e", position: "left", placeholder: "اكتب رسالتك..." });
+      }
+    } catch (e: any) {
+      showToast(e?.message || "تعذر إنشاء الـ widget");
+    }
+  };
+
+  const updateWidget = async (id: string, updates: any) => {
+    try {
+      if (demo) {
+        setWidgets(widgets.map(w => w.id === id ? { ...w, ...updates } : w));
+        showToast("تم تحديث الـ widget");
+      } else {
+        const updated = await apiAuthFetch(token!, `/api/widgets/dashboard/${id}`, {
+          method: "PUT",
+          body: JSON.stringify(updates),
+        });
+        setWidgets(widgets.map(w => w.id === id ? updated : w));
+        showToast("تم تحديث الـ widget");
+      }
+      setEditingWidget(null);
+    } catch (e: any) {
+      showToast(e?.message || "تعذر تحديث الـ widget");
+    }
+  };
+
+  const deleteWidget = async (id: string) => {
+    if (!confirm("هل أنت متأكد من حذف هذا الـ widget؟")) return;
+    try {
+      if (demo) {
+        setWidgets(widgets.filter(w => w.id !== id));
+        showToast("تم حذف الـ widget");
+      } else {
+        await apiAuthFetch(token!, `/api/widgets/dashboard/${id}`, { method: "DELETE" });
+        setWidgets(widgets.filter(w => w.id !== id));
+        showToast("تم حذف الـ widget");
+      }
+    } catch (e: any) {
+      showToast(e?.message || "تعذر حذف الـ widget");
+    }
+  };
+
+  const toggleWidget = async (id: string, enabled: boolean) => {
+    try {
+      if (demo) {
+        setWidgets(widgets.map(w => w.id === id ? { ...w, enabled } : w));
+      } else {
+        await apiAuthFetch(token!, `/api/widgets/dashboard/${id}`, {
+          method: "PUT",
+          body: JSON.stringify({ enabled }),
+        });
+        setWidgets(widgets.map(w => w.id === id ? { ...w, enabled } : w));
+      }
+    } catch (e: any) {
+      showToast(e?.message || "تعذر تحديث الحالة");
+    }
+  };
+
+  const copyEmbedCode = (token: string) => {
+    const code = `<script src="${apiEnabled ? API : "https://your-server.com"}/widget.js" data-token="${token}"></script>`;
+    navigator.clipboard.writeText(code);
+    setCopiedCode(token);
+    setTimeout(() => setCopiedCode(null), 2000);
+    showToast("تم نسخ كود التضمين");
+  };
+
   /* ═══════════ شاشات ما قبل اللوحة ═══════════ */
 
   if (!authed) {
@@ -688,6 +822,7 @@ export default function Dashboard() {
     { id: "convs" as const, label: "المحادثات", icon: <IconLog className="w-4 h-4" /> },
     { id: "unresolved" as const, label: "العالقة", icon: <IconQuestion className="w-4 h-4" />, badge: st.openUnresolved },
     { id: "knowledge" as const, label: "المعرفة", icon: <IconDatabase className="w-4 h-4" /> },
+    { id: "widgets" as const, label: "Widgets", icon: <span className="text-sm">💬</span> },
   ];
 
   return (
@@ -810,10 +945,10 @@ export default function Dashboard() {
         </div>
 
         {/* التبويبات */}
-        <div className="relative bg-pine/50 border border-verde/12 rounded-2xl p-1.5 grid grid-cols-3 mb-6 max-w-md">
+        <div className="relative bg-pine/50 border border-verde/12 rounded-2xl p-1.5 grid grid-cols-4 mb-6 max-w-lg">
           <span
-            className="absolute top-1.5 bottom-1.5 w-[calc((100%-0.75rem)/3)] bg-moss rounded-xl border border-verde/25 transition-transform duration-300 ease-out"
-            style={{ insetInlineStart: "0.375rem", transform: `translateX(${tab === "convs" ? 0 : tab === "unresolved" ? "-100%" : "-200%"})` }}
+            className="absolute top-1.5 bottom-1.5 w-[calc((100%-0.75rem)/4)] bg-moss rounded-xl border border-verde/25 transition-transform duration-300 ease-out"
+            style={{ insetInlineStart: "0.375rem", transform: `translateX(${tab === "convs" ? 0 : tab === "unresolved" ? "-100%" : tab === "knowledge" ? "-200%" : "-300%"})` }}
             aria-hidden="true"
           />
           {TABS.map((t) => (
@@ -1104,7 +1239,204 @@ export default function Dashboard() {
             </aside>
           </div>
         )}
+
+        {/* ── Widgets ── */}
+        {tab === "widgets" && (
+          <div className="grid lg:grid-cols-[1fr_400px] gap-4 items-start">
+            <section className={`${cls.card} overflow-hidden`}>
+              <div className="px-5 py-4 border-b border-verde/10 flex items-center justify-between">
+                <p className="text-sm font-bold text-bone inline-flex items-center gap-2">
+                  <span className="text-lg">💬</span>
+                  Widgets الخاصة بك
+                </p>
+                <span className="text-[11px] text-sage tabular-nums">{widgets.length} widget</span>
+              </div>
+              <ul className="divide-y divide-verde/8">
+                {widgets.length === 0 && (
+                  <li className="px-5 py-12 text-center text-xs text-sage/70">
+                    لا widgets بعد — أنشئ أول widget من النموذج في الجهة الأخرى.
+                  </li>
+                )}
+                {widgets.map((w) => (
+                  <li key={w.id} className="px-5 py-4 group hover:bg-night/40 transition-colors duration-200">
+                    <div className="flex items-start gap-3.5">
+                      <div
+                        className="w-10 h-10 rounded-xl flex items-center justify-center text-white font-bold shrink-0"
+                        style={{ background: w.primary_color }}
+                      >
+                        💬
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-1">
+                          <p className="text-[14px] font-semibold text-bone truncate">{w.name}</p>
+                          <span className={`text-[10px] font-bold rounded-full px-2 py-0.5 ${w.enabled ? "bg-verde/10 text-verde border border-verde/30" : "bg-oro/10 text-oro-soft border border-oro/30"}`}>
+                            {w.enabled ? "مفعّل" : "معطّل"}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-sage truncate mb-2" dir="ltr">
+                          Token: {w.public_token}
+                        </p>
+                        <div className="flex gap-2 flex-wrap">
+                          <button
+                            onClick={() => setWidgetPreview(w)}
+                            className="text-[11px] font-semibold text-verde hover:text-oro transition-colors"
+                          >
+                            معاينة
+                          </button>
+                          <button
+                            onClick={() => copyEmbedCode(w.public_token)}
+                            className="text-[11px] font-semibold text-verde hover:text-oro transition-colors"
+                          >
+                            {copiedCode === w.public_token ? "✓ تم النسخ" : "نسخ الكود"}
+                          </button>
+                          <button
+                            onClick={() => toggleWidget(w.id, !w.enabled)}
+                            className="text-[11px] font-semibold text-oro hover:text-bone transition-colors"
+                          >
+                            {w.enabled ? "تعطيل" : "تفعيل"}
+                          </button>
+                          <button
+                            onClick={() => setEditingWidget(w.id)}
+                            className="text-[11px] font-semibold text-sage hover:text-bone transition-colors"
+                          >
+                            تعديل
+                          </button>
+                          <button
+                            onClick={() => deleteWidget(w.id)}
+                            className="text-[11px] font-semibold text-red-400 hover:text-red-300 transition-colors"
+                          >
+                            حذف
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </section>
+
+            <aside className={`${cls.card} p-5`}>
+              <p className="text-sm font-bold text-bone mb-4">
+                {editingWidget ? "تعديل Widget" : "إنشاء Widget جديد"}
+              </p>
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-xs font-semibold text-sage mb-1.5">الاسم *</label>
+                  <input
+                    value={widgetForm.name}
+                    onChange={(e) => setWidgetForm({ ...widgetForm, name: e.target.value })}
+                    className={cls.input}
+                    placeholder="مثال: Widget الموقع الرئيسي"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-sage mb-1.5">رسالة الترحيب</label>
+                  <textarea
+                    value={widgetForm.welcomeMessage}
+                    onChange={(e) => setWidgetForm({ ...widgetForm, welcomeMessage: e.target.value })}
+                    rows={2}
+                    className={`${cls.input} resize-none`}
+                    placeholder="مرحباً! كيف يمكنني مساعدتك؟"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-sage mb-1.5">اللون الأساسي</label>
+                  <div className="flex gap-2">
+                    <input
+                      type="color"
+                      value={widgetForm.primaryColor}
+                      onChange={(e) => setWidgetForm({ ...widgetForm, primaryColor: e.target.value })}
+                      className="w-12 h-10 rounded-lg border border-verde/20 cursor-pointer"
+                    />
+                    <input
+                      type="text"
+                      value={widgetForm.primaryColor}
+                      onChange={(e) => setWidgetForm({ ...widgetForm, primaryColor: e.target.value })}
+                      className={`${cls.input} flex-1`}
+                      placeholder="#2ec27e"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-sage mb-1.5">الموقع</label>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setWidgetForm({ ...widgetForm, position: "left" })}
+                      className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all ${widgetForm.position === "left" ? "bg-moss text-oro" : "bg-night/60 text-sage hover:text-bone"}`}
+                    >
+                      يسار
+                    </button>
+                    <button
+                      onClick={() => setWidgetForm({ ...widgetForm, position: "right" })}
+                      className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all ${widgetForm.position === "right" ? "bg-moss text-oro" : "bg-night/60 text-sage hover:text-bone"}`}
+                    >
+                      يمين
+                    </button>
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-sage mb-1.5">Placeholder</label>
+                  <input
+                    value={widgetForm.placeholder}
+                    onChange={(e) => setWidgetForm({ ...widgetForm, placeholder: e.target.value })}
+                    className={cls.input}
+                    placeholder="اكتب رسالتك..."
+                  />
+                </div>
+                <button onClick={createWidget} className={`${cls.btn} w-full py-3`}>
+                  {editingWidget ? "حفظ التعديلات" : "إنشاء Widget"}
+                </button>
+              </div>
+            </aside>
+          </div>
+        )}
       </main>
+
+      {/* ── Widget Preview Modal ── */}
+      {widgetPreview && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-night/80 backdrop-blur-sm" onClick={() => setWidgetPreview(null)}>
+          <div className="relative w-full max-w-sm bg-pine border border-verde/25 rounded-3xl p-6 msg-in shadow-[0_40px_120px_-30px_rgba(0,0,0,0.9)]" onClick={(e) => e.stopPropagation()}>
+            <button onClick={() => setWidgetPreview(null)} className="absolute top-4 left-4 text-sage hover:text-bone transition-colors" aria-label="إغلاق">
+              <IconX className="w-5 h-5" />
+            </button>
+            <h3 className="font-display font-bold text-xl text-bone mb-4 text-center">معاينة Widget</h3>
+            <div className="bg-bone rounded-2xl p-4 mb-4">
+              <div className="bg-white rounded-xl shadow-lg overflow-hidden" style={{ height: "400px" }}>
+                <div className="h-12 flex items-center gap-2 px-4 text-white" style={{ background: widgetPreview.primary_color }}>
+                  <span className="text-lg">💬</span>
+                  <div>
+                    <p className="text-sm font-bold">{widgetPreview.name}</p>
+                    <p className="text-[10px] opacity-90">{st?.businessName}</p>
+                  </div>
+                </div>
+                <div className="flex-1 p-4 bg-gray-50" style={{ height: "calc(100% - 48px - 60px)" }}>
+                  <div className="bg-white rounded-lg p-3 text-sm text-gray-800 shadow-sm">
+                    {widgetPreview.welcome_message}
+                  </div>
+                </div>
+                <div className="h-15 bg-white border-t border-gray-200 flex items-center gap-2 p-2">
+                  <input className="flex-1 px-3 py-2 border border-gray-300 rounded-full text-sm" placeholder={widgetPreview.placeholder} readOnly />
+                  <button className="w-9 h-9 rounded-full flex items-center justify-center text-white" style={{ background: widgetPreview.primary_color }}>
+                    →
+                  </button>
+                </div>
+              </div>
+            </div>
+            <div className="bg-night/60 border border-verde/15 rounded-xl p-3">
+              <p className="text-[11px] text-sage mb-2">كود التضمين:</p>
+              <code className="text-[10px] text-verde break-all" dir="ltr">
+                {`<script src="${API}/widget.js" data-token="${widgetPreview.public_token}"></script>`}
+              </code>
+              <button
+                onClick={() => copyEmbedCode(widgetPreview.public_token)}
+                className="mt-2 text-[11px] font-bold text-oro hover:text-bone transition-colors"
+              >
+                {copiedCode === widgetPreview.public_token ? "✓ تم النسخ" : "نسخ الكود"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── نافذة ربط واتساب ── */}
       {qrOpen && (

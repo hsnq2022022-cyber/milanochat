@@ -7,7 +7,7 @@
  * 3) demo     : لا شيء منهما → وضع العرض التجريبي
  */
 const env = (((import.meta as any).env ?? {}) as Record<string, string | undefined>);
-const API = (env.VITE_API_URL ?? "").replace(/\/+$/, "");
+export const API = (env.VITE_API_URL ?? "").replace(/\/+$/, "");
 const SUPABASE_URL = (env.VITE_SUPABASE_URL ?? "").replace(/\/+$/, "");
 const SUPABASE_ANON = env.VITE_SUPABASE_ANON_KEY ?? "";
 
