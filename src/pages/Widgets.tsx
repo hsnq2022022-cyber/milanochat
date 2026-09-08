@@ -289,6 +289,7 @@ export default function Widgets() {
           onSave={saveWidget}
           onClose={closeEditor}
           saving={saving}
+          authToken={token}
         />
       )}
 

@@ -6,6 +6,7 @@ import { useState, useEffect } from "react";
 import type { Widget, WidgetSettings } from "../types/widget";
 import { DEFAULT_SETTINGS, APPEARANCE_PRESETS } from "../types/widget";
 import WidgetPreview from "./WidgetPreview";
+import { API } from "../lib/api";
 import {
   IconX,
   IconSave,
@@ -28,6 +29,7 @@ interface WidgetEditorProps {
   onSave: (name: string, settings: WidgetSettings) => Promise<void>;
   onClose: () => void;
   saving: boolean;
+  authToken?: string | null;
 }
 
 // دالة لدمج إعدادات widget مع القيم الافتراضية
@@ -68,7 +70,7 @@ function mergeWithDefaults(settings: any): WidgetSettings {
   };
 }
 
-export default function WidgetEditor({ widget, onSave, onClose, saving }: WidgetEditorProps) {
+export default function WidgetEditor({ widget, onSave, onClose, saving, authToken }: WidgetEditorProps) {
   const [activeTab, setActiveTab] = useState<EditorTab>("general");
   const [name, setName] = useState(widget?.name ?? "");
   const [settings, setSettings] = useState<WidgetSettings>(
@@ -252,6 +254,7 @@ export default function WidgetEditor({ widget, onSave, onClose, saving }: Widget
                 updateSettings={updateSettings}
                 applyPreset={applyPreset}
                 errors={errors}
+                authToken={authToken}
               />
             )}
             {activeTab === "chat" && (
@@ -322,9 +325,100 @@ function GeneralTab({ name, setName, settings, updateSettings, errors }: any) {
   );
 }
 
-function AppearanceTab({ settings, updateSettings, applyPreset, errors }: any) {
+function AppearanceTab({ settings, updateSettings, applyPreset, errors, authToken }: any) {
+  const handleImageUpload = async (type: "logo" | "avatar", file: File) => {
+    if (file.size > 1024 * 1024) {
+      alert("حجم الملف يتجاوز 1MB");
+      return;
+    }
+
+    if (!authToken) {
+      alert("يجب تسجيل الدخول أولاً");
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const base64 = (reader.result as string).split(",")[1];
+      try {
+        const res = await fetch(`${API}/api/widgets/dashboard/upload`, {
+          method: "POST",
+          headers: { 
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${authToken}`
+          },
+          body: JSON.stringify({
+            type,
+            data: base64,
+            name: file.name,
+            size: file.size,
+            mimeType: file.type,
+          }),
+        });
+        
+        if (!res.ok) {
+          const errorData = await res.json();
+          throw new Error(errorData.error || "فشل رفع الصورة");
+        }
+        
+        const data = await res.json();
+        if (data.url) {
+          if (type === "logo") {
+            updateSettings("avatar.headerLogo.url", data.url);
+          } else {
+            updateSettings("avatar.botAvatar.url", data.url);
+          }
+        }
+      } catch (err: any) {
+        console.error("Upload error:", err);
+        alert(err.message || "فشل رفع الصورة");
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
   return (
     <div className="space-y-6">
+      {/* Logo Upload */}
+      <div>
+        <label className="text-xs text-sage mb-2 block">Logo المشروع</label>
+        <div className="flex items-center gap-3">
+          {settings.avatar?.headerLogo?.url && (
+            <img
+              src={settings.avatar.headerLogo.url}
+              alt="Logo"
+              className="w-16 h-16 rounded-lg object-cover border border-verde/20"
+            />
+          )}
+          <input
+            type="file"
+            accept="image/*"
+            onChange={(e) => e.target.files?.[0] && handleImageUpload("logo", e.target.files[0])}
+            className="text-xs text-sage"
+          />
+        </div>
+      </div>
+
+      {/* Avatar Upload */}
+      <div>
+        <label className="text-xs text-sage mb-2 block">صورة المساعد (Avatar)</label>
+        <div className="flex items-center gap-3">
+          {settings.avatar?.botAvatar?.url && (
+            <img
+              src={settings.avatar.botAvatar.url}
+              alt="Avatar"
+              className="w-16 h-16 rounded-full object-cover border border-verde/20"
+            />
+          )}
+          <input
+            type="file"
+            accept="image/*"
+            onChange={(e) => e.target.files?.[0] && handleImageUpload("avatar", e.target.files[0])}
+            className="text-xs text-sage"
+          />
+        </div>
+      </div>
+
       {/* Presets */}
       <div>
         <label className="text-xs text-sage mb-2 block">قوالب جاهزة</label>
