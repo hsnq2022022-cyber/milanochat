@@ -79,16 +79,28 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sessionId, message: text }),
       });
-      if (!res.ok) throw new Error('Message error');
-      const data = await res.json();
-      
-      messages.push({ direction: 'in', body: text, kind: 'customer', created_at: new Date().toISOString() });
-      messages.push({ direction: 'out', body: data.reply, kind: data.kind, created_at: new Date().toISOString() });
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        if (res.status === 429 || errorData.quotaExceeded) {
+          // نفاد الحصة
+          const quotaMessage = config.quotaExceededMessage || 'الخدمة غير متاحة مؤقتاً، اترك بريدك وسنتواصل معك';
+          messages.push({ direction: 'in', body: text, kind: 'customer', created_at: new Date().toISOString() });
+          messages.push({ direction: 'out', body: quotaMessage, kind: 'quota_exceeded', created_at: new Date().toISOString() });
+        } else {
+          throw new Error(errorData.error || 'Message error');
+        }
+      } else {
+        const data = await res.json();
+        messages.push({ direction: 'in', body: text, kind: 'customer', created_at: new Date().toISOString() });
+        messages.push({ direction: 'out', body: data.reply, kind: data.kind, created_at: new Date().toISOString() });
+      }
       
       isLoading = false;
       render();
     } catch (err) {
       console.error('[Milano Widget] Message error:', err);
+      messages.push({ direction: 'in', body: text, kind: 'customer', created_at: new Date().toISOString() });
+      messages.push({ direction: 'out', body: 'عذراً، حدث خطأ. يرجى المحاولة مرة أخرى.', kind: 'error', created_at: new Date().toISOString() });
       isLoading = false;
       render();
     }

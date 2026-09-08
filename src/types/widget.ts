@@ -47,6 +47,112 @@ export interface VisibilityRule {
   pattern: string; // URL pattern
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// أنواع المرحلة الثانية - تخصيص Chat Window والـ Avatar
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export type ChatWindowSize = "small" | "medium" | "large" | "fullscreen";
+export type BubbleShape = "rounded" | "square" | "tail";
+export type LauncherAnimation = "none" | "pulse" | "shake";
+export type HeaderStyle = "flat" | "gradient" | "image";
+export type SendIcon = "arrow" | "paper-plane" | "chat";
+
+export interface ChatWindowSettings {
+  // الشكل العام
+  size: ChatWindowSize;
+  borderRadius: number; // 0-32px
+  shadow: ShadowLevel;
+  glassmorphism: {
+    enabled: boolean;
+    opacity: number; // 0-1
+    blur: number; // 0-20px
+  };
+  
+  // الهيدر
+  header: {
+    style: HeaderStyle;
+    backgroundColor: string;
+    textColor: string;
+    backgroundImage?: string; // URL
+    height: number; // px
+    showStatus: boolean;
+    showMinimize: boolean;
+    showClose: boolean;
+  };
+  
+  // فقاعات الرسائل
+  bubbles: {
+    user: {
+      backgroundColor: string;
+      textColor: string;
+      shape: BubbleShape;
+    };
+    bot: {
+      backgroundColor: string;
+      textColor: string;
+      shape: BubbleShape;
+    };
+    fontSize: number; // 12-18px
+    fontFamily: FontFamily;
+    showTimestamp: boolean;
+  };
+  
+  // حقل الإدخال
+  input: {
+    placeholder: string;
+    sendButtonColor: string;
+    sendIcon: SendIcon;
+    showAttach: boolean;
+    showEmoji: boolean;
+  };
+  
+  // زر الفتح (Launcher)
+  launcher: {
+    shape: LauncherShape;
+    size: number; // 48-72px
+    icon: LauncherIcon;
+    customIcon?: string; // URL
+    animation: LauncherAnimation;
+    teaser: {
+      enabled: boolean;
+      text: string;
+      duration: number; // seconds
+    };
+  };
+}
+
+export interface AvatarSettings {
+  // لوغو الهيدر
+  headerLogo: {
+    url: string | null;
+    position: "left" | "center" | "right";
+    size: number; // px
+    shape: "circle" | "square";
+  };
+  
+  // صورة البوت
+  botAvatar: {
+    type: "upload" | "preset" | "initials";
+    url: string | null;
+    presetId?: string; // من مكتبة الأفاتار
+    initials?: string;
+    initialsColor?: string;
+    shape: "circle" | "rounded";
+    size: number; // px
+    showWith: "every" | "first";
+  };
+  
+  // اسم البوت وتوقيعه
+  botName: string;
+  botTagline: string; // وصف قصير
+  
+  // مؤشر الكتابة
+  typingIndicator: {
+    enabled: boolean;
+    style: "dots" | "avatar";
+  };
+}
+
 export interface WidgetAppearance {
   // الألوان
   primaryColor: string;
@@ -72,10 +178,10 @@ export interface WidgetAppearance {
   width: number;
   height: number;
   
-  // Launcher
+  // Launcher (قديم - للتوافق)
   launcher: {
     icon: LauncherIcon;
-    customIcon?: string; // URL
+    customIcon?: string;
     size: number;
     shape: LauncherShape;
     text?: string;
@@ -94,7 +200,7 @@ export interface WidgetAppearance {
     mobileY?: number;
   };
   
-  // Avatar
+  // Avatar (قديم - للتوافق)
   avatar: {
     url: string | null;
     agentName: string;
@@ -183,6 +289,9 @@ export interface WidgetSettings {
   forms: WidgetForms;
   localization: WidgetLocalization;
   branding: WidgetBranding;
+  // المرحلة الثانية
+  chatWindow?: ChatWindowSettings;
+  avatar?: AvatarSettings;
 }
 
 export interface Widget {
@@ -192,8 +301,36 @@ export interface Widget {
   public_token: string;
   enabled: boolean;
   settings: WidgetSettings;
+  // المرحلة الثانية - عداد الردود
+  replies_used?: number;
+  replies_limit?: number | null; // null = غير محدود
   created_at: string;
   updated_at: string;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// أنواع AI Auto-Theme
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export interface SiteAnalysis {
+  url: string;
+  colors: {
+    primary: string;
+    secondary: string;
+    background: string;
+    text: string;
+  };
+  fontFamily: string;
+  borderRadius: number;
+  theme: "light" | "dark";
+  logo?: string;
+  suggestedWelcome?: string;
+}
+
+export interface AIUsage {
+  used: number;
+  limit: number;
+  resetAt: string;
 }
 
 // القيم الافتراضية
@@ -295,6 +432,83 @@ export const DEFAULT_SETTINGS: WidgetSettings = {
   },
   branding: {
     showBranding: true,
+  },
+  // المرحلة الثانية - Chat Window
+  chatWindow: {
+    size: "medium",
+    borderRadius: 16,
+    shadow: "medium",
+    glassmorphism: {
+      enabled: false,
+      opacity: 0.95,
+      blur: 10,
+    },
+    header: {
+      style: "flat",
+      backgroundColor: "#2ec27e",
+      textColor: "#ffffff",
+      height: 72,
+      showStatus: true,
+      showMinimize: true,
+      showClose: true,
+    },
+    bubbles: {
+      user: {
+        backgroundColor: "#2ec27e",
+        textColor: "#ffffff",
+        shape: "rounded",
+      },
+      bot: {
+        backgroundColor: "#f0f0f0",
+        textColor: "#1a1a1a",
+        shape: "rounded",
+      },
+      fontSize: 14,
+      fontFamily: "Cairo",
+      showTimestamp: true,
+    },
+    input: {
+      placeholder: "اكتب رسالتك...",
+      sendButtonColor: "#2ec27e",
+      sendIcon: "arrow",
+      showAttach: false,
+      showEmoji: false,
+    },
+    launcher: {
+      shape: "circle",
+      size: 60,
+      icon: "chat",
+      animation: "none",
+      teaser: {
+        enabled: false,
+        text: "مرحباً! كيف يمكنني مساعدتك؟",
+        duration: 5,
+      },
+    },
+  },
+  // المرحلة الثانية - Avatar
+  avatar: {
+    headerLogo: {
+      url: null,
+      position: "left",
+      size: 32,
+      shape: "circle",
+    },
+    botAvatar: {
+      type: "initials",
+      url: null,
+      initials: "AI",
+      initialsColor: "#2ec27e",
+      shape: "circle",
+      size: 36,
+      showWith: "every",
+    },
+    botName: "مساعد ميلانو",
+    botTagline: "يرد خلال ثوانٍ",
+    typingIndicator: {
+      enabled: true,
+      style: "dots",
+    },
   },
 };
 
