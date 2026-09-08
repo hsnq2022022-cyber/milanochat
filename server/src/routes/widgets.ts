@@ -465,7 +465,7 @@ widgetsRouter.delete("/dashboard/:id", async (req, res) => {
 widgetsRouter.get("/public/:token", async (req, res) => {
   const { data: widget, error } = await db
     .from("widgets")
-    .select("id, name, enabled, welcome_message, primary_color, position, language, rtl, avatar_url, show_branding, placeholder, suggested_questions, tenant_id")
+    .select("*")
     .eq("public_token", req.params.token)
     .maybeSingle();
 
@@ -479,19 +479,42 @@ widgetsRouter.get("/public/:token", async (req, res) => {
     .eq("id", widget.tenant_id)
     .single();
 
+  // استخراج الإعدادات من settings JSONB أو الأعمدة القديمة
+  const settings = widget.settings || {};
+  const appearance = settings.appearance || {};
+  const avatar = settings.avatar || {};
+  const chatWindow = settings.chatWindow || {};
+  const chat = settings.chat || {};
+
   res.json({
     widgetId: widget.id,
     name: widget.name,
     businessName: tenant?.business_name ?? "ميلانو",
-    welcomeMessage: widget.welcome_message,
-    primaryColor: widget.primary_color,
-    position: widget.position,
-    language: widget.language,
-    rtl: widget.rtl,
-    avatarUrl: widget.avatar_url,
-    showBranding: widget.show_branding,
-    placeholder: widget.placeholder,
-    suggestedQuestions: widget.suggested_questions,
+    welcomeMessage: widget.welcome_message || chat.welcomeMessage || "مرحباً! كيف يمكنني مساعدتك؟",
+    primaryColor: widget.primary_color || appearance.primaryColor || "#2ec27e",
+    position: widget.position || appearance.position || "left",
+    language: widget.language || settings.localization?.language || "ar",
+    rtl: widget.rtl !== undefined ? widget.rtl : (settings.localization?.rtl ?? true),
+    avatarUrl: widget.avatar_url || avatar.botAvatar?.url || null,
+    logoUrl: avatar.headerLogo?.url || null,
+    agentName: avatar.botName || widget.name,
+    agentTagline: avatar.botTagline || tenant?.business_name || "مساعد ذكي",
+    showStatus: chatWindow.header?.showStatus !== false,
+    showBranding: widget.show_branding !== undefined ? widget.show_branding : (settings.branding?.showBranding ?? true),
+    placeholder: widget.placeholder || chat.placeholder || "اكتب رسالتك...",
+    suggestedQuestions: widget.suggested_questions || [],
+    // إعدادات المظهر المتقدمة
+    borderRadius: appearance.borderRadius ?? chatWindow.borderRadius ?? 16,
+    shadow: appearance.shadow ?? chatWindow.shadow ?? "medium",
+    windowWidth: appearance.width ?? chatWindow.width ?? 380,
+    windowHeight: appearance.height ?? chatWindow.height ?? 560,
+    headerBackgroundColor: chatWindow.header?.backgroundColor || widget.primary_color || "#2ec27e",
+    headerTextColor: chatWindow.header?.textColor || "#ffffff",
+    launcherSize: appearance.launcher?.size ?? chatWindow.launcher?.size ?? 60,
+    launcherShape: appearance.launcher?.shape ?? chatWindow.launcher?.shape ?? "circle",
+    launcherIconUrl: appearance.launcher?.customIcon || null,
+    launcherOffsetY: appearance.offset?.y ?? 20,
+    showTimestamp: chatWindow.bubbles?.showTimestamp !== false,
   });
 });
 
