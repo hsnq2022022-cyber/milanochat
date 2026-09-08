@@ -411,9 +411,29 @@ widgetsRouter.post("/dashboard/upload", rateLimit({ windowMs: 60_000, max: 10 })
   }
 
   try {
-    // في الإنتاج: رفع إلى Supabase Storage
-    // هنا: نولد URL مؤقت (في الإنتاج يجب استخدام Storage)
-    const url = `data:${mimeType || "image/png"};base64,${data}`;
+    // رفع إلى Supabase Storage
+    const { createClient } = await import("@supabase/supabase-js");
+    const supabase = createClient(
+      process.env.SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!
+    );
+
+    const fileName = `${tenant.id}/${type}/${Date.now()}-${name || "image"}`;
+    const { error: uploadError } = await supabase.storage
+      .from("widget-assets")
+      .upload(fileName, Buffer.from(data, "base64"), {
+        contentType: mimeType || "image/png",
+        upsert: false,
+      });
+
+    if (uploadError) throw uploadError;
+
+    // الحصول على URL عام
+    const { data: urlData } = supabase.storage
+      .from("widget-assets")
+      .getPublicUrl(fileName);
+
+    const publicUrl = urlData.publicUrl;
 
     // حفظ في قاعدة البيانات
     const { data: asset, error } = await db
@@ -422,7 +442,7 @@ widgetsRouter.post("/dashboard/upload", rateLimit({ windowMs: 60_000, max: 10 })
         tenant_id: tenant.id,
         widget_id: widgetId || null,
         type,
-        url,
+        url: publicUrl,
         original_name: name,
         size_bytes: size,
         mime_type: mimeType,
@@ -432,7 +452,7 @@ widgetsRouter.post("/dashboard/upload", rateLimit({ windowMs: 60_000, max: 10 })
 
     if (error) throw error;
 
-    res.json({ id: asset.id, url });
+    res.json({ id: asset.id, url: publicUrl });
   } catch (e: any) {
     console.error("[widgets] upload error:", e);
     res.status(500).json({ error: "تعذر رفع الصورة: " + e.message });

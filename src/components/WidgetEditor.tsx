@@ -323,8 +323,84 @@ function GeneralTab({ name, setName, settings, updateSettings, errors }: any) {
 }
 
 function AppearanceTab({ settings, updateSettings, applyPreset, errors }: any) {
+  const handleImageUpload = async (type: "logo" | "avatar", file: File) => {
+    if (file.size > 1024 * 1024) {
+      alert("حجم الملف يتجاوز 1MB");
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const base64 = (reader.result as string).split(",")[1];
+      try {
+        const res = await fetch("/api/widgets/dashboard/upload", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            type,
+            data: base64,
+            name: file.name,
+            size: file.size,
+            mimeType: file.type,
+          }),
+        });
+        const data = await res.json();
+        if (data.url) {
+          if (type === "logo") {
+            updateSettings("avatar.headerLogo.url", data.url);
+          } else {
+            updateSettings("avatar.botAvatar.url", data.url);
+          }
+        }
+      } catch (err) {
+        console.error("Upload error:", err);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
   return (
     <div className="space-y-6">
+      {/* Logo Upload */}
+      <div>
+        <label className="text-xs text-sage mb-2 block">Logo المشروع</label>
+        <div className="flex items-center gap-3">
+          {settings.avatar?.headerLogo?.url && (
+            <img
+              src={settings.avatar.headerLogo.url}
+              alt="Logo"
+              className="w-16 h-16 rounded-lg object-cover border border-verde/20"
+            />
+          )}
+          <input
+            type="file"
+            accept="image/*"
+            onChange={(e) => e.target.files?.[0] && handleImageUpload("logo", e.target.files[0])}
+            className="text-xs text-sage"
+          />
+        </div>
+      </div>
+
+      {/* Avatar Upload */}
+      <div>
+        <label className="text-xs text-sage mb-2 block">صورة المساعد (Avatar)</label>
+        <div className="flex items-center gap-3">
+          {settings.avatar?.botAvatar?.url && (
+            <img
+              src={settings.avatar.botAvatar.url}
+              alt="Avatar"
+              className="w-16 h-16 rounded-full object-cover border border-verde/20"
+            />
+          )}
+          <input
+            type="file"
+            accept="image/*"
+            onChange={(e) => e.target.files?.[0] && handleImageUpload("avatar", e.target.files[0])}
+            className="text-xs text-sage"
+          />
+        </div>
+      </div>
+
       {/* Presets */}
       <div>
         <label className="text-xs text-sage mb-2 block">قوالب جاهزة</label>
