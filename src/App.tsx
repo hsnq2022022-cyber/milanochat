@@ -9,6 +9,7 @@ import FAQ from "./components/FAQ";
 
 /* لوحة التحكم وحدة منفصلة — لا يتحمل زائر الصفحة الرئيسية حجمها */
 const Dashboard = lazy(() => import("./pages/Dashboard"));
+const Widgets = lazy(() => import("./pages/Widgets"));
 
 export default function App() {
   const [route, setRoute] = useState(() => window.location.hash);
@@ -24,6 +25,15 @@ export default function App() {
     return (
       <Suspense fallback={<div className="min-h-screen bg-night" />}>
         <Dashboard />
+      </Suspense>
+    );
+  }
+
+  /* صفحة Widgets: #/widgets */
+  if (route.startsWith("#/widgets")) {
+    return (
+      <Suspense fallback={<div className="min-h-screen bg-night" />}>
+        <Widgets />
       </Suspense>
     );
   }

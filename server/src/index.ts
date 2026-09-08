@@ -10,6 +10,7 @@ import { config, corsOrigins, corsOriginPatterns } from "./config.js";
 import { tenantsRouter } from "./routes/tenants.js";
 import { dashboardRouter } from "./routes/dashboard.js";
 import { whatsappRouter } from "./routes/whatsapp.js";
+import { widgetsRouter } from "./routes/widgets.js";
 import { paymentsRouter, webhooksRouter } from "./routes/payments.js";
 import { handleIncomingMessage } from "./rag/reply.js";
 import { initWa, restorePersistedSessions } from "./wa/sessionManager.js";
@@ -60,9 +61,15 @@ app.get("/privacy", (_req, res) =>
   res.sendFile(path.join(__dirname, "..", "PRIVACY_POLICY_ar.md"))
 );
 
+// تقديم widget.js
+app.get("/widget.js", (_req, res) => {
+  res.sendFile(path.join(__dirname, "..", "public", "widget.js"));
+});
+
 app.use("/api/tenants", tenantsRouter);
 app.use("/api/dashboard", dashboardRouter);
 app.use("/api/whatsapp", whatsappRouter);
+app.use("/api/widgets", widgetsRouter);
 app.use("/api/payments", paymentsRouter);
 app.use("/api/webhooks", webhooksRouter);
 
