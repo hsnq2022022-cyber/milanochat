@@ -6,6 +6,7 @@ import { useState, useEffect } from "react";
 import type { Widget, WidgetSettings } from "../types/widget";
 import { DEFAULT_SETTINGS, APPEARANCE_PRESETS } from "../types/widget";
 import WidgetPreview from "./WidgetPreview";
+import { API } from "../lib/api";
 import {
   IconX,
   IconSave,
@@ -28,6 +29,7 @@ interface WidgetEditorProps {
   onSave: (name: string, settings: WidgetSettings) => Promise<void>;
   onClose: () => void;
   saving: boolean;
+  authToken?: string | null;
 }
 
 // دالة لدمج إعدادات widget مع القيم الافتراضية
@@ -68,7 +70,7 @@ function mergeWithDefaults(settings: any): WidgetSettings {
   };
 }
 
-export default function WidgetEditor({ widget, onSave, onClose, saving }: WidgetEditorProps) {
+export default function WidgetEditor({ widget, onSave, onClose, saving, authToken }: WidgetEditorProps) {
   const [activeTab, setActiveTab] = useState<EditorTab>("general");
   const [name, setName] = useState(widget?.name ?? "");
   const [settings, setSettings] = useState<WidgetSettings>(
@@ -252,6 +254,7 @@ export default function WidgetEditor({ widget, onSave, onClose, saving }: Widget
                 updateSettings={updateSettings}
                 applyPreset={applyPreset}
                 errors={errors}
+                authToken={authToken}
               />
             )}
             {activeTab === "chat" && (
@@ -322,10 +325,15 @@ function GeneralTab({ name, setName, settings, updateSettings, errors }: any) {
   );
 }
 
-function AppearanceTab({ settings, updateSettings, applyPreset, errors }: any) {
+function AppearanceTab({ settings, updateSettings, applyPreset, errors, authToken }: any) {
   const handleImageUpload = async (type: "logo" | "avatar", file: File) => {
     if (file.size > 1024 * 1024) {
       alert("حجم الملف يتجاوز 1MB");
+      return;
+    }
+
+    if (!authToken) {
+      alert("يجب تسجيل الدخول أولاً");
       return;
     }
 
@@ -333,9 +341,12 @@ function AppearanceTab({ settings, updateSettings, applyPreset, errors }: any) {
     reader.onload = async () => {
       const base64 = (reader.result as string).split(",")[1];
       try {
-        const res = await fetch("/api/widgets/dashboard/upload", {
+        const res = await fetch(`${API}/api/widgets/dashboard/upload`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { 
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${authToken}`
+          },
           body: JSON.stringify({
             type,
             data: base64,
@@ -344,6 +355,12 @@ function AppearanceTab({ settings, updateSettings, applyPreset, errors }: any) {
             mimeType: file.type,
           }),
         });
+        
+        if (!res.ok) {
+          const errorData = await res.json();
+          throw new Error(errorData.error || "فشل رفع الصورة");
+        }
+        
         const data = await res.json();
         if (data.url) {
           if (type === "logo") {
@@ -352,8 +369,9 @@ function AppearanceTab({ settings, updateSettings, applyPreset, errors }: any) {
             updateSettings("avatar.botAvatar.url", data.url);
           }
         }
-      } catch (err) {
+      } catch (err: any) {
         console.error("Upload error:", err);
+        alert(err.message || "فشل رفع الصورة");
       }
     };
     reader.readAsDataURL(file);
