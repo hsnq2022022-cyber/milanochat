@@ -11,16 +11,38 @@ create table public.widgets (
   public_token text unique not null default encode(gen_random_bytes(16), 'hex'),
   enabled boolean not null default true,
   
-  -- إعدادات الواجهة
+  -- إعدادات الواجهة الأساسية
   welcome_message text not null default 'مرحباً! كيف يمكنني مساعدتك؟',
   primary_color text not null default '#2ec27e',
+  header_color text not null default '#2ec27e',
+  text_color text not null default '#ffffff',
   position text not null default 'left' check (position in ('left', 'right')),
   language text not null default 'ar',
   rtl boolean not null default true,
   avatar_url text,
+  logo_url text,
+  agent_name text not null default 'مساعد ميلانو',
+  agent_tagline text not null default 'يرد خلال ثوانٍ',
   show_branding boolean not null default true,
   placeholder text not null default 'اكتب رسالتك...',
   suggested_questions text[] default array[]::text[],
+  
+  -- إعدادات المظهر المتقدمة
+  border_radius integer not null default 16,
+  shadow text not null default 'medium' check (shadow in ('none', 'light', 'medium', 'strong')),
+  window_width integer not null default 380,
+  window_height integer not null default 560,
+  launcher_size integer not null default 60,
+  launcher_shape text not null default 'circle' check (launcher_shape in ('circle', 'square', 'rounded')),
+  launcher_icon_url text,
+  
+  -- إعدادات السلوك
+  show_status boolean not null default true,
+  show_timestamps boolean not null default true,
+  typing_indicator boolean not null default true,
+  
+  -- إعدادات متقدمة (JSONB للمرونة)
+  settings jsonb default '{}'::jsonb,
   
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
