@@ -44,8 +44,29 @@ widgetsRouter.use("/dashboard", requireAuth);
 
 /** قائمة widgets */
 widgetsRouter.get("/dashboard", async (req, res) => {
-  const tenant = await ownedTenant((req as AuthedRequest).userId!, req.query.tenantId as string);
-  if (!tenant) return res.status(404).json({ error: "لا يوجد حساب مرتبط" });
+  const userId = (req as AuthedRequest).userId!;
+  let tenant = await ownedTenant(userId, req.query.tenantId as string);
+  
+  // إذا لم يكن لدى المستخدم tenant، أنشئ واحد تلقائياً
+  if (!tenant) {
+    const { data: newTenant, error } = await db
+      .from("tenants")
+      .insert({
+        user_id: userId,
+        business_name: "مشروعي",
+        source_type: "manual",
+        credits_remaining: 1000,
+        is_active: true,
+        activated_at: new Date().toISOString(),
+      })
+      .select()
+      .single();
+    
+    if (error || !newTenant) {
+      return res.status(500).json({ error: "تعذر إنشاء حساب" });
+    }
+    tenant = newTenant;
+  }
 
   const { data, error } = await db
     .from("widgets")
@@ -59,8 +80,29 @@ widgetsRouter.get("/dashboard", async (req, res) => {
 
 /** إنشاء widget */
 widgetsRouter.post("/dashboard", rateLimit({ windowMs: 60_000, max: 10 }), async (req, res) => {
-  const tenant = await ownedTenant((req as AuthedRequest).userId!, req.body?.tenantId);
-  if (!tenant) return res.status(404).json({ error: "لا يوجد حساب مرتبط" });
+  const userId = (req as AuthedRequest).userId!;
+  let tenant = await ownedTenant(userId, req.body?.tenantId);
+  
+  // إذا لم يكن لدى المستخدم tenant، أنشئ واحد تلقائياً
+  if (!tenant) {
+    const { data: newTenant, error } = await db
+      .from("tenants")
+      .insert({
+        user_id: userId,
+        business_name: "مشروعي",
+        source_type: "manual",
+        credits_remaining: 1000,
+        is_active: true,
+        activated_at: new Date().toISOString(),
+      })
+      .select()
+      .single();
+    
+    if (error || !newTenant) {
+      return res.status(500).json({ error: "تعذر إنشاء حساب" });
+    }
+    tenant = newTenant;
+  }
 
   const { name, settings } = req.body ?? {};
   if (!name?.trim()) return res.status(400).json({ error: "اسم الـ widget مطلوب" });
@@ -89,8 +131,29 @@ widgetsRouter.post("/dashboard", rateLimit({ windowMs: 60_000, max: 10 }), async
 
 /** تحديث widget */
 widgetsRouter.put("/dashboard/:id", async (req, res) => {
-  const tenant = await ownedTenant((req as AuthedRequest).userId!, req.body?.tenantId);
-  if (!tenant) return res.status(404).json({ error: "لا يوجد حساب مرتبط" });
+  const userId = (req as AuthedRequest).userId!;
+  let tenant = await ownedTenant(userId, req.body?.tenantId);
+  
+  // إذا لم يكن لدى المستخدم tenant، أنشئ واحد تلقائياً
+  if (!tenant) {
+    const { data: newTenant, error } = await db
+      .from("tenants")
+      .insert({
+        user_id: userId,
+        business_name: "مشروعي",
+        source_type: "manual",
+        credits_remaining: 1000,
+        is_active: true,
+        activated_at: new Date().toISOString(),
+      })
+      .select()
+      .single();
+    
+    if (error || !newTenant) {
+      return res.status(500).json({ error: "تعذر إنشاء حساب" });
+    }
+    tenant = newTenant;
+  }
 
   const { settings, name, enabled } = req.body ?? {};
   const patch: Record<string, any> = {};
@@ -123,8 +186,29 @@ widgetsRouter.put("/dashboard/:id", async (req, res) => {
 
 /** حذف widget */
 widgetsRouter.delete("/dashboard/:id", async (req, res) => {
-  const tenant = await ownedTenant((req as AuthedRequest).userId!, req.body?.tenantId);
-  if (!tenant) return res.status(404).json({ error: "لا يوجد حساب مرتبط" });
+  const userId = (req as AuthedRequest).userId!;
+  let tenant = await ownedTenant(userId, req.body?.tenantId);
+  
+  // إذا لم يكن لدى المستخدم tenant، أنشئ واحد تلقائياً
+  if (!tenant) {
+    const { data: newTenant, error } = await db
+      .from("tenants")
+      .insert({
+        user_id: userId,
+        business_name: "مشروعي",
+        source_type: "manual",
+        credits_remaining: 1000,
+        is_active: true,
+        activated_at: new Date().toISOString(),
+      })
+      .select()
+      .single();
+    
+    if (error || !newTenant) {
+      return res.status(500).json({ error: "تعذر إنشاء حساب" });
+    }
+    tenant = newTenant;
+  }
 
   const { error } = await db
     .from("widgets")
