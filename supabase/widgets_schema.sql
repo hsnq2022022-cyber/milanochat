@@ -11,6 +11,10 @@ create table public.widgets (
   public_token text unique not null default encode(gen_random_bytes(16), 'hex'),
   enabled boolean not null default true,
   
+  -- حدود الردود (Quota System)
+  responses_limit integer, -- NULL = غير محدود
+  responses_used integer not null default 0,
+  
   -- إعدادات الواجهة الأساسية
   welcome_message text not null default 'مرحباً! كيف يمكنني مساعدتك؟',
   primary_color text not null default '#2ec27e',
