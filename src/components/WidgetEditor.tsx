@@ -30,11 +30,49 @@ interface WidgetEditorProps {
   saving: boolean;
 }
 
+// دالة لدمج إعدادات widget مع القيم الافتراضية
+function mergeWithDefaults(settings: any): WidgetSettings {
+  return {
+    appearance: {
+      ...DEFAULT_SETTINGS.appearance,
+      ...(settings?.appearance || {}),
+    },
+    chat: {
+      ...DEFAULT_SETTINGS.chat,
+      ...(settings?.chat || {}),
+    },
+    behavior: {
+      ...DEFAULT_SETTINGS.behavior,
+      ...(settings?.behavior || {}),
+    },
+    forms: {
+      ...DEFAULT_SETTINGS.forms,
+      ...(settings?.forms || {}),
+    },
+    localization: {
+      ...DEFAULT_SETTINGS.localization,
+      ...(settings?.localization || {}),
+    },
+    branding: {
+      ...DEFAULT_SETTINGS.branding,
+      ...(settings?.branding || {}),
+    },
+    chatWindow: {
+      ...DEFAULT_SETTINGS.chatWindow,
+      ...(settings?.chatWindow || {}),
+    },
+    avatar: {
+      ...DEFAULT_SETTINGS.avatar,
+      ...(settings?.avatar || {}),
+    },
+  };
+}
+
 export default function WidgetEditor({ widget, onSave, onClose, saving }: WidgetEditorProps) {
   const [activeTab, setActiveTab] = useState<EditorTab>("general");
   const [name, setName] = useState(widget?.name ?? "");
   const [settings, setSettings] = useState<WidgetSettings>(
-    widget?.settings ?? DEFAULT_SETTINGS
+    mergeWithDefaults(widget?.settings)
   );
   const [history, setHistory] = useState<WidgetSettings[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
