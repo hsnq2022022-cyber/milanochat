@@ -1,10 +1,10 @@
-# نشر تلقائي إلى GitHub Pages عند كل push إلى main
-# تفعيله مرة واحدة من: Settings → Pages → Source: GitHub Actions
 name: Deploy to GitHub Pages
 
 on:
   push:
-    branches: [main, master]
+    branches:
+      - main
+      - master
   workflow_dispatch:
 
 permissions:
@@ -19,27 +19,28 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-         node-version: 22
-      - name: Install
-        run: npm install
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
 
       - name: Build
         run: npm run build
-        # متغيرات البناء (VITE_*) — تُخبز داخل الموقع عند البناء.
-        # المفتاح anon عام ومخصص للمتصفح، فلا مشكلة من وجوده هنا.
         env:
           VITE_API_URL: https://milanochat-production.up.railway.app
           VITE_SUPABASE_URL: https://nmhefwvhoholcjrbbila.supabase.co
-          VITE_SUPABASE_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5taGVmd3Zob2hvbGNqcmJiaWxhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg2MDQxODgsImV4cCI6MjEwNDE4MDE4OH0.ALjKCHUjCfoxW0HJdz3EwL6JIEcc6OYXPucLP9un5j8
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
 
-      - name: Upload artifact
+      - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
           path: dist
@@ -47,10 +48,12 @@ jobs:
   deploy:
     needs: build
     runs-on: ubuntu-latest
+
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
+
     steps:
-      - name: Deploy
+      - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
