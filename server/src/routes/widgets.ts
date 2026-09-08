@@ -107,21 +107,39 @@ widgetsRouter.post("/dashboard", rateLimit({ windowMs: 60_000, max: 10 }), async
   const { name, settings } = req.body ?? {};
   if (!name?.trim()) return res.status(400).json({ error: "اسم الـ widget مطلوب" });
 
+  // دعم settings كـ JSONB للمحرر المتقدم
+  const insertData: any = {
+    tenant_id: tenant.id,
+    name: name.trim(),
+  };
+
+  // إذا تم إرسال settings كامل (JSONB)
+  if (settings && typeof settings === "object" && settings.appearance) {
+    insertData.settings = settings;
+    // استخراج الحقول الأساسية للتوافق مع الأعمدة القديمة
+    insertData.welcome_message = settings.chat?.welcomeMessage ?? "مرحباً! كيف يمكنني مساعدتك؟";
+    insertData.primary_color = settings.appearance?.primaryColor ?? "#2ec27e";
+    insertData.position = settings.appearance?.position ?? "left";
+    insertData.language = settings.localization?.language ?? "ar";
+    insertData.rtl = settings.localization?.rtl ?? true;
+    insertData.show_branding = settings.branding?.showBranding ?? true;
+    insertData.placeholder = settings.chat?.placeholder ?? "اكتب رسالتك...";
+  } else {
+    // التوافق مع الإصدار القديم
+    insertData.welcome_message = settings?.welcomeMessage ?? "مرحباً! كيف يمكنني مساعدتك؟";
+    insertData.primary_color = settings?.primaryColor ?? "#2ec27e";
+    insertData.position = settings?.position ?? "left";
+    insertData.language = settings?.language ?? "ar";
+    insertData.rtl = settings?.rtl ?? true;
+    insertData.avatar_url = settings?.avatarUrl ?? null;
+    insertData.show_branding = settings?.showBranding ?? true;
+    insertData.placeholder = settings?.placeholder ?? "اكتب رسالتك...";
+    insertData.suggested_questions = settings?.suggestedQuestions ?? [];
+  }
+
   const { data, error } = await db
     .from("widgets")
-    .insert({
-      tenant_id: tenant.id,
-      name: name.trim(),
-      welcome_message: settings?.welcomeMessage ?? "مرحباً! كيف يمكنني مساعدتك؟",
-      primary_color: settings?.primaryColor ?? "#2ec27e",
-      position: settings?.position ?? "left",
-      language: settings?.language ?? "ar",
-      rtl: settings?.rtl ?? true,
-      avatar_url: settings?.avatarUrl ?? null,
-      show_branding: settings?.showBranding ?? true,
-      placeholder: settings?.placeholder ?? "اكتب رسالتك...",
-      suggested_questions: settings?.suggestedQuestions ?? [],
-    })
+    .insert(insertData)
     .select()
     .single();
 
@@ -160,16 +178,31 @@ widgetsRouter.put("/dashboard/:id", async (req, res) => {
 
   if (name !== undefined) patch.name = name.trim();
   if (enabled !== undefined) patch.enabled = enabled;
+  
   if (settings) {
-    if (settings.welcomeMessage !== undefined) patch.welcome_message = settings.welcomeMessage;
-    if (settings.primaryColor !== undefined) patch.primary_color = settings.primaryColor;
-    if (settings.position !== undefined) patch.position = settings.position;
-    if (settings.language !== undefined) patch.language = settings.language;
-    if (settings.rtl !== undefined) patch.rtl = settings.rtl;
-    if (settings.avatarUrl !== undefined) patch.avatar_url = settings.avatarUrl;
-    if (settings.showBranding !== undefined) patch.show_branding = settings.showBranding;
-    if (settings.placeholder !== undefined) patch.placeholder = settings.placeholder;
-    if (settings.suggestedQuestions !== undefined) patch.suggested_questions = settings.suggestedQuestions;
+    // إذا كان settings كامل (JSONB) - المحرر المتقدم
+    if (settings.appearance && settings.chat) {
+      patch.settings = settings;
+      // استخراج الحقول الأساسية للتوافق
+      if (settings.chat.welcomeMessage !== undefined) patch.welcome_message = settings.chat.welcomeMessage;
+      if (settings.appearance.primaryColor !== undefined) patch.primary_color = settings.appearance.primaryColor;
+      if (settings.appearance.position !== undefined) patch.position = settings.appearance.position;
+      if (settings.localization?.language !== undefined) patch.language = settings.localization.language;
+      if (settings.localization?.rtl !== undefined) patch.rtl = settings.localization.rtl;
+      if (settings.branding?.showBranding !== undefined) patch.show_branding = settings.branding.showBranding;
+      if (settings.chat.placeholder !== undefined) patch.placeholder = settings.chat.placeholder;
+    } else {
+      // التوافق مع الإصدار القديم
+      if (settings.welcomeMessage !== undefined) patch.welcome_message = settings.welcomeMessage;
+      if (settings.primaryColor !== undefined) patch.primary_color = settings.primaryColor;
+      if (settings.position !== undefined) patch.position = settings.position;
+      if (settings.language !== undefined) patch.language = settings.language;
+      if (settings.rtl !== undefined) patch.rtl = settings.rtl;
+      if (settings.avatarUrl !== undefined) patch.avatar_url = settings.avatarUrl;
+      if (settings.showBranding !== undefined) patch.show_branding = settings.showBranding;
+      if (settings.placeholder !== undefined) patch.placeholder = settings.placeholder;
+      if (settings.suggestedQuestions !== undefined) patch.suggested_questions = settings.suggestedQuestions;
+    }
   }
 
   const { data, error } = await db
