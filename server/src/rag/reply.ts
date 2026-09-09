@@ -1,7 +1,9 @@
 /**
- * محرك الرد الآلي:
- * رسالة واردة ← تحقق (نشاط/رصيد/تحويل) ← بحث دلالي في معرفة العميل فقط ←
- * توليد رد مُقيّد بالسياق ← سياسة منع الاختلاق ← إرسال ← خصم ذرّي
+ * محرك الرد الآلي المتقدم:
+ * - دعم اللهجات العربية
+ * - ذاكرة المحادثة
+ * - منع الهلوسة
+ * - Hybrid RAG
  */
 import { db, type Conversation, type Tenant } from "../db.js";
 import { decryptField, encryptField } from "../crypto.js";
@@ -13,11 +15,34 @@ const REFUSAL_TEXT =
 
 const HANDOFF_TEXT = "وصلتني رسالتك، وحوّلت محادثتك لأحد الموظفين — بيرد عليك في أقرب وقت إن شاء الله.";
 
-/** نية تحويل صريحة أو حالة حساسة → إيقاف الرد الآلي فورًا */
+/** نية تحويل صريحة أو حالة حساسة */
 const HANDOFF_PATTERN =
   /(بشري|إنسان|موظف|مسؤول|مدير|شكوى|شكاوى|استرجاع|استرداد|تعويض|مشكلة كبيرة)/;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** جلب آخر N رسائل من المحادثة */
+async function getConversationHistory(conversationId: string, limit = 5): Promise<string> {
+  const { data: messages } = await db
+    .from("messages")
+    .select("direction, body_encrypted, created_at")
+    .eq("conversation_id", conversationId)
+    .order("created_at", { ascending: false })
+    .limit(limit);
+
+  if (!messages || messages.length === 0) return "";
+
+  // عكس الترتيب ليكون من الأقدم للأحدث
+  const reversed = messages.reverse();
+  
+  const history = reversed.map(m => {
+    const body = decryptField(m.body_encrypted);
+    const role = m.direction === "in" ? "العميل" : "المساعد";
+    return `${role}: ${body}`;
+  }).join("\n");
+
+  return history;
+}
 
 export async function handleIncomingMessage(
   tenantId: string,
@@ -29,7 +54,7 @@ export async function handleIncomingMessage(
   if (!tenant) return;
   const t = tenant as Tenant;
 
-  // حساب غير مفعل (لم يكتمل الدفع) → لا رد آلي
+  // حساب غير مفعل
   if (!t.is_active) return;
 
   // ── المحادثة ──
@@ -41,6 +66,7 @@ export async function handleIncomingMessage(
     .eq("tenant_id", tenantId)
     .eq("wa_chat_id", chatId)
     .maybeSingle();
+  
   if (found.data) {
     conv = found.data as Conversation;
     await db.from("conversations").update({ last_message_at: new Date().toISOString() }).eq("id", conv.id);
@@ -54,7 +80,7 @@ export async function handleIncomingMessage(
   }
   if (!conv) return;
 
-  // تسجيل رسالة العميل (مشفرة)
+  // تسجيل رسالة العميل
   await db.from("messages").insert({
     conversation_id: conv.id,
     tenant_id: tenantId,
@@ -66,40 +92,49 @@ export async function handleIncomingMessage(
   });
 
   // ── سياسات الإيقاف ──
-  if (conv.transferred) return; // محوّلة لبشري: لا تدخل آلي حتى يستأنف المالك
+  if (conv.transferred) return;
   if (conv.auto_paused_reason === "credits") return;
   if (t.credits_remaining <= 0) {
     await db.from("conversations").update({ auto_paused_reason: "credits" }).eq("id", conv.id);
     return;
   }
 
-  // ── نية تحويل صريحة أو حالة حساسة ──
+  // ── نية تحويل ──
   const wantsHuman = HANDOFF_PATTERN.test(customerText);
 
   let kind: "answer" | "refusal" | "handoff" = "answer";
   let replyText = "";
-
   let bestScore = 0;
+
   if (wantsHuman) {
     kind = "handoff";
     replyText = HANDOFF_TEXT;
   } else {
-    // الميزة 3: استرجاع دلالي بالتشابه (وليس مطابقة كلمات) ← عتبة ثقة قابلة للتعديل ← توليد مُقيّد بالسياق
-    const result = await answerFromKnowledge(tenantId, t.business_name, customerText);
+    // جلب تاريخ المحادثة للسياق
+    const conversationHistory = await getConversationHistory(conv.id, 5);
+    
+    // RAG متقدم مع دعم اللهجات وذاكرة المحادثة
+    const result = await answerFromKnowledge(
+      tenantId, 
+      t.business_name, 
+      customerText,
+      conversationHistory
+    );
+    
     bestScore = result.bestSimilarity;
+    
     if (result.confident && result.answer) {
       replyText = result.answer;
     } else {
-      // دون العتبة أو غير متأكد من السياق: اعتذار رسمي + تسجيل عالق — بلا إجبار على رد ضعيف
       kind = "refusal";
       replyText = REFUSAL_TEXT;
     }
   }
 
-  // لمس أنسنة الإيقاع قبل الإرسال
+  // أنسنة الإيقاع
   await sleep(700 + Math.random() * 900);
 
-  // ── الإرسال ثم الخصم (الخصم بعد التسليم الفعلي فقط) ──
+  // ── الإرسال ثم الخصم ──
   await sendText(tenantId, chatId, replyText);
 
   const msgIns = await db
@@ -116,7 +151,6 @@ export async function handleIncomingMessage(
     .single();
 
   if (msgIns.data) {
-    // دالة ذرّية: لا خصم مكرر، ولا نزول تحت الصفر
     await db.rpc("consume_reply", { p_tenant_id: tenantId, p_message_id: msgIns.data.id });
   }
 
@@ -125,7 +159,6 @@ export async function handleIncomingMessage(
   }
 
   if (kind === "refusal") {
-    // تسجيل السؤال العالق بدل اختلاق إجابة — مع درجة التشابه الأعلى للتشخيص
     await db.from("unresolved_questions").insert({
       tenant_id: tenantId,
       conversation_id: conv.id,
@@ -135,7 +168,7 @@ export async function handleIncomingMessage(
   }
 }
 
-/** إرسال رد يدوي من لوحة التحكم (يعطَّل الخصم الآلي؛ قرار المالك) */
+/** إرسال رد يدوي */
 export async function sendManualReply(
   tenantId: string,
   conversationId: string,
@@ -148,9 +181,10 @@ export async function sendManualReply(
     .eq("id", conversationId)
     .eq("tenant_id", tenantId)
     .single();
+
   if (!conv) throw new Error("المحادثة غير موجودة");
 
-  await sendText(tenantId, (conv as Conversation).wa_chat_id, text);
+  await sendText(tenantId, conv.wa_chat_id, text);
 
   await db.from("messages").insert({
     conversation_id: conversationId,
@@ -169,7 +203,7 @@ export async function sendManualReply(
   await db.from("conversations").update(patch).eq("id", conversationId);
 }
 
-/** قراءة رسائل محادثة (تُفك التشفير للعرض في اللوحة فقط) */
+/** قراءة رسائل محادثة */
 export async function readConversationMessages(tenantId: string, conversationId: string) {
   const { data } = await db
     .from("messages")

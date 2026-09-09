@@ -128,4 +128,147 @@ tenantsRouter.post(
   }
 );
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// إدارة إعدادات اللهجات
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/** الحصول على إعدادات اللهجة */
+tenantsRouter.get("/:id/dialect", async (req, res) => {
+  const { data, error } = await db
+    .from("tenant_dialect_settings")
+    .select("*")
+    .eq("tenant_id", req.params.id)
+    .maybeSingle();
+  
+  if (error) return res.status(500).json({ error: error.message });
+  
+  // إذا لم تكن موجودة، أنشئ إعدادات افتراضية
+  if (!data) {
+    const { data: newData, error: insertError } = await db
+      .from("tenant_dialect_settings")
+      .insert({
+        tenant_id: req.params.id,
+        dialect: "arabic_saudi",
+        formality: "natural"
+      })
+      .select()
+      .single();
+    
+    if (insertError) return res.status(500).json({ error: insertError.message });
+    return res.json(newData);
+  }
+  
+  res.json(data);
+});
+
+/** تحديث إعدادات اللهجة */
+tenantsRouter.put("/:id/dialect", async (req, res) => {
+  const { dialect, formality } = req.body ?? {};
+  
+  const validDialects = [
+    'arabic_fusha', 'arabic_iraqi', 'arabic_saudi', 'arabic_emirati',
+    'arabic_kuwaiti', 'arabic_qatari', 'arabic_bahraini', 'arabic_omani',
+    'arabic_gulf', 'english', 'auto_detect'
+  ];
+  
+  const validFormalities = ['formal', 'natural', 'casual'];
+  
+  if (dialect && !validDialects.includes(dialect)) {
+    return res.status(400).json({ error: "لهجة غير صالحة" });
+  }
+  
+  if (formality && !validFormalities.includes(formality)) {
+    return res.status(400).json({ error: "مستوى رسمية غير صالح" });
+  }
+  
+  const { data, error } = await db
+    .from("tenant_dialect_settings")
+    .upsert({
+      tenant_id: req.params.id,
+      dialect: dialect || 'arabic_saudi',
+      formality: formality || 'natural',
+      updated_at: new Date().toISOString()
+    })
+    .select()
+    .single();
+  
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// إدارة مصادر المعرفة المتقدمة
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/** قائمة مصادر المعرفة */
+tenantsRouter.get("/:id/knowledge/sources", async (req, res) => {
+  const { data, error } = await db
+    .from("knowledge_sources")
+    .select("*")
+    .eq("tenant_id", req.params.id)
+    .order("created_at", { ascending: false });
+  
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data || []);
+});
+
+/** حذف مصدر معرفة */
+tenantsRouter.delete("/:id/knowledge/sources/:sourceId", async (req, res) => {
+  const { error } = await db
+    .from("knowledge_sources")
+    .delete()
+    .eq("id", req.params.sourceId)
+    .eq("tenant_id", req.params.id);
+  
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ success: true });
+});
+
+/** إعادة مزامنة مصدر */
+tenantsRouter.post("/:id/knowledge/sources/:sourceId/resync", async (req, res) => {
+  const { data: source, error } = await db
+    .from("knowledge_sources")
+    .select("*")
+    .eq("id", req.params.sourceId)
+    .eq("tenant_id", req.params.id)
+    .single();
+  
+  if (error || !source) {
+    return res.status(404).json({ error: "المصدر غير موجود" });
+  }
+  
+  try {
+    // حذف chunks القديمة
+    await db.from("knowledge_chunks").delete().eq("source_id", source.id);
+    
+    // إعادة الفهرسة
+    let result;
+    if (source.kind === "url" && source.url) {
+      result = await ingestSource(req.params.id, { kind: "url", url: source.url });
+    } else {
+      return res.status(400).json({ error: "إعادة المزامنة متاحة فقط للمصادر من نوع URL" });
+    }
+    
+    res.json(result);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/** تفعيل/تعطيل مصدر */
+tenantsRouter.patch("/:id/knowledge/sources/:sourceId/toggle", async (req, res) => {
+  const { enabled } = req.body ?? {};
+  
+  const { data, error } = await db
+    .from("knowledge_sources")
+    .update({ enabled: !!enabled })
+    .eq("id", req.params.sourceId)
+    .eq("tenant_id", req.params.id)
+    .select()
+    .single();
+  
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
+});
+
 /* ربط واتساب انتقل إلى /api/whatsapp (جلسات حقيقية + SSE + صلاحيات) — انظر routes/whatsapp.ts */
