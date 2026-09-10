@@ -2,17 +2,39 @@ import { createClient } from "@supabase/supabase-js";
 import { config } from "./config.js";
 
 /**
- * عميل خدمة (service role) — يتجاوز RLS لأن العزل متعدد المستأجرين
- * يُفرض في طبقة التطبيق: كل استعلام يحمل tenant_id صراحةً.
+ * إعدادات Supabase.
+ *
+ * Node.js 22 يوفر WebSocket أصليًا، لذلك لا نحتاج
+ * إلى مكتبة ws لتشغيل Supabase Realtime.
  */
-export const db = createClient(config.supabaseUrl, config.supabaseServiceKey, {
-  auth: { persistSession: false, autoRefreshToken: false },
-});
+const supabaseOptions = {
+  auth: {
+    persistSession: false,
+    autoRefreshToken: false,
+  },
+};
 
-/** للتحقق من توكنات Supabase Auth في مسارات لوحة التحكم */
-export const authClient = createClient(config.supabaseUrl, config.supabaseServiceKey, {
-  auth: { persistSession: false, autoRefreshToken: false },
-});
+/**
+ * عميل خدمة Supabase.
+ *
+ * يستخدم Service Role Key، لذلك يتجاوز RLS.
+ * يجب أن يتم فرض tenant_id في طبقة التطبيق.
+ */
+export const db = createClient(
+  config.supabaseUrl,
+  config.supabaseServiceKey,
+  supabaseOptions
+);
+
+/**
+ * عميل Supabase للتحقق من توكنات Auth
+ * في مسارات لوحة التحكم.
+ */
+export const authClient = createClient(
+  config.supabaseUrl,
+  config.supabaseServiceKey,
+  supabaseOptions
+);
 
 export type Tenant = {
   id: string;
