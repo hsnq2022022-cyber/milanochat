@@ -1,23 +1,13 @@
 /**
  * Milano Auto Reply Engine
  *
- * WhatsApp message
- *      ↓
- * tenant validation
- *      ↓
- * conversation
- *      ↓
- * policies
- *      ↓
- * RAG
- *      ↓
- * grounded answer
- *      ↓
- * WhatsApp
- *      ↓
- * save message
- *      ↓
- * consume credit
+ * محرك الرد الآلي المتقدم:
+ * - دعم اللهجات العربية
+ * - ذاكرة المحادثة
+ * - منع الهلوسة عبر RAG
+ * - حماية الرصيد والإيقاف
+ * - التحويل إلى موظف
+ * - تسجيل الرسائل الواردة والصادرة
  */
 
 import {
@@ -41,13 +31,71 @@ const REFUSAL_TEXT =
 const HANDOFF_TEXT =
   "وصلتني رسالتك، وحوّلت محادثتك لأحد الموظفين — بيرد عليك في أقرب وقت إن شاء الله.";
 
+/** نية تحويل صريحة أو حالة حساسة */
 const HANDOFF_PATTERN =
   /(بشري|إنسان|موظف|مسؤول|مدير|شكوى|شكاوى|استرجاع|استرداد|تعويض|مشكلة كبيرة)/;
 
 const sleep = (ms: number) =>
-  new Promise((resolve) =>
-    setTimeout(resolve, ms)
-  );
+  new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * جلب آخر N رسائل من المحادثة.
+ *
+ * نستخدمها كسياق إضافي للـ RAG حتى يفهم الوكيل
+ * الأسئلة المختصرة مثل:
+ * "وكم؟"
+ * "وين؟"
+ * "زين وهذا؟"
+ */
+async function getConversationHistory(
+  conversationId: string,
+  limit = 8
+): Promise<string> {
+  const { data: messages, error } = await db
+    .from("messages")
+    .select("direction, body_encrypted, created_at")
+    .eq("conversation_id", conversationId)
+    .order("created_at", { ascending: false })
+    .limit(limit);
+
+  if (error) {
+    console.error(
+      "[WA] conversation history lookup failed:",
+      error.message
+    );
+    return "";
+  }
+
+  if (!messages || messages.length === 0) {
+    return "";
+  }
+
+  const reversed = [...messages].reverse();
+
+  return reversed
+    .map((m) => {
+      let body = "";
+
+      try {
+        body = decryptField(m.body_encrypted);
+      } catch (error) {
+        console.error(
+          "[WA] failed to decrypt conversation message:",
+          error
+        );
+        return null;
+      }
+
+      if (!body?.trim()) return null;
+
+      const role =
+        m.direction === "in" ? "العميل" : "المساعد";
+
+      return `${role}: ${body.trim()}`;
+    })
+    .filter(Boolean)
+    .join("\n");
+}
 
 /**
  * معالجة رسالة واردة من واتساب.
@@ -108,8 +156,7 @@ export async function handleIncomingMessage(
     /**
      * 3. البحث عن المحادثة.
      */
-    let conv: Conversation | null =
-      null;
+    let conv: Conversation | null = null;
 
     const phoneEnc = encryptField(
       chatId.replace(
@@ -164,8 +211,7 @@ export async function handleIncomingMessage(
         .insert({
           tenant_id: tenantId,
           wa_chat_id: chatId,
-          customer_phone_encrypted:
-            phoneEnc,
+          customer_phone_encrypted: phoneEnc,
         })
         .select()
         .single();
@@ -216,6 +262,8 @@ export async function handleIncomingMessage(
 
     /**
      * 5. المحادثة محولة لبشري.
+     *
+     * نسجل رسالة العميل أولاً، ثم نوقف الرد الآلي.
      */
     if (conv.transferred) {
       console.log(
@@ -225,7 +273,7 @@ export async function handleIncomingMessage(
     }
 
     /**
-     * 6. متوقفة بسبب الرصيد.
+     * 6. المحادثة متوقفة بسبب الرصيد.
      */
     if (
       conv.auto_paused_reason ===
@@ -256,21 +304,17 @@ export async function handleIncomingMessage(
     }
 
     /**
-     * 8. نية التحويل لبشري.
+     * 8. نية التحويل إلى موظف.
      */
     const wantsHuman =
-      HANDOFF_PATTERN.test(
-        customerText
-      );
+      HANDOFF_PATTERN.test(customerText);
 
     let kind:
       | "answer"
       | "refusal"
-      | "handoff" =
-      "answer";
+      | "handoff" = "answer";
 
     let replyText = "";
-
     let bestScore = 0;
 
     if (wantsHuman) {
@@ -278,22 +322,28 @@ export async function handleIncomingMessage(
       replyText = HANDOFF_TEXT;
     } else {
       /**
-       * 9. RAG.
+       * 9. جلب ذاكرة المحادثة ثم تشغيل RAG.
        *
-       * مهم جدًا:
-       * أي خطأ في Gemini أو match_knowledge
-       * لن يؤدي إلى توقف handler بالكامل.
+       * تمرير history إلى qa.ts يسمح بفهم السياق
+       * والأسئلة القصيرة واللهجات العربية المختلفة.
        */
+      const conversationHistory =
+        await getConversationHistory(
+          conv.id,
+          8
+        );
+
       try {
         console.log(
-          `[RAG] starting for tenant=${tenantId}`
+          `[RAG] starting for tenant=${tenantId} history=${conversationHistory ? "yes" : "no"}`
         );
 
         const result =
           await answerFromKnowledge(
             tenantId,
             t.business_name,
-            customerText
+            customerText,
+            conversationHistory
           );
 
         bestScore =
@@ -305,21 +355,24 @@ export async function handleIncomingMessage(
 
         if (
           result.confident &&
-          result.answer
+          result.answer?.trim()
         ) {
           replyText =
-            result.answer;
+            result.answer.trim();
         } else {
           kind = "refusal";
           replyText = REFUSAL_TEXT;
         }
       } catch (error: any) {
         /**
-         * لا تجعل خطأ RAG يمنع WhatsApp من إرسال رد.
+         * لا تجعل خطأ RAG أو Gemini يمنع
+         * استمرار خدمة واتساب بالكامل.
          */
         console.error(
           "[RAG] FAILED:",
-          error?.message ?? error
+          error?.stack ??
+            error?.message ??
+            error
         );
 
         kind = "refusal";
@@ -328,7 +381,7 @@ export async function handleIncomingMessage(
     }
 
     /**
-     * حماية أخيرة.
+     * حماية أخيرة من الرد الفارغ.
      */
     if (!replyText.trim()) {
       console.error(
@@ -365,7 +418,7 @@ export async function handleIncomingMessage(
     );
 
     /**
-     * 12. تسجيل الرد.
+     * 12. تسجيل الرد في قاعدة البيانات.
      */
     const {
       data: msgIns,
@@ -392,7 +445,10 @@ export async function handleIncomingMessage(
     }
 
     /**
-     * 13. خصم credit بعد الإرسال.
+     * 13. خصم credit بعد إرسال الرد الحقيقي.
+     *
+     * نستخدم message id الناتج من insert حتى يكون
+     * الخصم مرتبطًا بالرد نفسه.
      */
     if (msgIns) {
       const {
@@ -417,16 +473,28 @@ export async function handleIncomingMessage(
      * 14. تسجيل التحويل لبشري.
      */
     if (kind === "handoff") {
-      await db
+      const {
+        error: handoffError,
+      } = await db
         .from("conversations")
         .update({
           transferred: true,
         })
         .eq("id", conv.id);
+
+      if (handoffError) {
+        console.error(
+          "[WA] failed to mark conversation as transferred:",
+          handoffError.message
+        );
+      }
     }
 
     /**
      * 15. تسجيل السؤال غير المحلول.
+     *
+     * هذا يسمح بإظهاره لاحقًا في لوحة التحكم
+     * وتحويله إلى معلومة في قاعدة المعرفة.
      */
     if (kind === "refusal") {
       const {
@@ -450,12 +518,12 @@ export async function handleIncomingMessage(
     }
 
     console.log(
-      `[WA] processing complete tenant=${tenantId}`
+      `[WA] processing complete tenant=${tenantId} conversation=${conv.id}`
     );
   } catch (error: any) {
     /**
      * حارس أخير:
-     * أي خطأ غير متوقع لن يسبب crash للـ process.
+     * أي خطأ غير متوقع لن يؤدي إلى crash للـ process.
      */
     console.error(
       "[WA] handleIncomingMessage FAILED:",
@@ -498,24 +566,56 @@ export async function sendManualReply(
     );
   }
 
+  const conversation =
+    conv as Conversation;
+
+  const cleanText = text.trim();
+
+  if (!cleanText) {
+    throw new Error(
+      "نص الرسالة مطلوب"
+    );
+  }
+
+  /**
+   * إرسال الرد أولاً.
+   * إذا فشل WhatsApp فلن نسجل الرسالة
+   * على أنها أرسلت بنجاح.
+   */
   await sendText(
     tenantId,
-    (conv as Conversation)
-      .wa_chat_id,
-    text
+    conversation.wa_chat_id,
+    cleanText
   );
 
-  await db
+  /**
+   * تسجيل الرد اليدوي.
+   */
+  const {
+    error: messageError,
+  } = await db
     .from("messages")
     .insert({
-      conversation_id: conversationId,
+      conversation_id:
+        conversationId,
       tenant_id: tenantId,
       direction: "out",
-      body_encrypted: encryptField(text),
+      body_encrypted:
+        encryptField(cleanText),
       kind: "manual",
       is_auto: false,
     });
 
+  if (messageError) {
+    console.error(
+      "[WA] failed to save manual reply:",
+      messageError.message
+    );
+  }
+
+  /**
+   * تحديث حالة المحادثة.
+   */
   const patch: Record<
     string,
     unknown
@@ -529,14 +629,24 @@ export async function sendManualReply(
     patch.auto_paused_reason = null;
   }
 
-  await db
+  const {
+    error: updateError,
+  } = await db
     .from("conversations")
     .update(patch)
-    .eq("id", conversationId);
+    .eq("id", conversationId)
+    .eq("tenant_id", tenantId);
+
+  if (updateError) {
+    console.error(
+      "[WA] failed to update conversation after manual reply:",
+      updateError.message
+    );
+  }
 }
 
 /**
- * قراءة رسائل المحادثة.
+ * قراءة رسائل محادثة.
  */
 export async function readConversationMessages(
   tenantId: string,
@@ -568,11 +678,21 @@ export async function readConversationMessages(
   }
 
   return (data ?? []).map(
-    (m: any) => ({
-      ...m,
-      body: decryptField(
-        m.body_encrypted
-      ),
-    })
+    (m: any) => {
+      let body = "";
+
+      try {
+        body = decryptField(
+          m.body_encrypted
+        );
+      } catch {
+        body = "";
+      }
+
+      return {
+        ...m,
+        body,
+      };
+    }
   );
 }

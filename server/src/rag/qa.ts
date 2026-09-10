@@ -1,17 +1,131 @@
+/**
+ * نظام RAG المتقدم:
+ * - Hybrid Retrieval (Vector + Full Text)
+ * - دعم اللهجات العربية
+ * - منع الهلوسة
+ * - جودة إجابة عالية
+ */
+
 import { config } from "../config.js";
 import { db } from "../db.js";
 import { chatCompletion, embed, toPgVector } from "../llm.js";
-import { extractFromUrl } from "./ingest.js";
+import { extractFromUrl, smartChunkText } from "./ingest.js";
 
 export type QAPair = {
   question: string;
   answer: string;
 };
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// إعدادات اللهجات
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export type Dialect =
+  | "arabic_fusha"
+  | "arabic_iraqi"
+  | "arabic_saudi"
+  | "arabic_emirati"
+  | "arabic_kuwaiti"
+  | "arabic_qatari"
+  | "arabic_bahraini"
+  | "arabic_omani"
+  | "arabic_gulf"
+  | "english"
+  | "auto_detect";
+
+export type Formality = "formal" | "natural" | "casual";
+
+const DIALECT_PROMPTS: Record<Dialect, string> = {
+  arabic_fusha: "اكتب بالعربية الفصحى الواضحة",
+  arabic_iraqi:
+    "اكتب باللهجة العراقية الطبيعية، استخدم تعابير عراقية عند الحاجة بدون مبالغة",
+  arabic_saudi:
+    "اكتب باللهجة السعودية الطبيعية، استخدم تعابير سعودية عند الحاجة بدون مبالغة",
+  arabic_emirati: "اكتب باللهجة الإماراتية الطبيعية",
+  arabic_kuwaiti: "اكتب باللهجة الكويتية الطبيعية",
+  arabic_qatari: "اكتب باللهجة القطرية الطبيعية",
+  arabic_bahraini: "اكتب باللهجة البحرينية الطبيعية",
+  arabic_omani: "اكتب باللهجة العمانية الطبيعية",
+  arabic_gulf: "اكتب باللهجة الخليجية الطبيعية",
+  english: "Write in clear, natural English",
+  auto_detect: "اكتب بنفس لغة ولهجة سؤال العميل",
+};
+
+const FORMALITY_PROMPTS: Record<Formality, string> = {
+  formal: "استخدم أسلوب رسمي ومهذب",
+  natural: "استخدم أسلوب طبيعي وودي",
+  casual: "استخدم أسلوب عفوي وغير رسمي",
+};
+
+/** الحصول على إعدادات اللهجة للـ tenant */
+async function getDialectSettings(
+  tenantId: string
+): Promise<{ dialect: Dialect; formality: Formality }> {
+  const { data, error } = await db
+    .from("tenant_dialect_settings")
+    .select("dialect, formality")
+    .eq("tenant_id", tenantId)
+    .maybeSingle();
+
+  if (error) {
+    console.warn(
+      "[RAG] dialect settings lookup failed:",
+      error.message
+    );
+  }
+
+  return {
+    dialect: (data?.dialect as Dialect) || "arabic_saudi",
+    formality: (data?.formality as Formality) || "natural",
+  };
+}
+
+/** اكتشاف لغة ولهجة النص */
+async function detectLanguageDialect(text: string): Promise<Dialect> {
+  const iraqiWords = ["شكد", "هسة", "شلون", "مو", "وين", "أكو", "ماكو"];
+  const saudiWords = ["وش", "الحين", "ليش", "طيب", "وين", "أبغى"];
+  const emiratiWords = ["يشباب", "زين", "تدري"];
+
+  let iraqiScore = 0;
+  let saudiScore = 0;
+  let emiratiScore = 0;
+
+  for (const word of iraqiWords) {
+    if (text.includes(word)) iraqiScore++;
+  }
+
+  for (const word of saudiWords) {
+    if (text.includes(word)) saudiScore++;
+  }
+
+  for (const word of emiratiWords) {
+    if (text.includes(word)) emiratiScore++;
+  }
+
+  if (iraqiScore > saudiScore && iraqiScore > emiratiScore) {
+    return "arabic_iraqi";
+  }
+
+  if (saudiScore > iraqiScore && saudiScore > emiratiScore) {
+    return "arabic_saudi";
+  }
+
+  if (emiratiScore > iraqiScore && emiratiScore > saudiScore) {
+    return "arabic_emirati";
+  }
+
+  return "arabic_gulf";
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// توليد أسئلة وأجوبة من URL
+// ═══════════════════════════════════════════════════════════════════════════════
+
 const QA_SYSTEM = [
   "أنت محلل محتوى لنشاط تجاري.",
   "أنشئ أسئلة وأجوبة اعتمادًا على المحتوى المرفق فقط.",
   "ممنوع اختراع أي معلومات غير موجودة في المحتوى.",
+  "حافظ على الأرقام والأسعار وأسماء المنتجات والروابط كما هي.",
   'أعد JSON فقط بهذا الشكل: [{"question":"...","answer":"..."}]',
 ].join("\n");
 
@@ -125,6 +239,12 @@ export async function saveQAPairs(
 
   const vectors = await embed(texts);
 
+  if (vectors.length !== texts.length) {
+    throw new Error(
+      `[RAG] عدد embeddings (${vectors.length}) لا يطابق عدد النصوص (${texts.length})`
+    );
+  }
+
   const rows = texts.map((content, i) => ({
     tenant_id: tenantId,
     source_id: source.id,
@@ -150,12 +270,23 @@ export async function saveQAPairs(
   };
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// Hybrid Search (Vector + Full Text)
+// ═══════════════════════════════════════════════════════════════════════════════
+
 export type SemanticMatch = {
   id: string;
   content: string;
   similarity: number;
+  source_type?: string;
 };
 
+/**
+ * البحث الدلالي باستخدام match_knowledge.
+ *
+ * هذا هو fallback الأساسي إذا لم تكن دالة البحث الهجين
+ * موجودة أو فشلت.
+ */
 export async function semanticSearch(
   tenantId: string,
   text: string,
@@ -219,12 +350,13 @@ export async function semanticSearch(
       content: h.content,
       similarity:
         Math.round(h.similarity * 1000) / 1000,
+      source_type: "vector",
     }));
 
   const best = matches[0]?.similarity ?? 0;
 
   console.log(
-    `[RAG] matches=${matches.length} best=${best}`
+    `[RAG] semantic matches=${matches.length} best=${best}`
   );
 
   for (let i = 0; i < matches.length; i++) {
@@ -239,48 +371,153 @@ export async function semanticSearch(
   };
 }
 
+/** بحث هجين يجمع بين Vector و Full Text */
+export async function hybridSearch(
+  tenantId: string,
+  text: string,
+  topK = config.ragTopK
+): Promise<{
+  matches: SemanticMatch[];
+  best: number;
+}> {
+  console.log(
+    `[RAG] hybrid search tenant=${tenantId} text="${text}"`
+  );
+
+  const [qv] = await embed([text]);
+
+  if (!qv) {
+    throw new Error("[RAG] فشل إنشاء embedding");
+  }
+
+  console.log(
+    `[RAG] query embedding dimension=${qv.length}`
+  );
+
+  if (qv.length !== 3072) {
+    throw new Error(
+      `[RAG] embedding dimension غير صحيح: ${qv.length}`
+    );
+  }
+
+  const { data: hits, error } = await db.rpc(
+    "hybrid_search_knowledge",
+    {
+      p_tenant_id: tenantId,
+      p_query: toPgVector(qv),
+      p_text_query: text,
+      p_limit: topK,
+      p_threshold: 0,
+    }
+  );
+
+  if (error) {
+    console.warn(
+      "[RAG] Hybrid search failed, falling back to semantic search:",
+      error.message
+    );
+
+    return semanticSearch(tenantId, text, topK);
+  }
+
+  const matches = ((hits ?? []) as any[])
+    .filter(
+      (h) =>
+        h &&
+        typeof h.content === "string" &&
+        typeof h.similarity === "number"
+    )
+    .map((h) => ({
+      id: h.id,
+      content: h.content,
+      similarity:
+        Math.round(h.similarity * 1000) / 1000,
+      source_type: h.source_type || "hybrid",
+    }));
+
+  const best = matches[0]?.similarity ?? 0;
+
+  console.log(
+    `[RAG] hybrid matches=${matches.length} best=${best}`
+  );
+
+  for (let i = 0; i < matches.length; i++) {
+    console.log(
+      `[RAG] hybrid chunk ${i + 1} similarity=${matches[i].similarity} content="${matches[i].content.slice(0, 700)}"`
+    );
+  }
+
+  return {
+    matches,
+    best,
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// توليد إجابة مع دعم اللهجات
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/** توليد رد مُقيّد بالسياق مع دعم اللهجات */
 export async function generateGroundedAnswer(
+  tenantId: string,
   businessName: string,
   context: string,
-  question: string
-): Promise<{
-  answer: string;
-  grounded: boolean;
-}> {
+  question: string,
+  conversationHistory?: string
+): Promise<{ answer: string; grounded: boolean }> {
+  const { dialect, formality } =
+    await getDialectSettings(tenantId);
+
+  let effectiveDialect = dialect;
+
+  if (dialect === "auto_detect") {
+    effectiveDialect =
+      await detectLanguageDialect(question);
+  }
+
+  const dialectPrompt =
+    DIALECT_PROMPTS[effectiveDialect] ||
+    DIALECT_PROMPTS.arabic_fusha;
+
+  const formalityPrompt =
+    FORMALITY_PROMPTS[formality] ||
+    FORMALITY_PROMPTS.natural;
+
   const system = [
-    `أنت موظف خدمة عملاء لمشروع «${businessName}».`,
+    `أنت موظف خدمة عملاء ذكي لمشروع «${businessName}» يرد عبر واتساب.`,
     "",
-    "المعلومات الوحيدة التي يمكنك استخدامها هي المعلومات الموجودة داخل context.",
-    "لا تستخدم معرفتك العامة ولا تخمن.",
+    "## الأولوية القصوى: دقة المعلومات",
+    "1) أجب بناءً على السياق المرفق فقط.",
+    "2) ممنوع الاختراع أو التخمين إطلاقاً.",
+    "3) إذا لم تجد الإجابة في السياق، اجعل grounded=false ولا تخترع إجابة.",
+    "4) لا تذكر أسعار أو مواعيد أو معلومات غير موجودة في السياق.",
+    "5) حافظ على الأرقام والأسعار وأسماء المنتجات والروابط كما وردت في السياق.",
+    "6) لا تغيّر معنى المعلومة عند تحويلها إلى اللهجة المطلوبة.",
     "",
-    "إذا كانت إجابة سؤال العميل موجودة في context أو يمكن استخلاصها بوضوح منه، أجب عنها مباشرة.",
-    "لا ترفض الإجابة إذا كانت المعلومة موجودة في context.",
-    "إذا كانت المعلومة غير موجودة فعلًا، فقط عندها اجعل grounded=false.",
+    "## أسلوب الرد:",
+    `- ${dialectPrompt}`,
+    `- ${formalityPrompt}`,
+    "- استخدم اللهجة بصورة طبيعية وغير مبالغ فيها.",
+    "- لا تجعل تغيير اللهجة يغيّر الحقائق أو الأرقام.",
     "",
-    "إذا كان السؤال عن شروط شراء الحسابات، ابحث عن شروط الشراء والحسابات والدفع والتفعيل والضمان والاسترجاع داخل context.",
+    "## جودة الإجابة:",
+    "- قصيرة ومباشرة ومناسبة لواتساب.",
+    "- طبيعية وغير روبوتية.",
+    "- لا تعيد السؤال.",
+    "- لا تكرر نفس المعلومة.",
     "",
-    "الرد يجب أن يكون قصيرًا ومناسبًا لواتساب.",
-    "استخدم العربية الطبيعية.",
-    "",
-    "أعد JSON فقط.",
-    "عند وجود الإجابة:",
-    '{"answer":"الإجابة","grounded":true}',
-    "",
-    "عند عدم وجود الإجابة:",
-    '{"answer":"لا أملك معلومات مؤكدة عن ذلك من مصادر المعرفة.","grounded":false}',
+    'أعد JSON فقط: {"answer":"...","grounded":true|false}',
   ].join("\n");
 
-  const prompt = [
-    "<context>",
-    context,
-    "</context>",
-    "",
-    "<question>",
-    question,
-    "</question>",
-    "",
-    "أجب اعتمادًا على context فقط.",
-  ].join("\n");
+  let userPrompt =
+    `<context>\n${context}\n</context>\n\n` +
+    `سؤال العميل:\n${question}`;
+
+  if (conversationHistory?.trim()) {
+    userPrompt =
+      `<conversation_history>\n${conversationHistory}\n</conversation_history>\n\n` +
+      userPrompt;
+  }
 
   console.log(
     `[RAG] generating grounded answer question="${question}"`
@@ -288,7 +525,7 @@ export async function generateGroundedAnswer(
 
   const raw = await chatCompletion(
     system,
-    prompt,
+    userPrompt,
     {
       json: true,
       maxTokens: 600,
@@ -343,6 +580,10 @@ export async function generateGroundedAnswer(
   }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// المسار الكامل للإجابة
+// ═══════════════════════════════════════════════════════════════════════════════
+
 export type SemanticAnswerResult = {
   confident: boolean;
   bestSimilarity: number;
@@ -351,24 +592,21 @@ export type SemanticAnswerResult = {
   answer: string | null;
 };
 
+/** المسار الكامل: بحث هجين ← فحص العتبة ← توليد مُقيّد باللهجة */
 export async function answerFromKnowledge(
   tenantId: string,
   businessName: string,
-  text: string
+  text: string,
+  conversationHistory?: string
 ): Promise<SemanticAnswerResult> {
-  console.log(
-    `[RAG] starting for tenant=${tenantId}`
-  );
+  const { matches, best } =
+    await hybridSearch(
+      tenantId,
+      text
+    );
 
-  const {
-    matches,
-    best,
-  } = await semanticSearch(
-    tenantId,
-    text
-  );
-
-  const threshold = config.ragThreshold;
+  const threshold =
+    config.ragThreshold;
 
   console.log(
     `[RAG] threshold=${threshold} best=${best}`
@@ -404,9 +642,11 @@ export async function answerFromKnowledge(
 
   const result =
     await generateGroundedAnswer(
+      tenantId,
       businessName,
       context,
-      text
+      text,
+      conversationHistory
     );
 
   const confident =
