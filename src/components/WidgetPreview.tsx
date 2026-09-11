@@ -24,16 +24,48 @@ export default function WidgetPreview({
   const [device, setDevice] = useState<WidgetDevice>("desktop");
   const [state, setState] = useState<WidgetState>("open");
 
-  const { appearance, chat, branding, avatar } = settings;
+  const {
+    appearance,
+    chat,
+    branding,
+    avatar,
+  } = settings;
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // بيانات المساعد
+  // اسم الويدجت / المساعد
   //
-  // المسار الأساسي الجديد:
-  // settings.avatar.botAvatar
+  // الأولوية:
+  // 1. widgetName القادم مباشرة من الواجهة
+  // 2. settings.avatar.botName
+  // 3. الاسم القديم appearance.avatar.agentName
+  // 4. اسم افتراضي
   //
-  // fallback:
-  // settings.appearance.avatar
+  // بهذه الطريقة إذا غيّرت اسم الويدجت من الواجهة فسيتغير الـPreview مباشرة.
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  const normalizedWidgetName =
+    typeof widgetName === "string"
+      ? widgetName.trim()
+      : "";
+
+  const normalizedBotName =
+    typeof avatar?.botName === "string"
+      ? avatar.botName.trim()
+      : "";
+
+  const normalizedLegacyName =
+    typeof appearance?.avatar?.agentName === "string"
+      ? appearance.avatar.agentName.trim()
+      : "";
+
+  const botAgentName =
+    normalizedWidgetName ||
+    normalizedBotName ||
+    normalizedLegacyName ||
+    "المساعد";
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // صورة المساعد
   // ═══════════════════════════════════════════════════════════════════════════
 
   const botAvatarUrl =
@@ -41,25 +73,26 @@ export default function WidgetPreview({
     appearance?.avatar?.url ||
     "";
 
-const botAgentName =
-  avatar?.botName ||
-  appearance?.avatar?.agentName ||
-  widgetName ||
-  "المساعد";
-
+  // ═══════════════════════════════════════════════════════════════════════════
+  // وصف / عنوان المساعد
+  // ═══════════════════════════════════════════════════════════════════════════
 
   const botAgentTitle =
-    avatar?.botAvatar?.agentTitle ||
+    avatar?.botTagline ||
     appearance?.avatar?.agentTitle ||
     "";
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // مؤشر الحالة
+  // ═══════════════════════════════════════════════════════════════════════════
+
   const showStatusIndicator =
-    avatar?.botAvatar?.statusIndicator ??
-    appearance?.avatar?.statusIndicator ??
-    true;
+    avatar?.botAvatar
+      ? true
+      : appearance?.avatar?.statusIndicator ?? true;
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // حساب الألوان بناءً على الثيم
+  // الألوان
   // ═══════════════════════════════════════════════════════════════════════════
 
   const bgColor =
@@ -74,22 +107,30 @@ const botAgentName =
 
   const headerBg =
     appearance.headerGradient.enabled
-      ? `linear-gradient(${appearance.headerGradient.angle}deg, ${appearance.headerGradient.from}, ${appearance.headerGradient.to})`
+      ? `linear-gradient(
+          ${appearance.headerGradient.angle}deg,
+          ${appearance.headerGradient.from},
+          ${appearance.headerGradient.to}
+        )`
       : appearance.primaryColor;
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // حساب الظل
+  // الظلال
   // ═══════════════════════════════════════════════════════════════════════════
 
-  const shadowMap = {
+  const shadowMap: Record<string, string> = {
     none: "none",
     light: "0 2px 8px rgba(0,0,0,0.1)",
     medium: "0 4px 16px rgba(0,0,0,0.15)",
     strong: "0 8px 32px rgba(0,0,0,0.25)",
   };
 
+  const currentShadow =
+    shadowMap[appearance.shadow] ||
+    shadowMap.medium;
+
   // ═══════════════════════════════════════════════════════════════════════════
-  // حساب الأبعاد بناءً على الجهاز
+  // الأبعاد
   // ═══════════════════════════════════════════════════════════════════════════
 
   const width =
@@ -103,7 +144,10 @@ const botAgentName =
       : `${appearance.height}px`;
 
   return (
-    <div className="flex flex-col h-full">
+    <div
+      className="flex flex-col h-full"
+      dir={settings.localization.rtl ? "rtl" : "ltr"}
+    >
 
       {/* ══════════════════════════════════════════════════════════════════════
           شريط التحكم
@@ -207,8 +251,7 @@ const botAgentName =
               background: bgColor,
               borderRadius:
                 `${appearance.borderRadius}px`,
-              boxShadow:
-                shadowMap[appearance.shadow],
+              boxShadow: currentShadow,
               backdropFilter:
                 appearance.blur > 0
                   ? `blur(${appearance.blur}px)`
@@ -238,9 +281,7 @@ const botAgentName =
               }}
             >
 
-              {/* ═══════════════════════════════════════════════════════════
-                  Avatar
-              ═══════════════════════════════════════════════════════════ */}
+              {/* Avatar */}
 
               <div className="relative">
 
@@ -271,35 +312,35 @@ const botAgentName =
 
               </div>
 
-              {/* ═══════════════════════════════════════════════════════════
-                  Agent Info
-              ═══════════════════════════════════════════════════════════ */}
+              {/* معلومات المساعد */}
 
-              <div className="flex-1 text-white">
+              <div className="flex-1 text-white min-w-0">
 
                 <p
-                  className="font-bold"
+                  className="font-bold truncate"
                   style={{
                     fontWeight:
                       appearance.headingWeight,
                   }}
+                  title={botAgentName}
                 >
                   {botAgentName}
                 </p>
 
                 {botAgentTitle && (
-                  <p className="text-xs opacity-90">
+                  <p className="text-xs opacity-90 truncate">
                     {botAgentTitle}
                   </p>
                 )}
 
               </div>
 
-              {/* ═══════════════════════════════════════════════════════════
-                  Close Button
-              ═══════════════════════════════════════════════════════════ */}
+              {/* زر الإغلاق */}
 
-              <button className="text-white/80 hover:text-white transition-colors">
+              <button
+                type="button"
+                className="text-white/80 hover:text-white transition-colors"
+              >
                 <IconMinimize className="w-5 h-5" />
               </button>
 
@@ -354,6 +395,7 @@ const botAgentName =
                     .map((reply) => (
                       <button
                         key={reply.id}
+                        type="button"
                         className="px-3 py-1.5 rounded-full text-xs font-medium transition-all hover:scale-105"
                         style={{
                           background:
@@ -408,6 +450,7 @@ const botAgentName =
               />
 
               <button
+                type="button"
                 className="w-9 h-9 rounded-full flex items-center justify-center text-white transition-all hover:scale-105"
                 style={{
                   background:
@@ -450,6 +493,7 @@ const botAgentName =
                 }}
               >
                 مدعوم بواسطة{" "}
+
                 <span
                   className="font-bold"
                   style={{
@@ -457,8 +501,9 @@ const botAgentName =
                       appearance.primaryColor,
                   }}
                 >
-                  ميلانو
+                  {normalizedWidgetName || "ميلانو"}
                 </span>
+
               </div>
             )}
 
@@ -471,6 +516,7 @@ const botAgentName =
 
         {state === "closed" && (
           <button
+            type="button"
             className="flex items-center justify-center text-white transition-all hover:scale-110 relative"
             style={{
               width:
@@ -484,8 +530,7 @@ const botAgentName =
                 "circle"
                   ? "50%"
                   : `${appearance.borderRadius}px`,
-              boxShadow:
-                shadowMap[appearance.shadow],
+              boxShadow: currentShadow,
             }}
             onClick={() =>
               setState("open")
