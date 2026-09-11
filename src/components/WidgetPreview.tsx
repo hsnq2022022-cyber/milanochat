@@ -41,11 +41,12 @@ export default function WidgetPreview({
     appearance?.avatar?.url ||
     "";
 
-  const botAgentName =
-    avatar?.botAvatar?.agentName ||
-    appearance?.avatar?.agentName ||
-    widgetName ||
-    "المساعد";
+const botAgentName =
+  avatar?.botName ||
+  appearance?.avatar?.agentName ||
+  widgetName ||
+  "المساعد";
+
 
   const botAgentTitle =
     avatar?.botAvatar?.agentTitle ||
