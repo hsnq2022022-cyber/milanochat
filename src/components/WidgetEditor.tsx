@@ -38,6 +38,10 @@ function mergeWithDefaults(settings: any): WidgetSettings {
     appearance: {
       ...DEFAULT_SETTINGS.appearance,
       ...(settings?.appearance || {}),
+      launcher: {
+        ...DEFAULT_SETTINGS.appearance.launcher,
+        ...(settings?.appearance?.launcher || {}),
+      },
     },
     chat: {
       ...DEFAULT_SETTINGS.chat,

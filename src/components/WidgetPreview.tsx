@@ -77,11 +77,56 @@ export default function WidgetPreview({ settings, widgetName }: WidgetPreviewPro
 
       {/* منطقة المعاينة */}
       <div
-        className="flex-1 flex items-center justify-center p-8 overflow-auto"
+        className="flex-1 flex items-center justify-center p-8 overflow-auto relative"
         style={{
           background: theme === "dark" ? "#0a0a0a" : "#f5f5f5",
         }}
       >
+        {/* Launcher Button - يظهر دائماً في الزاوية */}
+        <button
+          className="absolute bottom-6 right-6 flex items-center justify-center text-white transition-all hover:scale-110 z-40"
+          style={{
+            width: `${appearance.launcher.size}px`,
+            height: `${appearance.launcher.size}px`,
+            background: appearance.primaryColor,
+            borderRadius: appearance.launcher.shape === "circle" ? "50%" : appearance.launcher.shape === "rounded" ? "12px" : "4px",
+            boxShadow: shadowMap[appearance.shadow],
+          }}
+          onClick={() => setState(state === "open" ? "closed" : "open")}
+          aria-label="زر المحادثة"
+        >
+          {/* أيقونة chat */}
+          {appearance.launcher.icon === "chat" && (
+            <svg viewBox="0 0 24 24" className="w-7 h-7" fill="currentColor">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+            </svg>
+          )}
+          {/* أيقونة message */}
+          {appearance.launcher.icon === "message" && (
+            <svg viewBox="0 0 24 24" className="w-7 h-7" fill="currentColor">
+              <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
+            </svg>
+          )}
+          {/* أيقونة support */}
+          {appearance.launcher.icon === "support" && (
+            <svg viewBox="0 0 24 24" className="w-7 h-7" fill="currentColor">
+              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v6h-2zm0 8h2v2h-2z" />
+            </svg>
+          )}
+          {/* أيقونة help */}
+          {appearance.launcher.icon === "help" && (
+            <svg viewBox="0 0 24 24" className="w-7 h-7" fill="currentColor">
+              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 17h-2v-2h2v2zm2.07-7.75l-.9.92C13.45 12.9 13 13.5 13 15h-2v-.5c0-1.1.45-2.1 1.17-2.83l1.24-1.26c.37-.36.59-.86.59-1.41 0-1.1-.9-2-2-2s-2 .9-2 2H8c0-2.21 1.79-4 4-4s4 1.79 4 4c0 .88-.36 1.68-.93 2.25z" />
+            </svg>
+          )}
+          {/* Badge */}
+          {appearance.launcher.badge.enabled && appearance.launcher.badge.count > 0 && (
+            <span className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-red-500 text-white text-xs flex items-center justify-center font-bold">
+              {appearance.launcher.badge.count}
+            </span>
+          )}
+        </button>
+
         {/* Widget Window */}
         {state === "open" && (
           <div
@@ -218,53 +263,6 @@ export default function WidgetPreview({ settings, widgetName }: WidgetPreviewPro
               </div>
             )}
           </div>
-        )}
-
-        {/* Launcher Button (when closed) */}
-        {state === "closed" && (
-          <button
-            className="flex items-center justify-center text-white transition-all hover:scale-110"
-            style={{
-              width: `${appearance.launcher.size}px`,
-              height: `${appearance.launcher.size}px`,
-              background: appearance.primaryColor,
-              borderRadius: appearance.launcher.shape === "circle" ? "50%" : `${appearance.borderRadius}px`,
-              boxShadow: shadowMap[appearance.shadow],
-            }}
-            onClick={() => setState("open")}
-            aria-label="فتح المحادثة"
-          >
-            {/* أيقونة chat */}
-            {appearance.launcher.icon === "chat" && (
-              <svg viewBox="0 0 24 24" className="w-7 h-7" fill="currentColor">
-                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-              </svg>
-            )}
-            {/* أيقونة message */}
-            {appearance.launcher.icon === "message" && (
-              <svg viewBox="0 0 24 24" className="w-7 h-7" fill="currentColor">
-                <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
-              </svg>
-            )}
-            {/* أيقونة support */}
-            {appearance.launcher.icon === "support" && (
-              <svg viewBox="0 0 24 24" className="w-7 h-7" fill="currentColor">
-                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v6h-2zm0 8h2v2h-2z" />
-              </svg>
-            )}
-            {/* أيقونة help */}
-            {appearance.launcher.icon === "help" && (
-              <svg viewBox="0 0 24 24" className="w-7 h-7" fill="currentColor">
-                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 17h-2v-2h2v2zm2.07-7.75l-.9.92C13.45 12.9 13 13.5 13 15h-2v-.5c0-1.1.45-2.1 1.17-2.83l1.24-1.26c.37-.36.59-.86.59-1.41 0-1.1-.9-2-2-2s-2 .9-2 2H8c0-2.21 1.79-4 4-4s4 1.79 4 4c0 .88-.36 1.68-.93 2.25z" />
-              </svg>
-            )}
-            {/* Badge للإشعارات */}
-            {appearance.launcher.badge.enabled && appearance.launcher.badge.count > 0 && (
-              <span className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-red-500 text-white text-xs flex items-center justify-center font-bold">
-                {appearance.launcher.badge.count}
-              </span>
-            )}
-          </button>
         )}
       </div>
     </div>
