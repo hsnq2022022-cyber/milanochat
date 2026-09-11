@@ -330,7 +330,7 @@ function GeneralTab({ name, setName, settings, updateSettings, errors }: any) {
 }
 
 function AppearanceTab({ settings, updateSettings, applyPreset, errors, authToken }: any) {
-  const handleImageUpload = async (type: "logo" | "avatar", file: File) => {
+  const handleImageUpload = async (type: "logo" | "avatar" | "launcher_icon", file: File) => {
     if (file.size > 1024 * 1024) {
       alert("حجم الملف يتجاوز 1MB");
       return;
@@ -369,8 +369,10 @@ function AppearanceTab({ settings, updateSettings, applyPreset, errors, authToke
         if (data.url) {
           if (type === "logo") {
             updateSettings("avatar.headerLogo.url", data.url);
-          } else {
+          } else if (type === "avatar") {
             updateSettings("avatar.botAvatar.url", data.url);
+          } else if (type === "launcher_icon") {
+            updateSettings("appearance.launcher.customIcon", data.url);
           }
         }
       } catch (err: any) {
@@ -555,7 +557,60 @@ function AppearanceTab({ settings, updateSettings, applyPreset, errors, authToke
               </svg>
               مساعدة
             </button>
+            <button
+              onClick={() => updateSettings("appearance.launcher.icon", "custom")}
+              className={`flex items-center justify-center gap-2 py-2 rounded-lg text-xs font-bold transition-all ${
+                settings.appearance.launcher.icon === "custom" ? "bg-verde text-ink" : "bg-night/50 text-sage hover:text-bone"
+              }`}
+            >
+              <svg viewBox="0 0 24 24" className="w-4 h-4" fill="currentColor">
+                <path d="M19 7v2.99s-1.99.01-2 0V7h-3s.01-1.99 0-2h3V2h2v3h3v2h-3zm-3 4V8h-3V2H5c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2v-8h-3zM5 10h6v4H5v-4zm8 8H5v-4h6v4zm3-8h3v4h-3v-4zm0 6h3v2h-3v-2z"/>
+              </svg>
+              شعار مخصص
+            </button>
           </div>
+          
+          {/* رفع الشعار المخصص */}
+          {settings.appearance.launcher.icon === "custom" && (
+            <div className="mt-3 p-3 bg-night/30 rounded-lg border border-verde/10">
+              <label className="text-xs text-sage mb-2 block">رفع الشعار (PNG, SVG, JPG - حد أقصى 1MB)</label>
+              <div className="flex items-center gap-3">
+                {settings.appearance.launcher.customIcon ? (
+                  <img
+                    src={settings.appearance.launcher.customIcon}
+                    alt="شعار مخصص"
+                    className="w-12 h-12 rounded-lg object-cover border border-verde/20"
+                  />
+                ) : (
+                  <div className="w-12 h-12 rounded-lg bg-night/50 border border-verde/20 flex items-center justify-center text-sage text-xs">
+                    لا يوجد
+                  </div>
+                )}
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/svg+xml"
+                  onChange={async (e) => {
+                    const file = e.target.files?.[0];
+                    if (file) {
+                      await handleImageUpload("launcher_icon", file);
+                    }
+                  }}
+                  className="text-xs text-sage flex-1"
+                />
+              </div>
+              {settings.appearance.launcher.customIcon && (
+                <button
+                  onClick={() => {
+                    updateSettings("appearance.launcher.customIcon", null);
+                    updateSettings("appearance.launcher.icon", "chat");
+                  }}
+                  className="mt-2 text-xs text-oro hover:text-oro-soft transition-colors"
+                >
+                  إزالة الشعار المخصص
+                </button>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
