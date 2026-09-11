@@ -47,6 +47,10 @@ function mergeWithDefaults(settings: any): WidgetSettings {
     appearance: {
       ...DEFAULT_SETTINGS.appearance,
       ...(settings?.appearance || {}),
+      launcher: {
+        ...DEFAULT_SETTINGS.appearance.launcher,
+        ...(settings?.appearance?.launcher || {}),
+      },
     },
     chat: {
       ...DEFAULT_SETTINGS.chat,
@@ -521,35 +525,10 @@ function GeneralTab({
   );
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// Appearance Tab
-// ═══════════════════════════════════════════════════════════════════════════════
-
-function AppearanceTab({
-  widget,
-  settings,
-  updateSettings,
-  applyPreset,
-  errors,
-  authToken,
-}: any) {
-  // ═══════════════════════════════════════════════════════════════════════════
-  // رفع الصور
-  // ═══════════════════════════════════════════════════════════════════════════
-
-  const handleImageUpload = async (
-    type: "logo" | "avatar",
-    file: File
-  ) => {
-    // ------------------------------------------------------------
-    // التحقق من Widget ID
-    // ------------------------------------------------------------
-
-    if (!widget?.id) {
-      alert(
-        "يجب حفظ الـ Widget أولاً قبل رفع الصورة.\n\nاحفظ الـ Widget ثم افتح التعديل مرة أخرى لرفع الشعار أو صورة المساعد."
-      );
-
+function AppearanceTab({ settings, updateSettings, applyPreset, errors, authToken }: any) {
+  const handleImageUpload = async (type: "logo" | "avatar" | "launcher_icon", file: File) => {
+    if (file.size > 1024 * 1024) {
+      alert("حجم الملف يتجاوز 1MB");
       return;
     }
 
@@ -593,55 +572,15 @@ function AppearanceTab({
         if (!result || !result.includes(",")) {
           throw new Error("تعذر قراءة الصورة");
         }
-
-        const base64 = result.split(",")[1];
-
-        if (!base64) {
-          throw new Error("تعذر تحويل الصورة");
-        }
-
-        // ----------------------------------------------------------
-        // رفع الصورة
-        //
-        // مهم:
-        // widget_id يتم إرساله الآن بشكل صريح.
-        // ----------------------------------------------------------
-
-        const res = await fetch(
-          `${API}/api/widgets/dashboard/upload`,
-          {
-            method: "POST",
-
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${authToken}`,
-            },
-
-            body: JSON.stringify({
-              widget_id: widget.id,
-
-              type,
-
-              data: base64,
-
-              // اسم الملف الأصلي
-              original_name: file.name,
-
-              // الاحتفاظ أيضًا بالاسم القديم للتوافق
-              name: file.name,
-
-              // حجم الملف
-              size_bytes: file.size,
-
-              // الاحتفاظ أيضًا بالحقل القديم للتوافق
-              size: file.size,
-
-              // MIME type
-              mime_type: file.type,
-
-              // الاحتفاظ أيضًا بالحقل القديم للتوافق
-              mimeType: file.type,
-            }),
+        
+        const data = await res.json();
+        if (data.url) {
+          if (type === "logo") {
+            updateSettings("avatar.headerLogo.url", data.url);
+          } else if (type === "avatar") {
+            updateSettings("avatar.botAvatar.url", data.url);
+          } else if (type === "launcher_icon") {
+            updateSettings("appearance.launcher.customIcon", data.url);
           }
         );
 
@@ -875,10 +814,160 @@ function AppearanceTab({
         )}
       </div>
 
-      {/* ══════════════════════════════════════════════════════════════════════
-          Font Family
-      ══════════════════════════════════════════════════════════════════════ */}
+      {/* Launcher Settings */}
+      <div className="border-t border-verde/10 pt-6">
+        <label className="text-sm font-bold text-bone mb-4 block">إعدادات زر المحادثة</label>
+        
+        {/* Launcher Size */}
+        <div className="mb-4">
+          <label className="text-xs text-sage mb-2 block">حجم الزر: {settings.appearance.launcher.size}px</label>
+          <input
+            type="range"
+            min="48"
+            max="80"
+            value={settings.appearance.launcher.size}
+            onChange={(e) => updateSettings("appearance.launcher.size", parseInt(e.target.value))}
+            className="w-full accent-verde"
+          />
+        </div>
 
+        {/* Launcher Shape */}
+        <div className="mb-4">
+          <label className="text-xs text-sage mb-2 block">شكل الزر</label>
+          <div className="grid grid-cols-3 gap-2">
+            <button
+              onClick={() => updateSettings("appearance.launcher.shape", "circle")}
+              className={`py-2 rounded-lg text-xs font-bold transition-all ${
+                settings.appearance.launcher.shape === "circle" ? "bg-verde text-ink" : "bg-night/50 text-sage hover:text-bone"
+              }`}
+            >
+              دائري
+            </button>
+            <button
+              onClick={() => updateSettings("appearance.launcher.shape", "square")}
+              className={`py-2 rounded-lg text-xs font-bold transition-all ${
+                settings.appearance.launcher.shape === "square" ? "bg-verde text-ink" : "bg-night/50 text-sage hover:text-bone"
+              }`}
+            >
+              مربع
+            </button>
+            <button
+              onClick={() => updateSettings("appearance.launcher.shape", "rounded")}
+              className={`py-2 rounded-lg text-xs font-bold transition-all ${
+                settings.appearance.launcher.shape === "rounded" ? "bg-verde text-ink" : "bg-night/50 text-sage hover:text-bone"
+              }`}
+            >
+              مستدير
+            </button>
+          </div>
+        </div>
+
+        {/* Launcher Icon */}
+        <div className="mb-4">
+          <label className="text-xs text-sage mb-2 block">أيقونة الزر</label>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              onClick={() => updateSettings("appearance.launcher.icon", "chat")}
+              className={`flex items-center justify-center gap-2 py-2 rounded-lg text-xs font-bold transition-all ${
+                settings.appearance.launcher.icon === "chat" ? "bg-verde text-ink" : "bg-night/50 text-sage hover:text-bone"
+              }`}
+            >
+              <svg viewBox="0 0 24 24" className="w-4 h-4" fill="currentColor">
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+              </svg>
+              محادثة
+            </button>
+            <button
+              onClick={() => updateSettings("appearance.launcher.icon", "message")}
+              className={`flex items-center justify-center gap-2 py-2 rounded-lg text-xs font-bold transition-all ${
+                settings.appearance.launcher.icon === "message" ? "bg-verde text-ink" : "bg-night/50 text-sage hover:text-bone"
+              }`}
+            >
+              <svg viewBox="0 0 24 24" className="w-4 h-4" fill="currentColor">
+                <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
+              </svg>
+              رسالة
+            </button>
+            <button
+              onClick={() => updateSettings("appearance.launcher.icon", "support")}
+              className={`flex items-center justify-center gap-2 py-2 rounded-lg text-xs font-bold transition-all ${
+                settings.appearance.launcher.icon === "support" ? "bg-verde text-ink" : "bg-night/50 text-sage hover:text-bone"
+              }`}
+            >
+              <svg viewBox="0 0 24 24" className="w-4 h-4" fill="currentColor">
+                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v6h-2zm0 8h2v2h-2z" />
+              </svg>
+              دعم
+            </button>
+            <button
+              onClick={() => updateSettings("appearance.launcher.icon", "help")}
+              className={`flex items-center justify-center gap-2 py-2 rounded-lg text-xs font-bold transition-all ${
+                settings.appearance.launcher.icon === "help" ? "bg-verde text-ink" : "bg-night/50 text-sage hover:text-bone"
+              }`}
+            >
+              <svg viewBox="0 0 24 24" className="w-4 h-4" fill="currentColor">
+                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 17h-2v-2h2v2zm2.07-7.75l-.9.92C13.45 12.9 13 13.5 13 15h-2v-.5c0-1.1.45-2.1 1.17-2.83l1.24-1.26c.37-.36.59-.86.59-1.41 0-1.1-.9-2-2-2s-2 .9-2 2H8c0-2.21 1.79-4 4-4s4 1.79 4 4c0 .88-.36 1.68-.93 2.25z" />
+              </svg>
+              مساعدة
+            </button>
+            <button
+              onClick={() => updateSettings("appearance.launcher.icon", "custom")}
+              className={`flex items-center justify-center gap-2 py-2 rounded-lg text-xs font-bold transition-all ${
+                settings.appearance.launcher.icon === "custom" ? "bg-verde text-ink" : "bg-night/50 text-sage hover:text-bone"
+              }`}
+            >
+              <svg viewBox="0 0 24 24" className="w-4 h-4" fill="currentColor">
+                <path d="M19 7v2.99s-1.99.01-2 0V7h-3s.01-1.99 0-2h3V2h2v3h3v2h-3zm-3 4V8h-3V2H5c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2v-8h-3zM5 10h6v4H5v-4zm8 8H5v-4h6v4zm3-8h3v4h-3v-4zm0 6h3v2h-3v-2z"/>
+              </svg>
+              شعار مخصص
+            </button>
+          </div>
+          
+          {/* رفع الشعار المخصص */}
+          {settings.appearance.launcher.icon === "custom" && (
+            <div className="mt-3 p-3 bg-night/30 rounded-lg border border-verde/10">
+              <label className="text-xs text-sage mb-2 block">رفع الشعار (PNG, SVG, JPG - حد أقصى 1MB)</label>
+              <div className="flex items-center gap-3">
+                {settings.appearance.launcher.customIcon ? (
+                  <img
+                    src={settings.appearance.launcher.customIcon}
+                    alt="شعار مخصص"
+                    className="w-12 h-12 rounded-lg object-cover border border-verde/20"
+                  />
+                ) : (
+                  <div className="w-12 h-12 rounded-lg bg-night/50 border border-verde/20 flex items-center justify-center text-sage text-xs">
+                    لا يوجد
+                  </div>
+                )}
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/svg+xml"
+                  onChange={async (e) => {
+                    const file = e.target.files?.[0];
+                    if (file) {
+                      await handleImageUpload("launcher_icon", file);
+                    }
+                  }}
+                  className="text-xs text-sage flex-1"
+                />
+              </div>
+              {settings.appearance.launcher.customIcon && (
+                <button
+                  onClick={() => {
+                    updateSettings("appearance.launcher.customIcon", null);
+                    updateSettings("appearance.launcher.icon", "chat");
+                  }}
+                  className="mt-2 text-xs text-oro hover:text-oro-soft transition-colors"
+                >
+                  إزالة الشعار المخصص
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Font Family */}
       <div>
         <label className="text-xs text-sage mb-2 block">
           الخط

@@ -35,12 +35,10 @@ export default function WidgetPreview({
   // اسم الويدجت / المساعد
   //
   // الأولوية:
-  // 1. widgetName القادم مباشرة من الواجهة
+  // 1. widgetName القادم من الواجهة
   // 2. settings.avatar.botName
   // 3. الاسم القديم appearance.avatar.agentName
   // 4. اسم افتراضي
-  //
-  // بهذه الطريقة إذا غيّرت اسم الويدجت من الواجهة فسيتغير الـPreview مباشرة.
   // ═══════════════════════════════════════════════════════════════════════════
 
   const normalizedWidgetName =
@@ -130,7 +128,7 @@ export default function WidgetPreview({
     shadowMap.medium;
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // الأبعاد
+  // أبعاد نافذة المحادثة
   // ═══════════════════════════════════════════════════════════════════════════
 
   const width =
@@ -142,6 +140,124 @@ export default function WidgetPreview({
     device === "mobile"
       ? "100%"
       : `${appearance.height}px`;
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // إعدادات الزر العائم
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  const launcher = appearance.launcher;
+
+  const launcherBorderRadius =
+    launcher.shape === "circle"
+      ? "50%"
+      : launcher.shape === "rounded"
+        ? `${Math.min(appearance.borderRadius, launcher.size / 2)}px`
+        : "4px";
+
+  const renderLauncherIcon = () => {
+    if (launcher.icon === "custom" && launcher.customIcon) {
+      return (
+        <img
+          src={launcher.customIcon}
+          alt="شعار مخصص"
+          className="w-7 h-7 object-contain"
+        />
+      );
+    }
+
+    if (launcher.icon === "message") {
+      return (
+        <svg
+          viewBox="0 0 24 24"
+          className="w-7 h-7"
+          fill="currentColor"
+          aria-hidden="true"
+        >
+          <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
+        </svg>
+      );
+    }
+
+    if (launcher.icon === "support") {
+      return (
+        <svg
+          viewBox="0 0 24 24"
+          className="w-7 h-7"
+          fill="currentColor"
+          aria-hidden="true"
+        >
+          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v6h-2zm0 8h2v2h-2z" />
+        </svg>
+      );
+    }
+
+    if (launcher.icon === "help") {
+      return (
+        <svg
+          viewBox="0 0 24 24"
+          className="w-7 h-7"
+          fill="currentColor"
+          aria-hidden="true"
+        >
+          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 17h-2v-2h2v2zm2.07-7.75l-.9.92C13.45 12.9 13 13.5 13 15h-2v-.5c0-1.1.45-2.1 1.17-2.83l1.24-1.26c.37-.36.59-.86.59-1.41 0-1.1-.9-2-2-2s-2 .9-2 2H8c0-2.21 1.79-4 4-4s4 1.79 4 4c0 .88-.36 1.68-.93 2.25z" />
+        </svg>
+      );
+    }
+
+    // chat هو الخيار الافتراضي
+    return (
+      <svg
+        viewBox="0 0 24 24"
+        className="w-7 h-7"
+        fill="currentColor"
+        aria-hidden="true"
+      >
+        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+      </svg>
+    );
+  };
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Launcher Button
+  // يظهر فقط عندما تكون النافذة مغلقة
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  const renderLauncher = () => {
+    if (state !== "closed") {
+      return null;
+    }
+
+    return (
+      <button
+        type="button"
+        className="absolute flex items-center justify-center text-white transition-all hover:scale-110 z-40 relative"
+        style={{
+          width: `${launcher.size}px`,
+          height: `${launcher.size}px`,
+          background: appearance.primaryColor,
+          borderRadius: launcherBorderRadius,
+          boxShadow: currentShadow,
+          bottom: "24px",
+          right: "24px",
+        }}
+        onClick={() => setState("open")}
+        aria-label="فتح المحادثة"
+      >
+        {renderLauncherIcon()}
+
+        {/* Badge */}
+        {launcher.badge.enabled &&
+          launcher.badge.count > 0 && (
+            <span
+              className="absolute -top-1 -right-1 min-w-5 h-5 px-1 rounded-full bg-red-500 text-white text-xs flex items-center justify-center font-bold"
+              aria-label={`عدد الإشعارات ${launcher.badge.count}`}
+            >
+              {launcher.badge.count}
+            </span>
+          )}
+      </button>
+    );
+  };
 
   return (
     <div
@@ -158,6 +274,7 @@ export default function WidgetPreview({
         <div className="flex items-center gap-2">
 
           <button
+            type="button"
             onClick={() => setDevice("desktop")}
             className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
               device === "desktop"
@@ -169,6 +286,7 @@ export default function WidgetPreview({
           </button>
 
           <button
+            type="button"
             onClick={() => setDevice("mobile")}
             className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
               device === "mobile"
@@ -184,6 +302,7 @@ export default function WidgetPreview({
         <div className="flex items-center gap-2">
 
           <button
+            type="button"
             onClick={() =>
               setTheme(
                 theme === "light"
@@ -199,6 +318,7 @@ export default function WidgetPreview({
           </button>
 
           <button
+            type="button"
             onClick={() =>
               setState(
                 state === "open"
@@ -221,7 +341,7 @@ export default function WidgetPreview({
       ══════════════════════════════════════════════════════════════════════ */}
 
       <div
-        className="flex-1 flex items-center justify-center p-8 overflow-auto"
+        className="flex-1 flex items-center justify-center p-8 overflow-auto relative"
         style={{
           background:
             theme === "dark"
@@ -339,7 +459,9 @@ export default function WidgetPreview({
 
               <button
                 type="button"
+                onClick={() => setState("closed")}
                 className="text-white/80 hover:text-white transition-colors"
+                aria-label="إغلاق المحادثة"
               >
                 <IconMinimize className="w-5 h-5" />
               </button>
@@ -456,6 +578,7 @@ export default function WidgetPreview({
                   background:
                     appearance.primaryColor,
                 }}
+                aria-label="إرسال"
               >
                 <svg
                   viewBox="0 0 24 24"
@@ -512,63 +635,10 @@ export default function WidgetPreview({
 
         {/* ════════════════════════════════════════════════════════════════════
             Launcher Button
+            يظهر فقط عند إغلاق نافذة الويدجت
         ════════════════════════════════════════════════════════════════════ */}
 
-        {state === "closed" && (
-          <button
-            type="button"
-            className="flex items-center justify-center text-white transition-all hover:scale-110 relative"
-            style={{
-              width:
-                `${appearance.launcher.size}px`,
-              height:
-                `${appearance.launcher.size}px`,
-              background:
-                appearance.primaryColor,
-              borderRadius:
-                appearance.launcher.shape ===
-                "circle"
-                  ? "50%"
-                  : `${appearance.borderRadius}px`,
-              boxShadow: currentShadow,
-            }}
-            onClick={() =>
-              setState("open")
-            }
-          >
-
-            {appearance.launcher.icon ===
-              "chat" && (
-              <svg
-                viewBox="0 0 24 24"
-                className="w-7 h-7"
-                fill="currentColor"
-              >
-                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-              </svg>
-            )}
-
-            {appearance.launcher.icon ===
-              "message" && (
-              <svg
-                viewBox="0 0 24 24"
-                className="w-7 h-7"
-                fill="currentColor"
-              >
-                <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
-              </svg>
-            )}
-
-            {appearance.launcher.badge.enabled &&
-              appearance.launcher.badge.count >
-                0 && (
-                <span className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-red-500 text-white text-xs flex items-center justify-center font-bold">
-                  {appearance.launcher.badge.count}
-                </span>
-              )}
-
-          </button>
-        )}
+        {renderLauncher()}
 
       </div>
     </div>
