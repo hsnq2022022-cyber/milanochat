@@ -1009,18 +1009,19 @@ function Wizard() {
 
             {apiEnabled ? (
               <>
-                <button
+                {/* [DEMO_MODE] تم تعطيل زر ربط واتساب للعرض التوضيحي */}
+                {/* <button
                   onClick={startLink}
                   disabled={busy}
                   className="w-full flex items-center justify-center gap-2.5 bg-verde text-ink font-display font-bold text-lg py-3.5 rounded-2xl hover:bg-oro transition-all duration-300 active:scale-[0.98] disabled:opacity-60"
                 >
                   <IconWhatsapp className="w-5 h-5" />
                   اربط واتساب الآن — الأجهزة المرتبطة
-                </button>
+                </button> */}
                 <button
                   onClick={startPay}
                   disabled={busy}
-                  className="mt-3 w-full bg-oro text-ink font-display font-bold py-3 rounded-2xl hover:bg-verde transition-all duration-300 active:scale-[0.98] disabled:opacity-60"
+                  className="w-full bg-oro text-ink font-display font-bold py-3 rounded-2xl hover:bg-verde transition-all duration-300 active:scale-[0.98] disabled:opacity-60"
                 >
                   {busy ? "جارٍ…" : "ادفع الآن — 99 ريال"}
                 </button>
@@ -1050,7 +1051,8 @@ function Wizard() {
         )}
 
         {/* مرحلة الربط الفعلي بواتساب — QR حقيقي صادر من جلسة Baileys في الخادم */}
-        {phase === "link" && (
+        {/* [DEMO_MODE] تم تعطيل مرحلة QR للعرض التوضيحي - يمكن إعادة التفعيل بإزالة التعليق */}
+        {/* phase === "link" && (
           <div className="py-4 text-center msg-in">
             <h2 className="font-display font-bold text-xl text-bone mb-1">اربط واتساب الآن</h2>
             <p className="text-xs text-sage leading-5 mb-5">
@@ -1150,7 +1152,7 @@ function Wizard() {
               العودة
             </button>
           </div>
-        )}
+        ) */}
 
         {/* مرحلة الدفع */}
         {(phase === "pay" || phase === "paid") && (

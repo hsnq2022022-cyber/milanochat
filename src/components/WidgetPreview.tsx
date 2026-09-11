@@ -42,18 +42,17 @@ export default function WidgetPreview({
     "";
 
   const botAgentName =
-    avatar?.botAvatar?.agentName ||
+    avatar?.botName ||
     appearance?.avatar?.agentName ||
     widgetName ||
     "المساعد";
 
   const botAgentTitle =
-    avatar?.botAvatar?.agentTitle ||
+    avatar?.botTagline ||
     appearance?.avatar?.agentTitle ||
     "";
 
   const showStatusIndicator =
-    avatar?.botAvatar?.statusIndicator ??
     appearance?.avatar?.statusIndicator ??
     true;
 

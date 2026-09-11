@@ -1343,7 +1343,8 @@ export default function Dashboard() {
       )}
 
       {/* ── نافذة ربط واتساب ── */}
-      {qrOpen && (
+      {/* [DEMO_MODE] تم تعطيل نافذة QR للعرض التوضيحي - يمكن إعادة التفعيل بإزالة التعليق */}
+      {/* qrOpen && (
         <QrModal
           demo={demo}
           tenantId={st.tenantId}
@@ -1351,7 +1352,7 @@ export default function Dashboard() {
           token={token}
           onState={(s) => setSt((p) => (p ? { ...p, waStatus: s } : p))}
         />
-      )}
+      ) */}
 
       {/* ── نافذة الشحن ── */}
       {payOpen && (

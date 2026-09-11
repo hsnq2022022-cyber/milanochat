@@ -525,7 +525,7 @@ function GeneralTab({
   );
 }
 
-function AppearanceTab({ settings, updateSettings, applyPreset, errors, authToken }: any) {
+function AppearanceTab({ settings, updateSettings, applyPreset, errors, authToken, widget }: any) {
   const handleImageUpload = async (type: "logo" | "avatar" | "launcher_icon", file: File) => {
     if (file.size > 1024 * 1024) {
       alert("حجم الملف يتجاوز 1MB");
@@ -572,17 +572,27 @@ function AppearanceTab({ settings, updateSettings, applyPreset, errors, authToke
         if (!result || !result.includes(",")) {
           throw new Error("تعذر قراءة الصورة");
         }
-        
-        const data = await res.json();
-        if (data.url) {
-          if (type === "logo") {
-            updateSettings("avatar.headerLogo.url", data.url);
-          } else if (type === "avatar") {
-            updateSettings("avatar.botAvatar.url", data.url);
-          } else if (type === "launcher_icon") {
-            updateSettings("appearance.launcher.customIcon", data.url);
-          }
-        );
+
+        const base64 = result.split(",")[1];
+
+        // ----------------------------------------------------------
+        // إرسال الصورة إلى الخادم
+        // ----------------------------------------------------------
+
+        const res = await fetch(`${API}/api/widgets/dashboard/upload`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${authToken}`,
+          },
+          body: JSON.stringify({
+            type,
+            data: base64,
+            name: file.name,
+            size: file.size,
+            mimeType: file.type,
+          }),
+        });
 
         // ----------------------------------------------------------
         // معالجة HTTP errors
@@ -593,11 +603,7 @@ function AppearanceTab({ settings, updateSettings, applyPreset, errors, authToke
 
           try {
             const errorData = await res.json();
-
-            errorMessage =
-              errorData?.error ||
-              errorData?.message ||
-              errorMessage;
+            errorMessage = errorData?.error || errorData?.message || errorMessage;
           } catch {
             // تجاهل خطأ JSON إذا كانت الاستجابة غير JSON
           }
@@ -612,9 +618,7 @@ function AppearanceTab({ settings, updateSettings, applyPreset, errors, authToke
         const data = await res.json();
 
         if (!data?.url) {
-          throw new Error(
-            "تم رفع الصورة ولكن لم يُرجع الخادم رابط الصورة"
-          );
+          throw new Error("تم رفع الصورة ولكن لم يُرجع الخادم رابط الصورة");
         }
 
         // ----------------------------------------------------------
@@ -622,32 +626,15 @@ function AppearanceTab({ settings, updateSettings, applyPreset, errors, authToke
         // ----------------------------------------------------------
 
         if (type === "logo") {
-          updateSettings(
-            "avatar.headerLogo.url",
-            data.url
-          );
-        } else {
-          updateSettings(
-            "avatar.botAvatar.url",
-            data.url
-          );
+          updateSettings("avatar.headerLogo.url", data.url);
+        } else if (type === "avatar") {
+          updateSettings("avatar.botAvatar.url", data.url);
+        } else if (type === "launcher_icon") {
+          updateSettings("appearance.launcher.customIcon", data.url);
         }
-
-        alert(
-          type === "logo"
-            ? "تم رفع شعار المشروع بنجاح"
-            : "تم رفع صورة المساعد بنجاح"
-        );
       } catch (err: any) {
-        console.error(
-          "Widget image upload error:",
-          err
-        );
-
-        alert(
-          err?.message ||
-            "تعذر رفع الصورة"
-        );
+        console.error("Widget image upload error:", err);
+        alert(err?.message || "تعذر رفع الصورة");
       }
     };
 
