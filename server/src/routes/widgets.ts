@@ -173,7 +173,6 @@ type AuthedRequest = Request & {
 // المصادقة
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/** التحقق من توكن Supabase Auth */
 async function requireAuth(
   req: Request,
   res: Response,
@@ -213,7 +212,6 @@ async function requireAuth(
   next();
 }
 
-/** تحميل tenant يملكه المستخدم */
 async function ownedTenant(
   userId: string,
   tenantId?: string
@@ -382,10 +380,6 @@ widgetsRouter.post(
       typeof settings === "object" &&
       settings.appearance
     ) {
-      /*
-       * settings هو المصدر الأساسي لإعدادات
-       * الـ Widget بالكامل.
-       */
       insertData.settings = settings;
 
       insertData.welcome_message =
@@ -425,10 +419,6 @@ widgetsRouter.post(
         settings.chat?.placeholder ??
         "اكتب رسالتك...";
 
-      /*
-       * حفظ روابط الصور في الأعمدة القديمة
-       * إن كانت موجودة في settings.
-       */
       insertData.avatar_url =
         settings.avatar?.botAvatar?.url ??
         null;
@@ -438,15 +428,12 @@ widgetsRouter.post(
         null;
 
       /*
-       * لا نستخدم agent_name لأن العمود
-       * غير موجود في قاعدة البيانات الحالية.
+       * مهم:
+       * botTagline محفوظ داخل settings فقط.
        *
-       * اسم المساعد محفوظ داخل settings.
+       * لا نستخدم agent_tagline لأن العمود
+       * غير موجود في جدول widgets.
        */
-
-      insertData.agent_tagline =
-        settings.avatar?.botTagline ??
-        "يرد خلال ثوانٍ";
 
       insertData.border_radius =
         settings.appearance?.borderRadius ??
@@ -488,9 +475,6 @@ widgetsRouter.post(
         settings.chat?.showTypingIndicator ??
         true;
     } else {
-      /*
-       * دعم الصيغة القديمة للإعدادات.
-       */
       insertData.settings =
         settings ?? {};
 
@@ -530,13 +514,6 @@ widgetsRouter.post(
       insertData.logo_url =
         settings?.logoUrl ??
         null;
-
-      /*
-       * لا نستخدم agent_name.
-       */
-      insertData.agent_tagline =
-        settings?.agentTagline ??
-        "يرد خلال ثوانٍ";
 
       insertData.show_branding =
         settings?.showBranding ??
@@ -683,14 +660,7 @@ widgetsRouter.put(
       typeof settings === "object"
     ) {
       /*
-       * مهم جداً:
-       *
-       * نحفظ settings بالكامل كما أرسلها
-       * الـ Editor.
-       *
-       * هذا يمنع حذف:
-       * settings.avatar.botAvatar.url
-       * settings.avatar.headerLogo.url
+       * حفظ settings بالكامل.
        */
       patch.settings = settings;
 
@@ -770,9 +740,6 @@ widgetsRouter.put(
             settings.chat.placeholder;
         }
 
-        /*
-         * الصور
-         */
         if (
           settings.avatar?.botAvatar?.url !==
           undefined
@@ -789,13 +756,11 @@ widgetsRouter.put(
             settings.avatar.headerLogo.url;
         }
 
-        if (
-          settings.avatar?.botTagline !==
-          undefined
-        ) {
-          patch.agent_tagline =
-            settings.avatar.botTagline;
-        }
+        /*
+         * botTagline يبقى داخل settings.
+         *
+         * لا نكتب agent_tagline في قاعدة البيانات.
+         */
 
         if (
           settings.appearance.borderRadius !==
@@ -957,16 +922,10 @@ widgetsRouter.put(
         }
 
         /*
-         * لا نستخدم agent_name.
+         * agentTagline لا يتم حفظه في عمود مستقل.
+         * إذا أرسلته الواجهة بصيغة قديمة،
+         * يبقى ضمن settings التي حفظناها أعلاه.
          */
-
-        if (
-          settings.agentTagline !==
-          undefined
-        ) {
-          patch.agent_tagline =
-            settings.agentTagline;
-        }
 
         if (
           settings.showBranding !==
@@ -1074,9 +1033,6 @@ widgetsRouter.put(
       }
     }
 
-    /*
-     * إذا لم يوجد أي شيء للتحديث
-     */
     if (
       Object.keys(patch).length === 0
     ) {
@@ -1244,20 +1200,6 @@ widgetsRouter.post(
 // رفع صور Widget
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/**
- * رفع صورة Widget — Avatar / Logo
- *
- * يحفظ الصورة في:
- *
- * 1. Supabase Storage
- * 2. widget_assets
- * 3. widgets.settings
- * 4. widgets.avatar_url / logo_url
- *
- * وبالتالي تصبح الصورة مرتبطة فعلياً
- * بالـ Widget.
- */
-
 widgetsRouter.post(
   "/dashboard/upload",
   rateLimit({
@@ -1354,9 +1296,6 @@ widgetsRouter.post(
     }
 
     try {
-      /*
-       * التحقق من ملكية Widget
-       */
       const {
         data: widget,
         error: widgetError,
@@ -1392,9 +1331,6 @@ widgetsRouter.post(
         });
       }
 
-      /*
-       * Supabase Service Role
-       */
       const {
         createClient,
       } = await import(
@@ -1408,9 +1344,6 @@ widgetsRouter.post(
             .SUPABASE_SERVICE_ROLE_KEY!
         );
 
-      /*
-       * تنظيف اسم الملف
-       */
       const safeOriginalName =
         String(originalName)
           .replace(
@@ -1424,9 +1357,6 @@ widgetsRouter.post(
           .slice(0, 120) ||
         "image";
 
-      /*
-       * إزالة Data URL إذا وصلت
-       */
       let cleanBase64 =
         base64Data;
 
@@ -1446,9 +1376,6 @@ widgetsRouter.post(
         });
       }
 
-      /*
-       * أنواع الصور المسموحة
-       */
       const allowedMimeTypes =
         [
           "image/png",
@@ -1469,9 +1396,6 @@ widgetsRouter.post(
         });
       }
 
-      /*
-       * Base64 → Buffer
-       */
       let fileBuffer: Buffer;
 
       try {
@@ -1494,9 +1418,6 @@ widgetsRouter.post(
         });
       }
 
-      /*
-       * حماية إضافية من الملفات الكبيرة
-       */
       if (
         fileBuffer.length >
         1024 * 1024
@@ -1507,9 +1428,6 @@ widgetsRouter.post(
         });
       }
 
-      /*
-       * الامتداد
-       */
       const extensionMap: Record<
         string,
         string
@@ -1525,23 +1443,12 @@ widgetsRouter.post(
         extensionMap[mimeType] ??
         "png";
 
-      /*
-       * مسار الملف:
-       *
-       * tenant_id/
-       * widget_id/
-       * type/
-       * filename
-       */
       const fileName =
         `${tenant.id}/${widget.id}/${type}/` +
         `${Date.now()}-${Math.random()
           .toString(36)
           .slice(2, 10)}.${extension}`;
 
-      /*
-       * رفع إلى Storage
-       */
       const {
         error: uploadError,
       } =
@@ -1570,9 +1477,6 @@ widgetsRouter.post(
         });
       }
 
-      /*
-       * Public URL
-       */
       const {
         data: urlData,
       } =
@@ -1599,9 +1503,6 @@ widgetsRouter.post(
         });
       }
 
-      /*
-       * حفظ سجل الصورة
-       */
       const {
         data: asset,
         error: assetError,
@@ -1641,10 +1542,6 @@ widgetsRouter.post(
             assetError.message,
         });
       }
-
-      // ═══════════════════════════════════════════════════════════════════════
-      // تحديث إعدادات الـ Widget مباشرة
-      // ═══════════════════════════════════════════════════════════════════════
 
       const currentSettings =
         widget.settings &&
@@ -1690,9 +1587,6 @@ widgetsRouter.post(
         },
       };
 
-      /*
-       * Avatar
-       */
       if (type === "avatar") {
         updatedSettings.avatar.botAvatar =
           {
@@ -1703,9 +1597,6 @@ widgetsRouter.post(
           };
       }
 
-      /*
-       * Logo
-       */
       if (type === "logo") {
         updatedSettings.avatar.headerLogo =
           {
@@ -1716,9 +1607,6 @@ widgetsRouter.post(
           };
       }
 
-      /*
-       * أعمدة التوافق القديمة
-       */
       const widgetPatch: Record<
         string,
         any
@@ -1737,9 +1625,6 @@ widgetsRouter.post(
           publicUrl;
       }
 
-      /*
-       * حفظ الرابط داخل widgets
-       */
       const {
         error: widgetUpdateError,
       } = await db
@@ -1764,9 +1649,6 @@ widgetsRouter.post(
         });
       }
 
-      /*
-       * إرجاع النتيجة للواجهة
-       */
       return res.json({
         success: true,
 
@@ -1954,7 +1836,6 @@ widgetsRouter.delete(
 // Public Widget
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/** جلب إعدادات widget */
 widgetsRouter.get(
   "/public/:token",
   async (req, res) => {
@@ -2076,16 +1957,20 @@ widgetsRouter.get(
         null,
 
       /*
-       * اسم المساعد أصبح من settings
-       * بدلاً من agent_name.
+       * اسم المساعد من settings.
        */
       agentName:
         avatar.botName ||
         avatar.botAvatar?.agentName ||
         widget.name,
 
+      /*
+       * الـ tagline من settings فقط.
+       *
+       * لا نقرأ widget.agent_tagline
+       * لأن العمود غير موجود.
+       */
       agentTagline:
-        widget.agent_tagline ||
         avatar.botTagline ||
         avatar.botAvatar?.agentTitle ||
         tenant?.business_name ||
@@ -2315,7 +2200,7 @@ widgetsRouter.post(
     } = await db
       .from("widgets")
       .select(
-        "welcome_message"
+        "welcome_message, settings"
       )
       .eq(
         "id",
@@ -2323,9 +2208,13 @@ widgetsRouter.post(
       )
       .single();
 
-    if (
-      welcomeWidget?.welcome_message
-    ) {
+    const welcomeMessage =
+      welcomeWidget?.welcome_message ||
+      welcomeWidget?.settings?.chat
+        ?.welcomeMessage ||
+      "مرحباً! كيف يمكنني مساعدتك؟";
+
+    if (welcomeMessage) {
       await db
         .from("widget_messages")
         .insert({
@@ -2337,8 +2226,7 @@ widgetsRouter.post(
             widget.tenant_id,
           direction: "out",
           body:
-            welcomeWidget
-              .welcome_message,
+            welcomeMessage,
           kind: "answer",
         });
     }
@@ -2348,14 +2236,13 @@ widgetsRouter.post(
         session.id,
 
       messages:
-        welcomeWidget?.welcome_message
+        welcomeMessage
           ? [
               {
                 id: "welcome",
                 direction: "out",
                 body:
-                  welcomeWidget
-                    .welcome_message,
+                  welcomeMessage,
                 kind: "answer",
                 created_at:
                   new Date().toISOString(),
@@ -3029,7 +2916,10 @@ widgetsRouter.post(
           });
       }
 
-      await db
+      const {
+        data: insertedMessage,
+        error: messageInsertError,
+      } = await db
         .from(
           "widget_messages"
         )
@@ -3044,26 +2934,16 @@ widgetsRouter.post(
           body:
             replyText,
           kind,
-        });
-
-      const {
-        data: lastMsg,
-      } = await db
-        .from(
-          "widget_messages"
-        )
+        })
         .select("id")
-        .eq(
-          "session_id",
-          session.id
-        )
-        .order(
-          "created_at",
-          {
-            ascending: false,
-          }
-        )
-        .limit(1);
+        .single();
+
+      if (messageInsertError) {
+        console.error(
+          "[widget] save reply error:",
+          messageInsertError
+        );
+      }
 
       await db.rpc(
         "consume_reply",
@@ -3071,7 +2951,7 @@ widgetsRouter.post(
           p_tenant_id:
             widget.tenant_id,
           p_message_id:
-            lastMsg?.[0]?.id,
+            insertedMessage?.id,
           p_widget_id:
             widget.id,
         }
