@@ -220,10 +220,10 @@ export default function WidgetPreview({ settings, widgetName }: WidgetPreviewPro
           </div>
         )}
 
-        {/* Launcher Button (when closed) - Floating Action Button */}
+        {/* Launcher Button (when closed) */}
         {state === "closed" && (
           <button
-            className="fixed bottom-6 right-6 flex items-center justify-center text-white transition-all hover:scale-110 z-50"
+            className="flex items-center justify-center text-white transition-all hover:scale-110"
             style={{
               width: `${appearance.launcher.size}px`,
               height: `${appearance.launcher.size}px`,

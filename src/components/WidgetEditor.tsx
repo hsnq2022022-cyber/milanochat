@@ -455,6 +455,106 @@ function AppearanceTab({ settings, updateSettings, applyPreset, errors, authToke
         {errors.primaryColor && <p className="text-oro text-xs mt-1">{errors.primaryColor}</p>}
       </div>
 
+      {/* Launcher Settings */}
+      <div className="border-t border-verde/10 pt-6">
+        <label className="text-sm font-bold text-bone mb-4 block">إعدادات زر المحادثة</label>
+        
+        {/* Launcher Size */}
+        <div className="mb-4">
+          <label className="text-xs text-sage mb-2 block">حجم الزر: {settings.appearance.launcher.size}px</label>
+          <input
+            type="range"
+            min="48"
+            max="80"
+            value={settings.appearance.launcher.size}
+            onChange={(e) => updateSettings("appearance.launcher.size", parseInt(e.target.value))}
+            className="w-full accent-verde"
+          />
+        </div>
+
+        {/* Launcher Shape */}
+        <div className="mb-4">
+          <label className="text-xs text-sage mb-2 block">شكل الزر</label>
+          <div className="grid grid-cols-3 gap-2">
+            <button
+              onClick={() => updateSettings("appearance.launcher.shape", "circle")}
+              className={`py-2 rounded-lg text-xs font-bold transition-all ${
+                settings.appearance.launcher.shape === "circle" ? "bg-verde text-ink" : "bg-night/50 text-sage hover:text-bone"
+              }`}
+            >
+              دائري
+            </button>
+            <button
+              onClick={() => updateSettings("appearance.launcher.shape", "square")}
+              className={`py-2 rounded-lg text-xs font-bold transition-all ${
+                settings.appearance.launcher.shape === "square" ? "bg-verde text-ink" : "bg-night/50 text-sage hover:text-bone"
+              }`}
+            >
+              مربع
+            </button>
+            <button
+              onClick={() => updateSettings("appearance.launcher.shape", "rounded")}
+              className={`py-2 rounded-lg text-xs font-bold transition-all ${
+                settings.appearance.launcher.shape === "rounded" ? "bg-verde text-ink" : "bg-night/50 text-sage hover:text-bone"
+              }`}
+            >
+              مستدير
+            </button>
+          </div>
+        </div>
+
+        {/* Launcher Icon */}
+        <div className="mb-4">
+          <label className="text-xs text-sage mb-2 block">أيقونة الزر</label>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              onClick={() => updateSettings("appearance.launcher.icon", "chat")}
+              className={`flex items-center justify-center gap-2 py-2 rounded-lg text-xs font-bold transition-all ${
+                settings.appearance.launcher.icon === "chat" ? "bg-verde text-ink" : "bg-night/50 text-sage hover:text-bone"
+              }`}
+            >
+              <svg viewBox="0 0 24 24" className="w-4 h-4" fill="currentColor">
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+              </svg>
+              محادثة
+            </button>
+            <button
+              onClick={() => updateSettings("appearance.launcher.icon", "message")}
+              className={`flex items-center justify-center gap-2 py-2 rounded-lg text-xs font-bold transition-all ${
+                settings.appearance.launcher.icon === "message" ? "bg-verde text-ink" : "bg-night/50 text-sage hover:text-bone"
+              }`}
+            >
+              <svg viewBox="0 0 24 24" className="w-4 h-4" fill="currentColor">
+                <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
+              </svg>
+              رسالة
+            </button>
+            <button
+              onClick={() => updateSettings("appearance.launcher.icon", "support")}
+              className={`flex items-center justify-center gap-2 py-2 rounded-lg text-xs font-bold transition-all ${
+                settings.appearance.launcher.icon === "support" ? "bg-verde text-ink" : "bg-night/50 text-sage hover:text-bone"
+              }`}
+            >
+              <svg viewBox="0 0 24 24" className="w-4 h-4" fill="currentColor">
+                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v6h-2zm0 8h2v2h-2z" />
+              </svg>
+              دعم
+            </button>
+            <button
+              onClick={() => updateSettings("appearance.launcher.icon", "help")}
+              className={`flex items-center justify-center gap-2 py-2 rounded-lg text-xs font-bold transition-all ${
+                settings.appearance.launcher.icon === "help" ? "bg-verde text-ink" : "bg-night/50 text-sage hover:text-bone"
+              }`}
+            >
+              <svg viewBox="0 0 24 24" className="w-4 h-4" fill="currentColor">
+                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 17h-2v-2h2v2zm2.07-7.75l-.9.92C13.45 12.9 13 13.5 13 15h-2v-.5c0-1.1.45-2.1 1.17-2.83l1.24-1.26c.37-.36.59-.86.59-1.41 0-1.1-.9-2-2-2s-2 .9-2 2H8c0-2.21 1.79-4 4-4s4 1.79 4 4c0 .88-.36 1.68-.93 2.25z" />
+              </svg>
+              مساعدة
+            </button>
+          </div>
+        </div>
+      </div>
+
       {/* Font Family */}
       <div>
         <label className="text-xs text-sage mb-2 block">الخط</label>
