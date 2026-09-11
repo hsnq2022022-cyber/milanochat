@@ -55,18 +55,12 @@ function mergeWithDefaults(
     appearance: {
       ...DEFAULT_SETTINGS.appearance,
       ...(settings?.appearance || {}),
-      launcher: {
-        ...DEFAULT_SETTINGS.appearance.launcher,
-        ...(settings?.appearance?.launcher || {}),
-        badge: {
-          ...DEFAULT_SETTINGS.appearance.launcher.badge,
-          ...(settings?.appearance?.launcher?.badge || {}),
-        },
-      },
+
       headerGradient: {
         ...DEFAULT_SETTINGS.appearance.headerGradient,
         ...(settings?.appearance?.headerGradient || {}),
       },
+
       launcher: {
         ...DEFAULT_SETTINGS.appearance.launcher,
         ...(settings?.appearance?.launcher || {}),
@@ -75,10 +69,12 @@ function mergeWithDefaults(
           ...(settings?.appearance?.launcher?.badge || {}),
         },
       },
+
       avatar: {
         ...DEFAULT_SETTINGS.appearance.avatar,
         ...(settings?.appearance?.avatar || {}),
       },
+
       offset: {
         ...DEFAULT_SETTINGS.appearance.offset,
         ...(settings?.appearance?.offset || {}),
@@ -98,14 +94,17 @@ function mergeWithDefaults(
     behavior: {
       ...DEFAULT_SETTINGS.behavior,
       ...(settings?.behavior || {}),
+
       autoOpen: {
         ...DEFAULT_SETTINGS.behavior.autoOpen,
         ...(settings?.behavior?.autoOpen || {}),
       },
+
       sound: {
         ...DEFAULT_SETTINGS.behavior.sound,
         ...(settings?.behavior?.sound || {}),
       },
+
       visibility: {
         ...DEFAULT_SETTINGS.behavior.visibility,
         ...(settings?.behavior?.visibility || {}),
@@ -115,10 +114,12 @@ function mergeWithDefaults(
     forms: {
       ...DEFAULT_SETTINGS.forms,
       ...(settings?.forms || {}),
+
       preChat: {
         ...DEFAULT_SETTINGS.forms.preChat,
         ...(settings?.forms?.preChat || {}),
       },
+
       offlineForm: {
         ...DEFAULT_SETTINGS.forms.offlineForm,
         ...(settings?.forms?.offlineForm || {}),
@@ -143,14 +144,17 @@ function mergeWithDefaults(
     avatar: {
       ...DEFAULT_SETTINGS.avatar,
       ...(settings?.avatar || {}),
+
       headerLogo: {
         ...DEFAULT_SETTINGS.avatar.headerLogo,
         ...(settings?.avatar?.headerLogo || {}),
       },
+
       botAvatar: {
         ...DEFAULT_SETTINGS.avatar.botAvatar,
         ...(settings?.avatar?.botAvatar || {}),
       },
+
       typingIndicator: {
         ...DEFAULT_SETTINGS.avatar.typingIndicator,
         ...(settings?.avatar?.typingIndicator || {}),
@@ -341,6 +345,7 @@ export default function WidgetEditor({
     value: any
   ) => {
     const keys = path.split(".");
+
     const newSettings: any = {
       ...settings,
     };
@@ -742,8 +747,10 @@ function AppearanceTab({
         file
       );
 
+      // IMPORTANT:
+      // Backend expects "widget_id", not "widgetId".
       formData.append(
-        "widgetId",
+        "widget_id",
         String(widget.id)
       );
 
@@ -769,29 +776,21 @@ function AppearanceTab({
           }
         );
 
-      if (!response.ok) {
-        let errorMessage =
-          "فشل رفع الصورة";
+      let data: any = null;
 
-        try {
-          const errorData =
-            await response.json();
-
-          errorMessage =
-            errorData?.error ||
-            errorData?.message ||
-            errorMessage;
-        } catch {
-          // الاستجابة ليست JSON
-        }
-
-        throw new Error(
-          errorMessage
-        );
+      try {
+        data = await response.json();
+      } catch {
+        data = null;
       }
 
-      const data =
-        await response.json();
+      if (!response.ok) {
+        throw new Error(
+          data?.error ||
+            data?.message ||
+            "فشل رفع الصورة"
+        );
+      }
 
       if (!data?.url) {
         throw new Error(
@@ -808,6 +807,12 @@ function AppearanceTab({
           "avatar.headerLogo.url",
           data.url
         );
+
+        alert(
+          "تم رفع شعار المشروع بنجاح"
+        );
+
+        return;
       }
 
       if (type === "avatar") {
@@ -815,6 +820,12 @@ function AppearanceTab({
           "avatar.botAvatar.url",
           data.url
         );
+
+        alert(
+          "تم رفع صورة المساعد بنجاح"
+        );
+
+        return;
       }
 
       if (type === "launcher_icon") {
@@ -827,21 +838,9 @@ function AppearanceTab({
           "appearance.launcher.icon",
           "custom"
         );
-      }
 
-      if (type === "logo") {
         alert(
-          "تم رفع شعار المشروع بنجاح"
-        );
-      } else if (
-        type === "avatar"
-      ) {
-        alert(
-          "تم رفع صورة المساعد بنجاح"
-        );
-      } else {
-        alert(
-          "تم رفع أيقونة الزر بنجاح"
+          "تم رفع أيقونة الزر العائم بنجاح"
         );
       }
     } catch (error: any) {
@@ -1725,8 +1724,7 @@ function BehaviorTab({
             type="number"
             value={
               settings.behavior
-                .autoOpen.delay ??
-              5
+                .autoOpen.delay ?? 5
             }
             onChange={(e) =>
               updateSettings(
