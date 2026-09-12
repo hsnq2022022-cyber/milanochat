@@ -47,22 +47,30 @@ whatsappWebhookRouter.post("/whatsapp", async (req: Request, res: Response) => {
     console.log("[Webhook] Received webhook payload");
 
     // معالجة الرسائل الواردة وتحديثات الحالة
-    const { messages, statuses } = metaCloudAPI.parseIncomingWebhook(req.body);
+    const { messages, statuses, phoneNumberId } = metaCloudAPI.parseIncomingWebhook(req.body);
+
+    if (!phoneNumberId) {
+      console.error("[Webhook] Missing metadata.phone_number_id in webhook payload");
+      return res.status(200).send("EVENT_RECEIVED"); // Meta يتطلب 200 OK
+    }
+
+    console.log(`[Webhook] Phone Number ID: ${phoneNumberId}`);
+
+    // البحث عن tenant باستخدام phone_number_id من wa_bindings
+    const tenantId = await findTenantByPhoneNumberId(phoneNumberId);
+    
+    if (!tenantId) {
+      console.error(`[Webhook] No tenant found for phone_number_id: ${phoneNumberId}`);
+      console.error("[Webhook] Please bind this phone number to a tenant using POST /api/dashboard/wa/bind");
+      return res.status(200).send("EVENT_RECEIVED"); // Meta يتطلب 200 OK
+    }
+
+    console.log(`[Webhook] Found tenant: ${tenantId}`);
 
     // معالجة الرسائل الواردة
     for (const message of messages) {
       try {
         console.log(`[Webhook] Processing message from ${message.chatId}: ${message.text.substring(0, 50)}...`);
-
-        // البحث عن tenant بناءً على رقم الهاتف
-        // في الإنتاج، يجب ربط أرقام الهواتف بـ tenants
-        // حالياً نستخدم tenant الافتراضي
-        const tenantId = await findTenantByPhoneNumber(message.chatId);
-        
-        if (!tenantId) {
-          console.warn(`[Webhook] No tenant found for phone number ${message.chatId}`);
-          continue;
-        }
 
         // تحديث message tenantId
         message.tenantId = tenantId;
@@ -103,19 +111,22 @@ whatsappWebhookRouter.post("/whatsapp", async (req: Request, res: Response) => {
 });
 
 /**
- * البحث عن tenant بناءً على رقم الهاتف
- * في الإنتاج، يجب إنشاء جدول لربط أرقام الهواتف بـ tenants
+ * البحث عن tenant باستخدام phone_number_id من wa_bindings
+ * هذا هو الربط الصحيح بين WhatsApp Cloud API Phone Number و Tenant
  */
-async function findTenantByPhoneNumber(phoneNumber: string): Promise<string | null> {
-  // حالياً نستخدم tenant الافتراضي
-  // في الإنتاج، يجب البحث في جدول phone_numbers أو tenant_phones
-  const { data } = await db
-    .from("tenants")
-    .select("id")
-    .limit(1)
+async function findTenantByPhoneNumberId(phoneNumberId: string): Promise<string | null> {
+  const { data, error } = await db
+    .from("wa_bindings")
+    .select("tenant_id")
+    .eq("phone_id", phoneNumberId)
     .maybeSingle();
 
-  return data?.id ?? null;
+  if (error) {
+    console.error("[Webhook] Error searching wa_bindings:", error);
+    return null;
+  }
+
+  return data?.tenant_id ?? null;
 }
 
 /**

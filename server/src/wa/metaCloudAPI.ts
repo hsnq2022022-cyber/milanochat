@@ -202,12 +202,13 @@ class MetaCloudAPIProvider implements WhatsAppProvider {
   /**
    * معالجة الرسائل الواردة من Webhook
    */
-  parseIncomingWebhook(body: any): { messages: IncomingMessage[], statuses: MessageStatus[] } {
+  parseIncomingWebhook(body: any): { messages: IncomingMessage[], statuses: MessageStatus[], phoneNumberId?: string } {
     const messages: IncomingMessage[] = [];
     const statuses: MessageStatus[] = [];
+    let phoneNumberId: string | undefined;
 
     if (!body.entry || !Array.isArray(body.entry)) {
-      return { messages, statuses };
+      return { messages, statuses, phoneNumberId };
     }
 
     for (const entry of body.entry) {
@@ -218,17 +219,23 @@ class MetaCloudAPIProvider implements WhatsAppProvider {
 
         const value = change.value;
 
+        // استخراج metadata.phone_number_id (معرف رقم WhatsApp Cloud API)
+        if (value.metadata?.phone_number_id) {
+          phoneNumberId = value.metadata.phone_number_id;
+        }
+
         // معالجة الرسائل الواردة
         if (value.messages && Array.isArray(value.messages)) {
           for (const message of value.messages) {
             if (message.type === 'text' && message.text?.body) {
               messages.push({
-                tenantId: '', // سيتم تعيينه لاحقاً بناءً على phone number
-                chatId: message.from,
+                tenantId: '', // سيتم تعيينه لاحقاً بناءً على phoneNumberId
+                chatId: message.from, // رقم العميل/المرسل
                 text: message.text.body,
                 messageId: message.id,
                 timestamp: parseInt(message.timestamp) * 1000,
                 fromMe: false,
+                phoneNumberId: phoneNumberId, // حفظ phone_number_id
               });
             }
           }
@@ -247,7 +254,7 @@ class MetaCloudAPIProvider implements WhatsAppProvider {
       }
     }
 
-    return { messages, statuses };
+    return { messages, statuses, phoneNumberId };
   }
 
   /**
