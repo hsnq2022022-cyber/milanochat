@@ -40,6 +40,9 @@ jobs:
           VITE_SUPABASE_URL: https://nmhefwvhoholcjrbbila.supabase.co
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
 
+      - name: Copy privacy.html to dist
+        run: cp privacy.html dist/
+
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
