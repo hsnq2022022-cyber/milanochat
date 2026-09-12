@@ -17,23 +17,56 @@ import { encryptField } from "../crypto.js";
 export const whatsappWebhookRouter = Router();
 
 /**
- * GET /api/webhooks/whatsapp
+ * GET /api/webhooks/meta/whatsapp
  * Webhook verification من Meta
  */
 whatsappWebhookRouter.get("/whatsapp", async (req: Request, res: Response) => {
-  const mode = req.query["hub.mode"] as string;
-  const token = req.query["hub.verify_token"] as string;
-  const challenge = req.query["hub.challenge"] as string;
+  // Logging مفصل للتشخيص
+  console.log("[Webhook] GET verification request received");
+  console.log("[Webhook] URL:", req.url);
+  console.log("[Webhook] Original URL:", req.originalUrl);
+  console.log("[Webhook] Query parameters:", JSON.stringify(req.query));
+  
+  // استخراج معاملات Meta
+  const mode = req.query["hub.mode"] as string | undefined;
+  const token = req.query["hub.verify_token"] as string | undefined;
+  const challenge = req.query["hub.challenge"] as string | undefined;
 
-  console.log("[Webhook] Verification request received:", { mode, token: token?.substring(0, 10) + "..." });
+  // Logging آمن (بدون طباعة token كامل)
+  console.log("[Webhook] hub.mode:", mode || "MISSING");
+  console.log("[Webhook] hub.verify_token:", token ? `${token.substring(0, 5)}...` : "MISSING");
+  console.log("[Webhook] hub.challenge:", challenge ? "PRESENT" : "MISSING");
 
+  // التحقق من وجود جميع المعاملات
+  if (!mode || !token || !challenge) {
+    console.error("[Webhook] Missing required query parameters");
+    console.error("[Webhook] Required: hub.mode, hub.verify_token, hub.challenge");
+    return res.status(400).send("Missing required parameters");
+  }
+
+  // التحقق من mode
+  if (mode !== "subscribe") {
+    console.error(`[Webhook] Invalid mode: ${mode}`);
+    return res.status(400).send("Invalid mode");
+  }
+
+  // التحقق من verify_token باستخدام metaCloudAPI
+  const expectedToken = process.env.WHATSAPP_VERIFY_TOKEN;
+  if (!expectedToken) {
+    console.error("[Webhook] WHATSAPP_VERIFY_TOKEN not configured in environment");
+    return res.status(500).send("Server configuration error");
+  }
+
+  // استخدام metaCloudAPI للتحقق
   const result = metaCloudAPI.handleWebhookVerification(mode, token, challenge);
   
   if (result) {
-    console.log("[Webhook] Verification successful");
+    console.log("[Webhook] Verification successful - returning challenge");
     res.status(200).send(result);
   } else {
-    console.error("[Webhook] Verification failed");
+    console.error("[Webhook] Verification failed - token mismatch");
+    console.error(`[Webhook] Expected token starts with: ${expectedToken.substring(0, 5)}...`);
+    console.error(`[Webhook] Received token starts with: ${token.substring(0, 5)}...`);
     res.status(403).send("Verification failed");
   }
 });
