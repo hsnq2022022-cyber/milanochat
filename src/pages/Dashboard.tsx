@@ -112,7 +112,8 @@ export default function Dashboard() {
   const [draft, setDraft] = useState("");
   const [resumeAuto, setResumeAuto] = useState(true);
   const [sending, setSending] = useState(false);
-  const [qrOpen, setQrOpen] = useState(false);
+  // qrOpen لم يعد مستخدماً في Cloud API
+  // const [qrOpen, setQrOpen] = useState(false);
   const [payOpen, setPayOpen] = useState(false);
   const [toast, setToast] = useState("");
   const [answers, setAnswers] = useState<Record<string, { text: string; save: boolean }>>({});
@@ -789,12 +790,21 @@ export default function Dashboard() {
                   <span className={`w-2.5 h-2.5 rounded-full ${st.waStatus === "connected" ? "bg-verde live-dot" : "bg-oro"}`} />
                   {st.waStatus === "connected" ? "متصل" : st.waStatus === "qr" ? "بانتظار المسح" : "غير متصل"}
                 </p>
-                <p className="text-[11.5px] text-sage mt-1" dir="ltr">{st.phone ?? "—"}</p>
+                <p className="text-[11.5px] text-sage mt-1" dir="ltr">
+                  {st.waStatus === "connected" ? "WhatsApp Cloud API" : "غير مُعدّ"}
+                </p>
               </div>
-              <button onClick={() => setQrOpen(true)} className={`${cls.btnGhost} !py-2 !px-3.5 text-xs`}>
-                <IconWhatsapp className="w-4 h-4" />
-                {st.waStatus === "connected" ? "إعادة ربط" : "اربط الآن"}
-              </button>
+              {st.waStatus === "connected" ? (
+                <span className="text-xs text-verde font-semibold flex items-center gap-1">
+                  <IconWhatsapp className="w-4 h-4" />
+                  متصل عبر Cloud API
+                </span>
+              ) : (
+                <span className="text-xs text-oro font-semibold flex items-center gap-1">
+                  <IconWhatsapp className="w-4 h-4" />
+                  تحقق من إعدادات Cloud API
+                </span>
+              )}
             </div>
             <div className="mt-4 flex items-center gap-2 text-[11px] text-sage relative">
               <IconRefresh className="w-3.5 h-3.5 text-verde" />
