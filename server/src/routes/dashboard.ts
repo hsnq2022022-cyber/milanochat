@@ -58,6 +58,46 @@ dashboardRouter.post("/claim", async (req, res) => {
   res.json({ tenantId: data.id });
 });
 
+/** ربط WhatsApp Cloud API phone_number_id بالـ tenant */
+dashboardRouter.post("/wa/bind", async (req, res) => {
+  const userId = (req as AuthedRequest).userId!;
+  const tenant = await ownedTenant(userId, req.body?.tenantId);
+  if (!tenant) return res.status(404).json({ error: "لا يوجد حساب مرتبط" });
+
+  const { phoneNumberId } = req.body ?? {};
+  if (!phoneNumberId) return res.status(400).json({ error: "phoneNumberId مطلوب" });
+
+  // حذف الربط القديم إن وجد
+  await db.from("wa_bindings").delete().eq("phone_id", phoneNumberId);
+
+  // إنشاء الربط الجديد
+  const { data, error } = await db
+    .from("wa_bindings")
+    .insert({ phone_id: phoneNumberId, tenant_id: tenant.id })
+    .select()
+    .single();
+
+  if (error) return res.status(500).json({ error: error.message });
+  
+  console.log(`[Dashboard] Bound phone_number_id ${phoneNumberId} to tenant ${tenant.id}`);
+  res.json({ success: true, phoneNumberId, tenantId: tenant.id });
+});
+
+/** الحصول على bindings الحالية للـ tenant */
+dashboardRouter.get("/wa/bindings", async (req, res) => {
+  const userId = (req as AuthedRequest).userId!;
+  const tenant = await ownedTenant(userId, req.query.tenantId as string);
+  if (!tenant) return res.status(404).json({ error: "لا يوجد حساب مرتبط" });
+
+  const { data, error } = await db
+    .from("wa_bindings")
+    .select("*")
+    .eq("tenant_id", tenant.id);
+
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data || []);
+});
+
 /** ملخص: الرصيد، الاتصال، العدادات */
 dashboardRouter.get("/summary", async (req, res) => {
   const tenant = await ownedTenant((req as AuthedRequest).userId!, req.query.tenantId as string);

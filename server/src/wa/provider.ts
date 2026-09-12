@@ -53,6 +53,7 @@ export interface IncomingMessage {
   messageId: string;
   timestamp: number;
   fromMe: boolean;
+  phoneNumberId?: string; // Meta Cloud API phone_number_id من metadata
 }
 
 export interface MessageStatus {

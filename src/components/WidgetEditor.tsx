@@ -146,17 +146,17 @@ function mergeWithDefaults(
       ...(settings?.avatar || {}),
 
       headerLogo: {
-        ...DEFAULT_SETTINGS.avatar.headerLogo,
+        ...DEFAULT_SETTINGS.avatar?.headerLogo,
         ...(settings?.avatar?.headerLogo || {}),
       },
 
       botAvatar: {
-        ...DEFAULT_SETTINGS.avatar.botAvatar,
+        ...DEFAULT_SETTINGS.avatar?.botAvatar,
         ...(settings?.avatar?.botAvatar || {}),
       },
 
       typingIndicator: {
-        ...DEFAULT_SETTINGS.avatar.typingIndicator,
+        ...DEFAULT_SETTINGS.avatar?.typingIndicator,
         ...(settings?.avatar?.typingIndicator || {}),
       },
     },
