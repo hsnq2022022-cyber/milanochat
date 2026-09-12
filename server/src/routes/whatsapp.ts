@@ -1,10 +1,11 @@
 /**
- * WhatsApp Session API — ربط حقيقي عبر Baileys:
- *   POST /api/whatsapp/session                  إنشاء/استرجاع جلسة (تنشئ مقبس Baileys)
+ * WhatsApp Session API — Meta WhatsApp Cloud API (الرسمي من Meta):
+ *   POST /api/whatsapp/session                  إنشاء/استرجاع جلسة (يتحقق من Meta Cloud API)
  *   GET  /api/whatsapp/session/:sessionId       الحالة الحالية
- *   GET  /api/whatsapp/session/:sessionId/qr    آخر QR حقيقي (PNG data URL)
- *   POST /api/whatsapp/session/:sessionId/logout تسجيل خروج ومسح المفاتيح
- *   GET  /api/whatsapp/session/:sessionId/events بث SSE لحظي (حالة + كل QR جديد)
+ *   POST /api/whatsapp/session/:sessionId/logout تسجيل خروج (في Cloud API: فقط تغيير الحالة)
+ *   GET  /api/whatsapp/session/:sessionId/events بث SSE لحظي (حالة الاتصال)
+ *
+ * ملاحظة: QR endpoint لم يعد مستخدماً - Meta Cloud API لا يحتاج QR
  *
  * الأمان: كل طلب يمر عبر authorizeTenant — إما توكن Supabase (يُتحقق منه ثم يُبحث
  * عن الـ tenant المملوك للمستخدم) أو توكن جلسة المعالج (claim_token). معرّف الجلسة
@@ -106,15 +107,8 @@ whatsappRouter.get("/session/:sessionId", async (req, res) => {
   res.json(publicSnap(getSnapshot(owner)));
 });
 
-whatsappRouter.get(
-  "/session/:sessionId/qr",
-  rateLimit({ windowMs: 1000, max: 3 }),
-  async (req, res) => {
-    const owner = await guard(req, res);
-    if (!owner) return;
-    res.json(publicSnap(getSnapshot(owner)));
-  }
-);
+// QR endpoint لم يعد مستخدماً في Meta Cloud API
+// whatsappRouter.get("/session/:sessionId/qr", ...)
 
 whatsappRouter.post(
   "/session/:sessionId/logout",
@@ -128,8 +122,10 @@ whatsappRouter.post(
 );
 
 /**
- * بث SSE لحظي: لقطة فورية عند الفتح ثم كل تغيّر حالة وكل QR جديد فور صدوره،
+ * بث SSE لحظي: لقطة فورية عند الفتح ثم كل تغيّر حالة،
  * مع نبض كل 25 ثانية لإبقاء الاتصال حيًا خلف الوكلاء.
+ * 
+ * ملاحظة: QR لم يعد مستخدماً في Meta Cloud API
  */
 whatsappRouter.get("/session/:sessionId/events", async (req, res) => {
   const owner = await authorizeTenant(req);

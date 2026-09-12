@@ -233,7 +233,7 @@ function Wizard() {
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [apiResult, setApiResult] = useState<null | { ok: true } | { ok: false; error: string }>(null);
   /* ربط واتساب الحقيقي: الحالة تأتي من جلسة Baileys في الخادم عبر SSE */
-  const EMPTY_WA: WaSnapshot = { sessionId: "", state: "DISCONNECTED", qrDataUrl: null, phone: null, error: null };
+  const EMPTY_WA: WaSnapshot = { sessionId: "", state: "DISCONNECTED", phone: null, error: null };
   const [waSnap, setWaSnap] = useState<WaSnapshot>(EMPTY_WA);
   const [claimTok, setClaimTok] = useState<string | null>(null);
   /* نمط Supabase (Cloud API): ربط رقم المنصة بدلاً من مسح QR */
@@ -252,7 +252,7 @@ function Wizard() {
     setBindErr("");
     try {
       await api.wa.bindNumber(tenantId, pid);
-      setWaSnap({ ...EMPTY_WA, sessionId: tenantId, state: "CONNECTED", phone: pid, qrDataUrl: null, error: null });
+      setWaSnap({ ...EMPTY_WA, sessionId: tenantId, state: "CONNECTED", phone: pid, error: null });
     } catch (e: any) {
       setBindErr(e?.message ?? "تعذر الربط — تأكد من نشر دوال Edge");
     }
@@ -344,11 +344,7 @@ function Wizard() {
       }
       return snap;
     });
-    // انتهى الربط من الجوال (LOGGED_OUT) → جلسة جديدة وQR جديد تلقائياً دون تحديث الصفحة
-    if (snap.state === "LOGGED_OUT" && reconnects.current < 3 && !waBusyRef.current) {
-      reconnects.current += 1;
-      window.setTimeout(() => relink(), 1200);
-    }
+    // في Meta Cloud API، لا يوجد LOGGED_OUT - الاتصال دائم طالما الـ token صالح
   };
 
   /* فتح بث SSE للجلسة، مع استطلاع احتياطي إن تعذّر البث */

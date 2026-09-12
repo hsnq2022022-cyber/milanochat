@@ -1434,7 +1434,7 @@ function QrModal({ demo, tenantId, token, onClose, onState }: { demo: boolean; t
     setPidErr("");
     try {
       await api.wa.bindNumber(tenantId, v);
-      setSnap({ sessionId: tenantId, state: "CONNECTED", qrDataUrl: null, phone: v, error: null });
+      setSnap({ sessionId: tenantId, state: "CONNECTED", phone: v, error: null });
       onState("connected");
     } catch (e: any) {
       setPidErr(e?.message ?? "تعذر الربط");
@@ -1457,12 +1457,8 @@ function QrModal({ demo, tenantId, token, onClose, onState }: { demo: boolean; t
 
   const apply = (s: WaSnapshot) => {
     setSnap(s);
-    onState(s.state === "CONNECTED" ? "connected" : s.state === "QR_REQUIRED" ? "qr" : "disconnected");
-    // فُصل من الجوال → جلسة جديدة ورمز جديد تلقائياً دون تحديث الصفحة
-    if (s.state === "LOGGED_OUT" && retries.current < 2 && !busyRef.current) {
-      retries.current += 1;
-      window.setTimeout(() => connect(), 1000);
-    }
+    onState(s.state === "CONNECTED" ? "connected" : "disconnected");
+    // في Meta Cloud API، لا يوجد LOGGED_OUT - الاتصال دائم طالما الـ token صالح
   };
 
   const connect = async () => {
@@ -1622,34 +1618,25 @@ function QrModal({ demo, tenantId, token, onClose, onState }: { demo: boolean; t
           <>
             <h3 className="font-display font-bold text-xl text-bone mb-1">اربط واتساب</h3>
             <p className="text-[11.5px] text-sage leading-5 mb-4">
-              واتساب ← الإعدادات ← الأجهزة المرتبطة ← ربط جهاز، ثم امسح الرمز
+              Meta WhatsApp Cloud API - الاتصال تلقائي عبر الـ Access Token
             </p>
             <div className="bg-bone rounded-2xl p-3 inline-block mb-3">
-              {st === "QR_REQUIRED" && snap?.qrDataUrl ? (
-                <img key={snap.qrDataUrl.length} src={snap.qrDataUrl} alt="رمز ربط واتساب" className="w-52 h-52" />
-              ) : (
-                <div className="w-52 h-52 flex flex-col items-center justify-center gap-2.5">
-                  <span className="w-6 h-6 rounded-full border-2 border-[#1c5c41]/25 border-t-[#1c5c41] animate-spin" />
-                  <span className="text-[13px] font-semibold" style={{ color: "#1c5c41" }}>
-                    {st === "CONNECTING"
-                      ? "جاري الاتصال…"
-                      : st === "DISCONNECTED"
-                        ? "انقطع الاتصال — إعادة المحاولة تلقائياً"
-                        : st === "LOGGED_OUT"
-                          ? "انتهت صلاحية الجلسة — رمز جديد خلال لحظات"
-                          : st === "ERROR"
-                            ? "تعذر إنشاء الجلسة"
-                            : "جارٍ توليد الرمز…"}
-                  </span>
-                </div>
-              )}
+              <div className="w-52 h-52 flex flex-col items-center justify-center gap-2.5">
+                <span className="w-6 h-6 rounded-full border-2 border-[#1c5c41]/25 border-t-[#1c5c41] animate-spin" />
+                <span className="text-[13px] font-semibold" style={{ color: "#1c5c41" }}>
+                  {st === "CONNECTING"
+                    ? "جاري التحقق من الاتصال..."
+                    : st === "DISCONNECTED"
+                      ? "غير متصل - تحقق من Environment Variables"
+                      : st === "ERROR"
+                        ? "تعذر الاتصال بـ Meta Cloud API"
+                        : "جارٍ الاتصال..."}
+                </span>
+              </div>
             </div>
-            {st === "QR_REQUIRED" && (
-              <p className="text-[10.5px] text-verde/90 leading-5">يتجدد الرمز تلقائياً فور صدور رمز جديد — اترك النافذة مفتوحة.</p>
-            )}
             {st === "ERROR" && (
               <p className="text-[10.5px] text-oro-soft leading-5">
-                {snap?.error ?? "تعذر إنشاء جلسة واتساب، تحقق من اتصال الخادم."}
+                {snap?.error ?? "تعذر الاتصال بـ Meta Cloud API، تحقق من Environment Variables."}
               </p>
             )}
           </>

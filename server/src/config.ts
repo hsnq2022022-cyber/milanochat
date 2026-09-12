@@ -68,8 +68,14 @@ export const config = {
     webhookSecret: opt("MOYASAR_WEBHOOK_SECRET"),
   },
 
-  baseCredits: Number(opt("BASE_CREDITS", "1000")),
-  dataDir: opt("DATA_DIR", "./data"),
+  meta: {
+    accessToken: opt("WHATSAPP_ACCESS_TOKEN"),
+    phoneNumberId: opt("WHATSAPP_PHONE_NUMBER_ID"),
+    businessAccountId: opt("WHATSAPP_BUSINESS_ACCOUNT_ID"),
+    verifyToken: opt("WHATSAPP_VERIFY_TOKEN"),
+  },
+  
+  baseCredits: Number(opt("BASE_CREDITS", "1000")),  dataDir: opt("DATA_DIR", "./data"),
 
   ragThreshold: Number(
     opt("SIMILARITY_THRESHOLD", "0.25")
