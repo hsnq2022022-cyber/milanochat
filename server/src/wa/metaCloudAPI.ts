@@ -8,7 +8,6 @@
 import type { WhatsAppProvider, IncomingMessage, MessageStatus } from './provider.js';
 import { config } from '../config.js';
 
-const GRAPH_API_VERSION = 'v19.0';
 const GRAPH_API_BASE = 'https://graph.facebook.com';
 
 interface MetaConfig {
@@ -16,6 +15,7 @@ interface MetaConfig {
   phoneNumberId: string;
   businessAccountId: string;
   verifyToken: string;
+  graphApiVersion: string;
 }
 
 class MetaCloudAPIProvider implements WhatsAppProvider {
@@ -27,6 +27,7 @@ class MetaCloudAPIProvider implements WhatsAppProvider {
       phoneNumberId: config.meta.phoneNumberId,
       businessAccountId: config.meta.businessAccountId,
       verifyToken: config.meta.verifyToken,
+      graphApiVersion: config.meta.graphApiVersion,
     };
 
     if (!this.config.accessToken || !this.config.phoneNumberId) {
@@ -38,7 +39,7 @@ class MetaCloudAPIProvider implements WhatsAppProvider {
    * إرسال رسالة نصية عبر Meta Cloud API
    */
   async sendMessage(tenantId: string, chatId: string, text: string): Promise<string> {
-    const url = `${GRAPH_API_BASE}/${GRAPH_API_VERSION}/${this.config.phoneNumberId}/messages`;
+    const url = `${GRAPH_API_BASE}/${this.config.graphApiVersion}/${this.config.phoneNumberId}/messages`;
 
     const payload = {
       messaging_product: 'whatsapp',
@@ -91,7 +92,7 @@ class MetaCloudAPIProvider implements WhatsAppProvider {
     language: string,
     parameters?: Array<{ type: string; text?: string }>
   ): Promise<string> {
-    const url = `${GRAPH_API_BASE}/${GRAPH_API_VERSION}/${this.config.phoneNumberId}/messages`;
+    const url = `${GRAPH_API_BASE}/${this.config.graphApiVersion}/${this.config.phoneNumberId}/messages`;
 
     const payload: any = {
       messaging_product: 'whatsapp',

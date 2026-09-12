@@ -153,3 +153,36 @@ whatsappRouter.get("/session/:sessionId/events", async (req, res) => {
     unsubscribe();
   });
 });
+
+/**
+ * Test endpoint لإرسال رسالة اختبارية عبر Meta Cloud API
+ * يستخدم للاختبار فقط - ليس للاستخدام في الإنتاج
+ */
+whatsappRouter.post(
+  "/send-test",
+  rateLimit({ windowMs: 60_000, max: 5 }),
+  async (req, res) => {
+    const { to, message } = req.body ?? {};
+    
+    if (!to || !message) {
+      return res.status(400).json({ error: "الحقول المطلوبة: to, message" });
+    }
+
+    try {
+      const { metaCloudAPI } = await import("../wa/metaCloudAPI.js");
+      const messageId = await metaCloudAPI.sendMessage("test", to, message);
+      
+      res.json({ 
+        success: true, 
+        messageId,
+        message: "تم إرسال الرسالة بنجاح عبر Meta Cloud API"
+      });
+    } catch (error: any) {
+      console.error("[WhatsApp Test] Error:", error);
+      res.status(500).json({ 
+        success: false, 
+        error: error.message || "فشل إرسال الرسالة"
+      });
+    }
+  }
+);
