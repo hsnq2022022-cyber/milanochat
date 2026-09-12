@@ -1104,32 +1104,28 @@ function Wizard() {
             ) : (
               <>
                 <div className="bg-bone rounded-2xl p-3 inline-block mb-3 shadow-[0_20px_60px_-20px_rgba(46,194,126,0.35)]">
-                  {waSnap.qrDataUrl ? (
-                    <img key={waSnap.qrDataUrl.length} src={waSnap.qrDataUrl} alt="رمز ربط واتساب" className="w-52 h-52" />
-                  ) : (
-                    <div className="w-52 h-52 flex flex-col items-center justify-center gap-2.5">
-                      <span className="w-6 h-6 rounded-full border-2 border-[#1c5c41]/25 border-t-[#1c5c41] animate-spin" />
-                      <span className="text-[13px] font-semibold" style={{ color: "#1c5c41" }}>
-                        {waSnap.state === "CONNECTING"
-                          ? "جاري الاتصال…"
-                          : waSnap.state === "DISCONNECTED"
-                            ? "انقطع الاتصال — إعادة المحاولة تلقائياً"
-                            : waSnap.state === "LOGGED_OUT"
-                              ? "انتهت صلاحية الجلسة — رمز جديد خلال لحظات"
-                              : "جارٍ إنشاء الجلسة…"}
-                      </span>
-                    </div>
-                  )}
+                  <div className="w-52 h-52 flex flex-col items-center justify-center gap-2.5">
+                    <span className="w-6 h-6 rounded-full border-2 border-[#1c5c41]/25 border-t-[#1c5c41] animate-spin" />
+                    <span className="text-[13px] font-semibold" style={{ color: "#1c5c41" }}>
+                      {waSnap.state === "CONNECTING"
+                        ? "جاري الاتصال بـ Meta Cloud API…"
+                        : waSnap.state === "DISCONNECTED"
+                          ? "غير متصل — تحقق من Environment Variables"
+                          : waSnap.state === "ERROR"
+                            ? "خطأ في الاتصال بـ Meta Cloud API"
+                            : "جارٍ التحقق من الاتصال…"}
+                    </span>
+                  </div>
                 </div>
 
-                {waSnap.state === "QR_REQUIRED" && (
-                  <p className="text-[11px] text-verde/90 leading-5 mb-1.5">
-                    صلاحية الرمز قصيرة — يُجدَّد هنا تلقائياً فور صدور رمز جديد، اترك الصفحة مفتوحة.
-                  </p>
-                )}
                 {waSnap.state === "CONNECTING" && (
                   <p className="text-[11px] text-verde/90 leading-5 mb-1.5">
-                    تم المسح — جاري إتمام الاتصال بجلسة واتساب…
+                    جاري التحقق من اتصال Meta Cloud API…
+                  </p>
+                )}
+                {waSnap.state === "ERROR" && waSnap.error && (
+                  <p className="text-[11px] text-oro-soft leading-5 mb-1.5">
+                    {waSnap.error}
                   </p>
                 )}
               </>
