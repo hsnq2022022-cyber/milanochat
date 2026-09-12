@@ -53,6 +53,12 @@ export default function Navbar() {
 
         <div className="flex items-center gap-3">
           <a
+            href="#/demo"
+            className="hidden sm:inline-flex items-center gap-2 border border-oro/30 text-oro font-semibold text-sm px-4 py-2.5 rounded-full hover:border-oro/60 hover:bg-oro/10 transition-all duration-300 active:scale-95"
+          >
+            👨‍💼 Human Agent Demo
+          </a>
+          <a
             href="#/widgets"
             className="hidden sm:inline-flex items-center gap-2 border border-verde/30 text-mist font-semibold text-sm px-4 py-2.5 rounded-full hover:border-oro/60 hover:text-oro transition-all duration-300 active:scale-95"
           >

@@ -123,18 +123,15 @@ export type QrRes = {
 };
 
 export type WAState =
-  | "QR_REQUIRED"
   | "CONNECTING"
   | "CONNECTED"
   | "DISCONNECTED"
-  | "LOGGED_OUT"
   | "UNBOUND"
   | "ERROR";
 
 export type WaSnapshot = {
   sessionId: string;
   state: WAState;
-  qrDataUrl: string | null;
   phone: string | null;
   error: string | null;
 };
@@ -197,7 +194,6 @@ export const api = {
             (r): WaSnapshot => ({
               sessionId: tenantId,
               state: r.bound ? "CONNECTED" : "UNBOUND",
-              qrDataUrl: null,
               phone: r.phoneId,
               error: null,
             })
@@ -214,7 +210,6 @@ export const api = {
             (r): WaSnapshot => ({
               sessionId,
               state: r.bound ? "CONNECTED" : "UNBOUND",
-              qrDataUrl: null,
               phone: r.phoneId,
               error: null,
             })

@@ -1,43 +1,30 @@
 /**
- * مدير جلسات واتساب عبر Baileys (خاصية الأجهزة المرتبطة).
+ * مدير جلسات واتساب عبر Meta Cloud API (الرسمي من Meta).
  *
- * - جلسة مستقلة لكل عميل (tenant = agent/workspace) مع مفاتيح دائمة في
- *   data/auth/<tenantId> — بعد إعادة تشغيل السيرفر لا يُطلب QR ما دامت الجلسة صالحة.
- * - آلة حالات صريحة: QR_REQUIRED → CONNECTING → CONNECTED
- *   (مع DISCONNECTED / LOGGED_OUT / ERROR).
- * - ناشر أحداث (subscribe) يبث كل تغيّر حالة وكل QR جديد فور صدوره من Baileys
- *   لمسارات SSE — الواجهة لا تنشئ الجلسة أبدًا، فقط تعرض.
+ * - يستخدم Meta WhatsApp Cloud API الرسمي بدلاً من Baileys/QR
+ * - لا يحتاج QR code أو مسح من الجوال
+ * - الرسائل ترد عبر Webhook من Meta
+ * - الرسائل تُرسل عبر Graph API
  *
- * تنبيه: ربط غير رسمي من Meta وقد يعرّض الرقم للتقييد.
- * المسار الرسمي المستقبلي: WhatsApp Business Cloud API (انظر README).
+ * ملاحظة: Baileys لا يزال موجوداً كـ fallback لكن غير مستخدم في المسار الرئيسي
  */
-import makeWASocket, {
-  DisconnectReason,
-  useMultiFileAuthState,
-  type WASocket,
-} from "@whiskeysockets/baileys";
-import fs from "node:fs";
-import path from "node:path";
-import pino from "pino";
-import QRCode from "qrcode";
 import { config } from "../config.js";
 import { encryptField, maskPhone } from "../crypto.js";
 import { db } from "../db.js";
+import { metaCloudAPI } from "./metaCloudAPI.js";
+import type { WhatsAppProvider } from "./provider.js";
 
 export type SessionState =
-  | "QR_REQUIRED"
-  | "CONNECTING"
   | "CONNECTED"
   | "DISCONNECTED"
-  | "LOGGED_OUT"
   | "ERROR";
 
 export type SessionSnapshot = {
   sessionId: string;
   state: SessionState;
-  /** صورة PNG (data URL) للـ QR الخام الصادر من جلسة واتساب — null خارج حالة QR_REQUIRED */
-  qrDataUrl: string | null;
-  /** رقم الحساب مقنّعًا (متاح بعد الربط) */
+  /** QR لم يعد مستخدماً في Meta Cloud API */
+  qrDataUrl: null;
+  /** رقم الحساب مقنّعًا */
   phone: string | null;
   error: string | null;
   updatedAt: number;
@@ -45,10 +32,6 @@ export type SessionSnapshot = {
 
 type Listener = (snap: SessionSnapshot) => void;
 
-const RECONNECT_DELAYS = [2000, 4000, 8000, 16000, 30000];
-const CONNECT_ERROR = "تعذر إنشاء جلسة واتساب، تحقق من اتصال الخادم.";
-
-const logger = pino({ level: "silent" });
 const sessions = new Map<string, WaSession>();
 
 type IncomingHandler = (
@@ -64,18 +47,11 @@ export function initWa(handler: IncomingHandler) {
   onIncoming = handler;
 }
 
-const authDir = (tenantId: string) => path.join(config.dataDir, "auth", tenantId);
-
 class WaSession {
   readonly tenantId: string;
-  private socket: WASocket | null = null;
   private state: SessionState = "DISCONNECTED";
-  private qrDataUrl: string | null = null;
   private phone: string | null = null;
   private error: string | null = null;
-  private reconnectAttempt = 0;
-  private reconnectTimer: NodeJS.Timeout | null = null;
-  private starting: Promise<void> | null = null;
   private listeners = new Set<Listener>();
 
   constructor(tenantId: string) {
@@ -90,14 +66,14 @@ class WaSession {
   }
 
   isRunning(): boolean {
-    return this.socket !== null;
+    return this.state === "CONNECTED";
   }
 
   snapshot(): SessionSnapshot {
     return {
       sessionId: this.tenantId,
       state: this.state,
-      qrDataUrl: this.state === "QR_REQUIRED" ? this.qrDataUrl : null,
+      qrDataUrl: null, // QR لم يعد مستخدماً
       phone: this.phone ? maskPhone(this.phone) : null,
       error: this.error,
       updatedAt: Date.now(),
@@ -118,161 +94,36 @@ class WaSession {
   private setState(s: SessionState, error: string | null = null) {
     this.state = s;
     this.error = error;
-    if (s !== "QR_REQUIRED") this.qrDataUrl = null;
     this.emit();
   }
 
-  /** إنشاء مقبس Baileys (مرة واحدة حتى مع استدعاءات متزامنة) */
+  /** التحقق من الاتصال عبر Meta Cloud API */
   async start(): Promise<void> {
-    if (this.socket) return;
-    if (this.starting) return this.starting;
-    this.starting = this.doStart().finally(() => {
-      this.starting = null;
-    });
-    return this.starting;
-  }
-
-  private async doStart(): Promise<void> {
-    this.setState("CONNECTING");
     try {
-      const dir = authDir(this.tenantId);
-      fs.mkdirSync(dir, { recursive: true });
-      // مفاتيح دائمة → لا QR جديد بعد إعادة التشغيل ما دامت الجلسة صالحة
-      const { state, saveCreds } = await useMultiFileAuthState(dir);
-      if (this.socket) return; // سبقنا استدعاء آخر
-
-      const sock = makeWASocket({
-        auth: state,
-        logger,
-        printQRInTerminal: false,
-        generateHighQualityLinkPreview: false,
-        browser: ["Milano", "Chrome", "1.0"],
-        markOnlineOnConnect: false,
-      });
-      this.socket = sock;
-      this.bindEvents(sock, saveCreds);
-    } catch (e) {
-      console.error(`[wa:${this.tenantId}] start failed:`, e);
-      this.socket = null;
-      this.setState("ERROR", CONNECT_ERROR);
-    }
-  }
-
-  private bindEvents(sock: WASocket, saveCreds: () => Promise<void>) {
-    const stale = () => this.socket !== sock;
-
-    sock.ev.on("creds.update", () => {
-      saveCreds().catch(() => {});
-    });
-
-    sock.ev.on("connection.update", async ({ connection, lastDisconnect, qr }) => {
-      if (stale()) return;
-
-      // QR خام جديد من واتساب (يُجدَّد كل ~20 ثانية) → نعرض دائمًا آخر واحد فعّال
-      if (qr) {
-        try {
-          this.qrDataUrl = await QRCode.toDataURL(qr, { margin: 1, width: 360 });
-        } catch {
-          this.qrDataUrl = null;
-        }
-        this.state = "QR_REQUIRED";
-        this.error = null;
-        this.emit();
-      }
-
-      if (connection === "connecting") this.setState("CONNECTING");
-
-      if (connection === "open") {
-        this.reconnectAttempt = 0;
-        try {
-          const id = sock.user?.id ?? "";
-          this.phone = id.split(":")[0].split("@")[0] || null;
-          if (this.phone) {
-            db.from("tenants")
-              .update({ phone_encrypted: encryptField(this.phone) })
-              .eq("id", this.tenantId)
-              .then(() => {});
-          }
-        } catch {
-          /* غير حرج */
-        }
+      const connected = await metaCloudAPI.isConnected(this.tenantId);
+      if (connected) {
         this.setState("CONNECTED");
+      } else {
+        this.setState("ERROR", "Meta Cloud API غير متصل - تحقق من Environment Variables");
       }
-
-      if (connection === "close") {
-        this.socket = null;
-        const code = (lastDisconnect?.error as any)?.output?.statusCode;
-
-        if (code === DisconnectReason.loggedOut) {
-          // فُصل من الأجهزة المرتبطة → نمسح المفاتيح؛ الجلسة التالية تحتاج QR جديد
-          fs.rmSync(authDir(this.tenantId), { recursive: true, force: true });
-          this.phone = null;
-          this.setState("LOGGED_OUT");
-          return;
-        }
-
-        this.setState("DISCONNECTED");
-        if (this.reconnectAttempt < RECONNECT_DELAYS.length) {
-          const delay = RECONNECT_DELAYS[this.reconnectAttempt];
-          this.reconnectAttempt += 1;
-          this.reconnectTimer = setTimeout(() => {
-            this.start().catch(() => {});
-          }, delay);
-        } else {
-          // استُنفدت المحاولات → مقبس جديد: يتصل وحده إن كانت المفاتيح صالحة،
-          // وإلا يصدر QR جديد (أو LOGGED_OUT إن رُفضت الجلسة)
-          this.reconnectAttempt = 0;
-          this.start().catch(() => {});
-        }
-      }
-    });
-
-    sock.ev.on("messages.upsert", async ({ messages, type }) => {
-      if (stale() || type !== "notify" || !onIncoming) return;
-      for (const m of messages) {
-        try {
-          if (m.key.fromMe || !m.message) continue;
-          const jid = m.key.remoteJid;
-          if (!jid || jid.includes("@g.us")) continue; // MVP: محادثات خاصة فقط
-          const text =
-            (m.message as any).conversation ||
-            (m.message as any).extendedTextMessage?.text ||
-            "";
-          if (!text.trim()) continue;
-          await onIncoming(this.tenantId, jid, text.trim(), m.key.id ?? null);
-        } catch (e) {
-          console.error("[wa] message handler error:", e);
-        }
-      }
-    });
+    } catch (e) {
+      console.error(`[wa:${this.tenantId}] connection check failed:`, e);
+      this.setState("ERROR", "فشل التحقق من اتصال Meta Cloud API");
+    }
   }
 
-  /** إرسال رسالة نصية — ترمي خطأ إن لم تكن الجلسة متصلة */
+  /** إرسال رسالة نصية عبر Meta Cloud API */
   async send(chatId: string, text: string): Promise<void> {
-    if (!this.socket || this.state !== "CONNECTED") {
-      throw new Error("واتساب غير متصل حاليًا — أعد الربط من اللوحة");
+    if (this.state !== "CONNECTED") {
+      throw new Error("واتساب غير متصل حاليًا - تحقق من Meta Cloud API configuration");
     }
-    await this.socket.sendMessage(chatId, { text });
+    await metaCloudAPI.sendMessage(this.tenantId, chatId, text);
   }
 
-  /** تسجيل خروج حقيقي: يفصل الجهاز ويمسح المفاتيح المخزنة */
+  /** تسجيل الخروج - في Cloud API لا يوجد تسجيل خروج حقيقي */
   async logout(): Promise<void> {
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = null;
-    }
-    const sock = this.socket;
-    this.socket = null;
-    if (sock) {
-      try {
-        await sock.logout();
-      } catch {
-        /* نتجاهل أخطاء الإنهاء */
-      }
-    }
-    fs.rmSync(authDir(this.tenantId), { recursive: true, force: true });
     this.phone = null;
-    this.setState("LOGGED_OUT");
+    this.setState("DISCONNECTED");
   }
 }
 
@@ -315,7 +166,7 @@ export async function sendText(tenantId: string, chatId: string, text: string): 
 
 /** توافقية مع لوحة التحكم القديمة (ملخص الحالة) */
 export function waStatus(tenantId: string): {
-  status: "idle" | "qr" | "connecting" | "connected" | "disconnected";
+  status: "idle" | "connected" | "disconnected" | "error";
   qr: null;
   phoneMasked: string | null;
 } {
@@ -325,26 +176,20 @@ export function waStatus(tenantId: string): {
   const status =
     snap.state === "CONNECTED"
       ? "connected"
-      : snap.state === "CONNECTING"
-        ? "connecting"
-        : snap.state === "QR_REQUIRED"
-          ? "qr"
-          : snap.state === "DISCONNECTED"
-            ? "disconnected"
-            : "idle";
+      : snap.state === "DISCONNECTED"
+        ? "disconnected"
+        : "error";
   return { status, qr: null, phoneMasked: snap.phone };
 }
 
-/** عند إقلاع السيرفر: إعادة وصل الجلسات التي لها مفاتيح محفوظة مسبقًا */
+/** في Meta Cloud API لا نحتاج لاستعادة جلسات - الاتصال دائم طالما الـ token صالح */
 export async function restorePersistedSessions(): Promise<void> {
-  const root = path.join(config.dataDir, "auth");
-  if (!fs.existsSync(root)) return;
-  const ids = fs.readdirSync(root).filter((f) => !f.startsWith("."));
-  for (const id of ids) {
-    const hasCreds = fs.existsSync(path.join(root, id, "creds.json"));
-    if (hasCreds) {
-      console.log(`[wa] استعادة جلسة محفوظة: ${id}`);
-      ensureSession(id).catch((e) => console.error(`[wa] restore ${id} failed:`, e));
-    }
+  console.log("[wa] Meta Cloud API - لا حاجة لاستعادة جلسات محفوظة");
+  // في Cloud API، نتحقق فقط من صلاحية الـ token
+  const connected = await metaCloudAPI.isConnected("default");
+  if (connected) {
+    console.log("[wa] Meta Cloud API connected successfully");
+  } else {
+    console.warn("[wa] Meta Cloud API not connected - check environment variables");
   }
 }

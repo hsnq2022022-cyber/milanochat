@@ -747,8 +747,7 @@ function AppearanceTab({
         file
       );
 
-      // IMPORTANT:
-      // Backend expects "widget_id", not "widgetId".
+      // Backend expects "widget_id".
       formData.append(
         "widget_id",
         String(widget.id)

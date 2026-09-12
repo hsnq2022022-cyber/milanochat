@@ -233,7 +233,7 @@ function Wizard() {
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [apiResult, setApiResult] = useState<null | { ok: true } | { ok: false; error: string }>(null);
   /* ربط واتساب الحقيقي: الحالة تأتي من جلسة Baileys في الخادم عبر SSE */
-  const EMPTY_WA: WaSnapshot = { sessionId: "", state: "DISCONNECTED", qrDataUrl: null, phone: null, error: null };
+  const EMPTY_WA: WaSnapshot = { sessionId: "", state: "DISCONNECTED", phone: null, error: null };
   const [waSnap, setWaSnap] = useState<WaSnapshot>(EMPTY_WA);
   const [claimTok, setClaimTok] = useState<string | null>(null);
   /* نمط Supabase (Cloud API): ربط رقم المنصة بدلاً من مسح QR */
@@ -252,7 +252,7 @@ function Wizard() {
     setBindErr("");
     try {
       await api.wa.bindNumber(tenantId, pid);
-      setWaSnap({ ...EMPTY_WA, sessionId: tenantId, state: "CONNECTED", phone: pid, qrDataUrl: null, error: null });
+      setWaSnap({ ...EMPTY_WA, sessionId: tenantId, state: "CONNECTED", phone: pid, error: null });
     } catch (e: any) {
       setBindErr(e?.message ?? "تعذر الربط — تأكد من نشر دوال Edge");
     }
@@ -344,11 +344,7 @@ function Wizard() {
       }
       return snap;
     });
-    // انتهى الربط من الجوال (LOGGED_OUT) → جلسة جديدة وQR جديد تلقائياً دون تحديث الصفحة
-    if (snap.state === "LOGGED_OUT" && reconnects.current < 3 && !waBusyRef.current) {
-      reconnects.current += 1;
-      window.setTimeout(() => relink(), 1200);
-    }
+    // في Meta Cloud API، لا يوجد LOGGED_OUT - الاتصال دائم طالما الـ token صالح
   };
 
   /* فتح بث SSE للجلسة، مع استطلاع احتياطي إن تعذّر البث */
@@ -1009,18 +1005,19 @@ function Wizard() {
 
             {apiEnabled ? (
               <>
-                <button
+                {/* [DEMO_MODE] تم تعطيل زر ربط واتساب للعرض التوضيحي */}
+                {/* <button
                   onClick={startLink}
                   disabled={busy}
                   className="w-full flex items-center justify-center gap-2.5 bg-verde text-ink font-display font-bold text-lg py-3.5 rounded-2xl hover:bg-oro transition-all duration-300 active:scale-[0.98] disabled:opacity-60"
                 >
                   <IconWhatsapp className="w-5 h-5" />
                   اربط واتساب الآن — الأجهزة المرتبطة
-                </button>
+                </button> */}
                 <button
                   onClick={startPay}
                   disabled={busy}
-                  className="mt-3 w-full bg-oro text-ink font-display font-bold py-3 rounded-2xl hover:bg-verde transition-all duration-300 active:scale-[0.98] disabled:opacity-60"
+                  className="w-full bg-oro text-ink font-display font-bold py-3 rounded-2xl hover:bg-verde transition-all duration-300 active:scale-[0.98] disabled:opacity-60"
                 >
                   {busy ? "جارٍ…" : "ادفع الآن — 99 ريال"}
                 </button>
@@ -1050,7 +1047,8 @@ function Wizard() {
         )}
 
         {/* مرحلة الربط الفعلي بواتساب — QR حقيقي صادر من جلسة Baileys في الخادم */}
-        {phase === "link" && (
+        {/* [DEMO_MODE] تم تعطيل مرحلة QR للعرض التوضيحي - يمكن إعادة التفعيل بإزالة التعليق */}
+        {/* phase === "link" && (
           <div className="py-4 text-center msg-in">
             <h2 className="font-display font-bold text-xl text-bone mb-1">اربط واتساب الآن</h2>
             <p className="text-xs text-sage leading-5 mb-5">
@@ -1106,32 +1104,28 @@ function Wizard() {
             ) : (
               <>
                 <div className="bg-bone rounded-2xl p-3 inline-block mb-3 shadow-[0_20px_60px_-20px_rgba(46,194,126,0.35)]">
-                  {waSnap.qrDataUrl ? (
-                    <img key={waSnap.qrDataUrl.length} src={waSnap.qrDataUrl} alt="رمز ربط واتساب" className="w-52 h-52" />
-                  ) : (
-                    <div className="w-52 h-52 flex flex-col items-center justify-center gap-2.5">
-                      <span className="w-6 h-6 rounded-full border-2 border-[#1c5c41]/25 border-t-[#1c5c41] animate-spin" />
-                      <span className="text-[13px] font-semibold" style={{ color: "#1c5c41" }}>
-                        {waSnap.state === "CONNECTING"
-                          ? "جاري الاتصال…"
-                          : waSnap.state === "DISCONNECTED"
-                            ? "انقطع الاتصال — إعادة المحاولة تلقائياً"
-                            : waSnap.state === "LOGGED_OUT"
-                              ? "انتهت صلاحية الجلسة — رمز جديد خلال لحظات"
-                              : "جارٍ إنشاء الجلسة…"}
-                      </span>
-                    </div>
-                  )}
+                  <div className="w-52 h-52 flex flex-col items-center justify-center gap-2.5">
+                    <span className="w-6 h-6 rounded-full border-2 border-[#1c5c41]/25 border-t-[#1c5c41] animate-spin" />
+                    <span className="text-[13px] font-semibold" style={{ color: "#1c5c41" }}>
+                      {waSnap.state === "CONNECTING"
+                        ? "جاري الاتصال بـ Meta Cloud API…"
+                        : waSnap.state === "DISCONNECTED"
+                          ? "غير متصل — تحقق من Environment Variables"
+                          : waSnap.state === "ERROR"
+                            ? "خطأ في الاتصال بـ Meta Cloud API"
+                            : "جارٍ التحقق من الاتصال…"}
+                    </span>
+                  </div>
                 </div>
 
-                {waSnap.state === "QR_REQUIRED" && (
-                  <p className="text-[11px] text-verde/90 leading-5 mb-1.5">
-                    صلاحية الرمز قصيرة — يُجدَّد هنا تلقائياً فور صدور رمز جديد، اترك الصفحة مفتوحة.
-                  </p>
-                )}
                 {waSnap.state === "CONNECTING" && (
                   <p className="text-[11px] text-verde/90 leading-5 mb-1.5">
-                    تم المسح — جاري إتمام الاتصال بجلسة واتساب…
+                    جاري التحقق من اتصال Meta Cloud API…
+                  </p>
+                )}
+                {waSnap.state === "ERROR" && waSnap.error && (
+                  <p className="text-[11px] text-oro-soft leading-5 mb-1.5">
+                    {waSnap.error}
                   </p>
                 )}
               </>
@@ -1150,7 +1144,7 @@ function Wizard() {
               العودة
             </button>
           </div>
-        )}
+        ) */}
 
         {/* مرحلة الدفع */}
         {(phase === "pay" || phase === "paid") && (

@@ -71,9 +71,11 @@ export default function WidgetPreview({
     appearance?.avatar?.url ||
     "";
 
-  // ═══════════════════════════════════════════════════════════════════════════
-  // وصف / عنوان المساعد
-  // ═══════════════════════════════════════════════════════════════════════════
+  const botAgentName =
+    avatar?.botName ||
+    appearance?.avatar?.agentName ||
+    widgetName ||
+    "المساعد";
 
   const botAgentTitle =
     avatar?.botTagline ||
@@ -85,9 +87,8 @@ export default function WidgetPreview({
   // ═══════════════════════════════════════════════════════════════════════════
 
   const showStatusIndicator =
-    avatar?.botAvatar
-      ? true
-      : appearance?.avatar?.statusIndicator ?? true;
+    appearance?.avatar?.statusIndicator ??
+    true;
 
   // ═══════════════════════════════════════════════════════════════════════════
   // الألوان
