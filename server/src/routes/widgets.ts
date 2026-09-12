@@ -1,5 +1,5 @@
 /**
- * مسارات Widgets — CRUD + تشغيل الـ widget (إرسال/استقبال رسائل)
+ * مسارات Widgets — CRUD + تشغيل الـ widget
  */
 
 import { Router } from "express";
@@ -19,7 +19,7 @@ import {
 } from "../llm.js";
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// دوال مساعدة لتحليل المواقع
+// دوال مساعدة
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function extractColors(text: string): {
@@ -173,7 +173,6 @@ type AuthedRequest = Request & {
 // المصادقة
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/** التحقق من توكن Supabase Auth */
 async function requireAuth(
   req: Request,
   res: Response,
@@ -213,7 +212,6 @@ async function requireAuth(
   next();
 }
 
-/** تحميل tenant يملكه المستخدم */
 async function ownedTenant(
   userId: string,
   tenantId?: string
@@ -237,10 +235,6 @@ async function ownedTenant(
 
   return data;
 }
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// مسارات لوحة التحكم
-// ═══════════════════════════════════════════════════════════════════════════════
 
 widgetsRouter.use(
   "/dashboard",
@@ -369,227 +363,40 @@ widgetsRouter.post(
       });
     }
 
+    /*
+     * مهم جداً:
+     *
+     * لا نرسل أي إعدادات واجهة مثل:
+     * border_radius
+     * shadow
+     * window_width
+     * window_height
+     * launcher_size
+     * launcher_shape
+     * avatar_url
+     * logo_url
+     * primary_color
+     * ...
+     *
+     * كأعمدة منفصلة.
+     *
+     * كل إعدادات الـ Widget محفوظة داخل settings.
+     */
+
+    const cleanSettings =
+      settings &&
+      typeof settings === "object"
+        ? settings
+        : {};
+
     const insertData: Record<
       string,
       any
     > = {
       tenant_id: tenant.id,
       name: name.trim(),
+      settings: cleanSettings,
     };
-
-    if (
-      settings &&
-      typeof settings === "object" &&
-      settings.appearance
-    ) {
-      /*
-       * settings هو المصدر الأساسي لإعدادات
-       * الـ Widget بالكامل.
-       */
-      insertData.settings = settings;
-
-      insertData.welcome_message =
-        settings.chat?.welcomeMessage ??
-        "مرحباً! كيف يمكنني مساعدتك؟";
-
-      insertData.primary_color =
-        settings.appearance?.primaryColor ??
-        "#2ec27e";
-
-      insertData.header_color =
-        settings.appearance?.headerColor ??
-        settings.appearance?.primaryColor ??
-        "#2ec27e";
-
-      insertData.text_color =
-        settings.appearance?.textColor ??
-        "#ffffff";
-
-      insertData.position =
-        settings.appearance?.position ??
-        "left";
-
-      insertData.language =
-        settings.localization?.language ??
-        "ar";
-
-      insertData.rtl =
-        settings.localization?.rtl ??
-        true;
-
-      insertData.show_branding =
-        settings.branding?.showBranding ??
-        true;
-
-      insertData.placeholder =
-        settings.chat?.placeholder ??
-        "اكتب رسالتك...";
-
-      /*
-       * حفظ روابط الصور في الأعمدة القديمة
-       * إن كانت موجودة في settings.
-       */
-      insertData.avatar_url =
-        settings.avatar?.botAvatar?.url ??
-        null;
-
-      insertData.logo_url =
-        settings.avatar?.headerLogo?.url ??
-        null;
-
-      /*
-       * لا نستخدم agent_name لأن العمود
-       * غير موجود في قاعدة البيانات الحالية.
-       *
-       * اسم المساعد محفوظ داخل settings.
-       */
-
-      insertData.agent_tagline =
-        settings.avatar?.botTagline ??
-        "يرد خلال ثوانٍ";
-
-      insertData.border_radius =
-        settings.appearance?.borderRadius ??
-        16;
-
-      insertData.shadow =
-        settings.appearance?.shadow ??
-        "medium";
-
-      insertData.window_width =
-        settings.appearance?.width ??
-        380;
-
-      insertData.window_height =
-        settings.appearance?.height ??
-        560;
-
-      insertData.launcher_size =
-        settings.appearance?.launcher?.size ??
-        60;
-
-      insertData.launcher_shape =
-        settings.appearance?.launcher?.shape ??
-        "circle";
-
-      insertData.launcher_icon_url =
-        settings.appearance?.launcher?.customIcon ??
-        null;
-
-      insertData.show_status =
-        settings.chatWindow?.header?.showStatus ??
-        true;
-
-      insertData.show_timestamps =
-        settings.chatWindow?.bubbles?.showTimestamp ??
-        true;
-
-      insertData.typing_indicator =
-        settings.chat?.showTypingIndicator ??
-        true;
-    } else {
-      /*
-       * دعم الصيغة القديمة للإعدادات.
-       */
-      insertData.settings =
-        settings ?? {};
-
-      insertData.welcome_message =
-        settings?.welcomeMessage ??
-        "مرحباً! كيف يمكنني مساعدتك؟";
-
-      insertData.primary_color =
-        settings?.primaryColor ??
-        "#2ec27e";
-
-      insertData.header_color =
-        settings?.headerColor ??
-        settings?.primaryColor ??
-        "#2ec27e";
-
-      insertData.text_color =
-        settings?.textColor ??
-        "#ffffff";
-
-      insertData.position =
-        settings?.position ??
-        "left";
-
-      insertData.language =
-        settings?.language ??
-        "ar";
-
-      insertData.rtl =
-        settings?.rtl ??
-        true;
-
-      insertData.avatar_url =
-        settings?.avatarUrl ??
-        null;
-
-      insertData.logo_url =
-        settings?.logoUrl ??
-        null;
-
-      /*
-       * لا نستخدم agent_name.
-       */
-      insertData.agent_tagline =
-        settings?.agentTagline ??
-        "يرد خلال ثوانٍ";
-
-      insertData.show_branding =
-        settings?.showBranding ??
-        true;
-
-      insertData.placeholder =
-        settings?.placeholder ??
-        "اكتب رسالتك...";
-
-      insertData.suggested_questions =
-        settings?.suggestedQuestions ??
-        [];
-
-      insertData.border_radius =
-        settings?.borderRadius ??
-        16;
-
-      insertData.shadow =
-        settings?.shadow ??
-        "medium";
-
-      insertData.window_width =
-        settings?.windowWidth ??
-        380;
-
-      insertData.window_height =
-        settings?.windowHeight ??
-        560;
-
-      insertData.launcher_size =
-        settings?.launcherSize ??
-        60;
-
-      insertData.launcher_shape =
-        settings?.launcherShape ??
-        "circle";
-
-      insertData.launcher_icon_url =
-        settings?.launcherIconUrl ??
-        null;
-
-      insertData.show_status =
-        settings?.showStatus ??
-        true;
-
-      insertData.show_timestamps =
-        settings?.showTimestamps ??
-        true;
-
-      insertData.typing_indicator =
-        settings?.typingIndicator ??
-        true;
-    }
 
     const {
       data,
@@ -670,413 +477,59 @@ widgetsRouter.put(
     > = {};
 
     if (name !== undefined) {
-      patch.name =
+      const cleanName =
         String(name).trim();
+
+      if (!cleanName) {
+        return res.status(400).json({
+          error:
+            "اسم الـ widget لا يمكن أن يكون فارغاً",
+        });
+      }
+
+      patch.name = cleanName;
     }
 
     if (enabled !== undefined) {
-      patch.enabled = enabled;
+      patch.enabled = Boolean(enabled);
     }
+
+    /*
+     * جميع إعدادات التصميم والسلوك تحفظ داخل settings فقط.
+     *
+     * لا نكتب:
+     * border_radius
+     * shadow
+     * window_width
+     * window_height
+     * launcher_size
+     * launcher_shape
+     * launcher_icon_url
+     * avatar_url
+     * logo_url
+     * primary_color
+     * header_color
+     * text_color
+     * position
+     * language
+     * rtl
+     * show_branding
+     * placeholder
+     * suggested_questions
+     * show_status
+     * show_timestamps
+     * typing_indicator
+     *
+     * كأعمدة في widgets.
+     */
 
     if (
       settings &&
       typeof settings === "object"
     ) {
-      /*
-       * مهم جداً:
-       *
-       * نحفظ settings بالكامل كما أرسلها
-       * الـ Editor.
-       *
-       * هذا يمنع حذف:
-       * settings.avatar.botAvatar.url
-       * settings.avatar.headerLogo.url
-       */
       patch.settings = settings;
-
-      if (
-        settings.appearance &&
-        settings.chat
-      ) {
-        if (
-          settings.chat.welcomeMessage !==
-          undefined
-        ) {
-          patch.welcome_message =
-            settings.chat.welcomeMessage;
-        }
-
-        if (
-          settings.appearance.primaryColor !==
-          undefined
-        ) {
-          patch.primary_color =
-            settings.appearance.primaryColor;
-        }
-
-        if (
-          settings.appearance.headerColor !==
-          undefined
-        ) {
-          patch.header_color =
-            settings.appearance.headerColor;
-        }
-
-        if (
-          settings.appearance.textColor !==
-          undefined
-        ) {
-          patch.text_color =
-            settings.appearance.textColor;
-        }
-
-        if (
-          settings.appearance.position !==
-          undefined
-        ) {
-          patch.position =
-            settings.appearance.position;
-        }
-
-        if (
-          settings.localization?.language !==
-          undefined
-        ) {
-          patch.language =
-            settings.localization.language;
-        }
-
-        if (
-          settings.localization?.rtl !==
-          undefined
-        ) {
-          patch.rtl =
-            settings.localization.rtl;
-        }
-
-        if (
-          settings.branding?.showBranding !==
-          undefined
-        ) {
-          patch.show_branding =
-            settings.branding.showBranding;
-        }
-
-        if (
-          settings.chat.placeholder !==
-          undefined
-        ) {
-          patch.placeholder =
-            settings.chat.placeholder;
-        }
-
-        /*
-         * الصور
-         */
-        if (
-          settings.avatar?.botAvatar?.url !==
-          undefined
-        ) {
-          patch.avatar_url =
-            settings.avatar.botAvatar.url;
-        }
-
-        if (
-          settings.avatar?.headerLogo?.url !==
-          undefined
-        ) {
-          patch.logo_url =
-            settings.avatar.headerLogo.url;
-        }
-
-        if (
-          settings.avatar?.botTagline !==
-          undefined
-        ) {
-          patch.agent_tagline =
-            settings.avatar.botTagline;
-        }
-
-        if (
-          settings.appearance.borderRadius !==
-          undefined
-        ) {
-          patch.border_radius =
-            settings.appearance.borderRadius;
-        }
-
-        if (
-          settings.appearance.shadow !==
-          undefined
-        ) {
-          patch.shadow =
-            settings.appearance.shadow;
-        }
-
-        if (
-          settings.appearance.width !==
-          undefined
-        ) {
-          patch.window_width =
-            settings.appearance.width;
-        }
-
-        if (
-          settings.appearance.height !==
-          undefined
-        ) {
-          patch.window_height =
-            settings.appearance.height;
-        }
-
-        if (
-          settings.appearance.launcher?.size !==
-          undefined
-        ) {
-          patch.launcher_size =
-            settings.appearance.launcher.size;
-        }
-
-        if (
-          settings.appearance.launcher?.shape !==
-          undefined
-        ) {
-          patch.launcher_shape =
-            settings.appearance.launcher.shape;
-        }
-
-        if (
-          settings.appearance.launcher
-            ?.customIcon !==
-          undefined
-        ) {
-          patch.launcher_icon_url =
-            settings.appearance.launcher.customIcon;
-        }
-
-        if (
-          settings.chatWindow?.header
-            ?.showStatus !==
-          undefined
-        ) {
-          patch.show_status =
-            settings.chatWindow.header.showStatus;
-        }
-
-        if (
-          settings.chatWindow?.bubbles
-            ?.showTimestamp !==
-          undefined
-        ) {
-          patch.show_timestamps =
-            settings.chatWindow.bubbles.showTimestamp;
-        }
-
-        if (
-          settings.chat?.showTypingIndicator !==
-          undefined
-        ) {
-          patch.typing_indicator =
-            settings.chat.showTypingIndicator;
-        }
-      } else {
-        /*
-         * دعم صيغة الإعدادات القديمة.
-         */
-
-        if (
-          settings.welcomeMessage !==
-          undefined
-        ) {
-          patch.welcome_message =
-            settings.welcomeMessage;
-        }
-
-        if (
-          settings.primaryColor !==
-          undefined
-        ) {
-          patch.primary_color =
-            settings.primaryColor;
-        }
-
-        if (
-          settings.headerColor !==
-          undefined
-        ) {
-          patch.header_color =
-            settings.headerColor;
-        }
-
-        if (
-          settings.textColor !==
-          undefined
-        ) {
-          patch.text_color =
-            settings.textColor;
-        }
-
-        if (
-          settings.position !==
-          undefined
-        ) {
-          patch.position =
-            settings.position;
-        }
-
-        if (
-          settings.language !==
-          undefined
-        ) {
-          patch.language =
-            settings.language;
-        }
-
-        if (
-          settings.rtl !==
-          undefined
-        ) {
-          patch.rtl =
-            settings.rtl;
-        }
-
-        if (
-          settings.avatarUrl !==
-          undefined
-        ) {
-          patch.avatar_url =
-            settings.avatarUrl;
-        }
-
-        if (
-          settings.logoUrl !==
-          undefined
-        ) {
-          patch.logo_url =
-            settings.logoUrl;
-        }
-
-        /*
-         * لا نستخدم agent_name.
-         */
-
-        if (
-          settings.agentTagline !==
-          undefined
-        ) {
-          patch.agent_tagline =
-            settings.agentTagline;
-        }
-
-        if (
-          settings.showBranding !==
-          undefined
-        ) {
-          patch.show_branding =
-            settings.showBranding;
-        }
-
-        if (
-          settings.placeholder !==
-          undefined
-        ) {
-          patch.placeholder =
-            settings.placeholder;
-        }
-
-        if (
-          settings.suggestedQuestions !==
-          undefined
-        ) {
-          patch.suggested_questions =
-            settings.suggestedQuestions;
-        }
-
-        if (
-          settings.borderRadius !==
-          undefined
-        ) {
-          patch.border_radius =
-            settings.borderRadius;
-        }
-
-        if (
-          settings.shadow !==
-          undefined
-        ) {
-          patch.shadow =
-            settings.shadow;
-        }
-
-        if (
-          settings.windowWidth !==
-          undefined
-        ) {
-          patch.window_width =
-            settings.windowWidth;
-        }
-
-        if (
-          settings.windowHeight !==
-          undefined
-        ) {
-          patch.window_height =
-            settings.windowHeight;
-        }
-
-        if (
-          settings.launcherSize !==
-          undefined
-        ) {
-          patch.launcher_size =
-            settings.launcherSize;
-        }
-
-        if (
-          settings.launcherShape !==
-          undefined
-        ) {
-          patch.launcher_shape =
-            settings.launcherShape;
-        }
-
-        if (
-          settings.launcherIconUrl !==
-          undefined
-        ) {
-          patch.launcher_icon_url =
-            settings.launcherIconUrl;
-        }
-
-        if (
-          settings.showStatus !==
-          undefined
-        ) {
-          patch.show_status =
-            settings.showStatus;
-        }
-
-        if (
-          settings.showTimestamps !==
-          undefined
-        ) {
-          patch.show_timestamps =
-            settings.showTimestamps;
-        }
-
-        if (
-          settings.typingIndicator !==
-          undefined
-        ) {
-          patch.typing_indicator =
-            settings.typingIndicator;
-        }
-      }
     }
 
-    /*
-     * إذا لم يوجد أي شيء للتحديث
-     */
     if (
       Object.keys(patch).length === 0
     ) {
@@ -1244,20 +697,6 @@ widgetsRouter.post(
 // رفع صور Widget
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/**
- * رفع صورة Widget — Avatar / Logo
- *
- * يحفظ الصورة في:
- *
- * 1. Supabase Storage
- * 2. widget_assets
- * 3. widgets.settings
- * 4. widgets.avatar_url / logo_url
- *
- * وبالتالي تصبح الصورة مرتبطة فعلياً
- * بالـ Widget.
- */
-
 widgetsRouter.post(
   "/dashboard/upload",
   rateLimit({
@@ -1320,8 +759,7 @@ widgetsRouter.post(
 
     if (
       !base64Data ||
-      typeof base64Data !==
-        "string"
+      typeof base64Data !== "string"
     ) {
       return res.status(400).json({
         error:
@@ -1354,9 +792,6 @@ widgetsRouter.post(
     }
 
     try {
-      /*
-       * التحقق من ملكية Widget
-       */
       const {
         data: widget,
         error: widgetError,
@@ -1392,9 +827,6 @@ widgetsRouter.post(
         });
       }
 
-      /*
-       * Supabase Service Role
-       */
       const {
         createClient,
       } = await import(
@@ -1408,9 +840,6 @@ widgetsRouter.post(
             .SUPABASE_SERVICE_ROLE_KEY!
         );
 
-      /*
-       * تنظيف اسم الملف
-       */
       const safeOriginalName =
         String(originalName)
           .replace(
@@ -1424,9 +853,6 @@ widgetsRouter.post(
           .slice(0, 120) ||
         "image";
 
-      /*
-       * إزالة Data URL إذا وصلت
-       */
       let cleanBase64 =
         base64Data;
 
@@ -1446,17 +872,13 @@ widgetsRouter.post(
         });
       }
 
-      /*
-       * أنواع الصور المسموحة
-       */
-      const allowedMimeTypes =
-        [
-          "image/png",
-          "image/jpeg",
-          "image/jpg",
-          "image/webp",
-          "image/gif",
-        ];
+      const allowedMimeTypes = [
+        "image/png",
+        "image/jpeg",
+        "image/jpg",
+        "image/webp",
+        "image/gif",
+      ];
 
       if (
         !allowedMimeTypes.includes(
@@ -1469,9 +891,6 @@ widgetsRouter.post(
         });
       }
 
-      /*
-       * Base64 → Buffer
-       */
       let fileBuffer: Buffer;
 
       try {
@@ -1494,9 +913,6 @@ widgetsRouter.post(
         });
       }
 
-      /*
-       * حماية إضافية من الملفات الكبيرة
-       */
       if (
         fileBuffer.length >
         1024 * 1024
@@ -1507,9 +923,6 @@ widgetsRouter.post(
         });
       }
 
-      /*
-       * الامتداد
-       */
       const extensionMap: Record<
         string,
         string
@@ -1525,23 +938,12 @@ widgetsRouter.post(
         extensionMap[mimeType] ??
         "png";
 
-      /*
-       * مسار الملف:
-       *
-       * tenant_id/
-       * widget_id/
-       * type/
-       * filename
-       */
       const fileName =
         `${tenant.id}/${widget.id}/${type}/` +
         `${Date.now()}-${Math.random()
           .toString(36)
           .slice(2, 10)}.${extension}`;
 
-      /*
-       * رفع إلى Storage
-       */
       const {
         error: uploadError,
       } =
@@ -1570,9 +972,6 @@ widgetsRouter.post(
         });
       }
 
-      /*
-       * Public URL
-       */
       const {
         data: urlData,
       } =
@@ -1588,9 +987,7 @@ widgetsRouter.post(
       if (!publicUrl) {
         await supabase.storage
           .from("widget-assets")
-          .remove([
-            fileName,
-          ])
+          .remove([fileName])
           .catch(() => {});
 
         return res.status(500).json({
@@ -1599,9 +996,6 @@ widgetsRouter.post(
         });
       }
 
-      /*
-       * حفظ سجل الصورة
-       */
       const {
         data: asset,
         error: assetError,
@@ -1630,9 +1024,7 @@ widgetsRouter.post(
 
         await supabase.storage
           .from("widget-assets")
-          .remove([
-            fileName,
-          ])
+          .remove([fileName])
           .catch(() => {});
 
         return res.status(500).json({
@@ -1642,9 +1034,12 @@ widgetsRouter.post(
         });
       }
 
-      // ═══════════════════════════════════════════════════════════════════════
-      // تحديث إعدادات الـ Widget مباشرة
-      // ═══════════════════════════════════════════════════════════════════════
+      /*
+       * تحديث settings فقط.
+       *
+       * لا نستخدم avatar_url أو logo_url
+       * كأعمدة في widgets.
+       */
 
       const currentSettings =
         widget.settings &&
@@ -1690,61 +1085,32 @@ widgetsRouter.post(
         },
       };
 
-      /*
-       * Avatar
-       */
       if (type === "avatar") {
         updatedSettings.avatar.botAvatar =
           {
             ...updatedSettings.avatar
               .botAvatar,
-
             url: publicUrl,
           };
       }
 
-      /*
-       * Logo
-       */
       if (type === "logo") {
         updatedSettings.avatar.headerLogo =
           {
             ...updatedSettings.avatar
               .headerLogo,
-
             url: publicUrl,
           };
       }
 
-      /*
-       * أعمدة التوافق القديمة
-       */
-      const widgetPatch: Record<
-        string,
-        any
-      > = {
-        settings:
-          updatedSettings,
-      };
-
-      if (type === "avatar") {
-        widgetPatch.avatar_url =
-          publicUrl;
-      }
-
-      if (type === "logo") {
-        widgetPatch.logo_url =
-          publicUrl;
-      }
-
-      /*
-       * حفظ الرابط داخل widgets
-       */
       const {
         error: widgetUpdateError,
       } = await db
         .from("widgets")
-        .update(widgetPatch)
+        .update({
+          settings:
+            updatedSettings,
+        })
         .eq("id", widget.id)
         .eq(
           "tenant_id",
@@ -1764,30 +1130,19 @@ widgetsRouter.post(
         });
       }
 
-      /*
-       * إرجاع النتيجة للواجهة
-       */
       return res.json({
         success: true,
-
         id: asset.id,
         assetId: asset.id,
-
         url: publicUrl,
-
         widgetId: widget.id,
         widget_id: widget.id,
-
         type,
-
         originalName:
           safeOriginalName,
-
         sizeBytes:
           fileBuffer.length,
-
         mimeType,
-
         persisted: true,
       });
     } catch (e: any) {
@@ -1831,6 +1186,7 @@ widgetsRouter.get(
 
     const {
       data: widget,
+      error: widgetError,
     } = await db
       .from("widgets")
       .select(
@@ -1845,6 +1201,13 @@ widgetsRouter.get(
         tenant.id
       )
       .maybeSingle();
+
+    if (widgetError) {
+      return res.status(500).json({
+        error:
+          widgetError.message,
+      });
+    }
 
     if (!widget) {
       return res.status(404).json({
@@ -1870,8 +1233,7 @@ widgetsRouter.get(
       widgetId: widget.id,
       widgetName: widget.name,
       repliesUsed:
-        widget.replies_used ||
-        0,
+        widget.replies_used || 0,
       repliesLimit:
         widget.replies_limit,
       tenantCredits:
@@ -1954,7 +1316,6 @@ widgetsRouter.delete(
 // Public Widget
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/** جلب إعدادات widget */
 widgetsRouter.get(
   "/public/:token",
   async (req, res) => {
@@ -1998,7 +1359,11 @@ widgetsRouter.get(
       .single();
 
     const settings =
-      widget.settings || {};
+      widget.settings &&
+      typeof widget.settings ===
+        "object"
+        ? widget.settings
+        : {};
 
     const appearance =
       settings.appearance ||
@@ -2016,6 +1381,27 @@ widgetsRouter.get(
       settings.chat ||
       {};
 
+    const localization =
+      settings.localization ||
+      {};
+
+    const branding =
+      settings.branding ||
+      {};
+
+    const launcher =
+      appearance.launcher ||
+      chatWindow.launcher ||
+      {};
+
+    const header =
+      chatWindow.header ||
+      {};
+
+    const bubbles =
+      chatWindow.bubbles ||
+      {};
+
     res.json({
       widgetId: widget.id,
 
@@ -2026,149 +1412,118 @@ widgetsRouter.get(
         "ميلانو",
 
       welcomeMessage:
-        widget.welcome_message ||
         chat.welcomeMessage ||
         "مرحباً! كيف يمكنني مساعدتك؟",
 
       primaryColor:
-        widget.primary_color ||
         appearance.primaryColor ||
         "#2ec27e",
 
       headerColor:
-        widget.header_color ||
-        chatWindow.header
-          ?.backgroundColor ||
-        widget.primary_color ||
+        header.backgroundColor ||
+        appearance.headerColor ||
+        appearance.primaryColor ||
         "#2ec27e",
 
       textColor:
-        widget.text_color ||
-        chatWindow.header
-          ?.textColor ||
+        header.textColor ||
+        appearance.textColor ||
         "#ffffff",
 
       position:
-        widget.position ||
         appearance.position ||
         "left",
 
       language:
-        widget.language ||
-        settings.localization
-          ?.language ||
+        localization.language ||
         "ar",
 
       rtl:
-        widget.rtl !== undefined
-          ? widget.rtl
-          : settings.localization
-              ?.rtl ?? true,
+        localization.rtl !== undefined
+          ? localization.rtl
+          : true,
 
       avatarUrl:
-        widget.avatar_url ||
         avatar.botAvatar?.url ||
         null,
 
       logoUrl:
-        widget.logo_url ||
         avatar.headerLogo?.url ||
         null,
 
-      /*
-       * اسم المساعد أصبح من settings
-       * بدلاً من agent_name.
-       */
       agentName:
         avatar.botName ||
         avatar.botAvatar?.agentName ||
         widget.name,
 
       agentTagline:
-        widget.agent_tagline ||
         avatar.botTagline ||
         avatar.botAvatar?.agentTitle ||
         tenant?.business_name ||
         "مساعد ذكي",
 
       showStatus:
-        widget.show_status !==
+        header.showStatus !==
         undefined
-          ? widget.show_status
-          : chatWindow.header
-                ?.showStatus !==
-            false,
+          ? header.showStatus
+          : true,
 
       showBranding:
-        widget.show_branding !==
+        branding.showBranding !==
         undefined
-          ? widget.show_branding
-          : settings.branding
-              ?.showBranding ??
-            true,
+          ? branding.showBranding
+          : true,
 
       placeholder:
-        widget.placeholder ||
         chat.placeholder ||
         "اكتب رسالتك...",
 
       suggestedQuestions:
-        widget.suggested_questions ||
+        chat.suggestedQuestions ||
+        settings.suggestedQuestions ||
         [],
 
       borderRadius:
-        widget.border_radius ??
         appearance.borderRadius ??
         chatWindow.borderRadius ??
         16,
 
       shadow:
-        widget.shadow ??
         appearance.shadow ??
         chatWindow.shadow ??
         "medium",
 
       windowWidth:
-        widget.window_width ??
         appearance.width ??
         chatWindow.width ??
         380,
 
       windowHeight:
-        widget.window_height ??
         appearance.height ??
         chatWindow.height ??
         560,
 
       headerBackgroundColor:
-        widget.header_color ||
-        chatWindow.header
-          ?.backgroundColor ||
-        widget.primary_color ||
+        header.backgroundColor ||
+        appearance.headerColor ||
+        appearance.primaryColor ||
         "#2ec27e",
 
       headerTextColor:
-        widget.text_color ||
-        chatWindow.header
-          ?.textColor ||
+        header.textColor ||
+        appearance.textColor ||
         "#ffffff",
 
       launcherSize:
-        widget.launcher_size ??
-        appearance.launcher?.size ??
-        chatWindow.launcher?.size ??
+        launcher.size ??
         60,
 
       launcherShape:
-        widget.launcher_shape ??
-        appearance.launcher?.shape ??
-        chatWindow.launcher?.shape ??
+        launcher.shape ??
         "circle",
 
       launcherIconUrl:
-        widget.launcher_icon_url ||
-        appearance.launcher
-          ?.customIcon ||
+        launcher.customIcon ||
         null,
 
       launcherOffsetY:
@@ -2176,17 +1531,15 @@ widgetsRouter.get(
         20,
 
       showTimestamp:
-        widget.show_timestamps !==
+        bubbles.showTimestamp !==
         undefined
-          ? widget.show_timestamps
-          : chatWindow.bubbles
-                ?.showTimestamp !==
-            false,
+          ? bubbles.showTimestamp
+          : true,
 
       typingIndicator:
-        widget.typing_indicator !==
+        chat.showTypingIndicator !==
         undefined
-          ? widget.typing_indicator
+          ? chat.showTypingIndicator
           : true,
     });
   }
@@ -2315,7 +1668,7 @@ widgetsRouter.post(
     } = await db
       .from("widgets")
       .select(
-        "welcome_message"
+        "settings"
       )
       .eq(
         "id",
@@ -2323,9 +1676,13 @@ widgetsRouter.post(
       )
       .single();
 
-    if (
-      welcomeWidget?.welcome_message
-    ) {
+    const welcomeMessage =
+      welcomeWidget?.settings
+        ?.chat
+        ?.welcomeMessage ||
+      "مرحباً! كيف يمكنني مساعدتك؟";
+
+    if (welcomeMessage) {
       await db
         .from("widget_messages")
         .insert({
@@ -2337,8 +1694,7 @@ widgetsRouter.post(
             widget.tenant_id,
           direction: "out",
           body:
-            welcomeWidget
-              .welcome_message,
+            welcomeMessage,
           kind: "answer",
         });
     }
@@ -2348,14 +1704,13 @@ widgetsRouter.post(
         session.id,
 
       messages:
-        welcomeWidget?.welcome_message
+        welcomeMessage
           ? [
               {
                 id: "welcome",
                 direction: "out",
                 body:
-                  welcomeWidget
-                    .welcome_message,
+                  welcomeMessage,
                 kind: "answer",
                 created_at:
                   new Date().toISOString(),
@@ -2438,8 +1793,7 @@ widgetsRouter.post(
           .map(
             (m) =>
               `${
-                m.direction ===
-                "in"
+                m.direction === "in"
                   ? "العميل"
                   : "المساعد"
               }: ${m.body}`
@@ -2916,8 +2270,7 @@ widgetsRouter.post(
 
     if (
       !tenant ||
-      tenant.credits_remaining <=
-        0
+      tenant.credits_remaining <= 0
     ) {
       const quotaMessage =
         widgetData?.settings
@@ -3029,7 +2382,10 @@ widgetsRouter.post(
           });
       }
 
-      await db
+      const {
+        data: insertedMessage,
+        error: messageInsertError,
+      } = await db
         .from(
           "widget_messages"
         )
@@ -3044,26 +2400,16 @@ widgetsRouter.post(
           body:
             replyText,
           kind,
-        });
-
-      const {
-        data: lastMsg,
-      } = await db
-        .from(
-          "widget_messages"
-        )
+        })
         .select("id")
-        .eq(
-          "session_id",
-          session.id
-        )
-        .order(
-          "created_at",
-          {
-            ascending: false,
-          }
-        )
-        .limit(1);
+        .single();
+
+      if (messageInsertError) {
+        console.error(
+          "[widget] save reply error:",
+          messageInsertError
+        );
+      }
 
       await db.rpc(
         "consume_reply",
@@ -3071,7 +2417,7 @@ widgetsRouter.post(
           p_tenant_id:
             widget.tenant_id,
           p_message_id:
-            lastMsg?.[0]?.id,
+            insertedMessage?.id,
           p_widget_id:
             widget.id,
         }
