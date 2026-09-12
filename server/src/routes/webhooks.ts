@@ -76,6 +76,25 @@ whatsappWebhookRouter.get("/whatsapp", async (req: Request, res: Response) => {
  * Incoming messages & status updates من Meta
  */
 whatsappWebhookRouter.post("/whatsapp", async (req: Request, res: Response) => {
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Logging تشخيصي - لا يمس منطق المعالجة
+  // ═══════════════════════════════════════════════════════════════════════════
+  console.log("═══════════════════════════════════════════════════════════");
+  console.log("[Webhook POST] POST request received");
+  console.log("[Webhook POST] Method:", req.method);
+  console.log("[Webhook POST] Original URL:", req.originalUrl);
+  console.log("[Webhook POST] Headers:", JSON.stringify({
+    'content-type': req.headers['content-type'],
+    'user-agent': req.headers['user-agent']?.substring(0, 50),
+    'host': req.headers['host']
+  }));
+  console.log("[Webhook POST] Body exists:", !!req.body);
+  console.log("[Webhook POST] Body type:", typeof req.body);
+  console.log("[Webhook POST] Body keys:", req.body ? Object.keys(req.body) : 'null');
+  console.log("[Webhook POST] Body.object:", req.body?.object || 'undefined');
+  console.log("[Webhook POST] Body.entry?.length:", req.body?.entry?.length || 0);
+  console.log("═══════════════════════════════════════════════════════════");
+
   try {
     console.log("[Webhook] Received webhook payload");
 
