@@ -71,12 +71,6 @@ export default function WidgetPreview({
     appearance?.avatar?.url ||
     "";
 
-  const botAgentName =
-    avatar?.botName ||
-    appearance?.avatar?.agentName ||
-    widgetName ||
-    "المساعد";
-
   const botAgentTitle =
     avatar?.botTagline ||
     appearance?.avatar?.agentTitle ||
@@ -265,15 +259,12 @@ export default function WidgetPreview({
       className="flex flex-col h-full"
       dir={settings.localization.rtl ? "rtl" : "ltr"}
     >
-
       {/* ══════════════════════════════════════════════════════════════════════
           شريط التحكم
       ══════════════════════════════════════════════════════════════════════ */}
 
       <div className="flex items-center justify-between px-4 py-3 bg-pine/50 border-b border-verde/10">
-
         <div className="flex items-center gap-2">
-
           <button
             type="button"
             onClick={() => setDevice("desktop")}
@@ -297,11 +288,9 @@ export default function WidgetPreview({
           >
             جوال
           </button>
-
         </div>
 
         <div className="flex items-center gap-2">
-
           <button
             type="button"
             onClick={() =>
@@ -333,7 +322,6 @@ export default function WidgetPreview({
               ? "إغلاق"
               : "فتح"}
           </button>
-
         </div>
       </div>
 
@@ -350,7 +338,6 @@ export default function WidgetPreview({
               : "#f5f5f5",
         }}
       >
-
         {/* ════════════════════════════════════════════════════════════════════
             Widget Window
         ════════════════════════════════════════════════════════════════════ */}
@@ -390,7 +377,6 @@ export default function WidgetPreview({
                   : "ltr",
             }}
           >
-
             {/* ════════════════════════════════════════════════════════════════
                 Header
             ════════════════════════════════════════════════════════════════ */}
@@ -401,11 +387,9 @@ export default function WidgetPreview({
                 background: headerBg,
               }}
             >
-
               {/* Avatar */}
 
               <div className="relative">
-
                 {botAvatarUrl ? (
                   <img
                     src={botAvatarUrl}
@@ -430,13 +414,11 @@ export default function WidgetPreview({
                 {showStatusIndicator && (
                   <div className="absolute bottom-0 right-0 w-3 h-3 rounded-full bg-green-400 border-2 border-white" />
                 )}
-
               </div>
 
               {/* معلومات المساعد */}
 
               <div className="flex-1 text-white min-w-0">
-
                 <p
                   className="font-bold truncate"
                   style={{
@@ -453,7 +435,6 @@ export default function WidgetPreview({
                     {botAgentTitle}
                   </p>
                 )}
-
               </div>
 
               {/* زر الإغلاق */}
@@ -466,7 +447,6 @@ export default function WidgetPreview({
               >
                 <IconMinimize className="w-5 h-5" />
               </button>
-
             </div>
 
             {/* ════════════════════════════════════════════════════════════════
@@ -482,7 +462,6 @@ export default function WidgetPreview({
                     : "#f8f9fa",
               }}
             >
-
               {/* Welcome Message */}
 
               <div
@@ -512,7 +491,6 @@ export default function WidgetPreview({
 
               {chat.quickReplies.length > 0 && (
                 <div className="flex flex-wrap gap-2 mt-4">
-
                   {chat.quickReplies
                     .slice(0, 3)
                     .map((reply) => (
@@ -532,10 +510,8 @@ export default function WidgetPreview({
                         {reply.text}
                       </button>
                     ))}
-
                 </div>
               )}
-
             </div>
 
             {/* ════════════════════════════════════════════════════════════════
@@ -551,7 +527,6 @@ export default function WidgetPreview({
                     : "#e0e0e0",
               }}
             >
-
               <input
                 type="text"
                 placeholder={chat.placeholder}
@@ -589,7 +564,6 @@ export default function WidgetPreview({
                   <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
                 </svg>
               </button>
-
             </div>
 
             {/* ════════════════════════════════════════════════════════════════
@@ -627,10 +601,8 @@ export default function WidgetPreview({
                 >
                   {normalizedWidgetName || "ميلانو"}
                 </span>
-
               </div>
             )}
-
           </div>
         )}
 
@@ -640,7 +612,6 @@ export default function WidgetPreview({
         ════════════════════════════════════════════════════════════════════ */}
 
         {renderLauncher()}
-
       </div>
     </div>
   );
