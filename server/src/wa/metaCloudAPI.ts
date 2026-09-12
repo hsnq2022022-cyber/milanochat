@@ -149,7 +149,7 @@ class MetaCloudAPIProvider implements WhatsAppProvider {
     }
 
     try {
-      const url = `${GRAPH_API_BASE}/${GRAPH_API_VERSION}/${this.config.phoneNumberId}`;
+      const url = `${GRAPH_API_BASE}/${this.config.graphApiVersion}/${this.config.phoneNumberId}`;
       const response = await fetch(url, {
         headers: {
           'Authorization': `Bearer ${this.config.accessToken}`,
