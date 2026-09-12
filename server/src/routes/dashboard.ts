@@ -66,7 +66,7 @@ dashboardRouter.get("/summary", async (req, res) => {
   const [openQ, convCount, wa] = await Promise.all([
     db.from("unresolved_questions").select("id", { count: "exact", head: true }).eq("tenant_id", tenant.id).eq("status", "open"),
     db.from("conversations").select("id", { count: "exact", head: true }).eq("tenant_id", tenant.id),
-    Promise.resolve(waStatus(tenant.id)),
+    waStatus(tenant.id), // waStatus أصبحت async الآن
   ]);
 
   res.json({

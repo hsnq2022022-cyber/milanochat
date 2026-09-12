@@ -165,21 +165,27 @@ export async function sendText(tenantId: string, chatId: string, text: string): 
 }
 
 /** توافقية مع لوحة التحكم القديمة (ملخص الحالة) */
-export function waStatus(tenantId: string): {
+export async function waStatus(tenantId: string): Promise<{
   status: "idle" | "connected" | "disconnected" | "error";
   qr: null;
   phoneMasked: string | null;
-} {
-  const s = sessions.get(tenantId);
-  if (!s) return { status: "idle", qr: null, phoneMasked: null };
-  const snap = s.snapshot();
-  const status =
-    snap.state === "CONNECTED"
-      ? "connected"
-      : snap.state === "DISCONNECTED"
-        ? "disconnected"
-        : "error";
-  return { status, qr: null, phoneMasked: snap.phone };
+}> {
+  // التحقق من Cloud API مباشرة بدلاً من sessions Map
+  const connected = await metaCloudAPI.isConnected(tenantId);
+  
+  if (connected) {
+    return { 
+      status: "connected", 
+      qr: null, 
+      phoneMasked: null // سيتم ملؤه من Cloud API لاحقاً إذا لزم
+    };
+  } else {
+    return { 
+      status: "disconnected", 
+      qr: null, 
+      phoneMasked: null 
+    };
+  }
 }
 
 /** في Meta Cloud API لا نحتاج لاستعادة جلسات - الاتصال دائم طالما الـ token صالح */

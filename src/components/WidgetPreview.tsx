@@ -71,12 +71,6 @@ export default function WidgetPreview({
     appearance?.avatar?.url ||
     "";
 
-  const botAgentName =
-    avatar?.botName ||
-    appearance?.avatar?.agentName ||
-    widgetName ||
-    "المساعد";
-
   const botAgentTitle =
     avatar?.botTagline ||
     appearance?.avatar?.agentTitle ||
