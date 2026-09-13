@@ -129,18 +129,38 @@ dashboardRouter.get("/conversations", async (req, res) => {
   if (!tenant) return res.status(404).json({ error: "لا يوجد حساب مرتبط" });
   const { data } = await db
     .from("conversations")
-    .select("id, customer_phone_encrypted, transferred, auto_paused_reason, last_message_at")
+    .select(`
+      id,
+      customer_phone_encrypted,
+      transferred,
+      auto_paused_reason,
+      last_message_at,
+      messages (
+        body_encrypted,
+        direction,
+        created_at
+      )
+    `)
     .eq("tenant_id", tenant.id)
     .order("last_message_at", { ascending: false })
     .limit(50);
+  
   res.json(
-    (data ?? []).map((c: any) => ({
-      id: c.id,
-      customerPhone: decryptField(c.customer_phone_encrypted),
-      transferred: c.transferred,
-      autoPausedReason: c.auto_paused_reason,
-      lastMessageAt: c.last_message_at,
-    }))
+    (data ?? []).map((c: any) => {
+      // استخراج آخر رسالة من المصفوفة
+      const lastMsg = c.messages && c.messages.length > 0 
+        ? c.messages[0] // الرسائل مرتبة حسب created_at descending
+        : null;
+      
+      return {
+        id: c.id,
+        customerPhone: decryptField(c.customer_phone_encrypted),
+        transferred: c.transferred,
+        autoPausedReason: c.auto_paused_reason,
+        lastMessageAt: c.last_message_at,
+        lastMessageBody: lastMsg ? decryptField(lastMsg.body_encrypted) : null,
+      };
+    })
   );
 });
 
