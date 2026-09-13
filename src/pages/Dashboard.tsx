@@ -31,6 +31,8 @@ type ConvItem = {
   humanAgentActive?: boolean;
   remainingSeconds?: number;
   lastAt: string;
+  lastMessagePreview?: string; // معاينة آخر رسالة
+  unreadCount?: number; // عدد الرسائل غير المقروءة
   msgs: ThreadMsg[];
 };
 type UnresolvedItem = {
@@ -279,6 +281,7 @@ export default function Dashboard() {
         },
         (payload) => {
           const newConv = payload.new as any;
+          console.log('[Realtime] New conversation:', newConv.id);
           // إضافة المحادثة الجديدة للقائمة إذا لم تكن موجودة
           setSt((prev) => {
             if (!prev) return prev;
@@ -298,6 +301,7 @@ export default function Dashboard() {
                   remainingSeconds: 0,
                   lastAt: newConv.last_message_at,
                   msgs: [],
+                  unreadCount: 1, // محادثة جديدة = رسالة غير مقروءة
                 },
                 ...prev.convs
               ],
@@ -340,11 +344,71 @@ export default function Dashboard() {
       )
       .subscribe();
 
+    // الاشتراك في أحداث INSERT للرسائل الجديدة - لتحديث القائمة ونقل المحادثة للأعلى
+    const messagesChannel = sb
+      .channel('messages:public')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'messages',
+        },
+        (payload) => {
+          const newMsg = payload.new as any;
+          const convId = newMsg.conversation_id;
+          const msgBody = newMsg.body || newMsg.body_encrypted || '';
+          const isOutbound = newMsg.direction === 'outbound';
+          
+          console.log('[Realtime] New message:', {
+            convId,
+            body: msgBody.substring(0, 50),
+            direction: newMsg.direction,
+            isActive: activeConv === convId
+          });
+          
+          setSt((prev) => {
+            if (!prev) return prev;
+            
+            // البحث عن المحادثة في القائمة
+            const convIndex = prev.convs.findIndex(c => c.id === convId);
+            if (convIndex === -1) return prev;
+            
+            const targetConv = prev.convs[convIndex];
+            const isActive = activeConv === convId;
+            
+            // إنشاء نسخة محدثة من المحادثة
+            const updatedConv = {
+              ...targetConv,
+              lastAt: newMsg.created_at,
+              // تحديث معاينة آخر رسالة
+              lastMessagePreview: msgBody,
+              // زيادة عداد الرسائل غير المقروءة فقط إذا لم تكن نشطة والرسالة واردة
+              unreadCount: isActive || isOutbound 
+                ? (targetConv.unreadCount || 0) 
+                : (targetConv.unreadCount || 0) + 1,
+            };
+            
+            // إزالة المحادثة من موقعها الحالي
+            const newConvs = prev.convs.filter(c => c.id !== convId);
+            // إضافتها في الأعلى
+            newConvs.unshift(updatedConv);
+            
+            return {
+              ...prev,
+              convs: newConvs,
+            };
+          });
+        }
+      )
+      .subscribe();
+
     return () => {
       sb.removeChannel(convChannel);
       sb.removeChannel(convUpdateChannel);
+      sb.removeChannel(messagesChannel);
     };
-  }, [demo, token, needClaim, sb]);
+  }, [demo, token, needClaim, sb, activeConv]);
 
   /* رسائل المحادثة المفتوحة (حقيقي) — تحديث حي */
   const loadThread = useCallback(async (convId: string) => {
