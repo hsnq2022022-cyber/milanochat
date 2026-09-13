@@ -3,6 +3,14 @@
 dist/
 build/
 
-# Database
-supabase/realtime_setup.sql
+# Environment files
+.env
+.env.local
+*.env.*
+
+# Logs
+*.log
+
+# Dependencies
+node_modules/
 ```

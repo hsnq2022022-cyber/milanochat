@@ -261,15 +261,90 @@ export default function Dashboard() {
       .finally(() => loadAll());
   }, [demo, token, loadAll]);
 
-  /* استطلاع خفيف للمحادثات الجديدة فقط — لا يعيد تحميل المحادثة المفتوحة */
+  /* ── استبدال polling بـ Supabase Realtime للمحادثات والرسائل ── */
+  /* لا نستخدم polling بعد الآن لتجنب إعادة تحميل النافذة */
+  
   useEffect(() => {
-    if (demo || !token || needClaim) return;
-    const iv = window.setInterval(() => {
-      // تحديث القائمة فقط بدون الرسائل - للحفاظ على المحادثة المفتوحة
-      loadAll(true);
-    }, 5000);
-    return () => window.clearInterval(iv);
-  }, [demo, token, needClaim, loadAll]);
+    if (demo || !token || needClaim || !sb) return;
+
+    // الاشتراك في أحداث INSERT للمحادثات الجديدة
+    const convChannel = sb
+      .channel('conversations:public')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'conversations',
+        },
+        (payload) => {
+          const newConv = payload.new as any;
+          // إضافة المحادثة الجديدة للقائمة إذا لم تكن موجودة
+          setSt((prev) => {
+            if (!prev) return prev;
+            const exists = prev.convs.some(c => c.id === newConv.id);
+            if (exists) return prev;
+            
+            return {
+              ...prev,
+              convs: [
+                {
+                  id: newConv.id,
+                  phone: newConv.customer_phone_encrypted,
+                  transferred: newConv.transferred,
+                  paused: newConv.auto_paused_reason,
+                  humanAgentExpiresAt: newConv.human_agent_expires_at,
+                  humanAgentActive: false,
+                  remainingSeconds: 0,
+                  lastAt: newConv.last_message_at,
+                  msgs: [],
+                },
+                ...prev.convs
+              ],
+            };
+          });
+        }
+      )
+      .subscribe();
+
+    // الاشتراك في أحداث UPDATE للمحادثات الموجودة (تحديث آخر رسالة)
+    const convUpdateChannel = sb
+      .channel('conversations_update:public')
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'conversations',
+        },
+        (payload) => {
+          const updatedConv = payload.new as any;
+          setSt((prev) => {
+            if (!prev) return prev;
+            return {
+              ...prev,
+              convs: prev.convs.map(c => 
+                c.id === updatedConv.id
+                  ? {
+                      ...c,
+                      lastAt: updatedConv.last_message_at,
+                      transferred: updatedConv.transferred,
+                      paused: updatedConv.auto_paused_reason,
+                      humanAgentExpiresAt: updatedConv.human_agent_expires_at,
+                    }
+                  : c
+              ),
+            };
+          });
+        }
+      )
+      .subscribe();
+
+    return () => {
+      sb.removeChannel(convChannel);
+      sb.removeChannel(convUpdateChannel);
+    };
+  }, [demo, token, needClaim, sb]);
 
   /* رسائل المحادثة المفتوحة (حقيقي) — تحديث حي */
   const loadThread = useCallback(async (convId: string) => {
