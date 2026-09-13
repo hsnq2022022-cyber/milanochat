@@ -987,13 +987,63 @@ export default function Dashboard() {
                     <div className="flex-1">
                       <p className="text-[13px] font-bold text-bone" dir="ltr">{active.phone}</p>
                       <p className="text-[10.5px] text-sage">
-                        {active.transferred ? "محوّلة لك — الرد الآلي متوقف" : active.paused ? "الرد الآلي موقوف" : "الرد الآلي يعمل"}
+                        {active.humanAgentActive 
+                          ? `Human Agent Active — ${Math.floor(active.remainingSeconds! / 60)}:${String(active.remainingSeconds! % 60).padStart(2, '0')} متبقي`
+                          : active.transferred 
+                            ? "محوّلة لك — الرد الآلي متوقف" 
+                            : active.paused 
+                              ? "الرد الآلي موقوف" 
+                              : "الرد الآلي يعمل"}
                       </p>
                     </div>
-                    {active.transferred && (
+                    {active.humanAgentActive ? (
+                      <button 
+                        onClick={async () => {
+                          await apiAuthFetch(token!, `/api/dashboard/conversations/${active.id}/release`, { method: "POST" });
+                          // تحديث الحالة المحلية مباشرة
+                          setSt((prev) => prev ? {
+                            ...prev,
+                            convs: prev.convs.map((c) => c.id === active.id ? {
+                              ...c,
+                              transferred: false,
+                              humanAgentActive: false,
+                              remainingSeconds: 0,
+                              humanAgentExpiresAt: null
+                            } : c)
+                          } : null);
+                        }}
+                        className="text-[10px] font-bold text-red-600 bg-red-100 hover:bg-red-200 border border-red-300 rounded-full px-2.5 py-1 inline-flex items-center gap-1 transition-colors"
+                      >
+                        <IconX className="w-3 h-3" /> إلغاء Human Agent
+                      </button>
+                    ) : active.transferred ? (
                       <span className="text-[10px] font-bold text-oro-soft bg-oro/10 border border-oro/30 rounded-full px-2.5 py-1 inline-flex items-center gap-1">
                         <IconHandoff className="w-3 h-3" /> تحتاج تدخلّك
                       </span>
+                    ) : (
+                      <button 
+                        onClick={async () => {
+                          try {
+                            const res = await apiAuthFetch<{ expiresAt: string }>(token!, `/api/dashboard/conversations/${active.id}/takeover`, { method: "POST" });
+                            // تحديث الحالة المحلية مباشرة
+                            setSt((prev) => prev ? {
+                              ...prev,
+                              convs: prev.convs.map((c) => c.id === active.id ? {
+                                ...c,
+                                transferred: true,
+                                humanAgentActive: true,
+                                remainingSeconds: 3600, // 60 دقيقة
+                                humanAgentExpiresAt: res.expiresAt
+                              } : c)
+                            } : null);
+                          } catch (e) {
+                            console.error("فشل تفعيل Human Agent:", e);
+                          }
+                        }}
+                        className="text-[10px] font-bold text-white bg-blue-600 hover:bg-blue-700 border border-blue-700 rounded-full px-2.5 py-1 inline-flex items-center gap-1 transition-colors"
+                      >
+                        <IconHandoff className="w-3 h-3" /> Human Agent
+                      </button>
                     )}
                   </div>
 
