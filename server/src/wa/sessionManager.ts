@@ -1,4 +1,3 @@
-```ts
 /**
  * مدير جلسات واتساب عبر Meta Cloud API الرسمي من Meta.
  *
@@ -383,5 +382,5 @@ export async function restorePersistedSessions(): Promise<void> {
   console.log(
     "[wa] Connection status will be checked per tenant"
   );
-}
-```
+)
+
