@@ -166,6 +166,18 @@ dashboardRouter.post("/conversations/:id/reply", async (req, res) => {
   }
 });
 
+dashboardRouter.post("/conversations/:id/takeover", async (req, res) => {
+  const tenant = await ownedTenant((req as AuthedRequest).userId!, req.body?.tenantId);
+  if (!tenant) return res.status(404).json({ error: "لا يوجد حساب مرتبط" });
+  const { error } = await db
+    .from("conversations")
+    .update({ transferred: true, auto_paused_reason: "manual_takeover" })
+    .eq("id", req.params.id)
+    .eq("tenant_id", tenant.id);
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ ok: true });
+});
+
 /** الأسئلة العالقة المفتوحة */
 dashboardRouter.get("/unresolved", async (req, res) => {
   const tenant = await ownedTenant((req as AuthedRequest).userId!, req.query.tenantId as string);
