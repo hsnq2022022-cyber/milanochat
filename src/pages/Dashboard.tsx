@@ -27,6 +27,9 @@ type ConvItem = {
   phone: string;
   transferred: boolean;
   paused: string | null;
+  humanAgentExpiresAt?: string | null;
+  humanAgentActive?: boolean;
+  remainingSeconds?: number;
   lastAt: string;
   msgs: ThreadMsg[];
 };
@@ -210,10 +213,23 @@ export default function Dashboard() {
         phone: summary.tenant.phone,
         waStatus: summary.wa.status,
         openUnresolved: summary.openUnresolved,
-        convs: skipConvs ? (prev?.convs || []) : convs.map((c: any) => ({
-          id: c.id, phone: c.customerPhone, transferred: c.transferred,
-          paused: c.autoPausedReason, lastAt: c.lastMessageAt, msgs: [],
-        })),
+        convs: skipConvs ? (prev?.convs || []) : convs.map((c: any) => {
+          const now = new Date();
+          const expiresAt = c.humanAgentExpiresAt ? new Date(c.humanAgentExpiresAt) : null;
+          const humanAgentActive = c.transferred && expiresAt && expiresAt > now;
+          const remainingSeconds = humanAgentActive && expiresAt ? Math.floor((expiresAt.getTime() - now.getTime()) / 1000) : 0;
+          return {
+            id: c.id, 
+            phone: c.customerPhone, 
+            transferred: c.transferred,
+            paused: c.autoPausedReason,
+            humanAgentExpiresAt: c.humanAgentExpiresAt,
+            humanAgentActive,
+            remainingSeconds,
+            lastAt: c.lastMessageAt, 
+            msgs: [],
+          };
+        }),
         unresolved: unresolved.filter((q: any) => q.status === "open").map((q: any) => ({
           id: q.id, question: q.question, createdAt: q.createdAt,
           conversationId: q.conversationId, bestSimilarity: q.bestSimilarity,

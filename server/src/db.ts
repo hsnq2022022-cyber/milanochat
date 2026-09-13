@@ -57,6 +57,8 @@ export type Conversation = {
   customer_phone_encrypted: string;
   transferred: boolean;
   auto_paused_reason: string | null;
+  human_agent_expires_at: string | null;
+  human_agent_activated_by: string | null;
   last_message_at: string;
   created_at: string;
 };
