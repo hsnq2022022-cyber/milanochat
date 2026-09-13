@@ -169,13 +169,70 @@ dashboardRouter.post("/conversations/:id/reply", async (req, res) => {
 dashboardRouter.post("/conversations/:id/takeover", async (req, res) => {
   const tenant = await ownedTenant((req as AuthedRequest).userId!, req.body?.tenantId);
   if (!tenant) return res.status(404).json({ error: "لا يوجد حساب مرتبط" });
+  
+  // تفعيل Human Agent لمدة 60 دقيقة (Sliding Timeout)
+  const userId = (req as AuthedRequest).userId!;
+  const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString(); // 60 دقيقة من الآن
+  
   const { error } = await db
     .from("conversations")
-    .update({ transferred: true, auto_paused_reason: "manual_takeover" })
+    .update({ 
+      transferred: true, 
+      auto_paused_reason: "manual_takeover",
+      human_agent_expires_at: expiresAt,
+      human_agent_activated_by: userId
+    })
+    .eq("id", req.params.id)
+    .eq("tenant_id", tenant.id);
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ ok: true, expiresAt });
+});
+
+/** إلغاء Human Agent يدويًا */
+dashboardRouter.post("/conversations/:id/release", async (req, res) => {
+  const tenant = await ownedTenant((req as AuthedRequest).userId!, req.body?.tenantId);
+  if (!tenant) return res.status(404).json({ error: "لا يوجد حساب مرتبط" });
+  
+  const { error } = await db
+    .from("conversations")
+    .update({ 
+      transferred: false, 
+      auto_paused_reason: null,
+      human_agent_expires_at: null,
+      human_agent_activated_by: null
+    })
     .eq("id", req.params.id)
     .eq("tenant_id", tenant.id);
   if (error) return res.status(500).json({ error: error.message });
   res.json({ ok: true });
+});
+
+/** الحصول على حالة Human Agent للمحادثة */
+dashboardRouter.get("/conversations/:id/human-status", async (req, res) => {
+  const tenant = await ownedTenant((req as AuthedRequest).userId!, req.query.tenantId as string);
+  if (!tenant) return res.status(404).json({ error: "لا يوجد حساب مرتبط" });
+  
+  const { data, error } = await db
+    .from("conversations")
+    .select("transferred, auto_paused_reason, human_agent_expires_at, human_agent_activated_by")
+    .eq("id", req.params.id)
+    .eq("tenant_id", tenant.id)
+    .single();
+  
+  if (error) return res.status(500).json({ error: error.message });
+  
+  const now = new Date();
+  const expiresAt = data?.human_agent_expires_at ? new Date(data.human_agent_expires_at) : null;
+  const isActive = data?.transferred && expiresAt && expiresAt > now;
+  const remainingSeconds = isActive && expiresAt ? Math.floor((expiresAt.getTime() - now.getTime()) / 1000) : 0;
+  
+  res.json({
+    isActive,
+    transferred: data?.transferred || false,
+    expiresAt: data?.human_agent_expires_at,
+    activatedBy: data?.human_agent_activated_by,
+    remainingSeconds
+  });
 });
 
 /** الأسئلة العالقة المفتوحة */

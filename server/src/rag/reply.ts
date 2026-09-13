@@ -261,15 +261,38 @@ export async function handleIncomingMessage(
     }
 
     /**
-     * 5. المحادثة محولة لبشري.
+     * 5. المحادثة محولة لبشري (مع التحقق من وقت الانتهاء).
      *
-     * نسجل رسالة العميل أولاً، ثم نوقف الرد الآلي.
+     * نسجل رسالة العميل أولاً، ثم نتحقق هل Human Agent لا يزال نشطًا.
      */
     if (conv.transferred) {
-      console.log(
-        `[WA] conversation transferred: ${conv.id}`
-      );
-      return;
+      // التحقق من human_agent_expires_at إذا كان موجودًا
+      const expiresAt = conv.human_agent_expires_at 
+        ? new Date(conv.human_agent_expires_at) 
+        : null;
+      
+      const now = new Date();
+      const isStillActive = expiresAt ? expiresAt > now : true; // إذا لم يكن هناك وقت انتهاء، نعتبره نشطًا
+      
+      if (isStillActive) {
+        console.log(
+          `[WA] conversation transferred (Human Agent active): ${conv.id}`
+        );
+        return;
+      } else {
+        // انتهى وقت Human Agent - نعود للوضع الطبيعي
+        console.log(
+          `[WA] Human Agent expired for conversation: ${conv.id} - resuming AI`
+        );
+        await db
+          .from("conversations")
+          .update({
+            transferred: false,
+            auto_paused_reason: null,
+            human_agent_expires_at: null,
+          })
+          .eq("id", conv.id);
+      }
     }
 
     /**
