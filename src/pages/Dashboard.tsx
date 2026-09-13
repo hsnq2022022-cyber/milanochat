@@ -228,7 +228,8 @@ export default function Dashboard() {
             humanAgentExpiresAt: c.humanAgentExpiresAt,
             humanAgentActive,
             remainingSeconds,
-            lastAt: c.lastMessageAt, 
+            lastAt: c.lastMessageAt,
+            lastMessagePreview: c.lastMessageBody || "—",
             msgs: [],
           };
         }),
@@ -1123,7 +1124,7 @@ export default function Dashboard() {
                   </li>
                 )}
                 {st.convs.map((c) => {
-                  const last = c.msgs[c.msgs.length - 1];
+                  
                   const sel = c.id === activeConv;
                   return (
                     <li key={c.id}>
@@ -1137,7 +1138,7 @@ export default function Dashboard() {
                           <span className="text-[13px] font-bold text-bone" dir="ltr">{c.phone}</span>
                           <span className="text-[10px] text-sage tabular-nums">{fmtTime(c.lastAt)}</span>
                         </div>
-                        <p className="text-[11.5px] text-sage truncate">{last?.body ?? "—"}</p>
+                        <p className="text-[11.5px] text-sage truncate">{c.lastMessagePreview ?? (c.msgs[c.msgs.length - 1]?.body) ?? "—"}</p>
                         <div className="flex gap-1.5 mt-1.5">
                           {c.transferred && (
                             <span className="text-[9.5px] font-bold text-oro-soft bg-oro/10 border border-oro/30 rounded-full px-2 py-0.5 inline-flex items-center gap-1">
@@ -1147,6 +1148,11 @@ export default function Dashboard() {
                           {c.paused === "credits" && (
                             <span className="text-[9.5px] font-bold text-oro-soft bg-oro/10 border border-oro/30 rounded-full px-2 py-0.5">
                               موقوفة — نفد الرصيد
+                            </span>
+                          )}
+                          {c.unreadCount !== undefined && c.unreadCount > 0 && (
+                            <span className="text-[9.5px] font-bold text-white bg-verde rounded-full px-2 py-0.5 inline-flex items-center gap-1">
+                              {c.unreadCount} جديدة
                             </span>
                           )}
                         </div>
