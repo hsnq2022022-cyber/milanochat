@@ -115,10 +115,6 @@ class WaSession {
 
   /**
    * التحقق من اتصال Meta Cloud API لهذا الـ tenant.
-   *
-   * مهم:
-   * لا نستخدم "default" هنا.
-   * كل Tenant يجب أن يتم التحقق منه باستخدام tenantId الحقيقي.
    */
   async start(): Promise<void> {
     try {
@@ -168,7 +164,6 @@ class WaSession {
     text: string
   ): Promise<void> {
     if (this.state !== "CONNECTED") {
-      // إعادة التحقق مرة واحدة قبل رفض الإرسال.
       await this.start();
     }
 
@@ -189,7 +184,6 @@ class WaSession {
    * في Meta Cloud API لا يوجد logout مثل WhatsApp Web.
    *
    * هذه الدالة فقط تفصل الحالة المحلية داخل السيرفر.
-   * لا تلغي رقم الهاتف من Meta.
    */
   async logout(): Promise<void> {
     this.phone = null;
@@ -243,7 +237,7 @@ export async function ensureSession(
 }
 
 /**
- * الحصول على الحالة الحالية بدون إنشاء اتصال WhatsApp Web.
+ * الحصول على الحالة الحالية.
  */
 export function getSnapshot(
   tenantId: string
@@ -303,7 +297,7 @@ export async function sendText(
 /**
  * حالة WhatsApp المستخدمة بواسطة Dashboard.
  *
- * هذه الدالة تتحقق مباشرة من Meta Cloud API
+ * يتم التحقق مباشرة من Meta Cloud API
  * باستخدام tenantId الحقيقي.
  */
 export async function waStatus(
@@ -361,18 +355,8 @@ export async function waStatus(
 /**
  * Meta Cloud API لا يحتاج إلى استعادة جلسات محفوظة.
  *
- * مهم جدًا:
  * لا نستخدم tenantId = "default".
- *
- * السبب:
- * التطبيق Multi-Tenant، وبالتالي لا يمكننا افتراض
- * Tenant عام باسم default.
- *
- * حالة كل Tenant يتم فحصها عند:
- * - فتح Dashboard
- * - ensureSession()
- * - waStatus()
- * - إرسال الرسالة
+ * حالة كل Tenant يتم فحصها عند الحاجة.
  */
 export async function restorePersistedSessions(): Promise<void> {
   console.log(
@@ -382,5 +366,5 @@ export async function restorePersistedSessions(): Promise<void> {
   console.log(
     "[wa] Connection status will be checked per tenant"
   );
-)
+}
 
