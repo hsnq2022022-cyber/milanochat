@@ -170,9 +170,9 @@ dashboardRouter.post("/conversations/:id/takeover", async (req, res) => {
   const tenant = await ownedTenant((req as AuthedRequest).userId!, req.body?.tenantId);
   if (!tenant) return res.status(404).json({ error: "لا يوجد حساب مرتبط" });
   
-  // تفعيل Human Agent لمدة 60 دقيقة (Sliding Timeout)
+  // تفعيل Human Agent لمدة 15 دقيقة (Sliding Timeout)
   const userId = (req as AuthedRequest).userId!;
-  const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString(); // 60 دقيقة من الآن
+  const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString(); // 15 دقيقة من الآن
   
   const { error } = await db
     .from("conversations")
