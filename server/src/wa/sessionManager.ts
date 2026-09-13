@@ -1,18 +1,16 @@
+```ts
 /**
- * مدير جلسات واتساب عبر Meta Cloud API (الرسمي من Meta).
+ * مدير جلسات واتساب عبر Meta Cloud API الرسمي من Meta.
  *
- * - يستخدم Meta WhatsApp Cloud API الرسمي بدلاً من Baileys/QR
- * - لا يحتاج QR code أو مسح من الجوال
- * - الرسائل ترد عبر Webhook من Meta
- * - الرسائل تُرسل عبر Graph API
- *
- * ملاحظة: Baileys لا يزال موجوداً كـ fallback لكن غير مستخدم في المسار الرئيسي
+ * - لا يستخدم Baileys أو WhatsApp Web أو QR
+ * - الاتصال يتم عبر Meta WhatsApp Cloud API
+ * - استقبال الرسائل يتم عبر Webhook
+ * - إرسال الرسائل يتم عبر Graph API
+ * - كل Tenant يتم التحقق منه بشكل مستقل
  */
-import { config } from "../config.js";
-import { encryptField, maskPhone } from "../crypto.js";
-import { db } from "../db.js";
+
+import { maskPhone } from "../crypto.js";
 import { metaCloudAPI } from "./metaCloudAPI.js";
-import type { WhatsAppProvider } from "./provider.js";
 
 export type SessionState =
   | "CONNECTED"
@@ -22,9 +20,7 @@ export type SessionState =
 export type SessionSnapshot = {
   sessionId: string;
   state: SessionState;
-  /** QR لم يعد مستخدماً في Meta Cloud API */
   qrDataUrl: null;
-  /** رقم الحساب مقنّعًا */
   phone: string | null;
   error: string | null;
   updatedAt: number;
@@ -40,15 +36,28 @@ type IncomingHandler = (
   text: string,
   waMessageId: string | null
 ) => Promise<void>;
+
 let onIncoming: IncomingHandler | null = null;
 
-/** يربط محرك الرد بالجلسات (يُستدعى مرة واحدة من index.ts) */
+/**
+ * يربط محرك الرد بالجلسات.
+ *
+ * محفوظ للتوافق مع النظام الحالي.
+ * استقبال رسائل Meta يتم فعليًا عبر Webhook.
+ */
 export function initWa(handler: IncomingHandler) {
   onIncoming = handler;
 }
 
+/**
+ * جلسة Meta Cloud API.
+ *
+ * لا توجد جلسة WhatsApp Web فعلية هنا.
+ * الحالة تعكس صلاحية اتصال Meta Cloud API لهذا الـ tenant.
+ */
 class WaSession {
   readonly tenantId: string;
+
   private state: SessionState = "DISCONNECTED";
   private phone: string | null = null;
   private error: string | null = null;
@@ -60,6 +69,7 @@ class WaSession {
 
   subscribe(fn: Listener): () => void {
     this.listeners.add(fn);
+
     return () => {
       this.listeners.delete(fn);
     };
@@ -73,7 +83,7 @@ class WaSession {
     return {
       sessionId: this.tenantId,
       state: this.state,
-      qrDataUrl: null, // QR لم يعد مستخدماً
+      qrDataUrl: null,
       phone: this.phone ? maskPhone(this.phone) : null,
       error: this.error,
       updatedAt: Date.now(),
@@ -82,120 +92,296 @@ class WaSession {
 
   private emit() {
     const snap = this.snapshot();
-    for (const l of this.listeners) {
+
+    for (const listener of this.listeners) {
       try {
-        l(snap);
-      } catch {
-        /* مستمع واحد لا يكسر البقية */
+        listener(snap);
+      } catch (error) {
+        console.error(
+          `[wa:${this.tenantId}] session listener error:`,
+          error
+        );
       }
     }
   }
 
-  private setState(s: SessionState, error: string | null = null) {
-    this.state = s;
+  private setState(
+    state: SessionState,
+    error: string | null = null
+  ) {
+    this.state = state;
     this.error = error;
     this.emit();
   }
 
-  /** التحقق من الاتصال عبر Meta Cloud API */
+  /**
+   * التحقق من اتصال Meta Cloud API لهذا الـ tenant.
+   *
+   * مهم:
+   * لا نستخدم "default" هنا.
+   * كل Tenant يجب أن يتم التحقق منه باستخدام tenantId الحقيقي.
+   */
   async start(): Promise<void> {
     try {
-      const connected = await metaCloudAPI.isConnected(this.tenantId);
+      console.log(
+        `[wa:${this.tenantId}] Checking Meta Cloud API connection...`
+      );
+
+      const connected = await metaCloudAPI.isConnected(
+        this.tenantId
+      );
+
       if (connected) {
-        this.setState("CONNECTED");
-      } else {
-        this.setState("ERROR", "Meta Cloud API غير متصل - تحقق من Environment Variables");
+        console.log(
+          `[wa:${this.tenantId}] Meta Cloud API connected`
+        );
+
+        this.setState("CONNECTED", null);
+        return;
       }
-    } catch (e) {
-      console.error(`[wa:${this.tenantId}] connection check failed:`, e);
-      this.setState("ERROR", "فشل التحقق من اتصال Meta Cloud API");
+
+      console.warn(
+        `[wa:${this.tenantId}] Meta Cloud API is not connected`
+      );
+
+      this.setState(
+        "DISCONNECTED",
+        "Meta Cloud API غير متصل - تحقق من إعدادات WhatsApp Cloud API"
+      );
+    } catch (error) {
+      console.error(
+        `[wa:${this.tenantId}] Meta Cloud API connection check failed:`,
+        error
+      );
+
+      this.setState(
+        "ERROR",
+        "فشل التحقق من اتصال Meta Cloud API"
+      );
     }
   }
 
-  /** إرسال رسالة نصية عبر Meta Cloud API */
-  async send(chatId: string, text: string): Promise<void> {
+  /**
+   * إرسال رسالة نصية عبر Meta Cloud API.
+   */
+  async send(
+    chatId: string,
+    text: string
+  ): Promise<void> {
     if (this.state !== "CONNECTED") {
-      throw new Error("واتساب غير متصل حاليًا - تحقق من Meta Cloud API configuration");
+      // إعادة التحقق مرة واحدة قبل رفض الإرسال.
+      await this.start();
     }
-    await metaCloudAPI.sendMessage(this.tenantId, chatId, text);
+
+    if (this.state !== "CONNECTED") {
+      throw new Error(
+        "واتساب غير متصل حاليًا - تحقق من إعدادات Meta Cloud API"
+      );
+    }
+
+    await metaCloudAPI.sendMessage(
+      this.tenantId,
+      chatId,
+      text
+    );
   }
 
-  /** تسجيل الخروج - في Cloud API لا يوجد تسجيل خروج حقيقي */
+  /**
+   * في Meta Cloud API لا يوجد logout مثل WhatsApp Web.
+   *
+   * هذه الدالة فقط تفصل الحالة المحلية داخل السيرفر.
+   * لا تلغي رقم الهاتف من Meta.
+   */
   async logout(): Promise<void> {
     this.phone = null;
-    this.setState("DISCONNECTED");
+
+    this.setState(
+      "DISCONNECTED",
+      null
+    );
   }
 }
 
-/* ── الواجهة العامة للمدير ── */
+/* =========================================================
+   Public Session Manager API
+   ========================================================= */
 
+/**
+ * الحصول على جلسة موجودة أو إنشاء جلسة جديدة.
+ */
 function getOrCreate(tenantId: string): WaSession {
-  let s = sessions.get(tenantId);
-  if (!s) {
-    s = new WaSession(tenantId);
-    sessions.set(tenantId, s);
+  let session = sessions.get(tenantId);
+
+  if (!session) {
+    session = new WaSession(tenantId);
+    sessions.set(tenantId, session);
   }
-  return s;
+
+  return session;
 }
 
-/** إنشاء/استرجاع جلسة العميل وبدء المقبس إن لم يكن يعمل */
-export async function ensureSession(tenantId: string): Promise<SessionSnapshot> {
-  const s = getOrCreate(tenantId);
-  if (!s.isRunning()) await s.start();
-  return s.snapshot();
+/**
+ * إنشاء/التحقق من جلسة Tenant.
+ *
+ * لا يوجد QR.
+ * لا يوجد Baileys.
+ * لا يوجد WhatsApp Web.
+ */
+export async function ensureSession(
+  tenantId: string
+): Promise<SessionSnapshot> {
+  if (!tenantId) {
+    throw new Error("tenantId مطلوب");
+  }
+
+  const session = getOrCreate(tenantId);
+
+  if (!session.isRunning()) {
+    await session.start();
+  }
+
+  return session.snapshot();
 }
 
-export function getSnapshot(tenantId: string): SessionSnapshot {
+/**
+ * الحصول على الحالة الحالية بدون إنشاء اتصال WhatsApp Web.
+ */
+export function getSnapshot(
+  tenantId: string
+): SessionSnapshot {
   return getOrCreate(tenantId).snapshot();
 }
 
-/** الاشتراك في بث أحداث الجلسة (SSE) — يعيد دالة إلغاء الاشتراك */
-export function subscribeSession(tenantId: string, fn: Listener): () => void {
-  return getOrCreate(tenantId).subscribe(fn);
+/**
+ * الاشتراك في تحديثات حالة الجلسة.
+ */
+export function subscribeSession(
+  tenantId: string,
+  listener: Listener
+): () => void {
+  return getOrCreate(tenantId).subscribe(listener);
 }
 
-export async function logoutSession(tenantId: string): Promise<void> {
+/**
+ * فصل الحالة المحلية للـ Tenant.
+ *
+ * لا يقوم بإلغاء ربط رقم WhatsApp من Meta.
+ */
+export async function logoutSession(
+  tenantId: string
+): Promise<void> {
   await getOrCreate(tenantId).logout();
 }
 
-export async function sendText(tenantId: string, chatId: string, text: string): Promise<void> {
-  const s = sessions.get(tenantId);
-  if (!s) throw new Error("واتساب غير متصل حاليًا — أعد الربط من اللوحة");
-  await s.send(chatId, text);
+/**
+ * إرسال رسالة.
+ */
+export async function sendText(
+  tenantId: string,
+  chatId: string,
+  text: string
+): Promise<void> {
+  if (!tenantId) {
+    throw new Error("tenantId مطلوب");
+  }
+
+  if (!chatId) {
+    throw new Error("chatId مطلوب");
+  }
+
+  if (!text?.trim()) {
+    throw new Error("نص الرسالة مطلوب");
+  }
+
+  const session = getOrCreate(tenantId);
+
+  await session.send(
+    chatId,
+    text
+  );
 }
 
-/** توافقية مع لوحة التحكم القديمة (ملخص الحالة) */
-export async function waStatus(tenantId: string): Promise<{
-  status: "idle" | "connected" | "disconnected" | "error";
+/**
+ * حالة WhatsApp المستخدمة بواسطة Dashboard.
+ *
+ * هذه الدالة تتحقق مباشرة من Meta Cloud API
+ * باستخدام tenantId الحقيقي.
+ */
+export async function waStatus(
+  tenantId: string
+): Promise<{
+  status:
+    | "idle"
+    | "connected"
+    | "disconnected"
+    | "error";
   qr: null;
   phoneMasked: string | null;
 }> {
-  // التحقق من Cloud API مباشرة بدلاً من sessions Map
-  const connected = await metaCloudAPI.isConnected(tenantId);
-  
-  if (connected) {
-    return { 
-      status: "connected", 
-      qr: null, 
-      phoneMasked: null // سيتم ملؤه من Cloud API لاحقاً إذا لزم
+  if (!tenantId) {
+    return {
+      status: "error",
+      qr: null,
+      phoneMasked: null,
     };
-  } else {
-    return { 
-      status: "disconnected", 
-      qr: null, 
-      phoneMasked: null 
+  }
+
+  try {
+    const connected =
+      await metaCloudAPI.isConnected(
+        tenantId
+      );
+
+    if (connected) {
+      return {
+        status: "connected",
+        qr: null,
+        phoneMasked: null,
+      };
+    }
+
+    return {
+      status: "disconnected",
+      qr: null,
+      phoneMasked: null,
+    };
+  } catch (error) {
+    console.error(
+      `[wa:${tenantId}] waStatus failed:`,
+      error
+    );
+
+    return {
+      status: "error",
+      qr: null,
+      phoneMasked: null,
     };
   }
 }
 
-/** في Meta Cloud API لا نحتاج لاستعادة جلسات - الاتصال دائم طالما الـ token صالح */
+/**
+ * Meta Cloud API لا يحتاج إلى استعادة جلسات محفوظة.
+ *
+ * مهم جدًا:
+ * لا نستخدم tenantId = "default".
+ *
+ * السبب:
+ * التطبيق Multi-Tenant، وبالتالي لا يمكننا افتراض
+ * Tenant عام باسم default.
+ *
+ * حالة كل Tenant يتم فحصها عند:
+ * - فتح Dashboard
+ * - ensureSession()
+ * - waStatus()
+ * - إرسال الرسالة
+ */
 export async function restorePersistedSessions(): Promise<void> {
-  console.log("[wa] Meta Cloud API - لا حاجة لاستعادة جلسات محفوظة");
-  // في Cloud API، نتحقق فقط من صلاحية الـ token
-  const connected = await metaCloudAPI.isConnected("default");
-  if (connected) {
-    console.log("[wa] Meta Cloud API connected successfully");
-  } else {
-    console.warn("[wa] Meta Cloud API not connected - check environment variables");
-  }
+  console.log(
+    "[wa] Meta Cloud API enabled - no persisted WhatsApp sessions to restore"
+  );
+
+  console.log(
+    "[wa] Connection status will be checked per tenant"
+  );
 }
+```
