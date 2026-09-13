@@ -192,17 +192,17 @@ export default function Dashboard() {
   };
 
   /* ── تحميل البيانات (حقيقي) ── */
-  const loadAll = useCallback(async () => {
+  const loadAll = useCallback(async (skipConvs = false) => {
     if (!token) return;
     try {
       const [summary, convs, unresolved, sources] = await Promise.all([
         apiAuthFetch<any>(token, "/api/dashboard/summary"),
-        apiAuthFetch<any[]>(token, "/api/dashboard/conversations"),
+        skipConvs ? Promise.resolve(st?.convs || []) : apiAuthFetch<any[]>(token, "/api/dashboard/conversations"),
         apiAuthFetch<any[]>(token, "/api/dashboard/unresolved"),
         apiAuthFetch<any[]>(token, "/api/dashboard/knowledge"),
       ]);
       setNeedClaim(false);
-      setSt({
+      setSt((prev) => ({
         tenantId: summary.tenant.id,
         businessName: summary.tenant.businessName,
         isActive: summary.tenant.isActive,
@@ -210,7 +210,7 @@ export default function Dashboard() {
         phone: summary.tenant.phone,
         waStatus: summary.wa.status,
         openUnresolved: summary.openUnresolved,
-        convs: convs.map((c: any) => ({
+        convs: skipConvs ? (prev?.convs || []) : convs.map((c: any) => ({
           id: c.id, phone: c.customerPhone, transferred: c.transferred,
           paused: c.autoPausedReason, lastAt: c.lastMessageAt, msgs: [],
         })),
@@ -222,7 +222,7 @@ export default function Dashboard() {
           id: s.id, kind: s.kind, url: s.url, status: s.status,
           chunks: s.chunks_count ?? 0, createdAt: s.created_at, error: s.error ?? undefined,
         })),
-      });
+      }));
     } catch (e: any) {
       if (String(e?.message ?? "").includes("حساب")) setNeedClaim(true);
     }
@@ -245,27 +245,46 @@ export default function Dashboard() {
       .finally(() => loadAll());
   }, [demo, token, loadAll]);
 
-  /* استطلاع خفيف كل 6 ثوانٍ */
+  /* استطلاع خفيف كل 6 ثوانٍ — يتجنب تحميل قائمة المحادثات إذا كانت هناك محادثة مفتوحة */
   useEffect(() => {
     if (demo || !token || needClaim) return;
-    const iv = window.setInterval(loadAll, 6000);
+    const iv = window.setInterval(() => {
+      // إذا كانت هناك محادثة مفتوحة، لا نعيد تحميل قائمة المحادثات
+      loadAll(activeConv !== null);
+    }, 6000);
     return () => window.clearInterval(iv);
-  }, [demo, token, needClaim, loadAll]);
+  }, [demo, token, needClaim, loadAll, activeConv]);
 
   /* رسائل المحادثة المفتوحة (حقيقي) — تحديث حي */
   const loadThread = useCallback(async (convId: string) => {
     if (!token) return;
-    const msgs = await apiAuthFetch<any[]>(token, `/api/dashboard/conversations/${convId}/messages`);
-    setSt((prev) =>
-      prev
-        ? {
-            ...prev,
-            convs: prev.convs.map((c) =>
-              c.id === convId ? { ...c, msgs: msgs.map((m: any) => ({ id: m.id, direction: m.direction, body: m.body, kind: m.kind, is_auto: m.is_auto, created_at: m.created_at })) } : c
-            ),
-          }
-        : prev
-    );
+    try {
+      const msgs = await apiAuthFetch<any[]>(token, `/api/dashboard/conversations/${convId}/messages`);
+      setSt((prev) => {
+        if (!prev) return prev;
+        // تحديث الرسائل فقط للمحادثة المفتوحة — دون إعادة تحميل قائمة المحادثات
+        return {
+          ...prev,
+          convs: prev.convs.map((c) =>
+            c.id === convId 
+              ? { 
+                  ...c, 
+                  msgs: msgs.map((m: any) => ({ 
+                    id: m.id, 
+                    direction: m.direction, 
+                    body: m.body, 
+                    kind: m.kind, 
+                    is_auto: m.is_auto, 
+                    created_at: m.created_at 
+                  })) 
+                } 
+              : c
+          ),
+        };
+      });
+    } catch (e) {
+      console.error("[Dashboard] loadThread error:", e);
+    }
   }, [token]);
 
   useEffect(() => {
