@@ -310,6 +310,56 @@ export default function Dashboard() {
     return () => window.clearInterval(iv);
   }, [demo, activeConv, token, loadThread]);
 
+  /* ── Supabase Realtime للمحادثة النشطة فقط ── */
+  useEffect(() => {
+    if (demo || !activeConv || !sb) return;
+    
+    const channel = sb
+      .channel(`messages:${activeConv}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "messages",
+          filter: `conversation_id=eq.${activeConv}`,
+        },
+        async (payload) => {
+          const newMsg = payload.new as any;
+          // إضافة الرسالة الجديدة فقط إذا لم تكن موجودة
+          setSt((prev) => {
+            if (!prev) return prev;
+            const exists = prev.convs.find(c => c.id === activeConv)?.msgs.some(m => m.id === newMsg.id);
+            if (exists) return prev;
+            
+            return {
+              ...prev,
+              convs: prev.convs.map((c) =>
+                c.id === activeConv
+                  ? {
+                      ...c,
+                      msgs: [...c.msgs, {
+                        id: newMsg.id,
+                        direction: newMsg.direction,
+                        body: newMsg.body,
+                        kind: newMsg.kind,
+                        is_auto: newMsg.is_auto,
+                        created_at: newMsg.created_at,
+                      }],
+                    }
+                  : c
+              ),
+            };
+          });
+        }
+      )
+      .subscribe();
+
+    return () => {
+      sb.removeChannel(channel);
+    };
+  }, [demo, activeConv, sb]);
+
   /* ── تحميل البيانات الحقيقية ── */
   useEffect(() => {
     if (demo || !authed || !token) {
