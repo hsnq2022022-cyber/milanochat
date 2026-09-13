@@ -40,9 +40,6 @@ jobs:
           VITE_SUPABASE_URL: https://nmhefwvhoholcjrbbila.supabase.co
           VITE_SUPABASE_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5taGVmd3Zob2hvbGNqcmJiaWxhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg2MDQxODgsImV4cCI6MjEwNDE4MDE4OH0.ALjKCHUjCfoxW0HJdz3EwL6JIEcc6OYXPucLP9un5j8
 
-      - name: Copy privacy.html to dist
-        run: cp privacy.html dist/
-
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
