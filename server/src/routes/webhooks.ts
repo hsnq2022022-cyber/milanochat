@@ -21,11 +21,18 @@ export const whatsappWebhookRouter = Router();
  * Webhook verification من Meta
  */
 whatsappWebhookRouter.get("/whatsapp", async (req: Request, res: Response) => {
-  // Logging مفصل للتشخيص
-  console.log("[Webhook] GET verification request received");
-  console.log("[Webhook] URL:", req.url);
-  console.log("[Webhook] Original URL:", req.originalUrl);
-  console.log("[Webhook] Query parameters:", JSON.stringify(req.query));
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Logging تشخيصي موسّع - يساعد على التمييز بين:
+  // 1. طلب اختبار يدوي من المتصفح (بدون query parameters)
+  // 2. طلب حقيقي من Meta (مع hub.mode, hub.verify_token, hub.challenge)
+  // ═══════════════════════════════════════════════════════════════════════════
+  console.log("═══════════════════════════════════════════════════════════");
+  console.log("[Webhook GET] GET verification request received");
+  console.log("[Webhook GET] URL:", req.url);
+  console.log("[Webhook GET] Original URL:", req.originalUrl);
+  console.log("[Webhook GET] User-Agent:", req.headers['user-agent']?.substring(0, 100) || 'MISSING');
+  console.log("[Webhook GET] IP:", req.ip || req.socket.remoteAddress || 'MISSING');
+  console.log("[Webhook GET] Query parameters:", JSON.stringify(req.query));
   
   // استخراج معاملات Meta
   const mode = req.query["hub.mode"] as string | undefined;
@@ -33,9 +40,22 @@ whatsappWebhookRouter.get("/whatsapp", async (req: Request, res: Response) => {
   const challenge = req.query["hub.challenge"] as string | undefined;
 
   // Logging آمن (بدون طباعة token كامل)
-  console.log("[Webhook] hub.mode:", mode || "MISSING");
-  console.log("[Webhook] hub.verify_token:", token ? `${token.substring(0, 5)}...` : "MISSING");
-  console.log("[Webhook] hub.challenge:", challenge ? "PRESENT" : "MISSING");
+  console.log("[Webhook GET] hub.mode:", mode || "MISSING");
+  console.log("[Webhook GET] hub.verify_token:", token ? `${token.substring(0, 5)}...` : "MISSING");
+  console.log("[Webhook GET] hub.challenge:", challenge ? "PRESENT" : "MISSING");
+  
+  // ═══════════════════════════════════════════════════════════════════════════
+  // تشخيص: إذا كانت جميع المعاملات MISSING، فهذا يعني:
+  // - إما طلب اختبار يدوي من المتصفح (افتح URL مباشرة في المتصفح)
+  // - أو إعدادات Meta App Dashboard غير صحيحة
+  // 
+  // الخطوات التالية للتشخيص:
+  // 1. تحقق من Meta App Dashboard → WhatsApp → Configuration
+  // 2. تأكد من Callback URL: https://milanochat-production.up.railway.app/api/webhooks/meta/whatsapp
+  // 3. تأكد من Verify Token يطابق WHATSAPP_VERIFY_TOKEN في Railway Variables
+  // 4. تأكد من تفعيل Webhook field subscription لحقل "messages"
+  // 5. تأكد من تفعيل WABA subscription
+  // ═══════════════════════════════════════════════════════════════════════════
 
   // التحقق من وجود جميع المعاملات
   if (!mode || !token || !challenge) {
