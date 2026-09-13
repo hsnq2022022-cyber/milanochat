@@ -1,24 +1,38 @@
--- ═══════════════════════════════════════════════════════════════════════════
--- Milano - Supabase Realtime Setup for Conversations & Messages
--- تمكين Realtime للجداول المطلوبة لتحديث المحادثات فورياً
--- ═══════════════════════════════════════════════════════════════════════════
+-- ================================================================
+-- SUPABASE REALTIME SETUP (Final Version)
+-- Enables Realtime subscriptions for Conversations and Messages.
+-- Required for: Dashboard.tsx (Instant message delivery & list updates)
+-- ================================================================
 
--- ملاحظة: يجب تشغيل هذا الملف في Supabase SQL Editor لتفعيل Realtime
+-- 1. Enable Realtime for 'conversations' table
+-- Allows frontend to detect new conversations and updates (last_message_at).
+-- Uses DO block to handle "already exists" errors gracefully.
+DO $$
+BEGIN
+  -- Check if table is already in publication to avoid errors
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_publication_tables 
+    WHERE pubname = 'supabase_realtime' AND schemaname = 'public' AND tablename = 'conversations'
+  ) THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.conversations;
+  END IF;
+END $$;
 
--- إضافة جدول conversations إلى publication الخاص بـ Realtime
-ALTER PUBLICATION supabase_realtime ADD TABLE public.conversations;
+-- 2. Enable Realtime for 'messages' table
+-- Allows frontend to receive new messages instantly without polling.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_publication_tables 
+    WHERE pubname = 'supabase_realtime' AND schemaname = 'public' AND tablename = 'messages'
+  ) THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.messages;
+  END IF;
+END $$;
 
--- إضافة جدول messages إلى publication الخاص بـ Realtime  
-ALTER PUBLICATION supabase_realtime ADD TABLE public.messages;
-
--- التحقق من أن الأعمدة المطلوبة متاحة للـ Realtime
--- (Supabase 2.x يجعل جميع الأعمدة متاحة افتراضياً)
-
--- ملاحظات مهمة:
--- 1. هذا لا يؤثر على RLS - سياسات الأمان تظل سارية
--- 2. العميل سيستقبل فقط الأحداث التي يملك صلاحية قراءتها عبر RLS
--- 3. يجب أن يكون لدى المستخدم جلسة صالحة للاشتراك في القنوات
-
--- لإيقاف Realtime لاحقاً إذا لزم الأمر:
--- ALTER PUBLICATION supabase_realtime DROP TABLE public.conversations;
--- ALTER PUBLICATION supabase_realtime DROP TABLE public.messages;
+-- ================================================================
+-- NOTES:
+-- - Idempotent: Safe to run multiple times.
+-- - Does not alter RLS policies.
+-- - Requires 'supabase_realtime' publication to exist (default in Supabase).
+-- ================================================================

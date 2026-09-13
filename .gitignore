@@ -1,16 +1,68 @@
 ```
-# Build artifacts
-dist/
-build/
+# Supabase specific files
+.supabase/
+**/supabase/migrations/*.sql
+**/supabase/logs/
 
-# Environment files
+# Database dumps and temporary files
+*.dump
+*.sql.bak
+*.tmp
+
+# Environment specific
 .env
 .env.local
-*.env.*
-
-# Logs
-*.log
+.env.*
 
 # Dependencies
 node_modules/
+venv/
+.venv/
+__pycache__/
+*.egg-info/
+dist/
+build/
+target/
+.gradle/
+.mypy_cache/
+.pytest_cache/
+coverage/
+htmlcov/
+*.coverage
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*.log
+*.tmp
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Compressed files
+*.zip
+*.gz
+*.tar
+*.tgz
+*.bz2
+*.xz
+*.7z
+*.rar
+*.zst
+*.lz4
+*.lzh
+*.cab
+*.arj
+*.rpm
+*.deb
+*.Z
+*.lz
+*.lzo
+*.tar.gz
+*.tar.bz2
+*.tar.xz
+*.tar.zst
 ```
