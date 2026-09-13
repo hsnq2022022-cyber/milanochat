@@ -10,7 +10,6 @@ import FAQ from "./components/FAQ";
 /* لوحة التحكم وحدة منفصلة — لا يتحمل زائر الصفحة الرئيسية حجمها */
 const Dashboard = lazy(() => import("./pages/Dashboard"));
 const Widgets = lazy(() => import("./pages/Widgets"));
-const HumanAgentDemo = lazy(() => import("./pages/HumanAgentDemo"));
 
 export default function App() {
   const [route, setRoute] = useState(() => window.location.hash);
@@ -35,15 +34,6 @@ export default function App() {
     return (
       <Suspense fallback={<div className="min-h-screen bg-night" />}>
         <Widgets />
-      </Suspense>
-    );
-  }
-
-  /* صفحة Human Agent Demo: #/demo */
-  if (route.startsWith("#/demo")) {
-    return (
-      <Suspense fallback={<div className="min-h-screen bg-night" />}>
-        <HumanAgentDemo />
       </Suspense>
     );
   }
