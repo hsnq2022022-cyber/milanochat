@@ -261,15 +261,15 @@ export default function Dashboard() {
       .finally(() => loadAll());
   }, [demo, token, loadAll]);
 
-  /* استطلاع خفيف كل 6 ثوانٍ — يتجنب تحميل قائمة المحادثات إذا كانت هناك محادثة مفتوحة */
+  /* استطلاع خفيف كل 5 ثوانٍ — يحمّل دائمًا لضمان ظهور المحادثات الجديدة */
   useEffect(() => {
     if (demo || !token || needClaim) return;
     const iv = window.setInterval(() => {
-      // إذا كانت هناك محادثة مفتوحة، لا نعيد تحميل قائمة المحادثات
-      loadAll(activeConv !== null);
-    }, 6000);
+      // نحمّل دائمًا لضمان ظهور المحادثات الجديدة والرسائل الحديثة
+      loadAll(false);
+    }, 5000);
     return () => window.clearInterval(iv);
-  }, [demo, token, needClaim, loadAll, activeConv]);
+  }, [demo, token, needClaim, loadAll]);
 
   /* رسائل المحادثة المفتوحة (حقيقي) — تحديث حي */
   const loadThread = useCallback(async (convId: string) => {
