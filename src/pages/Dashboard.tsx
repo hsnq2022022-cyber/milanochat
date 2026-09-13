@@ -261,12 +261,12 @@ export default function Dashboard() {
       .finally(() => loadAll());
   }, [demo, token, loadAll]);
 
-  /* استطلاع خفيف كل 5 ثوانٍ — يحمّل دائمًا لضمان ظهور المحادثات الجديدة */
+  /* استطلاع خفيف للمحادثات الجديدة فقط — لا يعيد تحميل المحادثة المفتوحة */
   useEffect(() => {
     if (demo || !token || needClaim) return;
     const iv = window.setInterval(() => {
-      // نحمّل دائمًا لضمان ظهور المحادثات الجديدة والرسائل الحديثة
-      loadAll(false);
+      // تحديث القائمة فقط بدون الرسائل - للحفاظ على المحادثة المفتوحة
+      loadAll(true);
     }, 5000);
     return () => window.clearInterval(iv);
   }, [demo, token, needClaim, loadAll]);
@@ -1032,7 +1032,7 @@ export default function Dashboard() {
                                 ...c,
                                 transferred: true,
                                 humanAgentActive: true,
-                                remainingSeconds: 3600, // 60 دقيقة
+                                remainingSeconds: 900, // 15 دقيقة
                                 humanAgentExpiresAt: res.expiresAt
                               } : c)
                             } : null);
