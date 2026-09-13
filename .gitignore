@@ -1,12 +1,66 @@
+```gitignore
+# Dependencies
 node_modules/
-.next/
+
+# Build artifacts
 dist/
 build/
-*.log
+target/
 
-# المفاتيح — ممنوع رفعها إلى Git
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.py.class
+.Python
+env/
+venv/
+.venv/
 .env
 .env.local
-.env.*.local
-server/.env
-server/data/
+.env.*
+
+# Logs
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Coverage
+coverage/
+htmlcov/
+.coverage
+
+# Compressed
+*.zip
+*.gz
+*.tar
+*.tgz
+*.bz2
+*.xz
+*.7z
+*.rar
+*.zst
+*.lz4
+*.lzh
+*.cab
+*.arj
+*.rpm
+*.deb
+*.Z
+*.lz
+*.lzo
+*.tar.gz
+*.tar.bz2
+*.tar.xz
+*.tar.zst
+```
