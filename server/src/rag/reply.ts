@@ -261,43 +261,15 @@ export async function handleIncomingMessage(
     }
 
     /**
-     * 5. المحادثة محولة لبشري (مع التحقق من وقت الانتهاء).
+     * 5. المحادثة محولة لبشري.
      *
-     * نسجل رسالة العميل أولاً، ثم نتحقق هل Human Agent لا يزال نشطًا.
+     * نسجل رسالة العميل أولاً، ثم نوقف الرد الآلي.
      */
     if (conv.transferred) {
-      // التحقق من human_agent_expires_at إذا كان موجودًا
-      const expiresAt = conv.human_agent_expires_at 
-        ? new Date(conv.human_agent_expires_at) 
-        : null;
-      
-      const now = new Date();
-      const isStillActive = expiresAt ? expiresAt > now : true; // إذا لم يكن هناك وقت انتهاء، نعتبره نشطًا
-      
-      if (isStillActive) {
-        console.log(
-          `[WA] conversation transferred (Human Agent active): ${conv.id}`
-        );
-        return;
-      } else {
-        // انتهى وقت Human Agent - نعود للوضع الطبيعي
-        console.log(
-          `[WA] Human Agent expired for conversation: ${conv.id} - resuming AI`
-        );
-        await db
-          .from("conversations")
-          .update({
-            transferred: false,
-            auto_paused_reason: null,
-            human_agent_expires_at: null,
-          })
-          .eq("id", conv.id);
-        
-        // نوقف هنا عند هذه الرسالة تحديدًا فقط — لا نرد آليًا فورًا على رسالة
-        // الانتظار التي سبّبت اكتشاف الانتهاء، حتى لا يُفاجأ الموظف والعميل
-        // برد آلي لحظي. الرد الآلي يستأنف بدءًا من الرسالة التالية.
-        return;
-      }
+      console.log(
+        `[WA] conversation transferred: ${conv.id}`
+      );
+      return;
     }
 
     /**
@@ -570,7 +542,7 @@ export async function sendManualReply(
   conversationId: string,
   text: string,
   resumeAuto: boolean
-): Promise<void> {
+) {
   const {
     data: conv,
     error,
@@ -594,22 +566,14 @@ export async function sendManualReply(
     );
   }
 
-  const conversation =
-    conv as Conversation;
-
+  const conversation = conv as Conversation;
   const cleanText = text.trim();
 
   if (!cleanText) {
-    throw new Error(
-      "نص الرسالة مطلوب"
-    );
+    throw new Error("نص الرسالة مطلوب");
   }
 
-  /**
-   * إرسال الرد أولاً.
-   * إذا فشل WhatsApp فلن نسجل الرسالة
-   * على أنها أرسلت بنجاح.
-   */
+  /** إرسال الرد أولاً. */
   await sendText(
     tenantId,
     conversation.wa_chat_id,
@@ -617,38 +581,43 @@ export async function sendManualReply(
   );
 
   /**
-   * تسجيل الرد اليدوي.
+   * حفظ الرسالة وإرجاع الصف الحقيقي الذي أنشأته قاعدة البيانات.
+   * نستخدم direction = "out" حتى يتطابق مع بقية النظام والواجهة.
    */
   const {
+    data: insertedMessage,
     error: messageError,
   } = await db
     .from("messages")
     .insert({
-      conversation_id:
-        conversationId,
+      conversation_id: conversationId,
       tenant_id: tenantId,
-      direction: "outbound",
-      body_encrypted:
-        encryptField(cleanText),
-      kind: "answer",
+      direction: "out",
+      body_encrypted: encryptField(cleanText),
+      kind: "manual",
       is_auto: false,
-    });
+    })
+    .select(
+      "id,direction,body_encrypted,kind,is_auto,created_at"
+    )
+    .single();
 
-  if (messageError) {
+  if (messageError || !insertedMessage) {
+    const reason = messageError?.message ?? "لم يتم إنشاء الرسالة";
     console.error(
       "[WA] failed to save manual reply:",
-      messageError.message
+      reason
+    );
+    throw new Error(
+      "تم إرسال الرسالة إلى WhatsApp لكن فشل حفظها في قاعدة البيانات: " +
+        reason
     );
   }
 
-  /**
-   * تحديث حالة المحادثة.
-   */
-  const patch: Record<
-    string,
-    unknown
-  > = {
+  /** تحديث حالة المحادثة. */
+  const patch: Record<string, unknown> = {
     last_message_at:
+      insertedMessage.created_at ??
       new Date().toISOString(),
   };
 
@@ -657,9 +626,7 @@ export async function sendManualReply(
     patch.auto_paused_reason = null;
   }
 
-  const {
-    error: updateError,
-  } = await db
+  const { error: updateError } = await db
     .from("conversations")
     .update(patch)
     .eq("id", conversationId)
@@ -671,6 +638,22 @@ export async function sendManualReply(
       updateError.message
     );
   }
+
+  let body = cleanText;
+  try {
+    body = decryptField(insertedMessage.body_encrypted);
+  } catch {
+    // يبقى cleanText كقيمة احتياطية للواجهة.
+  }
+
+  return {
+    id: insertedMessage.id,
+    direction: "out" as const,
+    body,
+    kind: insertedMessage.kind ?? "manual",
+    is_auto: Boolean(insertedMessage.is_auto),
+    created_at: insertedMessage.created_at,
+  };
 }
 
 /**
