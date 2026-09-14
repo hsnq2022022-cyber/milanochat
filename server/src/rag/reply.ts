@@ -622,10 +622,10 @@ export async function sendManualReply(
       conversation_id:
         conversationId,
       tenant_id: tenantId,
-      direction: "out",
+      direction: "outbound",
       body_encrypted:
         encryptField(cleanText),
-      kind: "manual",
+      kind: "answer",
       is_auto: false,
     });
 

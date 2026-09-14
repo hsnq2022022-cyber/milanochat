@@ -541,37 +541,8 @@ export default function Dashboard() {
           body: JSON.stringify({ text: draft.trim(), resumeAuto }),
         });
         
-        // إنشاء كائن الرسالة فورًا للتحديث المحلي
-        const outMsg: ThreadMsg = { 
-          id: result.id || `man-${Date.now()}`, 
-          direction: "out", 
-          body: draft.trim(), 
-          kind: result.kind || "answer", 
-          is_auto: false, 
-          created_at: result.created_at || now() 
-        };
-        
-        // تحديث فوري للواجهة قبل وصول Realtime
-        setSt((prev) => {
-          if (!prev) return prev;
-          return {
-            ...prev,
-            convs: prev.convs.map((c) => {
-              if (c.id === activeConv) {
-                // إضافة الرسالة للمحادثة النشطة وتحديث المعاينة
-                return {
-                  ...c,
-                  transferred: resumeAuto ? false : c.transferred,
-                  paused: resumeAuto ? null : c.paused,
-                  lastAt: outMsg.created_at,
-                  msgs: [...c.msgs, outMsg],
-                  lastMessagePreview: outMsg.body,
-                };
-              }
-              return c;
-            }),
-          };
-        });
+        // ملاحظة: لا نحدث الواجهة هنا يدويًا لأن Realtime سيصل خلال أجزاء من الثانية
+        // ونريد تجنب التكرار. الواجهة ستتحدث تلقائيًا عبر الاشتراك.
         
         // تنظيف حقل الكتابة
         setDraft("");
