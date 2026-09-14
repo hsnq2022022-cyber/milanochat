@@ -143,6 +143,8 @@ dashboardRouter.get("/conversations", async (req, res) => {
     `)
     .eq("tenant_id", tenant.id)
     .order("last_message_at", { ascending: false })
+    .order("created_at", { referencedTable: "messages", ascending: false })
+    .limit(1, { referencedTable: "messages" })
     .limit(50);
   
   res.json(
