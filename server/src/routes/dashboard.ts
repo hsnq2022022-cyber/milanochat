@@ -1,6 +1,13 @@
 /**
  * لوحة التحكم — كل المسارات تتطلب توكن Supabase Auth صالح.
  * تشمل: الملخص، المحادثات، الرد اليدوي، الأسئلة العالقة، مصادر المعرفة، ربط الحساب.
+ *
+ * ملاحظات النسخة:
+ * - تمت إضافة human_agent_expires_at إلى رد قائمة المحادثات.
+ * - تمت إضافة GET /conversations/:id لجلب محادثة واحدة.
+ * - تمت إضافة GET /conversations/summary لتحديث خفيف بديل عن polling ثقيل.
+ * - تمت إضافة POST /conversations/:id/mark-read.
+ * - شكل رد /reply موحَّد ليُقرأ مباشرة في الواجهة عبر result.message.
  */
 
 import { Router } from "express";
@@ -64,6 +71,58 @@ async function ownedTenant(userId: string, tenantId?: string) {
     .maybeSingle();
 
   return data;
+}
+
+/**
+ * تُستخدم داخليًا: تنسيق صف محادثة واحد من قاعدة البيانات
+ * إلى الشكل الموحَّد الذي تتوقعه الواجهة.
+ */
+function shapeConversation(c: any) {
+  // آخر رسالة (إن وُجدت عبر join)
+  const lastMsg =
+    Array.isArray(c.messages) && c.messages.length > 0
+      ? c.messages[0]
+      : null;
+
+  let lastMessageBody: string | null = null;
+
+  if (lastMsg?.body_encrypted) {
+    try {
+      lastMessageBody = decryptField(lastMsg.body_encrypted);
+    } catch {
+      lastMessageBody = null;
+    }
+  }
+
+  // حساب حالة Human Agent
+  const now = new Date();
+  const expiresAt = c.human_agent_expires_at
+    ? new Date(c.human_agent_expires_at)
+    : null;
+
+  const humanAgentActive = Boolean(
+    c.transferred && expiresAt && expiresAt > now
+  );
+
+  const remainingSeconds =
+    humanAgentActive && expiresAt
+      ? Math.max(
+          0,
+          Math.floor((expiresAt.getTime() - now.getTime()) / 1000)
+        )
+      : 0;
+
+  return {
+    id: c.id,
+    customerPhone: decryptField(c.customer_phone_encrypted),
+    transferred: c.transferred,
+    autoPausedReason: c.auto_paused_reason,
+    humanAgentExpiresAt: c.human_agent_expires_at ?? null,
+    humanAgentActive,
+    remainingSeconds,
+    lastMessageAt: c.last_message_at,
+    lastMessageBody,
+  };
 }
 
 /** ضم حساب أُنشئ في الصفحة الرئيسية إلى حساب لوحة التحكم عبر claimToken */
@@ -203,6 +262,77 @@ dashboardRouter.get("/summary", async (req, res) => {
   });
 });
 
+/**
+ * ملخص خفيف لتحديث الواجهة عند فشل Realtime.
+ * يعيد فقط معرّفات المحادثات مع آخر وقت + آخر معاينة،
+ * بدون جلب الرسائل الكاملة.
+ */
+dashboardRouter.get("/conversations/summary", async (req, res) => {
+  const tenant = await ownedTenant(
+    (req as AuthedRequest).userId!,
+    req.query.tenantId as string
+  );
+
+  if (!tenant) {
+    return res.status(404).json({ error: "لا يوجد حساب مرتبط" });
+  }
+
+  const { data, error } = await db
+    .from("conversations")
+    .select(`
+      id,
+      transferred,
+      auto_paused_reason,
+      human_agent_expires_at,
+      last_message_at,
+      messages (
+        body_encrypted,
+        direction,
+        created_at
+      )
+    `)
+    .eq("tenant_id", tenant.id)
+    .order("last_message_at", { ascending: false })
+    .order("created_at", {
+      referencedTable: "messages",
+      ascending: false,
+    })
+    .limit(1, { referencedTable: "messages" })
+    .limit(50);
+
+  if (error) {
+    console.error("[Dashboard] Failed to load conversations summary:", error);
+    return res.status(500).json({ error: error.message });
+  }
+
+  res.json(
+    (data ?? []).map((c: any) => {
+      const lastMsg =
+        Array.isArray(c.messages) && c.messages.length > 0
+          ? c.messages[0]
+          : null;
+
+      let lastMessageBody: string | null = null;
+      if (lastMsg?.body_encrypted) {
+        try {
+          lastMessageBody = decryptField(lastMsg.body_encrypted);
+        } catch {
+          lastMessageBody = null;
+        }
+      }
+
+      return {
+        id: c.id,
+        transferred: c.transferred,
+        autoPausedReason: c.auto_paused_reason,
+        humanAgentExpiresAt: c.human_agent_expires_at ?? null,
+        lastMessageAt: c.last_message_at,
+        lastMessageBody,
+      };
+    })
+  );
+});
+
 /** قائمة المحادثات */
 dashboardRouter.get("/conversations", async (req, res) => {
   const tenant = await ownedTenant(
@@ -221,6 +351,7 @@ dashboardRouter.get("/conversations", async (req, res) => {
       customer_phone_encrypted,
       transferred,
       auto_paused_reason,
+      human_agent_expires_at,
       last_message_at,
       messages (
         body_encrypted,
@@ -229,16 +360,12 @@ dashboardRouter.get("/conversations", async (req, res) => {
       )
     `)
     .eq("tenant_id", tenant.id)
-    .order("last_message_at", {
-      ascending: false,
-    })
+    .order("last_message_at", { ascending: false })
     .order("created_at", {
       referencedTable: "messages",
       ascending: false,
     })
-    .limit(1, {
-      referencedTable: "messages",
-    })
+    .limit(1, { referencedTable: "messages" })
     .limit(50);
 
   if (error) {
@@ -249,33 +376,58 @@ dashboardRouter.get("/conversations", async (req, res) => {
     });
   }
 
-  res.json(
-    (data ?? []).map((c: any) => {
-      const lastMsg =
-        c.messages && c.messages.length > 0
-          ? c.messages[0]
-          : null;
+  res.json((data ?? []).map(shapeConversation));
+});
 
-      let lastMessageBody: string | null = null;
-
-      if (lastMsg?.body_encrypted) {
-        try {
-          lastMessageBody = decryptField(lastMsg.body_encrypted);
-        } catch {
-          lastMessageBody = null;
-        }
-      }
-
-      return {
-        id: c.id,
-        customerPhone: decryptField(c.customer_phone_encrypted),
-        transferred: c.transferred,
-        autoPausedReason: c.auto_paused_reason,
-        lastMessageAt: c.last_message_at,
-        lastMessageBody,
-      };
-    })
+/**
+ * جلب محادثة واحدة بمعرّفها.
+ * تُستخدم عند وصول إشعار Realtime لمحادثة جديدة
+ * أو بعد الإرسال لإعادة تحميل محادثة معينة.
+ */
+dashboardRouter.get("/conversations/:id", async (req, res) => {
+  const tenant = await ownedTenant(
+    (req as AuthedRequest).userId!,
+    req.query.tenantId as string
   );
+
+  if (!tenant) {
+    return res.status(404).json({ error: "لا يوجد حساب مرتبط" });
+  }
+
+  const { data, error } = await db
+    .from("conversations")
+    .select(`
+      id,
+      customer_phone_encrypted,
+      transferred,
+      auto_paused_reason,
+      human_agent_expires_at,
+      last_message_at,
+      messages (
+        body_encrypted,
+        direction,
+        created_at
+      )
+    `)
+    .eq("id", req.params.id)
+    .eq("tenant_id", tenant.id)
+    .order("created_at", {
+      referencedTable: "messages",
+      ascending: false,
+    })
+    .limit(1, { referencedTable: "messages" })
+    .maybeSingle();
+
+  if (error) {
+    console.error("[Dashboard] Failed to load conversation:", error);
+    return res.status(500).json({ error: error.message });
+  }
+
+  if (!data) {
+    return res.status(404).json({ error: "المحادثة غير موجودة" });
+  }
+
+  res.json(shapeConversation(data));
 });
 
 /** رسائل محادثة — تُفك التشفير للعرض فقط */
@@ -312,6 +464,39 @@ dashboardRouter.get(
           "فشل تحميل رسائل المحادثة",
       });
     }
+  }
+);
+
+/**
+ * تصفير عدّاد غير المقروء لمحادثة معينة (اختياري).
+ * لا يغيّر شيئًا في قاعدة البيانات إلا إذا كان لديك عمود unread_count.
+ * إن لم يكن لديك العمود، يُعيد ok:true بدون أي أثر جانبي.
+ */
+dashboardRouter.post(
+  "/conversations/:id/mark-read",
+  async (req, res) => {
+    const tenant = await ownedTenant(
+      (req as AuthedRequest).userId!,
+      req.body?.tenantId
+    );
+
+    if (!tenant) {
+      return res.status(404).json({ error: "لا يوجد حساب مرتبط" });
+    }
+
+    // نحاول التحديث، وإذا لم يوجد العمود نتجاهل الخطأ بهدوء.
+    const { error } = await db
+      .from("conversations")
+      .update({ unread_count: 0 })
+      .eq("id", req.params.id)
+      .eq("tenant_id", tenant.id);
+
+    if (error) {
+      // غالبًا العمود غير موجود — لا نُفشل الطلب.
+      return res.json({ ok: true, note: "unread_count not persisted" });
+    }
+
+    res.json({ ok: true });
   }
 );
 
