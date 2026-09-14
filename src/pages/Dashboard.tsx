@@ -541,8 +541,52 @@ export default function Dashboard() {
           body: JSON.stringify({ text: draft.trim(), resumeAuto }),
         });
         
-        // ملاحظة: لا نحدث الواجهة هنا يدويًا لأن Realtime سيصل خلال أجزاء من الثانية
-        // ونريد تجنب التكرار. الواجهة ستتحدث تلقائيًا عبر الاشتراك.
+        // تحديث فوري للواجهة (Optimistic Update) لتجنب انتظار Realtime
+        // نضيف الرسالة يدويًا للقائمة وللمحادثة النشطة فور نجاح الإرسال
+        const newMsgBody = draft.trim();
+        const nowStr = new Date().toISOString();
+        
+        setSt((prev) => {
+          if (!prev) return prev;
+          
+          // 1. تحديث قائمة المحادثات: نقل المحادثة للأعلى وتحديث المعاينة
+          const updatedConvs = prev.convs
+            .filter(c => c.id !== activeConv) // إزالة المحادثة من مكانها
+            .sort((a, b) => new Date(b.lastAt).getTime() - new Date(a.lastAt).getTime()) // ترتيب الباقي
+            .concat({ // إضافة المحادثة المحدثة في النهاية (ستظهر أولاً بسبب الترتيب العكسي في UI أو العكس حسب المنطق)
+              ...prev.convs.find(c => c.id === activeConv)!,
+              lastAt: nowStr,
+              lastMessagePreview: newMsgBody,
+              transferred: resumeAuto ? false : prev.convs.find(c => c.id === activeConv)?.transferred,
+              paused: resumeAuto ? null : prev.convs.find(c => c.id === activeConv)?.paused,
+            } as any); // ملاحظة: قد نحتاج لضبط الترتيب حسب اتجاه العرض (الأحدث أولاً)
+
+          // طريقة أفضل للترتيب: وضع المحادثة المحدثة في البداية مباشرة
+          const otherConvs = prev.convs.filter(c => c.id !== activeConv);
+          const activeConvData = prev.convs.find(c => c.id === activeConv)!;
+          const updatedActiveConv = {
+            ...activeConvData,
+            lastAt: nowStr,
+            lastMessagePreview: newMsgBody,
+            transferred: resumeAuto ? false : activeConvData.transferred,
+            paused: resumeAuto ? null : activeConvData.paused,
+          };
+          
+          // 2. تحديث رسائل المحادثة النشطة
+          const updatedMsgs = [...(activeConvData.msgs || []), {
+            id: `temp-${Date.now()}`,
+            direction: 'out' as const,
+            body: newMsgBody,
+            kind: 'answer' as const,
+            is_auto: false,
+            created_at: nowStr
+          } as ThreadMsg];
+
+          return {
+            ...prev,
+            convs: prev.convs.map(c => c.id === activeConv ? updatedActiveConv : c).sort((a,b) => new Date(b.lastAt).getTime() - new Date(a.lastAt).getTime()), // ترتيب زمني تنازلي للمحادثة المحدثة + البقية
+          };
+        });
         
         // تنظيف حقل الكتابة
         setDraft("");
