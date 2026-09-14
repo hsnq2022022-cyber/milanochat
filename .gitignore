@@ -1,21 +1,17 @@
 ```
-# Build artifacts
-dist/
-build/
-coverage/
-htmlcov/
-*.log
-*.tmp
-
 # Dependencies
 node_modules/
-.venv/
-venv/
-__pycache__/
-.mypy_cache/
-.pytest_cache/
-target/
-.gradle/
+
+# Build outputs
+dist/
+build/
+*.js.map
+*.ts.map
+
+# Environment variables
+.env
+.env.local
+*.env.*
 
 # Editors
 .vscode/
@@ -23,12 +19,47 @@ target/
 *.swp
 *.swo
 
-# Environment
-.env
-.env.local
-*.env.*
+# Logs
+*.log
 
-# System
+# Coverage
+coverage/
+htmlcov/
+.coverage
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+.Python
+env/
+venv/
+.venv/
+.venv.bak/
+pip-log.txt
+pip-delete-this-directory.txt
+.tox/
+.coverage
+.nox/
+.coverage.*
+.cache
+.pytest_cache/
+.mypy_cache/
+
+# Node
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS generated files
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
 Thumbs.db
 ```
