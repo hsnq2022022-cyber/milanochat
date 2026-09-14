@@ -1,6 +1,16 @@
 /**
  * لوحة تحكم ميلانو — حقيقية عبر Supabase Auth + الخادم،
  * وبوضع عرض حيّ (بيانات محاكاة + سيناريو تلقائي) عندما لا تتوفر متغيرات البيئة.
+ *
+ * ملاحظات الإصلاح:
+ * - لا يوجد polling على الإطلاق — كل التحديثات تأتي عبر Supabase Realtime.
+ * - قناة Realtime واحدة موحّدة للمحادثات والرسائل.
+ * - لا يتم عرض body_encrypted إطلاقًا في الواجهة (يُستخدم body المفكوك من الخادم).
+ * - عند الإرسال اليدوي نعتمد على رسالة الـ Backend (أو fallback مؤقت عند غيابها).
+ * - إدارة unreadCount: تزداد للرسائل الواردة على محادثة غير مفتوحة، وتُصفَّر عند فتح المحادثة.
+ * - المحادثة النشطة لا تُقفل عند وصول رسالة لمحادثة أخرى.
+ * - توحيد "out"/"outbound" إلى "out" و "in"/"inbound" إلى "in".
+ * - تحميل رسائل المحادثة يتم فقط عند فتحها (لا دورية مستمرة).
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import confetti from "canvas-confetti";
@@ -72,6 +82,17 @@ const fmtTime = (iso: string) =>
 const fmtDate = (iso: string) =>
   new Date(iso).toLocaleDateString("ar", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 
+/** توحيد اتجاه الرسالة القادم من الخادم إلى "in" | "out". */
+const normalizeDirection = (d: string | null | undefined): "in" | "out" =>
+  d === "out" || d === "outbound" ? "out" : "in";
+
+/** استخراج نص الرسالة من صف قاعدة البيانات — لا نستخدم body_encrypted إطلاقًا. */
+const extractBody = (row: any): string => {
+  if (!row) return "";
+  if (typeof row.body === "string" && row.body.length > 0) return row.body;
+  return "";
+};
+
 const cls = {
   card: "bg-pine/70 border border-verde/15 rounded-2xl",
   input:
@@ -117,13 +138,11 @@ export default function Dashboard() {
   const [draft, setDraft] = useState("");
   const [resumeAuto, setResumeAuto] = useState(true);
   const [sending, setSending] = useState(false);
-  // qrOpen لم يعد مستخدماً في Cloud API
-  // const [qrOpen, setQrOpen] = useState(false);
   const [payOpen, setPayOpen] = useState(false);
   const [toast, setToast] = useState("");
   const [answers, setAnswers] = useState<Record<string, { text: string; save: boolean }>>({});
   const [newSource, setNewSource] = useState<{ kind: "url" | "text"; url: string; text: string }>({ kind: "url", url: "", text: "" });
-  
+
   // Widgets state
   const [widgets, setWidgets] = useState<any[]>([]);
   const [widgetPreview, setWidgetPreview] = useState<any>(null);
@@ -136,10 +155,19 @@ export default function Dashboard() {
   });
   const [editingWidget, setEditingWidget] = useState<string | null>(null);
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
-  
+
   const threadEndRef = useRef<HTMLDivElement>(null);
   const toastTimer = useRef<number | null>(null);
   const scriptIdx = useRef(0);
+
+  /**
+   * مرجع للمحادثة النشطة — يُستخدم داخل معالجات Realtime
+   * لتجنّب إعادة الاشتراك عند تغيّر المحادثة المفتوحة.
+   */
+  const activeConvRef = useRef<string | null>(null);
+  useEffect(() => {
+    activeConvRef.current = activeConv;
+  }, [activeConv]);
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -216,13 +244,15 @@ export default function Dashboard() {
         waStatus: summary.wa.status,
         openUnresolved: summary.openUnresolved,
         convs: skipConvs ? (prev?.convs || []) : convs.map((c: any) => {
-          const now = new Date();
+          const nowD = new Date();
           const expiresAt = c.humanAgentExpiresAt ? new Date(c.humanAgentExpiresAt) : null;
-          const humanAgentActive = c.transferred && expiresAt && expiresAt > now;
-          const remainingSeconds = humanAgentActive && expiresAt ? Math.floor((expiresAt.getTime() - now.getTime()) / 1000) : 0;
+          const humanAgentActive = Boolean(c.transferred && expiresAt && expiresAt > nowD);
+          const remainingSeconds = humanAgentActive && expiresAt
+            ? Math.floor((expiresAt.getTime() - nowD.getTime()) / 1000)
+            : 0;
           return {
-            id: c.id, 
-            phone: c.customerPhone, 
+            id: c.id,
+            phone: c.customerPhone,
             transferred: c.transferred,
             paused: c.autoPausedReason,
             humanAgentExpiresAt: c.humanAgentExpiresAt,
@@ -230,6 +260,7 @@ export default function Dashboard() {
             remainingSeconds,
             lastAt: c.lastMessageAt,
             lastMessagePreview: c.lastMessageBody || "—",
+            unreadCount: 0,
             msgs: [],
           };
         }),
@@ -245,7 +276,7 @@ export default function Dashboard() {
     } catch (e: any) {
       if (String(e?.message ?? "").includes("حساب")) setNeedClaim(true);
     }
-  }, [token]);
+  }, [token, st?.convs]);
 
   /* محاولة ضم تلقائية بالحفظ من معالج الإنشاء */
   useEffect(() => {
@@ -262,178 +293,192 @@ export default function Dashboard() {
       .then(() => clearStoredClaim())
       .catch(() => {})
       .finally(() => loadAll());
-  }, [demo, token, loadAll]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [demo, token]);
 
-  /* ── استبدال polling بـ Supabase Realtime للمحادثات والرسائل ── */
-  /* لا نستخدم polling بعد الآن لتجنب إعادة تحميل النافذة */
-  
+  /* ── تحميل البيانات الحقيقية ── */
+  useEffect(() => {
+    if (demo || !authed || !token) {
+      setSt(null);
+      return;
+    }
+    loadAll();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [demo, authed, token]);
+
+  /* ═══════════════════════════════════════════════════════════
+   *  قناة Realtime واحدة موحّدة (محادثات + رسائل).
+   *  - لا polling.
+   *  - لا نعرض body_encrypted.
+   *  - نقل المحادثة للأعلى عند وصول رسالة.
+   *  - إدارة unreadCount.
+   *  - لا نُقفل المحادثة النشطة عند وصول رسالة لأخرى.
+   * ═══════════════════════════════════════════════════════════ */
   useEffect(() => {
     if (demo || !token || needClaim || !sb) return;
 
-    // الاشتراك في أحداث INSERT للمحادثات الجديدة
-    const convChannel = sb
-      .channel('conversations:public')
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'conversations',
-        },
-        (payload) => {
-          const newConv = payload.new as any;
-          console.log('[Realtime] New conversation:', newConv.id);
-          // إضافة المحادثة الجديدة للقائمة إذا لم تكن موجودة
-          setSt((prev) => {
-            if (!prev) return prev;
-            const exists = prev.convs.some(c => c.id === newConv.id);
-            if (exists) return prev;
-            
-            return {
-              ...prev,
-              convs: [
-                {
-                  id: newConv.id,
-                  phone: newConv.customer_phone_encrypted,
-                  transferred: newConv.transferred,
-                  paused: newConv.auto_paused_reason,
-                  humanAgentExpiresAt: newConv.human_agent_expires_at,
-                  humanAgentActive: false,
-                  remainingSeconds: 0,
-                  lastAt: newConv.last_message_at,
-                  msgs: [],
-                  unreadCount: 1, // محادثة جديدة = رسالة غير مقروءة
-                },
-                ...prev.convs
-              ],
-            };
-          });
-        }
-      )
-      .subscribe();
+    /* ── INSERT: محادثة جديدة ── */
+    const handleConvInsert = (payload: any) => {
+      const row = payload.new ?? {};
+      setSt((prev) => {
+        if (!prev) return prev;
+        if (prev.convs.some((c) => c.id === row.id)) return prev;
 
-    // الاشتراك في أحداث UPDATE للمحادثات الموجودة (تحديث آخر رسالة)
-    const convUpdateChannel = sb
-      .channel('conversations_update:public')
-      .on(
-        'postgres_changes',
-        {
-          event: 'UPDATE',
-          schema: 'public',
-          table: 'conversations',
-        },
-        (payload) => {
-          const updatedConv = payload.new as any;
-          setSt((prev) => {
-            if (!prev) return prev;
-            return {
-              ...prev,
-              convs: prev.convs.map(c => 
-                c.id === updatedConv.id
-                  ? {
-                      ...c,
-                      lastAt: updatedConv.last_message_at,
-                      transferred: updatedConv.transferred,
-                      paused: updatedConv.auto_paused_reason,
-                      humanAgentExpiresAt: updatedConv.human_agent_expires_at,
-                    }
-                  : c
-              ),
-            };
-          });
-        }
-      )
-      .subscribe();
+        const nowD = new Date();
+        const expiresAt = row.human_agent_expires_at ? new Date(row.human_agent_expires_at) : null;
+        const humanAgentActive = Boolean(row.transferred && expiresAt && expiresAt > nowD);
+        const remainingSeconds = humanAgentActive && expiresAt
+          ? Math.floor((expiresAt.getTime() - nowD.getTime()) / 1000)
+          : 0;
 
-    // الاشتراك في أحداث INSERT للرسائل الجديدة - لتحديث القائمة ونقل المحادثة للأعلى
-    const messagesChannel = sb
-      .channel('messages:public')
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'messages',
-        },
-        (payload) => {
-          const newMsg = payload.new as any;
-          const convId = newMsg.conversation_id;
-          const msgBody = newMsg.body || newMsg.body_encrypted || '';
-          const isOutbound = newMsg.direction === 'outbound';
-          
-          console.log('[Realtime] New message:', {
-            convId,
-            body: msgBody.substring(0, 50),
-            direction: newMsg.direction,
-            isActive: activeConv === convId
-          });
-          
-          setSt((prev) => {
-            if (!prev) return prev;
-            
-            // البحث عن المحادثة في القائمة
-            const convIndex = prev.convs.findIndex(c => c.id === convId);
-            if (convIndex === -1) return prev;
-            
-            const targetConv = prev.convs[convIndex];
-            const isActive = activeConv === convId;
-            
-            // إنشاء نسخة محدثة من المحادثة
-            const updatedConv = {
-              ...targetConv,
-              lastAt: newMsg.created_at,
-              // تحديث معاينة آخر رسالة
-              lastMessagePreview: msgBody,
-              // زيادة عداد الرسائل غير المقروءة فقط إذا لم تكن نشطة والرسالة واردة
-              unreadCount: isActive || isOutbound 
-                ? (targetConv.unreadCount || 0) 
-                : (targetConv.unreadCount || 0) + 1,
-            };
-            
-            // إزالة المحادثة من موقعها الحالي
-            const newConvs = prev.convs.filter(c => c.id !== convId);
-            // إضافتها في الأعلى
-            newConvs.unshift(updatedConv);
-            
+        const newConv: ConvItem = {
+          id: row.id,
+          phone: row.customer_phone ?? row.customer_phone_e164 ?? "",
+          transferred: Boolean(row.transferred),
+          paused: row.auto_paused_reason ?? null,
+          humanAgentExpiresAt: row.human_agent_expires_at ?? null,
+          humanAgentActive,
+          remainingSeconds,
+          lastAt: row.last_message_at ?? now(),
+          lastMessagePreview: extractBody(row) || "—",
+          unreadCount: 1,
+          msgs: [],
+        };
+
+        return { ...prev, convs: [newConv, ...prev.convs] };
+      });
+    };
+
+    /* ── UPDATE: محادثة موجودة (حقولها الوصفية فقط) ── */
+    const handleConvUpdate = (payload: any) => {
+      const row = payload.new ?? {};
+      setSt((prev) => {
+        if (!prev) return prev;
+        const exists = prev.convs.some((c) => c.id === row.id);
+        if (!exists) return prev;
+
+        return {
+          ...prev,
+          convs: prev.convs.map((c) => {
+            if (c.id !== row.id) return c;
+            const nowD = new Date();
+            const expiresAt = row.human_agent_expires_at ? new Date(row.human_agent_expires_at) : null;
+            const humanAgentActive = Boolean(row.transferred && expiresAt && expiresAt > nowD);
+            const remainingSeconds = humanAgentActive && expiresAt
+              ? Math.floor((expiresAt.getTime() - nowD.getTime()) / 1000)
+              : 0;
             return {
-              ...prev,
-              convs: newConvs,
+              ...c,
+              transferred: Boolean(row.transferred ?? c.transferred),
+              paused: row.auto_paused_reason ?? c.paused,
+              humanAgentExpiresAt: row.human_agent_expires_at ?? c.humanAgentExpiresAt,
+              humanAgentActive,
+              remainingSeconds,
             };
-          });
-        }
+          }),
+        };
+      });
+    };
+
+    /* ── INSERT: رسالة جديدة ── */
+    const handleMessageInsert = (payload: any) => {
+      const row = payload.new ?? {};
+      const convId: string = row.conversation_id;
+      if (!convId) return;
+
+      const body = extractBody(row); // لا body_encrypted
+      const direction = normalizeDirection(row.direction);
+
+      setSt((prev) => {
+        if (!prev) return prev;
+        const target = prev.convs.find((c) => c.id === convId);
+        if (!target) return prev;
+
+        const isActive = activeConvRef.current === convId;
+
+        // تجنّب التكرار (قد تكون الرسالة أُضيفت مسبقًا عبر Optimistic Update).
+        const already = (target.msgs || []).some((m) => m.id === row.id);
+
+        const newMsg: ThreadMsg = {
+          id: row.id,
+          direction,
+          body,
+          kind: row.kind ?? (direction === "out" ? "answer" : "text"),
+          is_auto: Boolean(row.is_auto),
+          created_at: row.created_at ?? now(),
+        };
+
+        const updatedConv: ConvItem = {
+          ...target,
+          lastAt: row.created_at ?? now(),
+          lastMessagePreview: body || target.lastMessagePreview || "—",
+          unreadCount:
+            isActive || direction === "out"
+              ? (target.unreadCount ?? 0)
+              : (target.unreadCount ?? 0) + 1,
+          msgs:
+            isActive && !already
+              ? [...(target.msgs || []), newMsg]
+              : target.msgs,
+        };
+
+        // نقل المحادثة إلى الأعلى
+        const others = prev.convs.filter((c) => c.id !== convId);
+        return { ...prev, convs: [updatedConv, ...others] };
+      });
+    };
+
+    const channel = sb
+      .channel("dashboard-realtime")
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "conversations" },
+        handleConvInsert
       )
-      .subscribe();
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "conversations" },
+        handleConvUpdate
+      )
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "messages" },
+        handleMessageInsert
+      )
+      .subscribe((status) => {
+        if (status === "CHANNEL_ERROR") {
+          console.warn("[Realtime] channel error — check RLS / publication");
+        }
+      });
 
     return () => {
-      sb.removeChannel(convChannel);
-      sb.removeChannel(convUpdateChannel);
-      sb.removeChannel(messagesChannel);
+      sb.removeChannel(channel);
     };
-  }, [demo, token, needClaim, sb, activeConv]);
+    // لا نضمّن activeConv: نستخدم activeConvRef داخل المعالجات.
+  }, [demo, token, needClaim, sb]);
 
-  /* رسائل المحادثة المفتوحة (حقيقي) — تحديث حي */
+  /* ── تحميل رسائل المحادثة النشطة (مرة واحدة عند فتحها) ── */
   const loadThread = useCallback(async (convId: string) => {
     if (!token) return;
     try {
       const msgs = await apiAuthFetch<any[]>(token, `/api/dashboard/conversations/${convId}/messages`);
       setSt((prev) => {
         if (!prev) return prev;
-        // تحديث الرسائل فقط للمحادثة المفتوحة — دون إعادة تحميل قائمة المحادثات
         return {
           ...prev,
           convs: prev.convs.map((c) =>
-            c.id === convId 
-              ? { 
-                  ...c, 
-                  msgs: msgs.map((m: any) => ({ 
-                    id: m.id, 
-                    direction: m.direction, 
-                    body: m.body, 
-                    kind: m.kind, 
-                    is_auto: m.is_auto, 
-                    created_at: m.created_at 
-                  })) 
-                } 
+            c.id === convId
+              ? {
+                  ...c,
+                  msgs: msgs.map((m: any) => ({
+                    id: m.id,
+                    direction: normalizeDirection(m.direction),
+                    body: extractBody(m),
+                    kind: m.kind ?? "text",
+                    is_auto: Boolean(m.is_auto),
+                    created_at: m.created_at,
+                  })),
+                }
               : c
           ),
         };
@@ -445,69 +490,9 @@ export default function Dashboard() {
 
   useEffect(() => {
     if (demo || !activeConv || !token) return;
+    // تحميل واحد فقط — بدون setInterval
     loadThread(activeConv).catch(() => {});
-    const iv = window.setInterval(() => loadThread(activeConv).catch(() => {}), 5000);
-    return () => window.clearInterval(iv);
   }, [demo, activeConv, token, loadThread]);
-
-  /* ── Supabase Realtime للمحادثة النشطة فقط ── */
-  useEffect(() => {
-    if (demo || !activeConv || !sb) return;
-    
-    const channel = sb
-      .channel(`messages:${activeConv}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "INSERT",
-          schema: "public",
-          table: "messages",
-          filter: `conversation_id=eq.${activeConv}`,
-        },
-        async (payload) => {
-          const newMsg = payload.new as any;
-          // إضافة الرسالة الجديدة فقط إذا لم تكن موجودة
-          setSt((prev) => {
-            if (!prev) return prev;
-            const exists = prev.convs.find(c => c.id === activeConv)?.msgs.some(m => m.id === newMsg.id);
-            if (exists) return prev;
-            
-            return {
-              ...prev,
-              convs: prev.convs.map((c) =>
-                c.id === activeConv
-                  ? {
-                      ...c,
-                      msgs: [...c.msgs, {
-                        id: newMsg.id,
-                        direction: newMsg.direction,
-                        body: newMsg.body,
-                        kind: newMsg.kind,
-                        is_auto: newMsg.is_auto,
-                        created_at: newMsg.created_at,
-                      }],
-                    }
-                  : c
-              ),
-            };
-          });
-        }
-      )
-      .subscribe();
-
-    return () => {
-      sb.removeChannel(channel);
-    };
-  }, [demo, activeConv, sb]);
-
-  /* ── تحميل البيانات الحقيقية ── */
-  useEffect(() => {
-    if (demo || !authed || !token) {
-      setSt(null);
-      return;
-    }
-    loadAll();
-  }, [demo, authed, token, loadAll]);
 
   /* تمرير تلقائي لأسفل الخيط */
   const activeThread = st?.convs.find((c) => c.id === activeConv) ?? null;
@@ -516,86 +501,98 @@ export default function Dashboard() {
   }, [activeThread?.msgs.length]);
 
   /* ── إجراءات ── */
+
+  /** فتح محادثة + تصفير عدّاد غير المقروء. */
+  const openConversation = (convId: string) => {
+    setActiveConv(convId);
+    setMobileThread(true);
+    setSt((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        convs: prev.convs.map((c) =>
+          c.id === convId ? { ...c, unreadCount: 0 } : c
+        ),
+      };
+    });
+  };
+
   const replyManual = async () => {
     if (!activeConv || !draft.trim() || !st) return;
+    const outgoing = draft.trim();
     setSending(true);
     try {
       if (demo) {
-        const outMsg: ThreadMsg = { id: `man-${Date.now()}`, direction: "out", body: draft.trim(), kind: "manual", is_auto: false, created_at: now() };
+        const outMsg: ThreadMsg = {
+          id: `man-${Date.now()}`,
+          direction: "out",
+          body: outgoing,
+          kind: "manual",
+          is_auto: false,
+          created_at: now(),
+        };
         setSt((prev) =>
           prev
             ? {
                 ...prev,
                 convs: prev.convs.map((c) =>
                   c.id === activeConv
-                    ? { ...c, transferred: resumeAuto ? false : c.transferred, paused: resumeAuto ? null : c.paused, lastAt: outMsg.created_at, msgs: [...c.msgs, outMsg], lastMessagePreview: outMsg.body }
+                    ? {
+                        ...c,
+                        transferred: resumeAuto ? false : c.transferred,
+                        paused: resumeAuto ? null : c.paused,
+                        lastAt: outMsg.created_at,
+                        lastMessagePreview: outMsg.body,
+                        msgs: [...c.msgs, outMsg],
+                      }
                     : c
                 ),
               }
             : prev
         );
+        setDraft("");
       } else {
-        // إرسال الرسالة إلى Backend
-        const result = await apiAuthFetch<any>(token!, `/api/dashboard/conversations/${activeConv}/reply`, {
-          method: "POST",
-          body: JSON.stringify({ text: draft.trim(), resumeAuto }),
-        });
-        
-        // تحديث فوري للواجهة (Optimistic Update) لتجنب انتظار Realtime
-        // نضيف الرسالة يدويًا للقائمة وللمحادثة النشطة فور نجاح الإرسال
-        const newMsgBody = draft.trim();
-        const nowStr = new Date().toISOString();
-        
+        // إرسال إلى الـ Backend — نعتمد على الرسالة التي يعيدها إن وُجدت.
+        const result: any = await apiAuthFetch<any>(
+          token!,
+          `/api/dashboard/conversations/${activeConv}/reply`,
+          {
+            method: "POST",
+            body: JSON.stringify({ text: outgoing, resumeAuto }),
+          }
+        );
+
+        // الرسالة التي نُضيفها للواجهة — من الخادم إن أمكن، وإلا fallback محلي.
+        const sentMsg: ThreadMsg = {
+          id: result?.id ?? result?.message?.id ?? `temp-${Date.now()}`,
+          direction: "out",
+          body: result?.body ?? result?.message?.body ?? outgoing,
+          kind: result?.kind ?? result?.message?.kind ?? "manual",
+          is_auto: Boolean(result?.is_auto ?? result?.message?.is_auto ?? false),
+          created_at: result?.created_at ?? result?.message?.created_at ?? now(),
+        };
+
         setSt((prev) => {
           if (!prev) return prev;
-          
-          // 1. تحديث قائمة المحادثات: نقل المحادثة للأعلى وتحديث المعاينة
-          const updatedConvs = prev.convs
-            .filter(c => c.id !== activeConv) // إزالة المحادثة من مكانها
-            .sort((a, b) => new Date(b.lastAt).getTime() - new Date(a.lastAt).getTime()) // ترتيب الباقي
-            .concat({ // إضافة المحادثة المحدثة في النهاية (ستظهر أولاً بسبب الترتيب العكسي في UI أو العكس حسب المنطق)
-              ...prev.convs.find(c => c.id === activeConv)!,
-              lastAt: nowStr,
-              lastMessagePreview: newMsgBody,
-              transferred: resumeAuto ? false : prev.convs.find(c => c.id === activeConv)?.transferred,
-              paused: resumeAuto ? null : prev.convs.find(c => c.id === activeConv)?.paused,
-            } as any); // ملاحظة: قد نحتاج لضبط الترتيب حسب اتجاه العرض (الأحدث أولاً)
+          const target = prev.convs.find((c) => c.id === activeConv);
+          if (!target) return prev;
 
-          // طريقة أفضل للترتيب: وضع المحادثة المحدثة في البداية مباشرة
-          const otherConvs = prev.convs.filter(c => c.id !== activeConv);
-          const activeConvData = prev.convs.find(c => c.id === activeConv)!;
-          const updatedActiveConv = {
-            ...activeConvData,
-            lastAt: nowStr,
-            lastMessagePreview: newMsgBody,
-            transferred: resumeAuto ? false : activeConvData.transferred,
-            paused: resumeAuto ? null : activeConvData.paused,
-          };
-          
-          // 2. تحديث رسائل المحادثة النشطة
-          const updatedMsgs = [...(activeConvData.msgs || []), {
-            id: `temp-${Date.now()}`,
-            direction: 'out' as const,
-            body: newMsgBody,
-            kind: 'answer' as const,
-            is_auto: false,
-            created_at: nowStr
-          } as ThreadMsg];
+          // تجنّب التكرار إن وصلت الرسالة عبر Realtime بالسرعة نفسها.
+          const already = (target.msgs || []).some((m) => m.id === sentMsg.id);
 
-          return {
-            ...prev,
-            // تحديث الرسائل الفعلية المعروضة داخل ConversationWindow فورًا
-            // بدل انتظار Realtime أو إعادة فتح المحادثة.
-            convs: prev.convs
-              .map(c => c.id === activeConv
-                ? { ...updatedActiveConv, msgs: updatedMsgs }
-                : c
-              )
-              .sort((a, b) => new Date(b.lastAt).getTime() - new Date(a.lastAt).getTime()),
+          const updatedConv: ConvItem = {
+            ...target,
+            transferred: resumeAuto ? false : target.transferred,
+            paused: resumeAuto ? null : target.paused,
+            lastAt: sentMsg.created_at,
+            lastMessagePreview: sentMsg.body,
+            msgs: already ? target.msgs : [...(target.msgs || []), sentMsg],
           };
+
+          const others = prev.convs.filter((c) => c.id !== activeConv);
+          return { ...prev, convs: [updatedConv, ...others] };
         });
-        
-        // تنظيف حقل الكتابة
+
         setDraft("");
         showToast("أُرسل الرد للعميل");
       }
@@ -1179,12 +1176,11 @@ export default function Dashboard() {
                   </li>
                 )}
                 {st.convs.map((c) => {
-                  
                   const sel = c.id === activeConv;
                   return (
                     <li key={c.id}>
                       <button
-                        onClick={() => { setActiveConv(c.id); setMobileThread(true); }}
+                        onClick={() => openConversation(c.id)}
                         className={`w-full text-start px-4 py-3.5 border-b border-verde/8 transition-all duration-200 ${
                           sel ? "bg-moss/80" : "hover:bg-night/50"
                         }`}
@@ -1193,8 +1189,10 @@ export default function Dashboard() {
                           <span className="text-[13px] font-bold text-bone" dir="ltr">{c.phone}</span>
                           <span className="text-[10px] text-sage tabular-nums">{fmtTime(c.lastAt)}</span>
                         </div>
-                        <p className="text-[11.5px] text-sage truncate">{c.lastMessagePreview ?? (c.msgs[c.msgs.length - 1]?.body) ?? "—"}</p>
-                        <div className="flex gap-1.5 mt-1.5">
+                        <p className="text-[11.5px] text-sage truncate">
+                          {c.lastMessagePreview ?? c.msgs[c.msgs.length - 1]?.body ?? "—"}
+                        </p>
+                        <div className="flex gap-1.5 mt-1.5 flex-wrap">
                           {c.transferred && (
                             <span className="text-[9.5px] font-bold text-oro-soft bg-oro/10 border border-oro/30 rounded-full px-2 py-0.5 inline-flex items-center gap-1">
                               <IconHandoff className="w-3 h-3" /> محوّلة لبشري
@@ -1205,7 +1203,7 @@ export default function Dashboard() {
                               موقوفة — نفد الرصيد
                             </span>
                           )}
-                          {c.unreadCount !== undefined && c.unreadCount > 0 && (
+                          {typeof c.unreadCount === "number" && c.unreadCount > 0 && !sel && (
                             <span className="text-[9.5px] font-bold text-white bg-verde rounded-full px-2 py-0.5 inline-flex items-center gap-1">
                               {c.unreadCount} جديدة
                             </span>
@@ -1237,20 +1235,19 @@ export default function Dashboard() {
                     <div className="flex-1">
                       <p className="text-[13px] font-bold text-bone" dir="ltr">{active.phone}</p>
                       <p className="text-[10.5px] text-sage">
-                        {active.humanAgentActive 
-                          ? `Human Agent Active — ${Math.floor(active.remainingSeconds! / 60)}:${String(active.remainingSeconds! % 60).padStart(2, '0')} متبقي`
-                          : active.transferred 
-                            ? "محوّلة لك — الرد الآلي متوقف" 
-                            : active.paused 
-                              ? "الرد الآلي موقوف" 
+                        {active.humanAgentActive
+                          ? `Human Agent Active — ${Math.floor((active.remainingSeconds ?? 0) / 60)}:${String((active.remainingSeconds ?? 0) % 60).padStart(2, '0')} متبقي`
+                          : active.transferred
+                            ? "محوّلة لك — الرد الآلي متوقف"
+                            : active.paused
+                              ? "الرد الآلي موقوف"
                               : "الرد الآلي يعمل"}
                       </p>
                     </div>
                     {active.humanAgentActive ? (
-                      <button 
+                      <button
                         onClick={async () => {
                           await apiAuthFetch(token!, `/api/dashboard/conversations/${active.id}/release`, { method: "POST" });
-                          // تحديث الحالة المحلية مباشرة
                           setSt((prev) => prev ? {
                             ...prev,
                             convs: prev.convs.map((c) => c.id === active.id ? {
@@ -1271,18 +1268,17 @@ export default function Dashboard() {
                         <IconHandoff className="w-3 h-3" /> تحتاج تدخلّك
                       </span>
                     ) : (
-                      <button 
+                      <button
                         onClick={async () => {
                           try {
                             const res = await apiAuthFetch<{ expiresAt: string }>(token!, `/api/dashboard/conversations/${active.id}/takeover`, { method: "POST" });
-                            // تحديث الحالة المحلية مباشرة
                             setSt((prev) => prev ? {
                               ...prev,
                               convs: prev.convs.map((c) => c.id === active.id ? {
                                 ...c,
                                 transferred: true,
                                 humanAgentActive: true,
-                                remainingSeconds: 900, // 15 دقيقة
+                                remainingSeconds: 900,
                                 humanAgentExpiresAt: res.expiresAt
                               } : c)
                             } : null);
@@ -1803,7 +1799,6 @@ function QrModal({ demo, tenantId, token, onClose, onState }: { demo: boolean; t
   const apply = (s: WaSnapshot) => {
     setSnap(s);
     onState(s.state === "CONNECTED" ? "connected" : "disconnected");
-    // في Meta Cloud API، لا يوجد LOGGED_OUT - الاتصال دائم طالما الـ token صالح
   };
 
   const connect = async () => {
@@ -1813,7 +1808,6 @@ function QrModal({ demo, tenantId, token, onClose, onState }: { demo: boolean; t
     try {
       const s = await api.wa.createSession(tenantId, token);
       if (backendMode === "supabase") {
-        // Cloud API: لا جلسة ولا بث — الحالة لحظية
         apply(s);
         busyRef.current = false;
         return;
@@ -1851,7 +1845,7 @@ function QrModal({ demo, tenantId, token, onClose, onState }: { demo: boolean; t
   };
 
   useEffect(() => {
-    if (demo) return; // وضع العرض: لا جلسة حقيقية ولا QR — رسالة خطأ فقط
+    if (demo) return;
     connect();
     return stopStreams;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1869,7 +1863,6 @@ function QrModal({ demo, tenantId, token, onClose, onState }: { demo: boolean; t
     setLoggingOut(false);
   };
 
-  /* بدون خادم: لا نعرض أي رمز — رسالة واضحة فقط */
   if (demo || failed) {
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true">
