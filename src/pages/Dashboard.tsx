@@ -528,7 +528,7 @@ export default function Dashboard() {
                 ...prev,
                 convs: prev.convs.map((c) =>
                   c.id === activeConv
-                    ? { ...c, transferred: resumeAuto ? false : c.transferred, paused: resumeAuto ? null : c.paused, lastAt: outMsg.created_at, msgs: [...c.msgs, outMsg] }
+                    ? { ...c, transferred: resumeAuto ? false : c.transferred, paused: resumeAuto ? null : c.paused, lastAt: outMsg.created_at, msgs: [...c.msgs, outMsg], lastMessagePreview: outMsg.body }
                     : c
                 ),
               }
@@ -541,7 +541,7 @@ export default function Dashboard() {
           body: JSON.stringify({ text: draft.trim(), resumeAuto }),
         });
         
-        // تحديث فوري للواجهة بعد نجاح الإرسال
+        // إنشاء كائن الرسالة فورًا للتحديث المحلي
         const outMsg: ThreadMsg = { 
           id: result.id || `man-${Date.now()}`, 
           direction: "out", 
@@ -551,14 +551,15 @@ export default function Dashboard() {
           created_at: result.created_at || now() 
         };
         
+        // تحديث فوري للواجهة قبل وصول Realtime
         setSt((prev) => {
           if (!prev) return prev;
           return {
             ...prev,
             convs: prev.convs.map((c) => {
               if (c.id === activeConv) {
-                // إضافة الرسالة للمحادثة النشطة
-                const updatedConv = {
+                // إضافة الرسالة للمحادثة النشطة وتحديث المعاينة
+                return {
                   ...c,
                   transferred: resumeAuto ? false : c.transferred,
                   paused: resumeAuto ? null : c.paused,
@@ -566,21 +567,16 @@ export default function Dashboard() {
                   msgs: [...c.msgs, outMsg],
                   lastMessagePreview: outMsg.body,
                 };
-                return updatedConv;
               }
               return c;
             }),
           };
         });
         
-        // ملاحظة: لا نحتاج لاستدعاء loadThread أو loadAll هنا لأن Realtime سيحدث الباقي
-        // لكن ننتظر قليلاً للتأكد من أن Realtime قد استلم الحدث
-        setTimeout(() => {
-          loadThread(activeConv).catch(console.error);
-        }, 500);
+        // تنظيف حقل الكتابة
+        setDraft("");
+        showToast("أُرسل الرد للعميل");
       }
-      setDraft("");
-      showToast("أُرسل الرد للعميل");
     } catch (e: any) {
       showToast(e?.message ?? "تعذر الإرسال — واتساب غير متصل؟");
     }
