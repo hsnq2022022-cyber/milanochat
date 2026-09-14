@@ -535,12 +535,49 @@ export default function Dashboard() {
             : prev
         );
       } else {
-        await apiAuthFetch(token!, `/api/dashboard/conversations/${activeConv}/reply`, {
+        // إرسال الرسالة إلى Backend
+        const result = await apiAuthFetch<any>(token!, `/api/dashboard/conversations/${activeConv}/reply`, {
           method: "POST",
           body: JSON.stringify({ text: draft.trim(), resumeAuto }),
         });
-        await loadThread(activeConv);
-        loadAll();
+        
+        // تحديث فوري للواجهة بعد نجاح الإرسال
+        const outMsg: ThreadMsg = { 
+          id: result.id || `man-${Date.now()}`, 
+          direction: "out", 
+          body: draft.trim(), 
+          kind: result.kind || "answer", 
+          is_auto: false, 
+          created_at: result.created_at || now() 
+        };
+        
+        setSt((prev) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            convs: prev.convs.map((c) => {
+              if (c.id === activeConv) {
+                // إضافة الرسالة للمحادثة النشطة
+                const updatedConv = {
+                  ...c,
+                  transferred: resumeAuto ? false : c.transferred,
+                  paused: resumeAuto ? null : c.paused,
+                  lastAt: outMsg.created_at,
+                  msgs: [...c.msgs, outMsg],
+                  lastMessagePreview: outMsg.body,
+                };
+                return updatedConv;
+              }
+              return c;
+            }),
+          };
+        });
+        
+        // ملاحظة: لا نحتاج لاستدعاء loadThread أو loadAll هنا لأن Realtime سيحدث الباقي
+        // لكن ننتظر قليلاً للتأكد من أن Realtime قد استلم الحدث
+        setTimeout(() => {
+          loadThread(activeConv).catch(console.error);
+        }, 500);
       }
       setDraft("");
       showToast("أُرسل الرد للعميل");
