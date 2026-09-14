@@ -584,7 +584,14 @@ export default function Dashboard() {
 
           return {
             ...prev,
-            convs: prev.convs.map(c => c.id === activeConv ? updatedActiveConv : c).sort((a,b) => new Date(b.lastAt).getTime() - new Date(a.lastAt).getTime()), // ترتيب زمني تنازلي للمحادثة المحدثة + البقية
+            // تحديث الرسائل الفعلية المعروضة داخل ConversationWindow فورًا
+            // بدل انتظار Realtime أو إعادة فتح المحادثة.
+            convs: prev.convs
+              .map(c => c.id === activeConv
+                ? { ...updatedActiveConv, msgs: updatedMsgs }
+                : c
+              )
+              .sort((a, b) => new Date(b.lastAt).getTime() - new Date(a.lastAt).getTime()),
           };
         });
         
