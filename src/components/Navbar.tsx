@@ -3,7 +3,7 @@ import { Logo, IconWhatsapp, IconMenu, IconX } from "./Icons";
 
 const LINKS = [
   { label: "الضمانات", href: "#guarantees" },
-  { label: "شاهد ميلانو", href: "#demo-section" },
+  { label: "شاهد إدارة ســوشـــيــــال", href: "#demo-section" },
   { label: "الأسعار", href: "#pricing" },
   { label: "الأسئلة", href: "#faq" },
 ];
@@ -33,7 +33,7 @@ export default function Navbar() {
             <Logo className="w-9 h-9" />
           </span>
           <span className="font-display font-bold text-2xl leading-none text-bone">
-            ميلانو
+            إدارة ســوشـــيــــال
             <span className="text-oro">.</span>
           </span>
         </a>
@@ -66,7 +66,7 @@ export default function Navbar() {
           </a>
           <a
             href="#start"
-            className="hidden sm:inline-flex items-center gap-2 bg-verde text-ink font-semibold text-sm px-5 py-2.5 rounded-full hover:bg-oro transition-colors duration-300 hover:shadow-[0_8px_30px_-8px_rgba(232,178,75,0.5)] active:scale-95"
+            className="hidden sm:inline-flex items-center gap-2 bg-verde text-ink font-semibold text-sm px-5 py-2.5 rounded-full hover:bg-oro transition-colors duration-300 hover:shadow-[0_8px_30px_-8px_rgba(46,194,126,0.4)] active:scale-95"
           >
             <IconWhatsapp className="w-4 h-4" />
             ابدأ الآن

@@ -26,7 +26,7 @@ function Diamond() {
 export function Marquee() {
   const row = [...SECTORS, ...SECTORS];
   return (
-    <section className="relative py-6 border-y border-verde/12 bg-pine/50 overflow-hidden" aria-label="الأنشطة التي يخدمها ميلانو">
+    <section className="relative py-6 border-y border-verde/12 bg-pine/50 overflow-hidden" aria-label="الأنشطة التي تخدمها إدارة ســوشـــيــــال">
       <div className="marquee-track flex w-max items-center gap-8 pe-8">
         {row.map((s, i) => (
           <span key={i} className="flex items-center gap-8">
@@ -84,7 +84,7 @@ export function Footer() {
         <div className="flex flex-col sm:flex-row lg:justify-end gap-3">
           <a
             href="#start"
-            className="group inline-flex items-center justify-center gap-2.5 bg-verde text-ink font-display font-bold text-lg px-8 py-4 rounded-2xl hover:bg-oro transition-all duration-300 active:scale-95 hover:shadow-[0_16px_45px_-12px_rgba(232,178,75,0.5)]"
+            className="group inline-flex items-center justify-center gap-2.5 bg-verde text-ink font-display font-bold text-lg px-8 py-4 rounded-2xl hover:bg-oro transition-all duration-300 active:scale-95 hover:shadow-[0_12px_40px_-12px_rgba(46,194,126,0.4)]"
           >
             <IconWhatsapp className="w-5 h-5" />
             أنشئ موظفك الآن
@@ -107,7 +107,7 @@ export function Footer() {
                 <Logo className="w-9 h-9" />
               </span>
               <span className="font-display font-bold text-2xl text-bone">
-                ميلانو<span className="text-oro">.</span>
+                إدارة ســوشـــيــــال<span className="text-oro">.</span>
               </span>
             </a>
             <p className="text-[12.5px] text-sage/80 leading-6 max-w-sm">
@@ -135,7 +135,7 @@ export function Footer() {
       {/* الشريط الأخير */}
       <div className="border-t border-verde/10">
         <div className="max-w-6xl mx-auto px-5 lg:px-8 py-5 flex flex-col sm:flex-row items-center justify-between gap-3 text-[11.5px] text-sage/70">
-          <p>© 2026 ميلانو — جميع الحقوق محفوظة.</p>
+          <p>© 2026 إدارة ســوشـــيــــال — جميع الحقوق محفوظة.</p>
           <p className="text-center sm:text-left leading-5 max-w-xl">
             الربط عبر «الأجهزة المرتبطة» في واتساب وليس قناة رسمية من Meta، وقد تقيّد واتساب أي رقم وفق
             تقديرها. <span className="text-oro-soft">اقرأ التفاصيل قبل الربط.</span>
