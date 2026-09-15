@@ -11,8 +11,10 @@ const isPreviewEnv =
   ) || process.env.HMR === "false";
 
 export default defineConfig({
-  // مسارات نسبية حتى يعمل الموقع من أي مجلد فرعي (مثل GitHub Pages: /milanochat/)
-  base: "./",
+  // ⚠️ مهم: base يجب أن يطابق اسم المستودع على GitHub بالضبط
+  // مستودعك: https://github.com/hsnq2022022-cyber/milanochat
+  // لذلك: /milanochat/
+  base: "/milanochat/",
   plugins: [react(), tailwindcss()],
   server: {
     host: "0.0.0.0",
