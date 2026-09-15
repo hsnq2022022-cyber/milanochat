@@ -11,13 +11,14 @@
  * - المحادثة النشطة لا تُقفل عند وصول رسالة لمحادثة أخرى.
  * - توحيد "out"/"outbound" إلى "out" و "in"/"inbound" إلى "in".
  * - تحميل رسائل المحادثة يتم فقط عند فتحها (لا دورية مستمرة).
+ * - الشعار يُحمَّل عبر import.meta.env.BASE_URL ليعمل على GitHub Pages.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import confetti from "canvas-confetti";
 import { apiAuthFetch, apiEnabled, api, backendMode, API, type WaSnapshot } from "../lib/api";
 import { getSupabase, getStoredClaim, clearStoredClaim } from "../lib/supabase";
 import {
-  Logo, IconWhatsapp, IconCheck, IconX, IconPlus, IconTrash, IconSend,
+  IconWhatsapp, IconCheck, IconX, IconPlus, IconTrash, IconSend,
   IconLogout, IconRefresh, IconDatabase, IconCard, IconGlobe, IconMapPin,
   IconPen, IconQuestion, IconHandoff, IconLog, IconCoin, IconSparkle, IconChevronDown,
 } from "../components/Icons";
@@ -41,8 +42,8 @@ type ConvItem = {
   humanAgentActive?: boolean;
   remainingSeconds?: number;
   lastAt: string;
-  lastMessagePreview?: string; // معاينة آخر رسالة
-  unreadCount?: number; // عدد الرسائل غير المقروءة
+  lastMessagePreview?: string;
+  unreadCount?: number;
   msgs: ThreadMsg[];
 };
 type UnresolvedItem = {
@@ -77,6 +78,9 @@ type DashState = {
 
 /* ═══════════════ أدوات ═══════════════ */
 
+/** رابط الشعار — يعمل على GitHub Pages والنطاق المخصص والمحلي. */
+const LOGO_URL = `${import.meta.env.BASE_URL}logo.png`;
+
 const fmtTime = (iso: string) =>
   new Date(iso).toLocaleTimeString("ar", { hour: "2-digit", minute: "2-digit" });
 const fmtDate = (iso: string) =>
@@ -102,8 +106,6 @@ const cls = {
     "inline-flex items-center justify-center gap-2 border border-verde/25 text-mist font-semibold text-sm px-4 py-2.5 rounded-xl hover:border-oro/60 hover:text-oro transition-all duration-300 active:scale-[0.97]",
 };
 
-/* لا يوجد أي QR تجريبي في هذا الملف — الربط يتم حصراً عبر جلسة Baileys حقيقية في الخادم */
-
 /* ═══════════════ أدوات مساعدة ═══════════════ */
 
 const now = () => new Date().toISOString();
@@ -116,7 +118,7 @@ export default function Dashboard() {
   const demo = sb === null;
 
   /* ── المصادقة ── */
-  const [authed, setAuthed] = useState(demo ? false : true); // الحقيقي: نتحقق من الجلسة أدناه
+  const [authed, setAuthed] = useState(demo ? false : true);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [authMode, setAuthMode] = useState<"login" | "signup">("login");
@@ -160,10 +162,6 @@ export default function Dashboard() {
   const toastTimer = useRef<number | null>(null);
   const scriptIdx = useRef(0);
 
-  /**
-   * مرجع للمحادثة النشطة — يُستخدم داخل معالجات Realtime
-   * لتجنّب إعادة الاشتراك عند تغيّر المحادثة المفتوحة.
-   */
   const activeConvRef = useRef<string | null>(null);
   useEffect(() => {
     activeConvRef.current = activeConv;
@@ -308,11 +306,6 @@ export default function Dashboard() {
 
   /* ═══════════════════════════════════════════════════════════
    *  قناة Realtime واحدة موحّدة (محادثات + رسائل).
-   *  - لا polling.
-   *  - لا نعرض body_encrypted.
-   *  - نقل المحادثة للأعلى عند وصول رسالة.
-   *  - إدارة unreadCount.
-   *  - لا نُقفل المحادثة النشطة عند وصول رسالة لأخرى.
    * ═══════════════════════════════════════════════════════════ */
   useEffect(() => {
     if (demo || !token || needClaim || !sb) return;
@@ -386,7 +379,7 @@ export default function Dashboard() {
       const convId: string = row.conversation_id;
       if (!convId) return;
 
-      const body = extractBody(row); // لا body_encrypted
+      const body = extractBody(row);
       const direction = normalizeDirection(row.direction);
 
       setSt((prev) => {
@@ -395,8 +388,6 @@ export default function Dashboard() {
         if (!target) return prev;
 
         const isActive = activeConvRef.current === convId;
-
-        // تجنّب التكرار (قد تكون الرسالة أُضيفت مسبقًا عبر Optimistic Update).
         const already = (target.msgs || []).some((m) => m.id === row.id);
 
         const newMsg: ThreadMsg = {
@@ -422,7 +413,6 @@ export default function Dashboard() {
               : target.msgs,
         };
 
-        // نقل المحادثة إلى الأعلى
         const others = prev.convs.filter((c) => c.id !== convId);
         return { ...prev, convs: [updatedConv, ...others] };
       });
@@ -454,7 +444,6 @@ export default function Dashboard() {
     return () => {
       sb.removeChannel(channel);
     };
-    // لا نضمّن activeConv: نستخدم activeConvRef داخل المعالجات.
   }, [demo, token, needClaim, sb]);
 
   /* ── تحميل رسائل المحادثة النشطة (مرة واحدة عند فتحها) ── */
@@ -490,7 +479,6 @@ export default function Dashboard() {
 
   useEffect(() => {
     if (demo || !activeConv || !token) return;
-    // تحميل واحد فقط — بدون setInterval
     loadThread(activeConv).catch(() => {});
   }, [demo, activeConv, token, loadThread]);
 
@@ -502,7 +490,6 @@ export default function Dashboard() {
 
   /* ── إجراءات ── */
 
-  /** فتح محادثة + تصفير عدّاد غير المقروء. */
   const openConversation = (convId: string) => {
     setActiveConv(convId);
     setMobileThread(true);
@@ -552,7 +539,6 @@ export default function Dashboard() {
         );
         setDraft("");
       } else {
-        // إرسال إلى الـ Backend — نعتمد على الرسالة التي يعيدها إن وُجدت.
         const result: any = await apiAuthFetch<any>(
           token!,
           `/api/dashboard/conversations/${activeConv}/reply`,
@@ -562,7 +548,6 @@ export default function Dashboard() {
           }
         );
 
-        // الرسالة التي نُضيفها للواجهة — من الخادم إن أمكن، وإلا fallback محلي.
         const sentMsg: ThreadMsg = {
           id: result?.id ?? result?.message?.id ?? `temp-${Date.now()}`,
           direction: "out",
@@ -577,7 +562,6 @@ export default function Dashboard() {
           const target = prev.convs.find((c) => c.id === activeConv);
           if (!target) return prev;
 
-          // تجنّب التكرار إن وصلت الرسالة عبر Realtime بالسرعة نفسها.
           const already = (target.msgs || []).some((m) => m.id === sentMsg.id);
 
           const updatedConv: ConvItem = {
@@ -850,7 +834,11 @@ export default function Dashboard() {
               <div className="absolute -top-20 -left-20 w-64 h-64 rounded-full bg-verde/10 blur-3xl" aria-hidden="true" />
               <div>
                 <span className="inline-flex items-center gap-2 text-verde mb-6">
-                  <Logo className="w-11 h-11" />
+                  <img
+                    src={LOGO_URL}
+                    alt="ميلانو"
+                    className="w-11 h-11 rounded-full object-cover"
+                  />
                   <span className="font-display font-bold text-3xl text-bone">
                     ميلانو<span className="text-oro">.</span>
                   </span>
@@ -951,7 +939,13 @@ export default function Dashboard() {
       <Shell>
         <div className="max-w-xl mx-auto px-5 pt-24 pb-20">
           <div className={`${cls.card} p-8`}>
-            <span className="text-verde inline-block mb-4"><Logo className="w-10 h-10" /></span>
+            <span className="text-verde inline-block mb-4">
+              <img
+                src={LOGO_URL}
+                alt="ميلانو"
+                className="w-10 h-10 rounded-full object-cover"
+              />
+            </span>
             <h2 className="font-display font-bold text-2xl text-bone mb-2">اربط حسابك بمشروعك</h2>
             <p className="text-sm text-sage leading-6 mb-6">
               أنشأت موظفًا من الصفحة الرئيسية؟ الصق رمز الضم الذي ظهر لك، أو سجّل بنفس البريد ليُضم تلقائيًا.
@@ -1013,7 +1007,13 @@ export default function Dashboard() {
       <header className="sticky top-0 z-40 bg-night/85 backdrop-blur-md border-b border-verde/12">
         <div className="max-w-6xl mx-auto px-5 h-16 flex items-center justify-between gap-3">
           <a href="#top" className="flex items-center gap-2 group shrink-0">
-            <span className="text-verde transition-transform duration-500 group-hover:rotate-[-8deg]"><Logo className="w-8 h-8" /></span>
+            <span className="text-verde transition-transform duration-500 group-hover:rotate-[-8deg]">
+              <img
+                src={LOGO_URL}
+                alt="ميلانو"
+                className="w-8 h-8 rounded-full object-cover"
+              />
+            </span>
             <span className="font-display font-bold text-xl text-bone hidden sm:block">
               ميلانو<span className="text-oro">.</span>
               <span className="text-sage text-xs font-body font-normal ms-2">لوحة التحكم</span>
@@ -1055,9 +1055,8 @@ export default function Dashboard() {
           </div>
         ) : null}
 
-        {/* شريط الملخص — تقسيم غير متساوٍ */}
+        {/* شريط الملخص */}
         <div className="grid md:grid-cols-12 gap-4 mb-7">
-          {/* الاتصال */}
           <section className={`${cls.card} md:col-span-5 p-5 relative overflow-hidden group hover:border-verde/35 transition-colors duration-300`}>
             <div className="absolute -bottom-14 -start-14 w-44 h-44 rounded-full bg-verde/10 blur-2xl group-hover:bg-verde/15 transition-colors duration-500" aria-hidden="true" />
             <div className="flex items-start justify-between gap-3 relative">
@@ -1089,7 +1088,6 @@ export default function Dashboard() {
             </div>
           </section>
 
-          {/* الرصيد */}
           <section className={`${cls.card} md:col-span-4 p-5 group hover:border-verde/35 transition-colors duration-300`}>
             <div className="flex items-center justify-between mb-2">
               <p className="text-[11px] text-sage">رصيد الردود</p>
@@ -1114,7 +1112,6 @@ export default function Dashboard() {
             </div>
           </section>
 
-          {/* عدّادات */}
           <section className="md:col-span-3 grid grid-rows-2 gap-4">
             <button onClick={() => setTab("convs")} className={`${cls.card} p-4 text-start group hover:border-verde/40 hover:-translate-y-0.5 transition-all duration-300`}>
               <div className="flex items-center justify-between">
@@ -1683,18 +1680,6 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* ── نافذة ربط واتساب ── */}
-      {/* [DEMO_MODE] تم تعطيل نافذة QR للعرض التوضيحي - يمكن إعادة التفعيل بإزالة التعليق */}
-      {/* qrOpen && (
-        <QrModal
-          demo={demo}
-          tenantId={st.tenantId}
-          onClose={() => setQrOpen(false)}
-          token={token}
-          onState={(s) => setSt((p) => (p ? { ...p, waStatus: s } : p))}
-        />
-      ) */}
-
       {/* ── نافذة الشحن ── */}
       {payOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true">
@@ -1751,236 +1736,6 @@ export default function Dashboard() {
         </div>
       )}
     </Shell>
-  );
-}
-
-/* ═══════════ نافذة QR ═══════════ */
-
-function QrModal({ demo, tenantId, token, onClose, onState }: { demo: boolean; tenantId: string; token: string | null; onClose: () => void; onState: (s: string) => void }) {
-  const [snap, setSnap] = useState<WaSnapshot | null>(null);
-  const [failed, setFailed] = useState(false);
-  const [loggingOut, setLoggingOut] = useState(false);
-  const [pid, setPid] = useState("");
-  const [pidErr, setPidErr] = useState("");
-  const [pidBusy, setPidBusy] = useState(false);
-
-  const bindPid = async () => {
-    if (pidBusy) return;
-    const v = pid.trim();
-    if (!/^\d{6,20}$/.test(v)) {
-      setPidErr("أدخل Phone Number ID الرقمي من Meta → WhatsApp → API Setup");
-      return;
-    }
-    setPidBusy(true);
-    setPidErr("");
-    try {
-      await api.wa.bindNumber(tenantId, v);
-      setSnap({ sessionId: tenantId, state: "CONNECTED", phone: v, error: null });
-      onState("connected");
-    } catch (e: any) {
-      setPidErr(e?.message ?? "تعذر الربط");
-    }
-    setPidBusy(false);
-  };
-  const retries = useRef(0);
-  const esRef = useRef<EventSource | null>(null);
-  const pollRef = useRef<number | null>(null);
-  const busyRef = useRef(false);
-
-  const stopStreams = () => {
-    esRef.current?.close();
-    esRef.current = null;
-    if (pollRef.current) {
-      window.clearInterval(pollRef.current);
-      pollRef.current = null;
-    }
-  };
-
-  const apply = (s: WaSnapshot) => {
-    setSnap(s);
-    onState(s.state === "CONNECTED" ? "connected" : "disconnected");
-  };
-
-  const connect = async () => {
-    if (busyRef.current) return;
-    busyRef.current = true;
-    setFailed(false);
-    try {
-      const s = await api.wa.createSession(tenantId, token);
-      if (backendMode === "supabase") {
-        apply(s);
-        busyRef.current = false;
-        return;
-      }
-      stopStreams();
-      let failures = 0;
-      const es = new EventSource(api.wa.eventsUrl(s.sessionId, token));
-      esRef.current = es;
-      es.onmessage = (m) => {
-        try {
-          failures = 0;
-          apply(JSON.parse(m.data) as WaSnapshot);
-        } catch {
-          /* تجاهل */
-        }
-      };
-      es.onerror = () => {
-        failures += 1;
-        if (failures >= 3) {
-          es.close();
-          esRef.current = null;
-          pollRef.current = window.setInterval(async () => {
-            try {
-              apply(await api.wa.getQr(s.sessionId, token));
-            } catch {
-              /* إعادة المحاولة لاحقاً */
-            }
-          }, 2500);
-        }
-      };
-    } catch {
-      setFailed(true);
-    }
-    busyRef.current = false;
-  };
-
-  useEffect(() => {
-    if (demo) return;
-    connect();
-    return stopStreams;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [demo]);
-
-  const logoutDevice = async () => {
-    if (!snap) return;
-    setLoggingOut(true);
-    try {
-      await api.wa.logout(snap.sessionId, token);
-      onState("disconnected");
-    } catch {
-      /* تجاهل */
-    }
-    setLoggingOut(false);
-  };
-
-  if (demo || failed) {
-    return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true">
-        <button className="absolute inset-0 bg-night/80 backdrop-blur-sm" onClick={onClose} aria-label="إغلاق" />
-        <div className="relative w-full max-w-sm bg-pine border border-oro/30 rounded-3xl p-6 text-center msg-in shadow-[0_40px_120px_-30px_rgba(0,0,0,0.9)]">
-          <button onClick={onClose} className="absolute top-4 left-4 text-sage hover:text-bone transition-colors" aria-label="إغلاق">
-            <IconX className="w-5 h-5" />
-          </button>
-          <div className="py-4">
-            <span className="inline-flex w-14 h-14 rounded-full bg-oro/10 border border-oro/35 items-center justify-center text-oro mb-4">
-              <IconWhatsapp className="w-7 h-7" />
-            </span>
-            <h3 className="font-display font-bold text-lg text-bone mb-2">
-              تعذر إنشاء جلسة واتساب، تحقق من اتصال الخادم.
-            </h3>
-            <p className="text-[11.5px] text-sage leading-5 mb-5">
-              {demo
-                ? "وضع العرض لا يربط واتساب حقيقياً — شغّل الخادم (server/) واضبط VITE_API_URL ثم أعد المحاولة."
-                : "الخادم لا يستجيب أو الجلسة رُفضت — تأكد من تشغيل الخادم ثم أعد المحاولة."}
-            </p>
-            {!demo && (
-              <button onClick={connect} className={`${cls.btn} w-full py-3 mb-3`}>
-                <IconRefresh className="w-4.5 h-4.5" />
-                إعادة المحاولة
-              </button>
-            )}
-            <button onClick={onClose} className="text-xs text-sage hover:text-bone underline underline-offset-4 transition-colors">
-              إغلاق
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  const st = snap?.state ?? "CONNECTING";
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true">
-      <button className="absolute inset-0 bg-night/80 backdrop-blur-sm" onClick={onClose} aria-label="إغلاق" />
-      <div className="relative w-full max-w-sm bg-pine border border-verde/25 rounded-3xl p-6 text-center msg-in shadow-[0_40px_120px_-30px_rgba(0,0,0,0.9)]">
-        <button onClick={onClose} className="absolute top-4 left-4 text-sage hover:text-bone transition-colors" aria-label="إغلاق">
-          <IconX className="w-5 h-5" />
-        </button>
-
-        {st === "CONNECTED" ? (
-          <div className="py-4">
-            <span className="inline-flex w-16 h-16 rounded-full bg-verde/15 border border-verde/40 items-center justify-center text-verde mb-4 msg-in">
-              <IconCheck className="w-8 h-8" />
-            </span>
-            <h3 className="font-display font-bold text-xl text-bone mb-1.5">
-              تم الربط بنجاح{backendMode === "server" && snap?.phone ? ` — ${snap.phone}` : ""}
-            </h3>
-            <p className="text-xs text-sage leading-5 mb-5">
-              {backendMode === "supabase"
-                ? "عبر منصة واتساب الرسمية — الردود تصل من رقمك المرتبط."
-                : "الموظف يرد الآن من معلومات مشروعك فقط."}
-            </p>
-            <button onClick={onClose} className={`${cls.btn} w-full py-3 mb-2.5`}>ممتاز</button>
-            {backendMode === "server" && (
-              <button
-                onClick={logoutDevice}
-                disabled={loggingOut}
-                className="w-full text-[11.5px] text-sage hover:text-oro underline underline-offset-4 transition-colors disabled:opacity-50"
-              >
-                {loggingOut ? "جارٍ الفصل…" : "فصل الجهاز (تسجيل خروج)"}
-              </button>
-            )}
-          </div>
-        ) : st === "UNBOUND" ? (
-          <div className="py-2 text-right">
-            <h3 className="font-display font-bold text-lg text-bone mb-1.5">اربط رقم المنصة الرسمية</h3>
-            <p className="text-[11.5px] text-sage leading-5 mb-3.5">
-              في وضع Supabase يعمل واتساب عبر Cloud API الرسمية من Meta — انسخ
-              <span dir="ltr" className="text-oro-soft font-semibold"> Phone Number ID </span>
-              من لوحة Meta والصقه هنا:
-            </p>
-            <input
-              dir="ltr"
-              value={pid}
-              onChange={(e) => setPid(e.target.value)}
-              placeholder="106342958987654"
-              className={`${cls.input} text-left tabular-nums mb-2`}
-            />
-            {pidErr && <p className="text-[11px] text-oro-soft mb-2">{pidErr}</p>}
-            <button onClick={bindPid} disabled={pidBusy} className={`${cls.btn} w-full py-3`}>
-              {pidBusy ? "جارٍ الربط…" : "ربط الرقم"}
-            </button>
-          </div>
-        ) : (
-          <>
-            <h3 className="font-display font-bold text-xl text-bone mb-1">اربط واتساب</h3>
-            <p className="text-[11.5px] text-sage leading-5 mb-4">
-              Meta WhatsApp Cloud API - الاتصال تلقائي عبر الـ Access Token
-            </p>
-            <div className="bg-bone rounded-2xl p-3 inline-block mb-3">
-              <div className="w-52 h-52 flex flex-col items-center justify-center gap-2.5">
-                <span className="w-6 h-6 rounded-full border-2 border-[#1c5c41]/25 border-t-[#1c5c41] animate-spin" />
-                <span className="text-[13px] font-semibold" style={{ color: "#1c5c41" }}>
-                  {st === "CONNECTING"
-                    ? "جاري التحقق من الاتصال..."
-                    : st === "DISCONNECTED"
-                      ? "غير متصل - تحقق من Environment Variables"
-                      : st === "ERROR"
-                        ? "تعذر الاتصال بـ Meta Cloud API"
-                        : "جارٍ الاتصال..."}
-                </span>
-              </div>
-            </div>
-            {st === "ERROR" && (
-              <p className="text-[10.5px] text-oro-soft leading-5">
-                {snap?.error ?? "تعذر الاتصال بـ Meta Cloud API، تحقق من Environment Variables."}
-              </p>
-            )}
-          </>
-        )}
-      </div>
-    </div>
   );
 }
 
