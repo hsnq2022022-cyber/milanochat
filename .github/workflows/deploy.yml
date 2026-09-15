@@ -33,12 +33,46 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # ✅ تحقق: هل ملف الشعار موجود فعلًا في public/؟
+      - name: Verify logo.png exists
+        run: |
+          if [ ! -f "public/logo.png" ]; then
+            echo "❌ public/logo.png not found!"
+            echo "Files in public/:"
+            ls -la public/ || echo "(public/ folder missing)"
+            exit 1
+          fi
+          echo "✅ public/logo.png found"
+          file public/logo.png
+          du -h public/logo.png
+
+      # ✅ تحقق: هل vite.config يحتوي على base صحيح؟
+      - name: Verify vite.config base
+        run: |
+          if ! grep -q "milanochat" vite.config.* 2>/dev/null; then
+            echo "⚠️  تحذير: لم أجد 'milanochat' في vite.config.ts/js"
+            echo "تأكد من إضافة: base: '/milanochat/'"
+          else
+            echo "✅ base موجود في vite.config"
+          fi
+
       - name: Build
         run: npm run build
         env:
           VITE_API_URL: https://milanochat-production.up.railway.app
           VITE_SUPABASE_URL: https://nmhefwvhoholcjrbbila.supabase.co
           VITE_SUPABASE_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5taGVmd3Zob2hvbGNqcmJiaWxhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg2MDQxODgsImV4cCI6MjEwNDE4MDE4OH0.ALjKCHUjCfoxW0HJdz3EwL6JIEcc6OYXPucLP9un5j8
+
+      # ✅ تحقق: هل logo.png وصل إلى dist/ بعد البناء؟
+      - name: Verify logo.png in build output
+        run: |
+          if [ ! -f "dist/logo.png" ]; then
+            echo "❌ dist/logo.png not found — لن تظهر الصورة في الموقع!"
+            echo "محتوى dist/:"
+            ls -la dist/
+            exit 1
+          fi
+          echo "✅ dist/logo.png موجود وجاهز للنشر"
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
