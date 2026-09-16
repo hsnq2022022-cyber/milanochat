@@ -491,10 +491,11 @@ export async function handleIncomingMessage(
     }
 
     /**
-     * 15. تسجيل السؤال غير المحلول.
+     * 15. تسجيل السؤال غير المحلول وتفعيل Human Agent تلقائيًا.
      *
      * هذا يسمح بإظهاره لاحقًا في لوحة التحكم
      * وتحويله إلى معلومة في قاعدة المعرفة.
+     * بالإضافة إلى تحويل المحادثة لموظف بشري فورًا.
      */
     if (kind === "refusal") {
       const {
@@ -513,6 +514,32 @@ export async function handleIncomingMessage(
         console.error(
           "[WA] unresolved question insert failed:",
           unresolvedError.message
+        );
+      }
+
+      // ── تفعيل Human Agent تلقائيًا عند العجز ──
+      const expiresAt = new Date(
+        Date.now() + 15 * 60 * 1000
+      ).toISOString();
+
+      const { error: handoffError } = await db
+        .from("conversations")
+        .update({
+          transferred: true,
+          auto_paused_reason: "ai_handoff",
+          human_agent_expires_at: expiresAt,
+          human_agent_activated_by: null, // آلي وليس يدوي
+        })
+        .eq("id", conv.id);
+
+      if (handoffError) {
+        console.error(
+          "[WA] auto handoff update failed:",
+          handoffError.message
+        );
+      } else {
+        console.log(
+          `[WA] auto handoff activated for conversation ${conv.id}`
         );
       }
     }
