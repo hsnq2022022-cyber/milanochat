@@ -61,7 +61,7 @@ export default function Pricing() {
             >
               <div className="absolute top-0 inset-x-0 h-1.5 bg-gradient-to-l from-verde via-oro to-transparent" />
               <div className="absolute -start-10 -bottom-14 opacity-10 text-verde rotate-12" aria-hidden="true">
-                <Logo className="w-48 h-48" />
+                <img src={`${import.meta.env.BASE_URL}logo.png`} alt="شعار إدارة ســوشـــيــــال" className="w-48 h-48" />
               </div>
 
               <div className="relative flex flex-wrap items-end justify-between gap-6">

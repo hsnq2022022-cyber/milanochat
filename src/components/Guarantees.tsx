@@ -9,7 +9,6 @@ import {
   IconPen,
   IconQuestion,
   IconShieldCheck,
-  Logo,
 } from "./Icons";
 
 type G = {
@@ -45,7 +44,7 @@ function SourcesDiagram() {
       </svg>
       <div className="flex flex-col items-center gap-2">
         <span className="w-14 h-14 rounded-2xl bg-moss border border-verde/40 flex items-center justify-center text-verde shadow-[0_10px_30px_-10px_rgba(46,194,126,0.4)]">
-          <Logo className="w-8 h-8" />
+          <img src={`${import.meta.env.BASE_URL}logo.png`} alt="شعار إدارة ســوشـــيــــال" className="w-8 h-8" />
         </span>
         <span className="text-[11px] text-sage font-semibold">إدارة ســوشـــيــــال</span>
       </div>

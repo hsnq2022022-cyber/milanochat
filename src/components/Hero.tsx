@@ -26,7 +26,6 @@ import {
   IconTrash,
   IconSparkle,
   IconWhatsapp,
-  Logo,
 } from "./Icons";
 
 /* ============================ أداة الربط ============================ */
@@ -770,7 +769,7 @@ function Wizard() {
           <div className="py-6">
             <div className="flex items-center gap-3 mb-6">
               <span className="text-verde">
-                <Logo className="w-10 h-10 animate-pulse" />
+                    <img src={`${import.meta.env.BASE_URL}logo.png`} alt="شعار إدارة ســوشـــيــــال" className="w-10 h-10 animate-pulse" />
               </span>
               <div>
                 <h2 className="font-display font-bold text-xl text-bone">جارٍ إنشاء موظف إدارة ســوشـــيــــال…</h2>
@@ -1161,7 +1160,7 @@ function Wizard() {
                       <p className="text-[11px] text-sage">دفعة واحدة — بدون اشتراك شهري</p>
                     </div>
                     <span className="text-verde">
-                      <Logo className="w-9 h-9" />
+                    <img src={`${import.meta.env.BASE_URL}logo.png`} alt="شعار إدارة ســوشـــيــــال" className="w-9 h-9" />
                     </span>
                   </div>
                   <ul className="pt-3 space-y-2">
@@ -1304,7 +1303,7 @@ export default function Hero() {
               كم سعر السبانش لاتيه؟
             </div>
             <div className="floaty-slow self-end bg-wa-out text-bone text-[13px] px-4 py-2.5 rounded-2xl rounded-br-md shadow-lg flex items-center gap-2">
-              <span className="text-verde"><Logo className="w-4 h-4" /></span>
+              <img src={`${import.meta.env.BASE_URL}logo.png`} alt="شعار إدارة ســوشـــيــــال" className="w-4 h-4" />
               18 ريال — حار أو مثلج
             </div>
           </div>

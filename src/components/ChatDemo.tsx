@@ -69,7 +69,7 @@ function Bubble({ m }: { m: Msg }) {
       >
         {!mine && (
           <span className="absolute -top-2 start-2 text-verde">
-            <Logo className="w-4 h-4" />
+            <img src={`${import.meta.env.BASE_URL}logo.png`} alt="شعار إدارة ســوشـــيــــال" className="w-4 h-4" />
           </span>
         )}
         <p className={m.highlight ? "font-semibold" : ""}>{m.text}</p>
@@ -98,7 +98,7 @@ function Phone({ step, typing }: { step: number; typing: boolean }) {
           {/* رأس واتساب */}
           <div className="bg-pine px-4 py-3 flex items-center gap-3 border-b border-verde/15">
             <span className="w-9 h-9 rounded-full bg-moss border border-verde/40 flex items-center justify-center text-verde shrink-0">
-              <Logo className="w-5.5 h-5.5" />
+              <img src={`${import.meta.env.BASE_URL}logo.png`} alt="شعار إدارة ســوشـــيــــال" className="w-5.5 h-5.5" />
             </span>
             <div className="flex-1 min-w-0">
               <p className="text-sm font-bold text-bone truncate">متجر إدارة سوشيال — موظف إدارة</p>
