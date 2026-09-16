@@ -123,8 +123,8 @@ export function Footer() {
         <div className="max-w-6xl mx-auto px-5 lg:px-8 py-10 grid sm:grid-cols-[1.4fr_1fr_1fr] gap-8">
           <div>
             <a href="#top" className="flex items-center gap-2.5 mb-4">
-              <span className="text-verde">
-                <Logo className="w-9 h-9" />
+              <span>
+                <img src={`${import.meta.env.BASE_URL}logo.png`} alt="شعار إدارة ســوشـــيــــال" className="w-9 h-9" />
               </span>
 
               <span className="font-display font-bold text-2xl text-bone">

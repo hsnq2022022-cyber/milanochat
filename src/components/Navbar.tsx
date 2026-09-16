@@ -29,8 +29,8 @@ export default function Navbar() {
     >
       <nav className="max-w-6xl mx-auto px-5 lg:px-8 h-16 flex items-center justify-between gap-4">
         <a href="#top" className="flex items-center gap-2.5 group">
-          <span className="text-verde transition-transform duration-500 group-hover:rotate-[-8deg] group-hover:scale-110">
-            <Logo className="w-9 h-9" />
+          <span className="transition-transform duration-500 group-hover:rotate-[-8deg] group-hover:scale-110">
+            <img src={`${import.meta.env.BASE_URL}logo.png`} alt="شعار إدارة ســوشـــيــــال" className="w-9 h-9" />
           </span>
           <span className="font-display font-bold text-2xl leading-none text-bone">
             إدارة ســوشـــيــــال

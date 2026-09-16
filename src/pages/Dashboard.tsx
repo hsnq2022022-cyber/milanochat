@@ -1400,8 +1400,8 @@ export default function Dashboard() {
                       </label>
                     )}
                     {!active.humanAgentActive && (
-                      <div className="mb-2.5 px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg">
-                        <span className="text-[11px] text-blue-700">
+                      <div className="mb-2.5 px-3 py-2 bg-blue-100 border-2 border-blue-400 rounded-lg">
+                        <span className="text-[12px] text-blue-900 font-bold">
                           الرد الآلي يعمل حاليًا. اضغط Human Agent للتدخل.
                         </span>
                       </div>
