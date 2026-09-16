@@ -158,6 +158,9 @@ export default function Dashboard() {
   const [editingWidget, setEditingWidget] = useState<string | null>(null);
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
 
+  /* ── Human Agent Countdown State ── */
+  const [humanAgentCountdown, setHumanAgentCountdown] = useState<Record<string, number>>({});
+
   const threadEndRef = useRef<HTMLDivElement>(null);
   const toastTimer = useRef<number | null>(null);
   const scriptIdx = useRef(0);
@@ -172,6 +175,55 @@ export default function Dashboard() {
     if (toastTimer.current) window.clearTimeout(toastTimer.current);
     toastTimer.current = window.setTimeout(() => setToast(""), 3200);
   };
+
+  /* ── Human Agent Countdown Timer ── */
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setHumanAgentCountdown((prev) => {
+        const next: Record<string, number> = {};
+        let hasChanged = false;
+        let anyExpired = false;
+        const expiredIds: string[] = [];
+
+        Object.entries(prev).forEach(([convId, seconds]) => {
+          if (seconds <= 0) {
+            anyExpired = true;
+            expiredIds.push(convId);
+            return;
+          }
+          const newSeconds = seconds - 1;
+          next[convId] = newSeconds;
+          if (newSeconds !== seconds) hasChanged = true;
+        });
+
+        if (anyExpired) {
+          // Handle expiration for each expired conversation
+          expiredIds.forEach((convId) => {
+            apiAuthFetch(token!, `/api/dashboard/conversations/${convId}/release`, { method: "POST" })
+              .then(() => {
+                setSt((prevSt) => prevSt ? {
+                  ...prevSt,
+                  convs: prevSt.convs.map((c) => c.id === convId ? {
+                    ...c,
+                    transferred: false,
+                    humanAgentActive: false,
+                    remainingSeconds: 0,
+                    humanAgentExpiresAt: null
+                  } : c)
+                } : null);
+                showToast("انتهت مدة Human Agent — عاد الرد الآلي");
+              })
+              .catch((e) => console.error("فشل الإلغاء التلقائي:", e));
+          });
+          return {}; // Clear all expired entries
+        }
+
+        return hasChanged ? next : prev;
+      });
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [token]);
 
   /* ── جلسة Supabase (الوضع الحقيقي) ── */
   useEffect(() => {
@@ -505,6 +557,13 @@ export default function Dashboard() {
   };
 
   const replyManual = async () => {
+    // Check if Human Agent is active for this conversation
+    const active = st?.convs.find(c => c.id === activeConv);
+    if (!active?.humanAgentActive) {
+      showToast("يجب تفعيل Human Agent للرد اليدوي");
+      return;
+    }
+    
     if (!activeConv || !draft.trim() || !st) return;
     const outgoing = draft.trim();
     setSending(true);
@@ -1245,6 +1304,11 @@ export default function Dashboard() {
                       <button
                         onClick={async () => {
                           await apiAuthFetch(token!, `/api/dashboard/conversations/${active.id}/release`, { method: "POST" });
+                          setHumanAgentCountdown((prev) => {
+                            const next = { ...prev };
+                            delete next[active.id];
+                            return next;
+                          });
                           setSt((prev) => prev ? {
                             ...prev,
                             convs: prev.convs.map((c) => c.id === active.id ? {
@@ -1255,6 +1319,7 @@ export default function Dashboard() {
                               humanAgentExpiresAt: null
                             } : c)
                           } : null);
+                          showToast("تم إنهاء Human Agent — الرد الآلي يعمل");
                         }}
                         className="text-[10px] font-bold text-red-600 bg-red-100 hover:bg-red-200 border border-red-300 rounded-full px-2.5 py-1 inline-flex items-center gap-1 transition-colors"
                       >
@@ -1269,6 +1334,10 @@ export default function Dashboard() {
                         onClick={async () => {
                           try {
                             const res = await apiAuthFetch<{ expiresAt: string }>(token!, `/api/dashboard/conversations/${active.id}/takeover`, { method: "POST" });
+                            setHumanAgentCountdown((prev) => ({
+                              ...prev,
+                              [active.id]: 900 // 15 minutes in seconds
+                            }));
                             setSt((prev) => prev ? {
                               ...prev,
                               convs: prev.convs.map((c) => c.id === active.id ? {
@@ -1317,11 +1386,25 @@ export default function Dashboard() {
 
                   {/* الملحن */}
                   <div className="p-3.5 border-t border-verde/10 bg-night/40">
-                    {(active.transferred || active.paused) && (
+                    {active.humanAgentActive && (
+                      <div className="mb-2.5 px-3 py-2 bg-amber-100 border border-amber-300 rounded-lg flex items-center justify-between gap-2">
+                        <span className="text-[11px] font-bold text-amber-800">
+                          ⚠️ Human Agent نشط — الرد الآلي متوقف. متبقٍ: {Math.floor((humanAgentCountdown[active.id] ?? 0) / 60)}:{String((humanAgentCountdown[active.id] ?? 0) % 60).padStart(2, '0')}
+                        </span>
+                      </div>
+                    )}
+                    {!active.humanAgentActive && (active.transferred || active.paused) && (
                       <label className="flex items-center gap-2.5 mb-2.5 text-[11.5px] text-mist cursor-pointer select-none">
                         <input type="checkbox" checked={resumeAuto} onChange={(e) => setResumeAuto(e.target.checked)} className="accent-[#2ec27e] w-4 h-4" />
                         استئناف الرد الآلي بعد إرسال هذا الرد
                       </label>
+                    )}
+                    {!active.humanAgentActive && (
+                      <div className="mb-2.5 px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg">
+                        <span className="text-[11px] text-blue-700">
+                          الرد الآلي يعمل حاليًا. اضغط Human Agent للتدخل.
+                        </span>
+                      </div>
                     )}
                     <div className="flex gap-2.5 items-end">
                       <textarea
@@ -1329,10 +1412,16 @@ export default function Dashboard() {
                         onChange={(e) => setDraft(e.target.value)}
                         onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); replyManual(); } }}
                         rows={1}
-                        placeholder="اكتب ردّك اليدوي…"
-                        className={`${cls.input} resize-none flex-1`}
+                        disabled={!active.humanAgentActive}
+                        placeholder={active.humanAgentActive ? "اكتب ردّك اليدوي…" : "اضغط Human Agent للرد يدويًا"}
+                        className={`${cls.input} resize-none flex-1 disabled:opacity-50 disabled:cursor-not-allowed`}
                       />
-                      <button onClick={replyManual} disabled={sending || !draft.trim()} className={`${cls.btn} !rounded-xl !px-4 !py-2.5`} aria-label="إرسال">
+                      <button 
+                        onClick={replyManual} 
+                        disabled={sending || !draft.trim() || !active.humanAgentActive} 
+                        className={`${cls.btn} !rounded-xl !px-4 !py-2.5 disabled:opacity-50 disabled:cursor-not-allowed`} 
+                        aria-label="إرسال"
+                      >
                         <IconSend className="w-5 h-5 -scale-x-100" />
                       </button>
                     </div>
