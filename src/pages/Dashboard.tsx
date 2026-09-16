@@ -37,6 +37,7 @@ type ThreadMsg = {
 type ConvItem = {
   id: string;
   phone: string;
+  customerName?: string | null;
   transferred: boolean;
   paused: string | null;
   humanAgentExpiresAt?: string | null;
@@ -1418,8 +1419,18 @@ export default function Dashboard() {
                         }`}
                       >
                         <div className="flex items-center justify-between gap-2 mb-1">
-                          <span className="text-[13px] font-bold text-bone" dir="ltr">{c.phone}</span>
-                          <span className="text-[10px] text-sage tabular-nums">{fmtTime(c.lastAt)}</span>
+                          {c.customerName ? (
+                            <>
+                              <span className="text-[13px] font-bold text-bone">{c.customerName}</span>
+                              <span className="text-[10px] text-sage tabular-nums" dir="ltr">{c.phone}</span>
+                            </>
+                          ) : (
+                            <>
+                              <span className="text-[13px] font-bold text-bone" dir="ltr">{c.phone}</span>
+                              <span className="text-[10px] text-sage tabular-nums">{fmtTime(c.lastAt)}</span>
+                            </>
+                          )}
+                          {!c.customerName && <span className="text-[10px] text-sage tabular-nums">{fmtTime(c.lastAt)}</span>}
                         </div>
                         <p className="text-[11.5px] text-sage truncate">
                           {c.lastMessagePreview ?? c.msgs[c.msgs.length - 1]?.body ?? "—"}
@@ -1470,7 +1481,14 @@ export default function Dashboard() {
                       <IconWhatsapp className="w-4.5 h-4.5" />
                     </span>
                     <div className="flex-1">
-                      <p className="text-[13px] font-bold text-bone" dir="ltr">{active.phone}</p>
+                      {active.customerName ? (
+                        <>
+                          <p className="text-[13px] font-bold text-bone">{active.customerName}</p>
+                          <p className="text-[10.5px] text-sage" dir="ltr">{active.phone}</p>
+                        </>
+                      ) : (
+                        <p className="text-[13px] font-bold text-bone" dir="ltr">{active.phone}</p>
+                      )}
                       <p className="text-[10.5px] text-sage">
                         {active.humanAgentActive
                           ? `Human Agent Active — ${Math.floor((active.remainingSeconds ?? 0) / 60)}:${String((active.remainingSeconds ?? 0) % 60).padStart(2, '0')} متبقي`

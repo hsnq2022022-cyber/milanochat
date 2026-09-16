@@ -546,6 +546,19 @@ class MetaCloudAPIProvider implements WhatsAppProvider {
               message?.type === "text" &&
               message?.text?.body
             ) {
+              /**
+               * استخراج اسم العميل من contacts.
+               */
+              let customerName: string | null = null;
+              if (Array.isArray(value.contacts)) {
+                const matchingContact = value.contacts.find(
+                  (c: any) => c.wa_id === message.from
+                );
+                if (matchingContact?.profile?.name) {
+                  customerName = String(matchingContact.profile.name);
+                }
+              }
+
               messages.push({
                 tenantId: "",
                 chatId: message.from,
@@ -558,6 +571,7 @@ class MetaCloudAPIProvider implements WhatsAppProvider {
                   ) * 1000,
                 fromMe: false,
                 phoneNumberId,
+                customerName,
               });
             }
           }

@@ -54,6 +54,7 @@ export interface IncomingMessage {
   timestamp: number;
   fromMe: boolean;
   phoneNumberId?: string; // Meta Cloud API phone_number_id من metadata
+  customerName?: string | null; // اسم العميل من WhatsApp Profile
 }
 
 export interface MessageStatus {

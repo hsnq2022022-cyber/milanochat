@@ -200,12 +200,21 @@ async function saveIncomingMessage(message: any): Promise<boolean> {
         tenant_id: message.tenantId,
         wa_chat_id: message.chatId,
         customer_phone_encrypted: encryptField(message.chatId),
+        customer_name: message.customerName || null,
         last_message_at: new Date(message.timestamp).toISOString(),
       })
       .select("id")
       .single();
 
     conversationId = newConv?.id;
+  } else {
+    // ── 4) تحديث اسم العميل إذا تغير ──
+    if (message.customerName) {
+      await db
+        .from("conversations")
+        .update({ customer_name: message.customerName })
+        .eq("id", conversationId);
+    }
   }
 
   if (!conversationId) {
