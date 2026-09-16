@@ -21,7 +21,7 @@ type G = {
   visual?: JSX.Element;
 };
 
-/* مخطط مصغّر لبطاقة الأولى: المصادر → ميلانو */
+/* مخطط مصغّر لبطاقة الأولى: المصادر → إدارة ســوشـــيــــال */
 function SourcesDiagram() {
   return (
     <div className="mt-6 grid grid-cols-[1fr_auto_1fr] items-center gap-3" aria-hidden="true">
@@ -47,7 +47,7 @@ function SourcesDiagram() {
         <span className="w-14 h-14 rounded-2xl bg-moss border border-verde/40 flex items-center justify-center text-verde shadow-[0_10px_30px_-10px_rgba(46,194,126,0.4)]">
           <Logo className="w-8 h-8" />
         </span>
-        <span className="text-[11px] text-sage font-semibold">ميلانو</span>
+        <span className="text-[11px] text-sage font-semibold">إدارة ســوشـــيــــال</span>
       </div>
     </div>
   );
@@ -65,13 +65,13 @@ const ITEMS: G[] = [
   {
     n: "٠٢",
     title: "كل رد يُفحص قبل ما يُرسل",
-    body: "قبل وصول الرد للعميل، يمر على فحص يمنع أي سعر أو موعد أو وعد ما صرّحت به. لو حاول يخترع، يُستبدل الرد ولا يخرج.",
+    body: "قبل وصول الرد للعميل، يمر على فحص يمنع أي سعر أو موعد أو وعد ما صرّحت به. لو حاول يخترع، يُستبدل الرد ولا يوصل للعميل.",
     icon: <IconFilter className="w-6 h-6" />,
   },
   {
     n: "٠٣",
     title: "ما يعرف؟ يقول ما يعرف",
-    body: "إذا سُئل عن شي ما عندك فيه معلومة مؤكدة، يقولها بوضوح ويعرض تحويل العميل لك — بدل ما يخمّن ويورّطك بوعد.",
+    body: "إذا سُئل عن شي ما عندك فيه معلومة مؤكدة، يقولها بوضوح ويعرض تحويل العميل لك — بدل ما يخمّن ويورّطك بوعود.",
     icon: <IconQuestion className="w-6 h-6" />,
   },
   {
@@ -125,7 +125,7 @@ export default function Guarantees() {
               }`}
             >
               <div className="flex items-start justify-between gap-4">
-                <span className="w-12 h-12 rounded-2xl bg-moss border border-verde/25 text-verde flex items-center justify-center group-hover:text-oro group-hover:border-oro/50 group-hover:rotate-6 transition-all duration-400">
+                <span className="w-12 h-12 rounded-2xl bg-moss border border-verde/25 text-verde flex items-center justify-center group-hover:text-oro group-hover:border-oro/50 group-hover:rotate-6 transition-all duration-300">
                   {g.icon}
                 </span>
                 <span className="font-display font-bold text-2xl text-verde/25 group-hover:text-oro/40 transition-colors duration-400">
