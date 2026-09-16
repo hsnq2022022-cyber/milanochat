@@ -42,7 +42,7 @@ const SOURCES: { id: Source; label: string; desc: string; icon: (c: string) => J
 
 const WORK_STEPS = [
   "نقرأ معلومات مشروعك من المصدر",
-  "نبني البطاقة المعرفية لميلانو",
+  "نبني البطاقة المعرفية لإدارة ســوشـــيــــال",
   "ندرّبه على لهجة عملائك",
   "نجهّز خط الواتساب للربط",
 ];
@@ -659,7 +659,7 @@ function Wizard() {
                       <input
                         value={bizName}
                         onChange={(e) => setBizName(e.target.value)}
-                        placeholder="كافيه ميلانو"
+                        placeholder="كافيه إدارة ســوشـــيــــال"
                         className={`${inputCls} ${errors.bizName ? "border-oro/70" : ""}`}
                       />
                       {errors.bizName && <p className={errCls}>{errors.bizName}</p>}
@@ -773,7 +773,7 @@ function Wizard() {
                 <Logo className="w-10 h-10 animate-pulse" />
               </span>
               <div>
-                <h2 className="font-display font-bold text-xl text-bone">جارٍ إنشاء موظف ميلانو…</h2>
+                <h2 className="font-display font-bold text-xl text-bone">جارٍ إنشاء موظف إدارة ســوشـــيــــال…</h2>
                 <p className="text-xs text-sage">المصدر: {sourceLabel}</p>
               </div>
             </div>
@@ -897,7 +897,7 @@ function Wizard() {
             <span className="inline-flex w-16 h-16 rounded-full bg-verde/15 border border-verde/40 items-center justify-center text-verde mb-4">
               <IconCheck className="w-8 h-8" />
             </span>
-            <h2 className="font-display font-bold text-2xl text-bone mb-1">موظف ميلانو جاهز</h2>
+            <h2 className="font-display font-bold text-2xl text-bone mb-1">موظف إدارة ســوشـــيــــال جاهز</h2>
             <p className="text-sm text-sage mb-6">
               {bizName.trim() ? `«${bizName.trim()}»` : "مشروعك"} صار عنده موظف يرد من معلوماته الحقيقية فقط.
             </p>
@@ -1065,7 +1065,7 @@ function Wizard() {
                 <p className="text-xs text-sage leading-5">
                   {backendMode === "supabase"
                     ? "عبر منصة واتساب الرسمية — بلا مسح رمز وبلا خطر حظر. جرّب إرسال رسالة من رقمك المضاف كمتلقٍ تجريبي."
-                    : "جرّب إرسال رسالة من رقم ثاني — ميلانو يرد من معلومات مشروعك فقط، ويحوّل لك أي سؤال ما يتأكد منه."}
+                    : "جرّب إرسال رسالة من رقم ثاني — إدارة ســوشـــيــــال ترد من معلومات مشروعك فقط، وتحوّل لك أي سؤال ما يتأكد منه."}
                 </p>
               </div>
             ) : backendMode === "supabase" && waSnap.state === "UNBOUND" ? (
@@ -1195,7 +1195,7 @@ function Wizard() {
                 <p className="text-sm text-sage leading-6 mb-6">
                   وصلك رابط ربط «الأجهزة المرتبطة» على جوالك.
                   <br />
-                  امسحه من واتساب — وميلانو يبدأ يرد عنك خلال ثواني.
+                  امسحه من واتساب — وإدارة ســوشـــيــــال تبدأ ترد عنك خلال ثواني.
                 </p>
                 <div className="bg-night/60 border border-verde/15 rounded-2xl p-4 mb-6">
                   <div className="flex items-center justify-center gap-2 text-verde text-sm font-semibold">
