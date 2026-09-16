@@ -3,7 +3,7 @@ import { useInView, usePrefersReducedMotion, useReveal } from "../hooks/useRevea
 import { IconMic, IconQuestion, IconShieldCheck, IconTicks, IconHandoff, Logo } from "./Icons";
 
 type Msg = {
-  from: "customer" | "milano" | "system";
+  from: "customer" | "idara" | "system";
   text: string;
   time: string;
   highlight?: boolean;
@@ -11,14 +11,14 @@ type Msg = {
 
 const SCRIPT: Msg[] = [
   { from: "customer", text: "سلام عليكم", time: "9:41 م" },
-  { from: "milano", text: "وعليكم السلام! حيّاك في كافيه ميلانو ☕ كيف أقدر أساعدك اليوم؟", time: "9:41 م" },
+  { from: "idara", text: "وعليكم السلام! حيّاك في متجر إدارة سوشيال ☕ كيف أقدر أساعدك اليوم؟", time: "9:41 م" },
   { from: "customer", text: "كم سعر السبانش لاتيه؟", time: "9:42 م" },
-  { from: "milano", text: "السبانش لاتيه عندنا بـ 18 ريال — حار أو مثلج. وعندك كرت الولاء: الكوب السادس مجاني.", time: "9:42 م" },
+  { from: "idara", text: "السبانش لاتيه عندنا بـ 18 ريال — حار أو مثلج. وعندك كرت الولاء: الكوب السادس مجاني.", time: "9:42 م" },
   { from: "customer", text: "ومتى تفتحون يوم الجمعة؟", time: "9:43 م" },
-  { from: "milano", text: "نفتح يومياً من 7 الصباح إلى 1 بالليل، بما فيها الجمعة والسبت. حياك في أي وقت!", time: "9:43 م" },
+  { from: "idara", text: "نفتح يومياً من 7 الصباح إلى 1 بالليل، بما فيها الجمعة والسبت. حياك في أي وقت!", time: "9:43 م" },
   { from: "customer", text: "عندكم فرع في جدة؟", time: "9:44 م" },
   {
-    from: "milano",
+    from: "idara",
     text: "عذراً، ما عندي معلومات مؤكدة عن فروع في جدة. أحوّلك للفريق يعطونك التفاصيل كاملة.",
     time: "9:44 م",
     highlight: true,
@@ -101,7 +101,7 @@ function Phone({ step, typing }: { step: number; typing: boolean }) {
               <Logo className="w-5.5 h-5.5" />
             </span>
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-bold text-bone truncate">كافيه ميلانو — موظف ميلانو</p>
+              <p className="text-sm font-bold text-bone truncate">متجر إدارة سوشيال — موظف إدارة</p>
               <p className="text-[11px] text-verde flex items-center gap-1.5">
                 <span className="w-1.5 h-1.5 rounded-full bg-verde live-dot" />
                 {typing ? "يكتب الآن…" : "متصل الآن"}
@@ -176,7 +176,7 @@ export default function ChatDemo() {
       return;
     }
     const msg = SCRIPT[step];
-    if (msg.from === "milano") {
+    if (msg.from === "idara") {
       setTyping(true);
       const t = setTimeout(() => {
         setTyping(false);
@@ -208,7 +208,7 @@ export default function ChatDemo() {
           <div className="flex items-center justify-center gap-3 mt-6">
             <button
               onClick={replay}
-              className="inline-flex items-center gap-2 text-sm font-semibold text-mist bg-moss border border-verde/25 rounded-full px-5 py-2.5 hover:border-oro/60 hover:text-oro transition-all duration-300 active:scale-95"
+              className="inline-flex items-center gap-2 text-sm font-semibold text-mist bg-moss border border-verde/25 rounded-full px-5 py-2.5 hover:border-oro/60 hover:text-oro transition-all duration-300"
             >
               <svg viewBox="0 0 24 24" className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1M3.5 3.5v5h5" />
@@ -224,12 +224,12 @@ export default function ChatDemo() {
         {/* الشرح */}
         <div>
           <p data-reveal className="font-display font-bold text-oro text-lg mb-2">
-            — ميلانو وهو يشتغل
+            — إدارة سوشيال وهي تشتغل
           </p>
           <h2 data-reveal style={{ transitionDelay: "80ms" }} className="font-display font-extrabold text-4xl sm:text-5xl leading-[1.15] text-bone mb-4">
-            شوفه يرد…
+            شوفها ترد…
             <br />
-            <span className="text-verde">وشوفه يوقف بوقته</span>
+            <span className="text-verde">وشوفها توقف بوقتها</span>
           </h2>
           <p data-reveal style={{ transitionDelay: "160ms" }} className="text-sage leading-8 mb-9 max-w-lg">
             المحادثة اللي تشوفها توضح الفرق بين موظف يرد «أي كلام» وموظف مربوط ببياناتك: يجاوب بدقّة،
