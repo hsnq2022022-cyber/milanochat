@@ -8,6 +8,7 @@
  * - تمت إضافة GET /conversations/summary لتحديث خفيف بديل عن polling ثقيل.
  * - تمت إضافة POST /conversations/:id/mark-read.
  * - شكل رد /reply موحَّد ليُقرأ مباشرة في الواجهة عبر result.message.
+ * - تمت إضافة customer_name إلى قائمة المحادثات ورد الـ shapeConversation.
  */
 
 import { Router } from "express";
@@ -115,6 +116,7 @@ function shapeConversation(c: any) {
   return {
     id: c.id,
     customerPhone: decryptField(c.customer_phone_encrypted),
+    customerName: c.customer_name || null,
     transferred: c.transferred,
     autoPausedReason: c.auto_paused_reason,
     humanAgentExpiresAt: c.human_agent_expires_at ?? null,
@@ -349,6 +351,7 @@ dashboardRouter.get("/conversations", async (req, res) => {
     .select(`
       id,
       customer_phone_encrypted,
+      customer_name,
       transferred,
       auto_paused_reason,
       human_agent_expires_at,
@@ -399,6 +402,7 @@ dashboardRouter.get("/conversations/:id", async (req, res) => {
     .select(`
       id,
       customer_phone_encrypted,
+      customer_name,
       transferred,
       auto_paused_reason,
       human_agent_expires_at,
