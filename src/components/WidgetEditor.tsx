@@ -1557,7 +1557,7 @@ function AppearanceTab({
           />
 
           <span className="text-sm text-bone">
-            إظهار "مدعوم بواسطة ميلانو"
+            إظهار "مدعوم بواسطة إدارة ســوشـــيــــال"
           </span>
         </label>
       </div>

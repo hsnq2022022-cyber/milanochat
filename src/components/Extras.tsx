@@ -165,7 +165,6 @@ export function Footer() {
       <div className="border-t border-verde/10">
         <div className="max-w-6xl mx-auto px-5 lg:px-8 py-5 flex flex-col sm:flex-row items-center justify-between gap-3 text-[11.5px] text-sage/70">
           <p>© 2026 إدارة ســوشـــيــــال — جميع الحقوق محفوظة.</p>
-
           <p className="text-center sm:text-left leading-5 max-w-xl">
             الربط عبر «الأجهزة المرتبطة» في واتساب وليس قناة رسمية من Meta، وقد
             تقيّد واتساب أي رقم وفق تقديرها.{" "}

@@ -1409,7 +1409,7 @@ widgetsRouter.get(
 
       businessName:
         tenant?.business_name ??
-        "ميلانو",
+        "إدارة ســوشـــيــــال",
 
       welcomeMessage:
         chat.welcomeMessage ||

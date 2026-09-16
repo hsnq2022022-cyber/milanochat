@@ -177,7 +177,7 @@ paymentsRouter.post(
         amount: pkg.amountHalalas,
         currency: "SAR",
         description:
-          `ميلانو — ${pkg.name} (${pkg.credits} رد ذكي) — ${tenant.business_name}`,
+          `إدارة ســوشـــيــــال — ${pkg.name} (${pkg.credits} رد ذكي) — ${tenant.business_name}`,
         callback_url:
           `${config.publicUrl}/api/webhooks/moyasar`,
         metadata: {

@@ -1,6 +1,6 @@
 type IconProps = { className?: string };
 
-/* شعار ميلانو: فقاعة محادثة بداخلها ميم مرسومة */
+/* شعار إدارة ســوشـــيــــال: فقاعة محادثة بداخلها ميم مرسومة */
 export function Logo({ className = "w-10 h-10" }: IconProps) {
   return (
     <svg viewBox="0 0 48 48" className={className} aria-hidden="true">

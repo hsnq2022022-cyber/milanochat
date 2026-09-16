@@ -370,7 +370,7 @@ export const DEFAULT_SETTINGS: WidgetSettings = {
     },
     avatar: {
       url: null,
-      agentName: "ميلانو",
+      agentName: "إدارة ســوشـــيــــال",
       agentTitle: "مساعد ذكي",
       statusIndicator: true,
     },
@@ -503,7 +503,7 @@ export const DEFAULT_SETTINGS: WidgetSettings = {
       size: 36,
       showWith: "every",
     },
-    botName: "مساعد ميلانو",
+    botName: "مساعد إدارة ســوشـــيــــال",
     botTagline: "يرد خلال ثوانٍ",
     typingIndicator: {
       enabled: true,

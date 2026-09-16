@@ -1,5 +1,5 @@
 /**
- * لوحة تحكم ميلانو — حقيقية عبر Supabase Auth + الخادم،
+ * لوحة تحكم إدارة ســوشـــيــــال — حقيقية عبر Supabase Auth + الخادم،
  * وبوضع عرض حيّ (بيانات محاكاة + سيناريو تلقائي) عندما لا تتوفر متغيرات البيئة.
  *
  * ملاحظات الإصلاح:
@@ -836,11 +836,11 @@ export default function Dashboard() {
                 <span className="inline-flex items-center gap-2 text-verde mb-6">
                   <img
                     src={LOGO_URL}
-                    alt="ميلانو"
+                    alt="إدارة ســوشـــيــــال"
                     className="w-11 h-11 rounded-full object-cover"
                   />
                   <span className="font-display font-bold text-3xl text-bone">
-                    ميلانو<span className="text-oro">.</span>
+                    إدارة ســوشـــيــــال<span className="text-oro">.</span>
                   </span>
                 </span>
                 <h1 className="font-display font-bold text-3xl lg:text-4xl leading-snug text-bone mb-5">
@@ -942,7 +942,7 @@ export default function Dashboard() {
             <span className="text-verde inline-block mb-4">
               <img
                 src={LOGO_URL}
-                alt="ميلانو"
+                alt="إدارة ســوشـــيــــال"
                 className="w-10 h-10 rounded-full object-cover"
               />
             </span>
@@ -1010,12 +1010,12 @@ export default function Dashboard() {
             <span className="text-verde transition-transform duration-500 group-hover:rotate-[-8deg]">
               <img
                 src={LOGO_URL}
-                alt="ميلانو"
+                alt="إدارة ســوشـــيــــال"
                 className="w-8 h-8 rounded-full object-cover"
               />
             </span>
             <span className="font-display font-bold text-xl text-bone hidden sm:block">
-              ميلانو<span className="text-oro">.</span>
+              إدارة ســوشـــيــــال<span className="text-oro">.</span>
               <span className="text-sage text-xs font-body font-normal ms-2">لوحة التحكم</span>
             </span>
           </a>
