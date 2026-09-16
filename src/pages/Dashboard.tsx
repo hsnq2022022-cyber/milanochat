@@ -12,6 +12,9 @@
  * - توحيد "out"/"outbound" إلى "out" و "in"/"inbound" إلى "in".
  * - تحميل رسائل المحادثة يتم فقط عند فتحها (لا دورية مستمرة).
  * - الشعار يُحمَّل عبر import.meta.env.BASE_URL ليعمل على GitHub Pages.
+ * - عرض اسم العميل (customerName) فوق الرقم في القائمة ورأس المحادثة.
+ * - عند وصول محادثة جديدة عبر Realtime نُعيد تحميل القائمة من الخادم 
+ *   (لأن الرقم مشفّر في البياندة الواردة).
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import confetti from "canvas-confetti";
@@ -76,6 +79,7 @@ type DashState = {
   convs: ConvItem[];
   unresolved: UnresolvedItem[];
   sources: SourceItem[];
+  loadingList?: boolean;
 };
 
 /* ═══════════════ أدوات ═══════════════ */
@@ -111,7 +115,6 @@ const cls = {
 /* ═══════════════ أدوات مساعدة ═══════════════ */
 
 const now = () => new Date().toISOString();
-const ago = (min: number) => new Date(Date.now() - min * 60000).toISOString();
 
 /* ═══════════════ المكوّن الرئيسي ═══════════════ */
 
@@ -165,7 +168,6 @@ export default function Dashboard() {
 
   const threadEndRef = useRef<HTMLDivElement>(null);
   const toastTimer = useRef<number | null>(null);
-  const scriptIdx = useRef(0);
 
   const activeConvRef = useRef<string | null>(null);
   useEffect(() => {
@@ -199,7 +201,6 @@ export default function Dashboard() {
         });
 
         if (anyExpired) {
-          // Handle expiration for each expired conversation
           expiredIds.forEach((convId) => {
             apiAuthFetch(token!, `/api/dashboard/conversations/${convId}/release`, { method: "POST" })
               .then(() => {
@@ -217,7 +218,7 @@ export default function Dashboard() {
               })
               .catch((e) => console.error("فشل الإلغاء التلقائي:", e));
           });
-          return {}; // Clear all expired entries
+          return {};
         }
 
         return hasChanged ? next : prev;
@@ -252,7 +253,7 @@ export default function Dashboard() {
     };
   }, [demo, sb]);
 
-  /* ── دخول/تسجيل (حقيقي) ── */
+  /* ── دخول/تسجيل ── */
   const doAuth = async () => {
     setAuthErr(""); setAuthNote("");
     if (!/^\S+@\S+\.\S+$/.test(email) || password.length < 6) {
@@ -282,7 +283,7 @@ export default function Dashboard() {
     try {
       // المرحلة 1: Summary فقط (سريع جدًا)
       const summary = await apiAuthFetch<any>(token, "/api/dashboard/summary");
-      
+
       setSt((prev) => ({
         tenantId: summary.tenant.id,
         businessName: summary.tenant.businessName,
@@ -294,9 +295,9 @@ export default function Dashboard() {
         convs: skipConvs ? (prev?.convs || []) : (prev?.convs || []),
         unresolved: prev?.unresolved || [],
         sources: prev?.sources || [],
-        loadingList: true, // إظهار Skeleton
+        loadingList: !skipConvs && (!prev || prev.convs.length === 0),
       }));
-      
+
       // المرحلة 2: البيانات الثقيلة في الخلفية
       if (!skipConvs) {
         Promise.all([
@@ -317,7 +318,8 @@ export default function Dashboard() {
                   : 0;
                 return {
                   id: c.id,
-                  phone: c.customerPhone,
+                  phone: c.customerPhone || "",
+                  customerName: c.customerName || null,
                   transferred: c.transferred,
                   paused: c.autoPausedReason,
                   humanAgentExpiresAt: c.humanAgentExpiresAt,
@@ -337,7 +339,7 @@ export default function Dashboard() {
                 id: s.id, kind: s.kind, url: s.url, status: s.status,
                 chunks: s.chunks_count ?? 0, createdAt: s.created_at, error: s.error ?? undefined,
               })),
-              loadingList: false, // إخفاء Skeleton
+              loadingList: false,
             };
           });
         }).catch(err => {
@@ -345,14 +347,14 @@ export default function Dashboard() {
           setSt(prev => prev ? { ...prev, loadingList: false } : null);
         });
       }
-      
+
       setNeedClaim(false);
     } catch (e: any) {
       if (String(e?.message ?? "").includes("حساب")) setNeedClaim(true);
     }
   }, [token]);
 
-  /* محاولة ضم تلقائية بالحفظ من معالج الإنشاء */
+  /* محاولة ضم تلقائية */
   useEffect(() => {
     if (demo || !token) return;
     const saved = getStoredClaim();
@@ -386,64 +388,42 @@ export default function Dashboard() {
   useEffect(() => {
     if (demo || !token || needClaim || !sb) return;
 
-    /* ── INSERT: محادثة جديدة ── */
+    /* ── INSERT: محادثة جديدة ──
+     * البياندة الواردة تحتوي على customer_phone_encrypted فقط
+     * (مشفّر ولا يمكن فكّه في المتصفح). لذلك نُعيد تحميل 
+     * القائمة من الخادم الذي يفكّه بدل إضافتها مباشرة.
+     */
     const handleConvInsert = (payload: any) => {
       const row = payload.new ?? {};
       setSt((prev) => {
         if (!prev) return prev;
         if (prev.convs.some((c) => c.id === row.id)) return prev;
-
-        const nowD = new Date();
-        const expiresAt = row.human_agent_expires_at ? new Date(row.human_agent_expires_at) : null;
-        const humanAgentActive = Boolean(row.transferred && expiresAt && expiresAt > nowD);
-        const remainingSeconds = humanAgentActive && expiresAt
-          ? Math.floor((expiresAt.getTime() - nowD.getTime()) / 1000)
-          : 0;
-
-        const newConv: ConvItem = {
-          id: row.id,
-          phone: row.customer_phone ?? row.customer_phone_e164 ?? "",
-          transferred: Boolean(row.transferred),
-          paused: row.auto_paused_reason ?? null,
-          humanAgentExpiresAt: row.human_agent_expires_at ?? null,
-          humanAgentActive,
-          remainingSeconds,
-          lastAt: row.last_message_at ?? now(),
-          lastMessagePreview: extractBody(row) || "—",
-          unreadCount: 1,
-          msgs: [],
-        };
-
-        return { ...prev, convs: [newConv, ...prev.convs] };
+        queueMicrotask(() => loadAll(true).catch(() => {}));
+        return prev;
       });
     };
 
-    /* ── UPDATE: محادثة موجودة (حقولها الوصفية فقط) ── */
+    /* ── UPDATE: محادثة موجودة ── */
     const handleConvUpdate = (payload: any) => {
       const row = payload.new ?? {};
-      
+
       // ── كشف التحويل التلقائي من AI (ai_handoff) ──
       setSt((prev) => {
         if (!prev) return prev;
-        
+
         const prevConv = prev.convs.find((c) => c.id === row.id);
         const wasTransferred = prevConv?.transferred ?? false;
         const nowTransferred = Boolean(row.transferred);
-        
-        // قبول عدة قيم للسبب لضمان العمل حتى لو اختلفت التسمية
+
         const isAutoTransfer =
           row.auto_paused_reason === "ai_handoff" ||
           row.auto_paused_reason === "no_answer" ||
           row.auto_paused_reason === "low_confidence" ||
-          row.human_agent_activated_by === null; // fallback: إذا كان المفعّل null فهو آلي
-        
-        // إذا تحوّلت المحادثة للتو من AI
+          row.human_agent_activated_by === null;
+
         if (!wasTransferred && nowTransferred && isAutoTransfer) {
           queueMicrotask(() => {
-            showToast(
-              "🔔 محادثة تحتاج تدخلك — الموظف الذكي لم يجد إجابة مؤكدة"
-            );
-            // نغمة تنبيه (اختيارية)
+            showToast("🔔 محادثة تحتاج تدخلك — الموظف الذكي لم يجد إجابة مؤكدة");
             try {
               const audio = new Audio(
                 "data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBSuBzvLZiTYIG2m98OScTgwOUarm7blmGgU7k9n1unEiBC13yO/eizEIHWq+8+OWT"
@@ -453,10 +433,10 @@ export default function Dashboard() {
             } catch {}
           });
         }
-        
+
         return prev;
       });
-      
+
       setSt((prev) => {
         if (!prev) return prev;
         const exists = prev.convs.some((c) => c.id === row.id);
@@ -492,40 +472,33 @@ export default function Dashboard() {
       if (!convId) return;
 
       const direction = normalizeDirection(row.direction);
-      // نستخدم ref للتأكد من حالة الفتح الحالية دون مشاكل closure
       const isActive = activeConvRef.current === convId;
 
       setSt((prev) => {
         if (!prev) return prev;
-        
+
         const target = prev.convs.find((c) => c.id === convId);
-        
-        // حالة خاصة: محادثة جديدة تمامًا لم تظهر في القائمة بعد
+
         if (!target) {
-          // نطلب إعادة تحميل القائمة في الخلفية لإضافتها
           queueMicrotask(() => loadAll(true).catch(() => {}));
-          return prev; 
+          return prev;
         }
 
-        // تحديث بيانات المحادثة في القائمة الجانبية
         const updatedConv: ConvItem = {
           ...target,
           lastAt: row.created_at ?? now(),
-          // نحتفظ بالنص القديم أو نضع "..." حتى يتم فك التشفير عند الفتح
           lastMessagePreview: target.lastMessagePreview || "…",
           unreadCount:
             isActive || direction === "out"
               ? (target.unreadCount ?? 0)
               : (target.unreadCount ?? 0) + 1,
-          // لا نلمس msgs هنا لتجنب إضافة رسالة فارغة
-          msgs: target.msgs, 
+          msgs: target.msgs,
         };
 
         const others = prev.convs.filter((c) => c.id !== convId);
         return { ...prev, convs: [updatedConv, ...others] };
       });
 
-      // إذا كانت المحادثة مفتوحة حاليًا، نجلب الرسائل المفكوكة فورًا
       if (isActive) {
         queueMicrotask(() => {
           loadThread(convId).catch((err) => {
@@ -563,7 +536,7 @@ export default function Dashboard() {
     };
   }, [demo, token, needClaim, sb]);
 
-  /* ── تحميل رسائل المحادثة النشطة (مرة واحدة عند فتحها) ── */
+  /* ── تحميل رسائل المحادثة النشطة ── */
   const loadThread = useCallback(async (convId: string) => {
     if (!token) return;
     try {
@@ -627,11 +600,10 @@ export default function Dashboard() {
       showToast("يجب تفعيل Human Agent للرد اليدوي");
       return;
     }
-    
+
     if (!activeConv || !draft.trim() || !st) return;
     const outgoing = draft.trim();
-    
-    // Optimistic UI: إضافة رسالة مؤقتة فورًا
+
     const tempId = `pending-${Date.now()}`;
     const optimisticMsg: ThreadMsg = {
       id: tempId,
@@ -642,33 +614,32 @@ export default function Dashboard() {
       created_at: now(),
       status: "sending",
     };
-    
+
     setSt((prev) => {
       if (!prev) return prev;
       const target = prev.convs.find((c) => c.id === activeConv);
       if (!target) return prev;
-      
+
       const updatedConv: ConvItem = {
         ...target,
         lastAt: optimisticMsg.created_at,
         lastMessagePreview: outgoing,
         msgs: [...(target.msgs || []), optimisticMsg],
       };
-      
+
       const others = prev.convs.filter((c) => c.id !== activeConv);
       return { ...prev, convs: [updatedConv, ...others] };
     });
-    
+
     setDraft("");
-    
+
     try {
       if (demo) {
-        // Demo mode: تحديث الحالة إلى sent فورًا
         setSt((prev) => {
           if (!prev) return prev;
           const target = prev.convs.find((c) => c.id === activeConv);
           if (!target) return prev;
-          const newMsgs = target.msgs.map(m => 
+          const newMsgs = target.msgs.map(m =>
             m.id === tempId ? { ...m, id: `man-${Date.now()}`, status: "sent" as const } : m
           );
           const updatedConv = { ...target, msgs: newMsgs };
@@ -684,76 +655,73 @@ export default function Dashboard() {
             body: JSON.stringify({ text: outgoing, resumeAuto }),
           }
         );
-        
+
         const realId = result?.id ?? result?.message?.id ?? tempId;
         const realBody = result?.body ?? result?.message?.body ?? outgoing;
         const realKind = result?.kind ?? result?.message?.kind ?? "manual";
         const realCreatedAt = result?.created_at ?? result?.message?.created_at ?? now();
-        
-        // استبدال الرسالة المؤقتة بالحقيقية
+
         setSt((prev) => {
           if (!prev) return prev;
           const target = prev.convs.find((c) => c.id === activeConv);
           if (!target) return prev;
-          
-          const newMsgs = target.msgs.map(m => 
-            m.id === tempId 
+
+          const newMsgs = target.msgs.map(m =>
+            m.id === tempId
               ? { ...m, id: realId, body: realBody, kind: realKind, created_at: realCreatedAt, status: "sent" as const }
               : m
           );
-          
+
           const updatedConv = { ...target, msgs: newMsgs };
           const others = prev.convs.filter((c) => c.id !== activeConv);
           return { ...prev, convs: [updatedConv, ...others] };
         });
-        
+
         showToast("أُرسل الرد للعميل");
       }
     } catch (e: any) {
-      // فشل الإرسال: تعليم الرسالة كـ failed
       setSt((prev) => {
         if (!prev) return prev;
         const target = prev.convs.find((c) => c.id === activeConv);
         if (!target) return prev;
-        
-        const newMsgs = target.msgs.map(m => 
+
+        const newMsgs = target.msgs.map(m =>
           m.id === tempId ? { ...m, status: "failed" as const } : m
         );
-        
+
         const updatedConv = { ...target, msgs: newMsgs };
         const others = prev.convs.filter((c) => c.id !== activeConv);
         return { ...prev, convs: [updatedConv, ...others] };
       });
-      
+
       showToast(e?.message ?? "تعذر الإرسال — اضغط ❌ لإعادة المحاولة");
     }
   };
-  
+
   const retrySend = async (msg: ThreadMsg) => {
     if (msg.status !== "failed" || !activeConv || !st) return;
-    
-    // إعادة تعيين الحالة إلى sending
+
     setSt((prev) => {
       if (!prev) return prev;
       const target = prev.convs.find((c) => c.id === activeConv);
       if (!target) return prev;
-      
-      const newMsgs = target.msgs.map(m => 
+
+      const newMsgs = target.msgs.map(m =>
         m.id === msg.id ? { ...m, status: "sending" as const } : m
       );
-      
+
       const updatedConv = { ...target, msgs: newMsgs };
       const others = prev.convs.filter((c) => c.id !== activeConv);
       return { ...prev, convs: [updatedConv, ...others] };
     });
-    
+
     try {
       if (demo) {
         setSt((prev) => {
           if (!prev) return prev;
           const target = prev.convs.find((c) => c.id === activeConv);
           if (!target) return prev;
-          const newMsgs = target.msgs.map(m => 
+          const newMsgs = target.msgs.map(m =>
             m.id === msg.id ? { ...m, status: "sent" as const } : m
           );
           const updatedConv = { ...target, msgs: newMsgs };
@@ -769,21 +737,21 @@ export default function Dashboard() {
             body: JSON.stringify({ text: msg.body, resumeAuto: false }),
           }
         );
-        
+
         const realId = result?.id ?? result?.message?.id ?? msg.id;
         const realBody = result?.body ?? result?.message?.body ?? msg.body;
-        
+
         setSt((prev) => {
           if (!prev) return prev;
           const target = prev.convs.find((c) => c.id === activeConv);
           if (!target) return prev;
-          
-          const newMsgs = target.msgs.map(m => 
-            m.id === msg.id 
+
+          const newMsgs = target.msgs.map(m =>
+            m.id === msg.id
               ? { ...m, id: realId, body: realBody, status: "sent" as const }
               : m
           );
-          
+
           const updatedConv = { ...target, msgs: newMsgs };
           const others = prev.convs.filter((c) => c.id !== activeConv);
           return { ...prev, convs: [updatedConv, ...others] };
@@ -794,16 +762,16 @@ export default function Dashboard() {
         if (!prev) return prev;
         const target = prev.convs.find((c) => c.id === activeConv);
         if (!target) return prev;
-        
-        const newMsgs = target.msgs.map(m => 
+
+        const newMsgs = target.msgs.map(m =>
           m.id === msg.id ? { ...m, status: "failed" as const } : m
         );
-        
+
         const updatedConv = { ...target, msgs: newMsgs };
         const others = prev.convs.filter((c) => c.id !== activeConv);
         return { ...prev, convs: [updatedConv, ...others] };
       });
-      
+
       showToast("فشل الإرسال مجددًا");
     }
   };
@@ -1051,7 +1019,6 @@ export default function Dashboard() {
       <Shell>
         <div className="max-w-5xl mx-auto px-5 pt-16 pb-20">
           <div className="grid lg:grid-cols-[1.1fr_1fr] gap-8 items-stretch">
-            {/* تعريف */}
             <div className={`${cls.card} p-8 lg:p-10 flex flex-col justify-between overflow-hidden relative`}>
               <div className="absolute -top-20 -left-20 w-64 h-64 rounded-full bg-verde/10 blur-3xl" aria-hidden="true" />
               <div>
@@ -1093,7 +1060,6 @@ export default function Dashboard() {
               )}
             </div>
 
-            {/* الدخول */}
             <div className={`${cls.card} p-8`}>
               {demo ? (
                 <div className="h-full flex flex-col justify-center gap-4">
@@ -1155,7 +1121,7 @@ export default function Dashboard() {
     );
   }
 
-  /* ضم حساب (حقيقي فقط) */
+  /* ضم حساب */
   if (!demo && needClaim && !st) {
     return (
       <Shell>
@@ -1225,7 +1191,6 @@ export default function Dashboard() {
 
   return (
     <Shell>
-      {/* شريط علوي */}
       <header className="sticky top-0 z-40 bg-night/85 backdrop-blur-md border-b border-verde/12">
         <div className="max-w-6xl mx-auto px-5 h-16 flex items-center justify-between gap-3">
           <a href="#top" className="flex items-center gap-2 group shrink-0">
@@ -1262,7 +1227,6 @@ export default function Dashboard() {
       </header>
 
       <main className="max-w-6xl mx-auto px-5 pt-7 pb-24">
-        {/* تنبيه الرصيد */}
         {st.credits <= 0 ? (
           <div className="mb-5 flex flex-wrap items-center gap-3 bg-oro/10 border border-oro/40 rounded-2xl px-5 py-3.5 msg-in">
             <span className="text-oro"><IconCoin className="w-5 h-5" /></span>
@@ -1277,7 +1241,6 @@ export default function Dashboard() {
           </div>
         ) : null}
 
-        {/* شريط الملخص */}
         <div className="grid md:grid-cols-12 gap-4 mb-7">
           <section className={`${cls.card} md:col-span-5 p-5 relative overflow-hidden group hover:border-verde/35 transition-colors duration-300`}>
             <div className="absolute -bottom-14 -start-14 w-44 h-44 rounded-full bg-verde/10 blur-2xl group-hover:bg-verde/15 transition-colors duration-500" aria-hidden="true" />
@@ -1354,7 +1317,6 @@ export default function Dashboard() {
           </section>
         </div>
 
-        {/* التبويبات */}
         <div className="relative bg-pine/50 border border-verde/12 rounded-2xl p-1.5 grid grid-cols-4 mb-6 max-w-lg">
           <span
             className="absolute top-1.5 bottom-1.5 w-[calc((100%-0.75rem)/4)] bg-moss rounded-xl border border-verde/25 transition-transform duration-300 ease-out"
@@ -1390,7 +1352,6 @@ export default function Dashboard() {
               </div>
               <ul className="max-h-[520px] overflow-y-auto qa-scroll">
                 {st.loadingList ? (
-                  // Skeleton Loader
                   Array.from({ length: 5 }).map((_, i) => (
                     <li key={i} className="px-4 py-3.5 border-b border-verde/8 animate-pulse">
                       <div className="flex items-center gap-3">
@@ -1419,18 +1380,26 @@ export default function Dashboard() {
                         }`}
                       >
                         <div className="flex items-center justify-between gap-2 mb-1">
-                          {c.customerName ? (
-                            <>
-                              <span className="text-[13px] font-bold text-bone">{c.customerName}</span>
-                              <span className="text-[10px] text-sage tabular-nums" dir="ltr">{c.phone}</span>
-                            </>
-                          ) : (
-                            <>
-                              <span className="text-[13px] font-bold text-bone" dir="ltr">{c.phone}</span>
-                              <span className="text-[10px] text-sage tabular-nums">{fmtTime(c.lastAt)}</span>
-                            </>
-                          )}
-                          {!c.customerName && <span className="text-[10px] text-sage tabular-nums">{fmtTime(c.lastAt)}</span>}
+                          <div className="flex flex-col gap-0.5 min-w-0 flex-1">
+                            {c.customerName && (
+                              <span className="text-[13px] font-bold text-bone truncate">
+                                {c.customerName}
+                              </span>
+                            )}
+                            <span
+                              className={
+                                c.customerName
+                                  ? "text-[10px] text-sage tabular-nums"
+                                  : "text-[13px] font-bold text-bone tabular-nums"
+                              }
+                              dir="ltr"
+                            >
+                              {c.phone || "—"}
+                            </span>
+                          </div>
+                          <span className="text-[10px] text-sage tabular-nums shrink-0">
+                            {fmtTime(c.lastAt)}
+                          </span>
                         </div>
                         <p className="text-[11.5px] text-sage truncate">
                           {c.lastMessagePreview ?? c.msgs[c.msgs.length - 1]?.body ?? "—"}
@@ -1464,7 +1433,6 @@ export default function Dashboard() {
               </ul>
             </aside>
 
-            {/* الخيط */}
             <section className={`${cls.card} overflow-hidden ${!mobileThread && !active ? "hidden lg:flex" : "flex"} flex-col`} style={{ minHeight: 460 }}>
               {!active ? (
                 <div className="flex-1 flex flex-col items-center justify-center text-center p-10 gap-3">
@@ -1480,16 +1448,23 @@ export default function Dashboard() {
                     <span className="w-9 h-9 rounded-full bg-moss border border-verde/30 text-verde flex items-center justify-center">
                       <IconWhatsapp className="w-4.5 h-4.5" />
                     </span>
-                    <div className="flex-1">
-                      {active.customerName ? (
-                        <>
-                          <p className="text-[13px] font-bold text-bone">{active.customerName}</p>
-                          <p className="text-[10.5px] text-sage" dir="ltr">{active.phone}</p>
-                        </>
-                      ) : (
-                        <p className="text-[13px] font-bold text-bone" dir="ltr">{active.phone}</p>
+                    <div className="flex-1 min-w-0">
+                      {active.customerName && (
+                        <p className="text-[13px] font-bold text-bone truncate">
+                          {active.customerName}
+                        </p>
                       )}
-                      <p className="text-[10.5px] text-sage">
+                      <p
+                        className={
+                          active.customerName
+                            ? "text-[10.5px] text-sage tabular-nums"
+                            : "text-[13px] font-bold text-bone tabular-nums"
+                        }
+                        dir="ltr"
+                      >
+                        {active.phone || "—"}
+                      </p>
+                      <p className="text-[10.5px] text-sage mt-0.5">
                         {active.humanAgentActive
                           ? `Human Agent Active — ${Math.floor((active.remainingSeconds ?? 0) / 60)}:${String((active.remainingSeconds ?? 0) % 60).padStart(2, '0')} متبقي`
                           : active.transferred
@@ -1636,7 +1611,6 @@ export default function Dashboard() {
                     <div ref={threadEndRef} />
                   </div>
 
-                  {/* الملحن */}
                   <div className="p-3.5 border-t border-verde/10 bg-night/40">
                     {active.humanAgentActive && (
                       <div className="mb-2.5 px-3 py-2 bg-amber-500/10 border border-amber-500/20 rounded-lg flex items-center justify-between gap-2">
@@ -1675,14 +1649,14 @@ export default function Dashboard() {
                             : 'bg-night/40 text-sage/60 border border-verde/10 cursor-not-allowed placeholder:text-sage/30'
                         }`}
                       />
-                      
+
                       {!active.humanAgentActive && !active.transferred && !active.paused && (
                         <p className="text-[10.5px] text-sage text-center mt-2 flex items-center justify-center gap-1">
                           <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
                           الرد الآلي يعمل حاليًا. اضغط Human Agent للتدخل.
                         </p>
                       )}
-                      
+
                       {active.transferred && !active.humanAgentActive && (
                         <p className="text-[10.5px] text-amber-500/80 text-center mt-2">
                           المحادثة محوّلة — يمكنك الرد مباشرة أو استلام رسمي
@@ -1888,34 +1862,19 @@ export default function Dashboard() {
                           Token: {w.public_token}
                         </p>
                         <div className="flex gap-2 flex-wrap">
-                          <button
-                            onClick={() => setWidgetPreview(w)}
-                            className="text-[11px] font-semibold text-verde hover:text-oro transition-colors"
-                          >
+                          <button onClick={() => setWidgetPreview(w)} className="text-[11px] font-semibold text-verde hover:text-oro transition-colors">
                             معاينة
                           </button>
-                          <button
-                            onClick={() => copyEmbedCode(w.public_token)}
-                            className="text-[11px] font-semibold text-verde hover:text-oro transition-colors"
-                          >
+                          <button onClick={() => copyEmbedCode(w.public_token)} className="text-[11px] font-semibold text-verde hover:text-oro transition-colors">
                             {copiedCode === w.public_token ? "✓ تم النسخ" : "نسخ الكود"}
                           </button>
-                          <button
-                            onClick={() => toggleWidget(w.id, !w.enabled)}
-                            className="text-[11px] font-semibold text-oro hover:text-bone transition-colors"
-                          >
+                          <button onClick={() => toggleWidget(w.id, !w.enabled)} className="text-[11px] font-semibold text-oro hover:text-bone transition-colors">
                             {w.enabled ? "تعطيل" : "تفعيل"}
                           </button>
-                          <button
-                            onClick={() => setEditingWidget(w.id)}
-                            className="text-[11px] font-semibold text-sage hover:text-bone transition-colors"
-                          >
+                          <button onClick={() => setEditingWidget(w.id)} className="text-[11px] font-semibold text-sage hover:text-bone transition-colors">
                             تعديل
                           </button>
-                          <button
-                            onClick={() => deleteWidget(w.id)}
-                            className="text-[11px] font-semibold text-red-400 hover:text-red-300 transition-colors"
-                          >
+                          <button onClick={() => deleteWidget(w.id)} className="text-[11px] font-semibold text-red-400 hover:text-red-300 transition-colors">
                             حذف
                           </button>
                         </div>
@@ -2096,7 +2055,6 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* توست */}
       {toast && (
         <div className="fixed bottom-6 inset-x-0 z-50 flex justify-center px-4 pointer-events-none">
           <p className="bg-pine border border-verde/35 text-bone text-[12.5px] font-semibold rounded-full px-5 py-2.5 shadow-[0_16px_50px_-12px_rgba(0,0,0,0.8)] msg-in">
