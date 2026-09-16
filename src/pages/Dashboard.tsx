@@ -405,10 +405,16 @@ export default function Dashboard() {
         const prevConv = prev.convs.find((c) => c.id === row.id);
         const wasTransferred = prevConv?.transferred ?? false;
         const nowTransferred = Boolean(row.transferred);
-        const isAiHandoff = row.auto_paused_reason === "ai_handoff";
+        
+        // قبول عدة قيم للسبب لضمان العمل حتى لو اختلفت التسمية
+        const isAutoTransfer =
+          row.auto_paused_reason === "ai_handoff" ||
+          row.auto_paused_reason === "no_answer" ||
+          row.auto_paused_reason === "low_confidence" ||
+          row.human_agent_activated_by === null; // fallback: إذا كان المفعّل null فهو آلي
         
         // إذا تحوّلت المحادثة للتو من AI
-        if (!wasTransferred && nowTransferred && isAiHandoff) {
+        if (!wasTransferred && nowTransferred && isAutoTransfer) {
           queueMicrotask(() => {
             showToast(
               "🔔 محادثة تحتاج تدخلك — الموظف الذكي لم يجد إجابة مؤكدة"
@@ -592,9 +598,9 @@ export default function Dashboard() {
   };
 
   const replyManual = async () => {
-    // Check if Human Agent is active for this conversation
+    // Check if Human Agent is active OR conversation is transferred for this conversation
     const active = st?.convs.find(c => c.id === activeConv);
-    if (!active?.humanAgentActive) {
+    if (!active?.humanAgentActive && !active?.transferred) {
       showToast("يجب تفعيل Human Agent للرد اليدوي");
       return;
     }
@@ -1475,14 +1481,21 @@ export default function Dashboard() {
                     {active.humanAgentActive && (
                       <div className="mb-2.5 px-3 py-2 bg-amber-500/10 border border-amber-500/20 rounded-lg flex items-center justify-between gap-2">
                         <span className="text-[10px] font-bold text-amber-400 flex items-center gap-1.5">
-                          <span>⚠️</span> Human Agent نشط — الرد الآلي متوقف
-                        </span>
-                        <span className="text-[11px] font-mono font-bold text-amber-300 bg-amber-950/50 px-2 py-0.5 rounded">
-                          {Math.floor((humanAgentCountdown[active.id] ?? 900) / 60)}:{String((humanAgentCountdown[active.id] ?? 900) % 60).padStart(2, '0')}
+                          <span>⚠️</span> Human Agent نشط — متبقٍ: {Math.floor((humanAgentCountdown[active.id] ?? 900) / 60)}:{String((humanAgentCountdown[active.id] ?? 900) % 60).padStart(2, '0')}
                         </span>
                       </div>
                     )}
-                    {!active.humanAgentActive && (active.transferred || active.paused) && (
+                    {active.transferred && !active.humanAgentActive && (
+                      <div className="mb-2.5 px-3 py-2 bg-amber-500/10 border border-amber-500/20 rounded-lg flex items-center justify-between gap-2">
+                        <span className="text-[10px] font-bold text-amber-400 flex items-center gap-1.5">
+                          <span>⚠️</span> الموظف الذكي يحتاج مساعدتك — يمكنك الرد مباشرة
+                        </span>
+                        <span className="text-[10px] text-amber-300 bg-amber-950/50 px-2 py-0.5 rounded">
+                          بانتظار استلامك الرسمي
+                        </span>
+                      </div>
+                    )}
+                    {(active.transferred || active.paused) && !active.humanAgentActive && (
                       <label className="flex items-center gap-2.5 mb-2.5 text-[11.5px] text-sage cursor-pointer select-none">
                         <input type="checkbox" checked={resumeAuto} onChange={(e) => setResumeAuto(e.target.checked)} className="accent-[#2ec27e] w-4 h-4" />
                         استئناف الرد الآلي بعد إرسال هذا الرد
@@ -1494,10 +1507,10 @@ export default function Dashboard() {
                         onChange={(e) => setDraft(e.target.value)}
                         onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); replyManual(); } }}
                         rows={1}
-                        disabled={!active.humanAgentActive}
-                        placeholder={active.humanAgentActive ? "اكتب ردّك اليدوي…" : "اضغط Human Agent للرد يدويًا"}
+                        disabled={!(active.humanAgentActive || active.transferred)}
+                        placeholder={(active.humanAgentActive || active.transferred) ? "اكتب ردّك اليدوي…" : "اضغط Human Agent للرد يدويًا"}
                         className={`w-full min-h-[80px] max-h-[120px] p-3 rounded-xl text-sm resize-none outline-none transition-all duration-200 custom-scrollbar ${
-                          active.humanAgentActive
+                          (active.humanAgentActive || active.transferred)
                             ? 'bg-night/70 text-bone border border-verde/20 focus:border-oro/70 focus:ring-1 focus:ring-oro/20 placeholder:text-sage/40'
                             : 'bg-night/40 text-sage/60 border border-verde/10 cursor-not-allowed placeholder:text-sage/30'
                         }`}
@@ -1512,15 +1525,15 @@ export default function Dashboard() {
                       
                       {active.transferred && !active.humanAgentActive && (
                         <p className="text-[10.5px] text-amber-500/80 text-center mt-2">
-                          المحادثة محوّلة — اختر إجراءً من الأعلى
+                          المحادثة محوّلة — يمكنك الرد مباشرة أو استلام رسمي
                         </p>
                       )}
 
                       <button
                         onClick={replyManual}
-                        disabled={sending || !draft.trim() || !active.humanAgentActive}
+                        disabled={sending || !draft.trim() || !(active.humanAgentActive || active.transferred)}
                         className={`absolute bottom-3 left-3 p-2 rounded-lg transition-all duration-200 ${
-                          active.humanAgentActive && draft.trim()
+                          (active.humanAgentActive || active.transferred) && draft.trim()
                             ? 'bg-oro text-night hover:bg-oro/90 shadow-lg shadow-oro/20 translate-y-0 opacity-100'
                             : 'bg-night/50 text-sage/30 cursor-not-allowed translate-y-1 opacity-0'
                         }`}
