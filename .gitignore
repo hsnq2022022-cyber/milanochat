@@ -1,49 +1,45 @@
-```gitignore
+```
 # Dependencies
 node_modules/
 
-# Build outputs
-dist/
-build/
-.next/
-out/
+# Logs and temp files
+*.log
+*.tmp
 
-# Environment variables
+# Environment
 .env
 .env.local
-*.env.*
+.env.*
 
-# IDE specific
+# Editors
 .vscode/
 .idea/
-*.swp
-*.swo
 
-# Python related
+# Python
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
-.Python
-*.so
-.coverage
-coverage/
-htmlcov/
 
-# Logs
-*.log
+# Build outputs
+dist/
+build/
+*.egg-info/
 
-# OS generated
+# OS generated files
 .DS_Store
 Thumbs.db
 
-# Temporary files
-*.tmp
-*.temp
-```
+# Coverage reports
+coverage/
+htmlcov/
+.coverage
 
-Wait, let me reconsider the input. The modified files are only TypeScript/JSX source files in a React project structure (`src/components/*.tsx`, `src/pages/*.tsx`). There are no build artifacts, dependency directories, or temporary files mentioned in the changes. According to rule #6, if the changes contain only source files and no build artifacts, dependencies, or temp files, I should output an empty .gitignore.
+# Testing
+.pytest_cache/
+.mypy_cache/
 
-```gitignore
-
+# Virtual environments
+venv/
+.venv/
 ```

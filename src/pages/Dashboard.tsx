@@ -1326,9 +1326,53 @@ export default function Dashboard() {
                         <IconX className="w-3 h-3" /> إلغاء Human Agent
                       </button>
                     ) : active.transferred ? (
-                      <span className="text-[10px] font-bold text-oro-soft bg-oro/10 border border-oro/30 rounded-full px-2.5 py-1 inline-flex items-center gap-1">
-                        <IconHandoff className="w-3 h-3" /> تحتاج تدخلّك
-                      </span>
+                      <>
+                        <button
+                          onClick={async () => {
+                            try {
+                              const res = await apiAuthFetch<{ expiresAt: string }>(token!, `/api/dashboard/conversations/${active.id}/takeover`, { method: "POST" });
+                              setHumanAgentCountdown((prev) => ({
+                                ...prev,
+                                [active.id]: 900
+                              }));
+                              setSt((prev) => prev ? {
+                                ...prev,
+                                convs: prev.convs.map((c) => c.id === active.id ? {
+                                  ...c,
+                                  transferred: true,
+                                  humanAgentActive: true,
+                                  remainingSeconds: 900,
+                                  humanAgentExpiresAt: res.expiresAt
+                                } : c)
+                              } : null);
+                            } catch (e) {
+                              console.error("فشل تفعيل Human Agent:", e);
+                            }
+                          }}
+                          className="text-[10px] font-bold text-white bg-blue-600 hover:bg-blue-700 border border-blue-700 rounded-full px-2.5 py-1 inline-flex items-center gap-1 transition-colors"
+                        >
+                          <IconHandoff className="w-3 h-3" /> Human Agent
+                        </button>
+                        <button
+                          onClick={async () => {
+                            await apiAuthFetch(token!, `/api/dashboard/conversations/${active.id}/release`, { method: "POST" });
+                            setSt((prev) => prev ? {
+                              ...prev,
+                              convs: prev.convs.map((c) => c.id === active.id ? {
+                                ...c,
+                                transferred: false,
+                                humanAgentActive: false,
+                                remainingSeconds: 0,
+                                humanAgentExpiresAt: null
+                              } : c)
+                            } : null);
+                            showToast("تم العودة للرد الآلي");
+                          }}
+                          className="text-[10px] font-bold text-emerald-600 bg-emerald-100 hover:bg-emerald-200 border border-emerald-300 rounded-full px-2.5 py-1 inline-flex items-center gap-1 transition-colors"
+                        >
+                          <IconCheck className="w-3 h-3" /> العودة للرد الآلي
+                        </button>
+                      </>
                     ) : (
                       <button
                         onClick={async () => {
@@ -1336,7 +1380,7 @@ export default function Dashboard() {
                             const res = await apiAuthFetch<{ expiresAt: string }>(token!, `/api/dashboard/conversations/${active.id}/takeover`, { method: "POST" });
                             setHumanAgentCountdown((prev) => ({
                               ...prev,
-                              [active.id]: 900 // 15 minutes in seconds
+                              [active.id]: 900
                             }));
                             setSt((prev) => prev ? {
                               ...prev,
@@ -1387,26 +1431,22 @@ export default function Dashboard() {
                   {/* الملحن */}
                   <div className="p-3.5 border-t border-verde/10 bg-night/40">
                     {active.humanAgentActive && (
-                      <div className="mb-2.5 px-3 py-2 bg-amber-100 border border-amber-300 rounded-lg flex items-center justify-between gap-2">
-                        <span className="text-[11px] font-bold text-amber-800">
-                          ⚠️ Human Agent نشط — الرد الآلي متوقف. متبقٍ: {Math.floor((humanAgentCountdown[active.id] ?? 0) / 60)}:{String((humanAgentCountdown[active.id] ?? 0) % 60).padStart(2, '0')}
+                      <div className="mb-2.5 px-3 py-2 bg-amber-500/10 border border-amber-500/20 rounded-lg flex items-center justify-between gap-2">
+                        <span className="text-[10px] font-bold text-amber-400 flex items-center gap-1.5">
+                          <span>⚠️</span> Human Agent نشط — الرد الآلي متوقف
+                        </span>
+                        <span className="text-[11px] font-mono font-bold text-amber-300 bg-amber-950/50 px-2 py-0.5 rounded">
+                          {Math.floor((humanAgentCountdown[active.id] ?? 900) / 60)}:{String((humanAgentCountdown[active.id] ?? 900) % 60).padStart(2, '0')}
                         </span>
                       </div>
                     )}
                     {!active.humanAgentActive && (active.transferred || active.paused) && (
-                      <label className="flex items-center gap-2.5 mb-2.5 text-[11.5px] text-mist cursor-pointer select-none">
+                      <label className="flex items-center gap-2.5 mb-2.5 text-[11.5px] text-sage cursor-pointer select-none">
                         <input type="checkbox" checked={resumeAuto} onChange={(e) => setResumeAuto(e.target.checked)} className="accent-[#2ec27e] w-4 h-4" />
                         استئناف الرد الآلي بعد إرسال هذا الرد
                       </label>
                     )}
-                    {!active.humanAgentActive && (
-                      <div className="mb-2.5 px-3 py-2 bg-blue-100 border-2 border-blue-400 rounded-lg">
-                        <span className="text-[12px] text-blue-900 font-bold">
-                          الرد الآلي يعمل حاليًا. اضغط Human Agent للتدخل.
-                        </span>
-                      </div>
-                    )}
-                    <div className="flex gap-2.5 items-end">
+                    <div className="relative group">
                       <textarea
                         value={draft}
                         onChange={(e) => setDraft(e.target.value)}
@@ -1414,15 +1454,40 @@ export default function Dashboard() {
                         rows={1}
                         disabled={!active.humanAgentActive}
                         placeholder={active.humanAgentActive ? "اكتب ردّك اليدوي…" : "اضغط Human Agent للرد يدويًا"}
-                        className={`${cls.input} resize-none flex-1 disabled:opacity-50 disabled:cursor-not-allowed`}
+                        className={`w-full min-h-[80px] max-h-[120px] p-3 rounded-xl text-sm resize-none outline-none transition-all duration-200 custom-scrollbar ${
+                          active.humanAgentActive
+                            ? 'bg-night/70 text-bone border border-verde/20 focus:border-oro/70 focus:ring-1 focus:ring-oro/20 placeholder:text-sage/40'
+                            : 'bg-night/40 text-sage/60 border border-verde/10 cursor-not-allowed placeholder:text-sage/30'
+                        }`}
                       />
-                      <button 
-                        onClick={replyManual} 
-                        disabled={sending || !draft.trim() || !active.humanAgentActive} 
-                        className={`${cls.btn} !rounded-xl !px-4 !py-2.5 disabled:opacity-50 disabled:cursor-not-allowed`} 
+                      
+                      {!active.humanAgentActive && !active.transferred && !active.paused && (
+                        <p className="text-[10.5px] text-sage text-center mt-2 flex items-center justify-center gap-1">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                          الرد الآلي يعمل حاليًا. اضغط Human Agent للتدخل.
+                        </p>
+                      )}
+                      
+                      {active.transferred && !active.humanAgentActive && (
+                        <p className="text-[10.5px] text-amber-500/80 text-center mt-2">
+                          المحادثة محوّلة — اختر إجراءً من الأعلى
+                        </p>
+                      )}
+
+                      <button
+                        onClick={replyManual}
+                        disabled={sending || !draft.trim() || !active.humanAgentActive}
+                        className={`absolute bottom-3 left-3 p-2 rounded-lg transition-all duration-200 ${
+                          active.humanAgentActive && draft.trim()
+                            ? 'bg-oro text-night hover:bg-oro/90 shadow-lg shadow-oro/20 translate-y-0 opacity-100'
+                            : 'bg-night/50 text-sage/30 cursor-not-allowed translate-y-1 opacity-0'
+                        }`}
                         aria-label="إرسال"
                       >
-                        <IconSend className="w-5 h-5 -scale-x-100" />
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <line x1="22" y1="2" x2="11" y2="13"></line>
+                          <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                        </svg>
                       </button>
                     </div>
                   </div>
