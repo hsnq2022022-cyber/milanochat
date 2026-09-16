@@ -32,6 +32,7 @@ type ThreadMsg = {
   kind: string;
   is_auto: boolean;
   created_at: string;
+  status?: "sending" | "sent" | "failed";
 };
 type ConvItem = {
   id: string;
@@ -278,13 +279,9 @@ export default function Dashboard() {
   const loadAll = useCallback(async (skipConvs = false) => {
     if (!token) return;
     try {
-      const [summary, convs, unresolved, sources] = await Promise.all([
-        apiAuthFetch<any>(token, "/api/dashboard/summary"),
-        skipConvs ? Promise.resolve(st?.convs || []) : apiAuthFetch<any[]>(token, "/api/dashboard/conversations"),
-        apiAuthFetch<any[]>(token, "/api/dashboard/unresolved"),
-        apiAuthFetch<any[]>(token, "/api/dashboard/knowledge"),
-      ]);
-      setNeedClaim(false);
+      // المرحلة 1: Summary فقط (سريع جدًا)
+      const summary = await apiAuthFetch<any>(token, "/api/dashboard/summary");
+      
       setSt((prev) => ({
         tenantId: summary.tenant.id,
         businessName: summary.tenant.businessName,
@@ -293,40 +290,66 @@ export default function Dashboard() {
         phone: summary.tenant.phone,
         waStatus: summary.wa.status,
         openUnresolved: summary.openUnresolved,
-        convs: skipConvs ? (prev?.convs || []) : convs.map((c: any) => {
-          const nowD = new Date();
-          const expiresAt = c.humanAgentExpiresAt ? new Date(c.humanAgentExpiresAt) : null;
-          const humanAgentActive = Boolean(c.transferred && expiresAt && expiresAt > nowD);
-          const remainingSeconds = humanAgentActive && expiresAt
-            ? Math.floor((expiresAt.getTime() - nowD.getTime()) / 1000)
-            : 0;
-          return {
-            id: c.id,
-            phone: c.customerPhone,
-            transferred: c.transferred,
-            paused: c.autoPausedReason,
-            humanAgentExpiresAt: c.humanAgentExpiresAt,
-            humanAgentActive,
-            remainingSeconds,
-            lastAt: c.lastMessageAt,
-            lastMessagePreview: c.lastMessageBody || "—",
-            unreadCount: 0,
-            msgs: [],
-          };
-        }),
-        unresolved: unresolved.filter((q: any) => q.status === "open").map((q: any) => ({
-          id: q.id, question: q.question, createdAt: q.createdAt,
-          conversationId: q.conversationId, bestSimilarity: q.bestSimilarity,
-        })),
-        sources: sources.map((s: any) => ({
-          id: s.id, kind: s.kind, url: s.url, status: s.status,
-          chunks: s.chunks_count ?? 0, createdAt: s.created_at, error: s.error ?? undefined,
-        })),
+        convs: skipConvs ? (prev?.convs || []) : (prev?.convs || []),
+        unresolved: prev?.unresolved || [],
+        sources: prev?.sources || [],
+        loadingList: true, // إظهار Skeleton
       }));
+      
+      // المرحلة 2: البيانات الثقيلة في الخلفية
+      if (!skipConvs) {
+        Promise.all([
+          apiAuthFetch<any[]>(token, "/api/dashboard/conversations"),
+          apiAuthFetch<any[]>(token, "/api/dashboard/unresolved"),
+          apiAuthFetch<any[]>(token, "/api/dashboard/knowledge"),
+        ]).then(([convs, unresolved, sources]) => {
+          const nowD = new Date();
+          setSt((prev) => {
+            if (!prev) return prev;
+            return {
+              ...prev,
+              convs: convs.map((c: any) => {
+                const expiresAt = c.humanAgentExpiresAt ? new Date(c.humanAgentExpiresAt) : null;
+                const humanAgentActive = Boolean(c.transferred && expiresAt && expiresAt > nowD);
+                const remainingSeconds = humanAgentActive && expiresAt
+                  ? Math.floor((expiresAt.getTime() - nowD.getTime()) / 1000)
+                  : 0;
+                return {
+                  id: c.id,
+                  phone: c.customerPhone,
+                  transferred: c.transferred,
+                  paused: c.autoPausedReason,
+                  humanAgentExpiresAt: c.humanAgentExpiresAt,
+                  humanAgentActive,
+                  remainingSeconds,
+                  lastAt: c.lastMessageAt,
+                  lastMessagePreview: c.lastMessageBody || "—",
+                  unreadCount: 0,
+                  msgs: [],
+                };
+              }),
+              unresolved: unresolved.filter((q: any) => q.status === "open").map((q: any) => ({
+                id: q.id, question: q.question, createdAt: q.createdAt,
+                conversationId: q.conversationId, bestSimilarity: q.bestSimilarity,
+              })),
+              sources: sources.map((s: any) => ({
+                id: s.id, kind: s.kind, url: s.url, status: s.status,
+                chunks: s.chunks_count ?? 0, createdAt: s.created_at, error: s.error ?? undefined,
+              })),
+              loadingList: false, // إخفاء Skeleton
+            };
+          });
+        }).catch(err => {
+          console.error("فشل تحميل البيانات الثانوية:", err);
+          setSt(prev => prev ? { ...prev, loadingList: false } : null);
+        });
+      }
+      
+      setNeedClaim(false);
     } catch (e: any) {
       if (String(e?.message ?? "").includes("حساب")) setNeedClaim(true);
     }
-  }, [token, st?.convs]);
+  }, [token]);
 
   /* محاولة ضم تلقائية بالحفظ من معالج الإنشاء */
   useEffect(() => {
@@ -598,7 +621,6 @@ export default function Dashboard() {
   };
 
   const replyManual = async () => {
-    // Check if Human Agent is active OR conversation is transferred for this conversation
     const active = st?.convs.find(c => c.id === activeConv);
     if (!active?.humanAgentActive && !active?.transferred) {
       showToast("يجب تفعيل Human Agent للرد اليدوي");
@@ -607,37 +629,51 @@ export default function Dashboard() {
     
     if (!activeConv || !draft.trim() || !st) return;
     const outgoing = draft.trim();
-    setSending(true);
+    
+    // Optimistic UI: إضافة رسالة مؤقتة فورًا
+    const tempId = `pending-${Date.now()}`;
+    const optimisticMsg: ThreadMsg = {
+      id: tempId,
+      direction: "out",
+      body: outgoing,
+      kind: "manual",
+      is_auto: false,
+      created_at: now(),
+      status: "sending",
+    };
+    
+    setSt((prev) => {
+      if (!prev) return prev;
+      const target = prev.convs.find((c) => c.id === activeConv);
+      if (!target) return prev;
+      
+      const updatedConv: ConvItem = {
+        ...target,
+        lastAt: optimisticMsg.created_at,
+        lastMessagePreview: outgoing,
+        msgs: [...(target.msgs || []), optimisticMsg],
+      };
+      
+      const others = prev.convs.filter((c) => c.id !== activeConv);
+      return { ...prev, convs: [updatedConv, ...others] };
+    });
+    
+    setDraft("");
+    
     try {
       if (demo) {
-        const outMsg: ThreadMsg = {
-          id: `man-${Date.now()}`,
-          direction: "out",
-          body: outgoing,
-          kind: "manual",
-          is_auto: false,
-          created_at: now(),
-        };
-        setSt((prev) =>
-          prev
-            ? {
-                ...prev,
-                convs: prev.convs.map((c) =>
-                  c.id === activeConv
-                    ? {
-                        ...c,
-                        transferred: resumeAuto ? false : c.transferred,
-                        paused: resumeAuto ? null : c.paused,
-                        lastAt: outMsg.created_at,
-                        lastMessagePreview: outMsg.body,
-                        msgs: [...c.msgs, outMsg],
-                      }
-                    : c
-                ),
-              }
-            : prev
-        );
-        setDraft("");
+        // Demo mode: تحديث الحالة إلى sent فورًا
+        setSt((prev) => {
+          if (!prev) return prev;
+          const target = prev.convs.find((c) => c.id === activeConv);
+          if (!target) return prev;
+          const newMsgs = target.msgs.map(m => 
+            m.id === tempId ? { ...m, id: `man-${Date.now()}`, status: "sent" as const } : m
+          );
+          const updatedConv = { ...target, msgs: newMsgs };
+          const others = prev.convs.filter((c) => c.id !== activeConv);
+          return { ...prev, convs: [updatedConv, ...others] };
+        });
       } else {
         const result: any = await apiAuthFetch<any>(
           token!,
@@ -647,43 +683,128 @@ export default function Dashboard() {
             body: JSON.stringify({ text: outgoing, resumeAuto }),
           }
         );
-
-        const sentMsg: ThreadMsg = {
-          id: result?.id ?? result?.message?.id ?? `temp-${Date.now()}`,
-          direction: "out",
-          body: result?.body ?? result?.message?.body ?? outgoing,
-          kind: result?.kind ?? result?.message?.kind ?? "manual",
-          is_auto: Boolean(result?.is_auto ?? result?.message?.is_auto ?? false),
-          created_at: result?.created_at ?? result?.message?.created_at ?? now(),
-        };
-
+        
+        const realId = result?.id ?? result?.message?.id ?? tempId;
+        const realBody = result?.body ?? result?.message?.body ?? outgoing;
+        const realKind = result?.kind ?? result?.message?.kind ?? "manual";
+        const realCreatedAt = result?.created_at ?? result?.message?.created_at ?? now();
+        
+        // استبدال الرسالة المؤقتة بالحقيقية
         setSt((prev) => {
           if (!prev) return prev;
           const target = prev.convs.find((c) => c.id === activeConv);
           if (!target) return prev;
-
-          const already = (target.msgs || []).some((m) => m.id === sentMsg.id);
-
-          const updatedConv: ConvItem = {
-            ...target,
-            transferred: resumeAuto ? false : target.transferred,
-            paused: resumeAuto ? null : target.paused,
-            lastAt: sentMsg.created_at,
-            lastMessagePreview: sentMsg.body,
-            msgs: already ? target.msgs : [...(target.msgs || []), sentMsg],
-          };
-
+          
+          const newMsgs = target.msgs.map(m => 
+            m.id === tempId 
+              ? { ...m, id: realId, body: realBody, kind: realKind, created_at: realCreatedAt, status: "sent" as const }
+              : m
+          );
+          
+          const updatedConv = { ...target, msgs: newMsgs };
           const others = prev.convs.filter((c) => c.id !== activeConv);
           return { ...prev, convs: [updatedConv, ...others] };
         });
-
-        setDraft("");
+        
         showToast("أُرسل الرد للعميل");
       }
     } catch (e: any) {
-      showToast(e?.message ?? "تعذر الإرسال — واتساب غير متصل؟");
+      // فشل الإرسال: تعليم الرسالة كـ failed
+      setSt((prev) => {
+        if (!prev) return prev;
+        const target = prev.convs.find((c) => c.id === activeConv);
+        if (!target) return prev;
+        
+        const newMsgs = target.msgs.map(m => 
+          m.id === tempId ? { ...m, status: "failed" as const } : m
+        );
+        
+        const updatedConv = { ...target, msgs: newMsgs };
+        const others = prev.convs.filter((c) => c.id !== activeConv);
+        return { ...prev, convs: [updatedConv, ...others] };
+      });
+      
+      showToast(e?.message ?? "تعذر الإرسال — اضغط ❌ لإعادة المحاولة");
     }
-    setSending(false);
+  };
+  
+  const retrySend = async (msg: ThreadMsg) => {
+    if (msg.status !== "failed" || !activeConv || !st) return;
+    
+    // إعادة تعيين الحالة إلى sending
+    setSt((prev) => {
+      if (!prev) return prev;
+      const target = prev.convs.find((c) => c.id === activeConv);
+      if (!target) return prev;
+      
+      const newMsgs = target.msgs.map(m => 
+        m.id === msg.id ? { ...m, status: "sending" as const } : m
+      );
+      
+      const updatedConv = { ...target, msgs: newMsgs };
+      const others = prev.convs.filter((c) => c.id !== activeConv);
+      return { ...prev, convs: [updatedConv, ...others] };
+    });
+    
+    try {
+      if (demo) {
+        setSt((prev) => {
+          if (!prev) return prev;
+          const target = prev.convs.find((c) => c.id === activeConv);
+          if (!target) return prev;
+          const newMsgs = target.msgs.map(m => 
+            m.id === msg.id ? { ...m, status: "sent" as const } : m
+          );
+          const updatedConv = { ...target, msgs: newMsgs };
+          const others = prev.convs.filter((c) => c.id !== activeConv);
+          return { ...prev, convs: [updatedConv, ...others] };
+        });
+      } else {
+        const result: any = await apiAuthFetch<any>(
+          token!,
+          `/api/dashboard/conversations/${activeConv}/reply`,
+          {
+            method: "POST",
+            body: JSON.stringify({ text: msg.body, resumeAuto: false }),
+          }
+        );
+        
+        const realId = result?.id ?? result?.message?.id ?? msg.id;
+        const realBody = result?.body ?? result?.message?.body ?? msg.body;
+        
+        setSt((prev) => {
+          if (!prev) return prev;
+          const target = prev.convs.find((c) => c.id === activeConv);
+          if (!target) return prev;
+          
+          const newMsgs = target.msgs.map(m => 
+            m.id === msg.id 
+              ? { ...m, id: realId, body: realBody, status: "sent" as const }
+              : m
+          );
+          
+          const updatedConv = { ...target, msgs: newMsgs };
+          const others = prev.convs.filter((c) => c.id !== activeConv);
+          return { ...prev, convs: [updatedConv, ...others] };
+        });
+      }
+    } catch (e: any) {
+      setSt((prev) => {
+        if (!prev) return prev;
+        const target = prev.convs.find((c) => c.id === activeConv);
+        if (!target) return prev;
+        
+        const newMsgs = target.msgs.map(m => 
+          m.id === msg.id ? { ...m, status: "failed" as const } : m
+        );
+        
+        const updatedConv = { ...target, msgs: newMsgs };
+        const others = prev.convs.filter((c) => c.id !== activeConv);
+        return { ...prev, convs: [updatedConv, ...others] };
+      });
+      
+      showToast("فشل الإرسال مجددًا");
+    }
   };
 
   const resolveOne = async (item: UnresolvedItem) => {
@@ -1267,12 +1388,24 @@ export default function Dashboard() {
                 <span className="w-2 h-2 rounded-full bg-verde live-dot" />
               </div>
               <ul className="max-h-[520px] overflow-y-auto qa-scroll">
-                {st.convs.length === 0 && (
+                {st.loadingList ? (
+                  // Skeleton Loader
+                  Array.from({ length: 5 }).map((_, i) => (
+                    <li key={i} className="px-4 py-3.5 border-b border-verde/8 animate-pulse">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-full bg-sage/10"></div>
+                        <div className="flex-1 space-y-2">
+                          <div className="h-3 bg-sage/10 rounded w-3/4"></div>
+                          <div className="h-2 bg-sage/5 rounded w-1/2"></div>
+                        </div>
+                      </div>
+                    </li>
+                  ))
+                ) : st.convs.length === 0 ? (
                   <li className="px-5 py-10 text-center text-xs text-sage/70 leading-6">
                     لا محادثات بعد — أرسل رسالة من أي رقم واتساب لموظفك.
                   </li>
-                )}
-                {st.convs.map((c) => {
+                ) : st.convs.map((c) => {
                   const sel = c.id === activeConv;
                   return (
                     <li key={c.id}>
@@ -1455,18 +1588,27 @@ export default function Dashboard() {
                     {active.msgs.map((m) => (
                       <div key={m.id} className={`flex ${m.direction === "out" ? "justify-start" : "justify-end"} msg-in`}>
                         <div
-                          className={`max-w-[78%] rounded-2xl px-3.5 py-2.5 shadow-sm ${
+                          className={`max-w-[78%] rounded-2xl px-3.5 py-2.5 shadow-sm transition-opacity duration-300 ${
                             m.direction === "out" ? "bg-wa-out rounded-bl-md" : "bg-wa-in rounded-br-md"
-                          }`}
+                          } ${m.status === "sending" ? "opacity-60" : ""}`}
                         >
                           <p className="text-[13px] leading-6 text-bone">{m.body}</p>
                           <p className="flex items-center justify-end gap-1.5 mt-1 text-[9.5px] text-sage/80">
                             {m.kind === "refusal" && <span className="text-oro-soft">بدون معلومة مؤكدة</span>}
                             {m.kind === "handoff" && <span className="text-oro-soft">تحويل</span>}
                             {m.direction === "out" && (
-                              <span className={`rounded-full px-1.5 py-px border text-[8.5px] font-bold ${m.is_auto ? "border-verde/50 text-verde" : "border-oro/50 text-oro-soft"}`}>
-                                {m.is_auto ? "آلي" : "أنت"}
-                              </span>
+                              <>
+                                <span className={`rounded-full px-1.5 py-px border text-[8.5px] font-bold ${m.is_auto ? "border-verde/50 text-verde" : "border-oro/50 text-oro-soft"}`}>
+                                  {m.is_auto ? "آلي" : "أنت"}
+                                </span>
+                                {m.status === "sending" && <span className="text-xs">⏳</span>}
+                                {m.status === "sent" && <span className="text-xs text-verde">✓</span>}
+                                {m.status === "failed" && (
+                                  <button onClick={() => retrySend(m)} className="text-red-400 hover:text-red-300 font-bold text-xs" title="إعادة المحاولة">
+                                    ❌
+                                  </button>
+                                )}
+                              </>
                             )}
                             <span className="tabular-nums">{fmtTime(m.created_at)}</span>
                           </p>
