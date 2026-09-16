@@ -397,6 +397,36 @@ export default function Dashboard() {
     /* ── UPDATE: محادثة موجودة (حقولها الوصفية فقط) ── */
     const handleConvUpdate = (payload: any) => {
       const row = payload.new ?? {};
+      
+      // ── كشف التحويل التلقائي من AI (ai_handoff) ──
+      setSt((prev) => {
+        if (!prev) return prev;
+        
+        const prevConv = prev.convs.find((c) => c.id === row.id);
+        const wasTransferred = prevConv?.transferred ?? false;
+        const nowTransferred = Boolean(row.transferred);
+        const isAiHandoff = row.auto_paused_reason === "ai_handoff";
+        
+        // إذا تحوّلت المحادثة للتو من AI
+        if (!wasTransferred && nowTransferred && isAiHandoff) {
+          queueMicrotask(() => {
+            showToast(
+              "🔔 محادثة تحتاج تدخلك — الموظف الذكي لم يجد إجابة مؤكدة"
+            );
+            // نغمة تنبيه (اختيارية)
+            try {
+              const audio = new Audio(
+                "data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBSuBzvLZiTYIG2m98OScTgwOUarm7blmGgU7k9n1unEiBC13yO/eizEIHWq+8+OWT"
+              );
+              audio.volume = 0.3;
+              audio.play().catch(() => {});
+            } catch {}
+          });
+        }
+        
+        return prev;
+      });
+      
       setSt((prev) => {
         if (!prev) return prev;
         const exists = prev.convs.some((c) => c.id === row.id);
@@ -1242,8 +1272,10 @@ export default function Dashboard() {
                     <li key={c.id}>
                       <button
                         onClick={() => openConversation(c.id)}
-                        className={`w-full text-start px-4 py-3.5 border-b border-verde/8 transition-all duration-200 ${
-                          sel ? "bg-moss/80" : "hover:bg-night/50"
+                        className={`w-full text-start px-4 py-3.5 border-b transition-all duration-200 ${
+                          c.paused === "ai_handoff" && !c.humanAgentActive
+                            ? `border-l-4 border-l-oro bg-oro/5 ${sel ? "bg-moss/80" : "hover:bg-night/50"}`
+                            : `border-verde/8 ${sel ? "bg-moss/80" : "hover:bg-night/50"}`
                         }`}
                       >
                         <div className="flex items-center justify-between gap-2 mb-1">
@@ -1262,6 +1294,11 @@ export default function Dashboard() {
                           {c.paused === "credits" && (
                             <span className="text-[9.5px] font-bold text-oro-soft bg-oro/10 border border-oro/30 rounded-full px-2 py-0.5">
                               موقوفة — نفد الرصيد
+                            </span>
+                          )}
+                          {c.paused === "ai_handoff" && !c.humanAgentActive && (
+                            <span className="text-[9.5px] font-bold text-oro-soft bg-oro/10 border border-oro/30 rounded-full px-2 py-0.5 inline-flex items-center gap-1">
+                              🔔 الموظف الذكي يحتاج مساعدتك
                             </span>
                           )}
                           {typeof c.unreadCount === "number" && c.unreadCount > 0 && !sel && (
