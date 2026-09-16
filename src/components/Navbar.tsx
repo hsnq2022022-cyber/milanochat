@@ -3,7 +3,7 @@ import { Logo, IconWhatsapp, IconMenu, IconX } from "./Icons";
 
 const LINKS = [
   { label: "الضمانات", href: "#guarantees" },
-  { label: "شاهد ميلانو", href: "#demo-section" },
+  { label: "شاهد إدارة ســوشـــيــــال", href: "#demo-section" },
   { label: "الأسعار", href: "#pricing" },
   { label: "الأسئلة", href: "#faq" },
 ];
@@ -33,7 +33,7 @@ export default function Navbar() {
             <Logo className="w-9 h-9" />
           </span>
           <span className="font-display font-bold text-2xl leading-none text-bone">
-            ميلانو
+            إدارة ســوشـــيــــال
             <span className="text-oro">.</span>
           </span>
         </a>

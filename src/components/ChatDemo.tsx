@@ -11,7 +11,7 @@ type Msg = {
 
 const SCRIPT: Msg[] = [
   { from: "customer", text: "سلام عليكم", time: "9:41 م" },
-  { from: "milano", text: "وعليكم السلام! حيّاك في كافيه ميلانو ☕ كيف أقدر أساعدك اليوم؟", time: "9:41 م" },
+  { from: "milano", text: "وعليكم السلام! حيّاك في كافيه إدارة ســوشـــيــــال ☕ كيف أقدر أساعدك اليوم؟", time: "9:41 م" },
   { from: "customer", text: "كم سعر السبانش لاتيه؟", time: "9:42 م" },
   { from: "milano", text: "السبانش لاتيه عندنا بـ 18 ريال — حار أو مثلج. وعندك كرت الولاء: الكوب السادس مجاني.", time: "9:42 م" },
   { from: "customer", text: "ومتى تفتحون يوم الجمعة؟", time: "9:43 م" },
@@ -101,7 +101,7 @@ function Phone({ step, typing }: { step: number; typing: boolean }) {
               <Logo className="w-5.5 h-5.5" />
             </span>
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-bold text-bone truncate">كافيه ميلانو — موظف ميلانو</p>
+              <p className="text-sm font-bold text-bone truncate">كافيه إدارة ســوشـــيــــال — موظف إدارة ســوشـــيــــال</p>
               <p className="text-[11px] text-verde flex items-center gap-1.5">
                 <span className="w-1.5 h-1.5 rounded-full bg-verde live-dot" />
                 {typing ? "يكتب الآن…" : "متصل الآن"}
@@ -224,7 +224,7 @@ export default function ChatDemo() {
         {/* الشرح */}
         <div>
           <p data-reveal className="font-display font-bold text-oro text-lg mb-2">
-            — ميلانو وهو يشتغل
+            — إدارة ســوشـــيــــال وهي تشتغل
           </p>
           <h2 data-reveal style={{ transitionDelay: "80ms" }} className="font-display font-extrabold text-4xl sm:text-5xl leading-[1.15] text-bone mb-4">
             شوفه يرد…

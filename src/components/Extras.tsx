@@ -26,7 +26,7 @@ function Diamond() {
 export function Marquee() {
   const row = [...SECTORS, ...SECTORS];
   return (
-    <section className="relative py-6 border-y border-verde/12 bg-pine/50 overflow-hidden" aria-label="الأنشطة التي يخدمها ميلانو">
+    <section className="relative py-6 border-y border-verde/12 bg-pine/50 overflow-hidden" aria-label="الأنشطة التي يخدمها إدارة ســوشـــيــــال">
       <div className="marquee-track flex w-max items-center gap-8 pe-8">
         {row.map((s, i) => (
           <span key={i} className="flex items-center gap-8">
