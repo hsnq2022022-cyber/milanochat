@@ -21,7 +21,7 @@ type G = {
   visual?: JSX.Element;
 };
 
-/* مخطط مصغّر لبطاقة الأولى: المصادر → ميلانو */
+/* مخطط مصغّر لبطاقة الأولى: المصادر → إدارة ســوشـــيــــال */
 function SourcesDiagram() {
   return (
     <div className="mt-6 grid grid-cols-[1fr_auto_1fr] items-center gap-3" aria-hidden="true">
@@ -47,7 +47,7 @@ function SourcesDiagram() {
         <span className="w-14 h-14 rounded-2xl bg-moss border border-verde/40 flex items-center justify-center text-verde shadow-[0_10px_30px_-10px_rgba(46,194,126,0.4)]">
           <Logo className="w-8 h-8" />
         </span>
-        <span className="text-[11px] text-sage font-semibold">ميلانو</span>
+        <span className="text-[11px] text-sage font-semibold">إدارة ســوشـــيــــال</span>
       </div>
     </div>
   );

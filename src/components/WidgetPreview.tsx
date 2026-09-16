@@ -599,7 +599,7 @@ export default function WidgetPreview({
                       appearance.primaryColor,
                   }}
                 >
-                  {normalizedWidgetName || "ميلانو"}
+                  {normalizedWidgetName || "إدارة ســوشـــيــــال"}
                 </span>
               </div>
             )}

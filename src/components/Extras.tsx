@@ -107,7 +107,7 @@ export function Footer() {
                 <Logo className="w-9 h-9" />
               </span>
               <span className="font-display font-bold text-2xl text-bone">
-                ميلانو<span className="text-oro">.</span>
+                إدارة ســوشـــيــــال<span className="text-oro">.</span>
               </span>
             </a>
             <p className="text-[12.5px] text-sage/80 leading-6 max-w-sm">
@@ -135,7 +135,7 @@ export function Footer() {
       {/* الشريط الأخير */}
       <div className="border-t border-verde/10">
         <div className="max-w-6xl mx-auto px-5 lg:px-8 py-5 flex flex-col sm:flex-row items-center justify-between gap-3 text-[11.5px] text-sage/70">
-          <p>© 2026 ميلانو — جميع الحقوق محفوظة.</p>
+          <p>© 2026 إدارة ســوشـــيــــال — جميع الحقوق محفوظة.</p>
           <p className="text-center sm:text-left leading-5 max-w-xl">
             الربط عبر «الأجهزة المرتبطة» في واتساب وليس قناة رسمية من Meta، وقد تقيّد واتساب أي رقم وفق
             تقديرها. <span className="text-oro-soft">اقرأ التفاصيل قبل الربط.</span>
