@@ -431,43 +431,48 @@ export default function Dashboard() {
       const convId: string = row.conversation_id;
       if (!convId) return;
 
-      const body = extractBody(row);
       const direction = normalizeDirection(row.direction);
+      // نستخدم ref للتأكد من حالة الفتح الحالية دون مشاكل closure
+      const isActive = activeConvRef.current === convId;
 
       setSt((prev) => {
         if (!prev) return prev;
+        
         const target = prev.convs.find((c) => c.id === convId);
-        if (!target) return prev;
+        
+        // حالة خاصة: محادثة جديدة تمامًا لم تظهر في القائمة بعد
+        if (!target) {
+          // نطلب إعادة تحميل القائمة في الخلفية لإضافتها
+          queueMicrotask(() => loadAll(true).catch(() => {}));
+          return prev; 
+        }
 
-        const isActive = activeConvRef.current === convId;
-        const already = (target.msgs || []).some((m) => m.id === row.id);
-
-        const newMsg: ThreadMsg = {
-          id: row.id,
-          direction,
-          body,
-          kind: row.kind ?? (direction === "out" ? "answer" : "text"),
-          is_auto: Boolean(row.is_auto),
-          created_at: row.created_at ?? now(),
-        };
-
+        // تحديث بيانات المحادثة في القائمة الجانبية
         const updatedConv: ConvItem = {
           ...target,
           lastAt: row.created_at ?? now(),
-          lastMessagePreview: body || target.lastMessagePreview || "—",
+          // نحتفظ بالنص القديم أو نضع "..." حتى يتم فك التشفير عند الفتح
+          lastMessagePreview: target.lastMessagePreview || "…",
           unreadCount:
             isActive || direction === "out"
               ? (target.unreadCount ?? 0)
               : (target.unreadCount ?? 0) + 1,
-          msgs:
-            isActive && !already
-              ? [...(target.msgs || []), newMsg]
-              : target.msgs,
+          // لا نلمس msgs هنا لتجنب إضافة رسالة فارغة
+          msgs: target.msgs, 
         };
 
         const others = prev.convs.filter((c) => c.id !== convId);
         return { ...prev, convs: [updatedConv, ...others] };
       });
+
+      // إذا كانت المحادثة مفتوحة حاليًا، نجلب الرسائل المفكوكة فورًا
+      if (isActive) {
+        queueMicrotask(() => {
+          loadThread(convId).catch((err) => {
+            console.error("فشل جلب الرسائل المحدثة:", err);
+          });
+        });
+      }
     };
 
     const channel = sb
