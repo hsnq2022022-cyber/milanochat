@@ -993,7 +993,7 @@ function Wizard() {
                   disabled={busy}
                   className="w-full bg-oro text-ink font-display font-bold py-3 rounded-2xl hover:bg-verde transition-all duration-300 active:scale-[0.98] disabled:opacity-60"
                 >
-                  {busy ? "جارٍ…" : "ادفع الآن — 99 ريال"}
+                  {busy ? "جارٍ…" : "ادفع الآن — 40,000 دينار"}
                 </button>
                 {payUrl && (
                   <p className="mt-2.5 text-[11px] text-verde leading-5">
@@ -1010,7 +1010,7 @@ function Wizard() {
                 onClick={() => setPhase("pay")}
                 className="w-full bg-verde text-ink font-display font-bold text-lg py-3.5 rounded-2xl hover:bg-oro transition-all duration-300 active:scale-[0.98]"
               >
-                أكمل الدفع — 99 ريال
+                أكمل الدفع — 40,000 دينار
               </button>
             )}
 
@@ -1130,7 +1130,7 @@ function Wizard() {
                   <div className="flex items-end justify-between pb-3 border-b border-dashed border-verde/20">
                     <div>
                       <p className="font-display font-bold text-3xl text-oro">
-                        99 <span className="text-base text-oro-soft">ريال</span>
+                        40,000 <span className="text-base text-oro-soft">دينار</span>
                       </p>
                       <p className="text-[11px] text-sage">دفعة واحدة — بدون اشتراك شهري</p>
                     </div>
@@ -1261,7 +1261,7 @@ export default function Hero() {
 
           <ul data-reveal style={{ transitionDelay: "0.3s" }} className="mt-7 flex flex-wrap gap-x-6 gap-y-3">
             {[
-              { icon: <IconBolt className="w-4 h-4" />, t: "99 ريال دفعة واحدة" },
+              { icon: <IconBolt className="w-4 h-4" />, t: "40,000 دينار دفعة واحدة" },
               { icon: <IconInfinity className="w-4 h-4" />, t: "بدون اشتراك شهري" },
               { icon: <IconShieldCheck className="w-4 h-4" />, t: "يشمل 1,000 رد ذكي" },
             ].map((b) => (
@@ -1279,7 +1279,7 @@ export default function Hero() {
             </div>
             <div className="floaty-slow self-end bg-wa-out text-bone text-[13px] px-4 py-2.5 rounded-2xl rounded-br-md shadow-lg flex items-center gap-2">
               <img src={`${import.meta.env.BASE_URL}logo.png`} alt="شعار إدارة ســوشـــيــــال" className="w-4 h-4" />
-              18 ريال — حار أو مثلج
+              18 دينار — حار أو مثلج
             </div>
           </div>
         </div>
@@ -1296,7 +1296,7 @@ export default function Hero() {
           <Stat value={24} suffix="/ 7" label="يرد بلا توقف ولا إجازات" active={stats.inView} delay={0} />
           <Stat value={3} prefix="<" suffix="ثواني" label="متوسط زمن الرد على العميل" active={stats.inView} delay={100} />
           <Stat value={1000} suffix="رد" label="ذكي مشمول في دفعة التفعيل" active={stats.inView} delay={200} />
-          <Stat value={0} suffix="ريال" label="رسوم شهرية — للأبد" active={stats.inView} delay={300} />
+          <Stat value={0} suffix="دينار" label="رسوم شهرية — للأبد" active={stats.inView} delay={300} />
         </div>
       </div>
     </section>

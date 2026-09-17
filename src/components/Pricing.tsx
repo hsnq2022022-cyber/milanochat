@@ -23,9 +23,9 @@ const STEPS = [
 ];
 
 const PACKS = [
-  { replies: "500 رد ذكي", price: "39", per: "0.078 ريال / رد", tag: "" },
-  { replies: "1,500 رد ذكي", price: "99", per: "0.066 ريال / رد", tag: "الأكثر طلباً" },
-  { replies: "5,000 رد ذكي", price: "249", per: "0.050 ريال / رد", tag: "للمشاغل العالية" },
+  { replies: "500 رد ذكي", price: "40,000", per: "80 دينار / رد", tag: "" },
+  { replies: "1,500 رد ذكي", price: "80,000", per: "53 دينار / رد", tag: "الأكثر طلباً" },
+  { replies: "5,000 رد ذكي", price: "200,000", per: "40 دينار / رد", tag: "للمشاغل العالية" },
 ];
 
 export default function Pricing() {
@@ -67,7 +67,7 @@ export default function Pricing() {
               <div className="relative flex flex-wrap items-end justify-between gap-6">
                 <div>
                   <p className="font-display font-extrabold text-7xl leading-none text-bone">
-                    99 <span className="text-2xl text-oro">ريال</span>
+                    40,000 <span className="text-2xl text-oro">دينار</span>
                   </p>
                   <p className="mt-2 text-sm text-sage">دفعة واحدة — يشمل إنشاء الموظف + 1,000 رد ذكي</p>
                 </div>
@@ -133,7 +133,7 @@ export default function Pricing() {
                       <p className="text-[11.5px] text-ink/50 mt-0.5 tabular-nums">{p.per}</p>
                     </div>
                     <p className="font-display font-extrabold text-2xl text-ink group-hover:text-verde-deep transition-colors">
-                      {p.price} <span className="text-sm text-ink/50">ريال</span>
+                      {p.price} <span className="text-sm text-ink/50">دينار</span>
                     </p>
                   </div>
                 ))}
