@@ -734,7 +734,6 @@ function Wizard() {
 
               <p className="text-[11px] leading-5 text-sage/75 border-t border-verde/10 pt-3.5">
                 الربط عبر واتساب الرسمي — Cloud API من Meta مباشرة.
-                </a>
               </p>
             </div>
           </>
