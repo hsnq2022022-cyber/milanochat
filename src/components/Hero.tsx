@@ -214,7 +214,6 @@ function PhoneField({
 function Wizard() {
   const [source, setSource] = useState<Source>("map");
   const [phase, setPhase] = useState<Phase>("form");
-  const [reseller, setReseller] = useState(false);
   const [workStep, setWorkStep] = useState(0);
 
   const [mapUrl, setMapUrl] = useState("");
@@ -705,26 +704,6 @@ function Wizard() {
                 error={errors.waNumber}
               />
 
-              {/* تبديل الوكيل */}
-              <button
-                onClick={() => setReseller((v) => !v)}
-                className="w-full flex items-center justify-between gap-3 bg-night/50 border border-verde/15 rounded-xl px-4 py-3 hover:border-verde/35 transition-colors"
-                aria-pressed={reseller}
-              >
-                <span className="text-[13px] text-mist">أنا أبيع الأداة لعملائي</span>
-                <span
-                  className={`relative w-10 h-5.5 rounded-full transition-colors duration-300 ${
-                    reseller ? "bg-verde" : "bg-moss"
-                  }`}
-                >
-                  <span
-                    className={`absolute top-0.5 w-4.5 h-4.5 rounded-full bg-bone transition-all duration-300 ${
-                      reseller ? "start-5" : "start-0.5"
-                    }`}
-                  />
-                </span>
-              </button>
-
               {errors.api && (
                 <div className="bg-night/60 border border-oro/25 rounded-xl px-3.5 py-2.5">
                   <p className="text-[11px] leading-5 text-oro-soft">{errors.api}</p>
@@ -747,17 +726,14 @@ function Wizard() {
                 onClick={submit}
                 className="w-full group flex items-center justify-center gap-2.5 bg-verde text-ink font-display font-bold text-lg py-3.5 rounded-2xl hover:bg-oro transition-all duration-300 active:scale-[0.98] hover:shadow-[0_16px_40px_-12px_rgba(232,178,75,0.45)]"
               >
-                {reseller ? "أنشئ موظف لعميلك" : "ابدأ الآن"}
+                ابدأ الآن
                 <span className="transition-transform duration-300 group-hover:-translate-x-1">
                   <IconArrowStart className="w-5 h-5" />
                 </span>
               </button>
 
               <p className="text-[11px] leading-5 text-sage/75 border-t border-verde/10 pt-3.5">
-                الربط يتم عبر خاصية «الأجهزة المرتبطة» في واتساب — وهي ليست قناة رسمية من Meta، وقد تقيّد واتساب أي
-                رقم وفق تقديرها.{" "}
-                <a href="#faq" className="text-oro-soft underline underline-offset-2 hover:text-oro">
-                  اقرأ التفاصيل قبل الربط
+                الربط عبر واتساب الرسمي — Cloud API من Meta مباشرة.
                 </a>
               </p>
             </div>

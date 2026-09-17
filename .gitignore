@@ -9,7 +9,21 @@ build/
 .nuxt/
 out/
 
-# Python
+# Environment variables
+.env
+.env.local
+.env.*
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+
+# Python specific
 __pycache__/
 *.pyc
 *.pyo
@@ -18,47 +32,38 @@ __pycache__/
 env/
 venv/
 .venv/
-.env
-.env.local
-.env.*
+pip-log.txt
+pip-delete-this-directory.txt
 
-# Logs
-*.log
-
-# OS generated files
-.DS_Store
-Thumbs.db
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# Coverage
+# Coverage reports
 coverage/
 htmlcov/
 .coverage
 
-# MyPy
-.mypy_cache/
-
-# Pytest
-.pytest_cache/
-
 # Temporary files
 *.tmp
 *.temp
-```
+.DS_Store
+Thumbs.db
 
-Wait, I need to reconsider. The only modified file is 'src/pages/Dashboard.tsx' which is a TypeScript React component file. This appears to be source code, not a build artifact or dependency. Looking at the changes again:
+# MyPy cache
+.mypy_cache/
 
-Added: []
-Deleted: []
-Modified: ['src/pages/Dashboard.tsx']
+# PyTest cache
+.pytest_cache/
 
-Since this is just a source code file modification and there are no build artifacts, dependencies, or temporary files in the changes, the optimized .gitignore should be empty.
+# Compiled binary files
+*.exe
+*.dll
+*.so
+*.dylib
 
-```gitignore
-
+# Compressed files
+*.zip
+*.tar.gz
+*.tar.bz2
+*.tar.xz
+*.gz
+*.rar
+*.7z
 ```
