@@ -477,14 +477,7 @@
     let html = '';
 
     if (messages.length === 0) {
-      html = `
-        <div class="milano-widget-message out">
-          ${getAvatarHtml(true)}
-          <div class="milano-widget-message-content">
-            <div class="milano-widget-message-bubble">${escapeHtml(config.welcomeMessage)}</div>
-          </div>
-        </div>
-      `;
+      html = '';  // لا تعرض شيئًا — الخادم يُرسل الترحيب
     } else {
       html = messages.map((m) => {
         const isBot = m.direction === 'out';
