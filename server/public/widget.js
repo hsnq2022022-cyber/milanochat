@@ -16,15 +16,17 @@
     if (src.includes('widget.js')) {
       token = scripts[i].getAttribute('data-token');
       const match = src.match(/^(https?:\/\/[^\/]+)/);
-      baseUrl = match ? match[1] : '';
+      baseUrl = match ? match[1] : window.location.origin;
       break;
     }
   }
 
-  if (!token || !baseUrl) {
-    console.error('[Milano Widget] Missing data-token or invalid src');
+  if (!token) {
+    console.error('[Milano Widget] Missing data-token');
     return;
   }
+
+  console.log('[Milano Widget] Initializing with baseUrl:', baseUrl, 'token:', token);
 
   // متغيرات الحالة
   let config = null;
@@ -33,8 +35,16 @@
   let isOpen = false;
   let isLoading = false;
 
-  // إنشاء visitor ID فريد
-  const visitorId = 'v_' + Math.random().toString(36).substr(2, 9) + '_' + Date.now();
+  // إنشاء visitor ID فريد - يُحفظ في localStorage ليبقى نفس الزائر عند العودة
+  const getVisitorId = () => {
+    const stored = localStorage.getItem('milano_visitor_id');
+    if (stored) return stored;
+    const newId = 'v_' + Math.random().toString(36).substr(2, 9) + '_' + Date.now();
+    localStorage.setItem('milano_visitor_id', newId);
+    return newId;
+  };
+  
+  const visitorId = getVisitorId();
 
   // ═══════════ API Calls ═══════════
 
@@ -54,10 +64,23 @@
     try {
       const res = await fetch(`${baseUrl}/api/widgets/public/${token}/session`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ visitorId }),
+        headers: { 
+          'Content-Type': 'application/json',
+          'Origin': window.location.origin
+        },
+        body: JSON.stringify({ visitorId, origin: window.location.origin }),
       });
-      if (!res.ok) throw new Error('Session error');
+      
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        console.error('[Milano Widget] Session error:', errorData);
+        
+        if (res.status === 403) {
+          throw new Error(errorData.code === 'DOMAIN_NOT_ALLOWED' ? 'النطاق غير مسموح به' : 'خطأ في التحقق من النطاق');
+        }
+        throw new Error(errorData.error || 'Session error');
+      }
+      
       const data = await res.json();
       sessionId = data.sessionId;
       messages = data.messages || [];
@@ -76,16 +99,32 @@
     try {
       const res = await fetch(`${baseUrl}/api/widgets/public/${token}/message`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId, message: text }),
+        headers: { 
+          'Content-Type': 'application/json',
+          'Origin': window.location.origin
+        },
+        body: JSON.stringify({ sessionId, message: text, origin: window.location.origin }),
       });
+      
       if (!res.ok) {
         const errorData = await res.json().catch(() => ({}));
+        console.error('[Milano Widget] Message error:', errorData);
+        
         if (res.status === 429 || errorData.quotaExceeded) {
           // نفاد الحصة
-          const quotaMessage = config.quotaExceededMessage || 'الخدمة غير متاحة مؤقتاً، اترك بريدك وسنتواصل معك';
+          const quotaMessage = config.quotaExceededMessage || errorData.reply || 'الخدمة غير متاحة مؤقتاً، اترك بريدك وسنتواصل معك';
           messages.push({ direction: 'in', body: text, kind: 'customer', created_at: new Date().toISOString() });
           messages.push({ direction: 'out', body: quotaMessage, kind: 'quota_exceeded', created_at: new Date().toISOString() });
+        } else if (res.status === 400 && errorData.code === 'MESSAGE_TOO_LONG') {
+          // الرسالة طويلة جداً
+          const lengthMessage = `الرسالة أطول من الحد المسموح (${config.maxMessageLength || 1000} حرف)`;
+          messages.push({ direction: 'in', body: text, kind: 'customer', created_at: new Date().toISOString() });
+          messages.push({ direction: 'out', body: lengthMessage, kind: 'error', created_at: new Date().toISOString() });
+        } else if (res.status === 403) {
+          // نطاق غير مسموح
+          const domainMessage = errorData.error || 'النطاق غير مسموح به';
+          messages.push({ direction: 'in', body: text, kind: 'customer', created_at: new Date().toISOString() });
+          messages.push({ direction: 'out', body: domainMessage, kind: 'error', created_at: new Date().toISOString() });
         } else {
           throw new Error(errorData.error || 'Message error');
         }
