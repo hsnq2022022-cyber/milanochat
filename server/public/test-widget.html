@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>اختبار Widget - موقع خارجي</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Tahoma, Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 40px 20px;
+            background: #f5f5f5;
+        }
+        .card {
+            background: white;
+            border-radius: 12px;
+            padding: 30px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        h1 { color: #2ec27e; margin-bottom: 10px; }
+        h2 { font-size: 18px; margin: 20px 0 10px; }
+        p { line-height: 1.6; color: #666; }
+        code {
+            background: #f0f0f0;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 14px;
+            direction: ltr;
+            display: inline-block;
+        }
+        .status {
+            padding: 10px 15px;
+            border-radius: 8px;
+            margin: 15px 0;
+        }
+        .status.success { background: #d1fae5; color: #065f46; }
+        .status.error { background: #fee2e2; color: #991b1b; }
+        .status.info { background: #dbeafe; color: #1e40af; }
+        .checklist { list-style: none; padding: 0; }
+        .checklist li {
+            padding: 8px 0;
+            border-bottom: 1px solid #eee;
+        }
+        .checklist li::before {
+            content: "✓ ";
+            color: #2ec27e;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>🧪 صفحة اختبار Widget Milano</h1>
+        <p>هذه صفحة اختبار على نطاق خارجي للتحقق من عمل widget الشات.</p>
+        
+        <div class="status info">
+            <strong>ملاحظة:</strong> يجب استبدال <code>YOUR_DOMAIN</code> و <code>WIDGET_TOKEN</code> بالقيم الصحيحة.
+        </div>
+
+        <h2>كود التضمين:</h2>
+        <pre style="background: #f8f9fa; padding: 15px; border-radius: 8px; overflow-x: auto; direction: ltr;">
+&lt;script 
+    src="https://YOUR_DOMAIN/widget.js" 
+    data-token="WIDGET_TOKEN"&gt;
+&lt;/script&gt;</pre>
+
+        <h2>قائمة التحقق:</h2>
+        <ul class="checklist">
+            <li>يظهر زر widget في زاوية الصفحة</li>
+            <li>عند النقر يفتح نافذة المحادثة</li>
+            <li>تظهر رسالة الترحيب والأسئلة المقترحة</li>
+            <li>يمكن إرسال رسالة جديدة</li>
+            <li>يظهر مؤشر "يكتب الآن" بعد الإرسال</li>
+            <li>يتم بث الرد حرفاً بحرف (Streaming)</li>
+            <li>لا توجد أخطاء CORS في Console المتصفح</li>
+            <li>المحادثة تُحفظ في قاعدة البيانات</li>
+            <li>التصميم متجاوب على الجوال</li>
+            <li>الاتجاه RTL صحيح للعربية</li>
+        </ul>
+
+        <h2>خطوات الاختبار:</h2>
+        <ol>
+            <li>افتح لوحة تحكم Milano وأنشئ widget جديد</li>
+            <li>انسخ الـ Token الخاص بالwidget</li>
+            <li>عدّل هذه الصفحة واستبدل YOUR_DOMAIN و WIDGET_TOKEN</li>
+            <li>افتح الصفحة في المتصفح</li>
+            <li>افتح Console المتصفح (F12) للتحقق من عدم وجود أخطاء</li>
+            <li>أرسل رسالة واختبر الرد</li>
+        </ol>
+
+        <div class="status success">
+            <strong>✅ الميزات المطبقة:</strong>
+            <ul>
+                <li>Shadow DOM لعزل التنسيقات</li>
+                <li>CORS مع التحقق من النطاقات</li>
+                <li>Visitor ID فريد يُحفظ في localStorage</li>
+                <li>بث مباشر للردود (Streaming)</li>
+                <li>مؤشر "يكتب الآن"</li>
+                <li>معالجة الأخطاء وعرضها للمستخدم</li>
+                <li>دعم كامل للعربية وRTL</li>
+                <li>إمكانية الوصول (Keyboard, ARIA)</li>
+                <li>حفظ المحادثة أثناء التنقل</li>
+            </ul>
+        </div>
+    </div>
+
+    <!-- مثال للتضمين (عدّل القيم قبل الاستخدام) -->
+    <!--
+    <script 
+        src="https://milanochat-production.up.railway.app/widget.js" 
+        data-token="your-widget-token-here">
+    </script>
+    -->
+</body>
+</html>
