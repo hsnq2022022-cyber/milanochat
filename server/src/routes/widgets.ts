@@ -1541,6 +1541,11 @@ widgetsRouter.get(
         undefined
           ? chat.showTypingIndicator
           : true,
+
+      // إعدادات الأمان
+      allowedDomains: settings.security?.allowedDomains || [],
+      maxMessagesPerHour: settings.security?.maxMessagesPerHour || 50,
+      maxMessageLength: settings.security?.maxMessageLength || 1000,
     });
   }
 );
@@ -1561,7 +1566,7 @@ widgetsRouter.post(
     } = await db
       .from("widgets")
       .select(
-        "id, tenant_id, enabled"
+        "id, tenant_id, enabled, settings"
       )
       .eq(
         "public_token",
@@ -1577,6 +1582,40 @@ widgetsRouter.post(
         error:
           "Widget غير موجود أو معطّل",
       });
+    }
+
+    // التحقق من النطاق المسموح به
+    const origin = req.headers.origin;
+    const settings = widget.settings && typeof widget.settings === "object" ? widget.settings : {};
+    const allowedDomains = settings.security?.allowedDomains || [];
+    
+    if (allowedDomains.length > 0 && origin) {
+      try {
+        const originUrl = new URL(origin);
+        const originHost = originUrl.hostname;
+        
+        const isAllowed = allowedDomains.some(domain => {
+          if (domain === "*") return true;
+          if (domain.startsWith("*.")) {
+            const baseDomain = domain.slice(1);
+            return originHost.endsWith(baseDomain);
+          }
+          return originHost === domain;
+        });
+        
+        if (!isAllowed) {
+          return res.status(403).json({
+            error: "النطاق غير مسموح به",
+            code: "DOMAIN_NOT_ALLOWED",
+          });
+        }
+      } catch {
+        // إذا فشل تحليل URL، نرفض الطلب
+        return res.status(403).json({
+          error: "نطاق غير صالح",
+          code: "INVALID_ORIGIN",
+        });
+      }
     }
 
     const {
@@ -2155,7 +2194,7 @@ widgetsRouter.post(
     } = await db
       .from("widgets")
       .select(
-        "id, tenant_id, enabled"
+        "id, tenant_id, enabled, settings"
       )
       .eq(
         "public_token",
@@ -2185,6 +2224,47 @@ widgetsRouter.post(
       return res.status(400).json({
         error:
           "sessionId و message مطلوبان",
+      });
+    }
+
+    // التحقق من طول الرسالة
+    const settings = widget.settings && typeof widget.settings === "object" ? widget.settings : {};
+    const maxMessageLength = settings.security?.maxMessageLength || 1000;
+    
+    if (message.trim().length > maxMessageLength) {
+      return res.status(400).json({
+        error: `الرسالة أطول من الحد المسموح (${maxMessageLength} حرف)`,
+        code: "MESSAGE_TOO_LONG",
+      });
+    }
+
+    // التحقق من الحصة每小时 للرسائل
+    const maxMessagesPerHour = settings.security?.maxMessagesPerHour || 50;
+    const { data: recentMessages } = await db
+      .from("widget_messages")
+      .select("id", { count: "exact" })
+      .eq("session_id", sessionId)
+      .eq("direction", "in")
+      .gte("created_at", new Date(Date.now() - 3600000).toISOString());
+    
+    if (recentMessages && recentMessages.length >= maxMessagesPerHour) {
+      const quotaMessage = settings.chat?.quotaExceededMessage || "تم تجاوز الحد المسموح من الرسائل في الساعة. يرجى الانتظار.";
+      
+      await db
+        .from("widget_messages")
+        .insert({
+          session_id: sessionId,
+          widget_id: widget.id,
+          tenant_id: widget.tenant_id,
+          direction: "out",
+          body: quotaMessage,
+          kind: "quota_exceeded",
+        });
+      
+      return res.status(429).json({
+        reply: quotaMessage,
+        kind: "quota_exceeded",
+        quotaExceeded: true,
       });
     }
 

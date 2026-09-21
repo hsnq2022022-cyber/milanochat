@@ -114,7 +114,7 @@ export default function Navbar() {
               onClick={() => setOpen(false)}
               className="block text-center bg-verde text-ink font-semibold px-4 py-3 rounded-xl mt-2"
             >
-              ابدأ الآن — 99 ريال
+              ابدأ الآن — 40,000 دينار
             </a>
           </li>
         </ul>

@@ -282,6 +282,12 @@ export interface WidgetBranding {
   customFooter?: string;
 }
 
+export interface WidgetSecurity {
+  allowedDomains: string[]; // قائمة النطاقات المسموح بها (بدون https://)
+  maxMessagesPerHour?: number; // حد أقصى للرسائل لكل زائر في الساعة
+  maxMessageLength?: number; // حد أقصى لطول الرسالة
+}
+
 export interface WidgetSettings {
   appearance: WidgetAppearance;
   chat: WidgetChat;
@@ -289,6 +295,7 @@ export interface WidgetSettings {
   forms: WidgetForms;
   localization: WidgetLocalization;
   branding: WidgetBranding;
+  security?: WidgetSecurity; // إعدادات الأمان والنطاقات المسموح بها
   // المرحلة الثانية
   chatWindow?: ChatWindowSettings;
   avatar?: AvatarSettings;
@@ -432,6 +439,11 @@ export const DEFAULT_SETTINGS: WidgetSettings = {
   },
   branding: {
     showBranding: true,
+  },
+  security: {
+    allowedDomains: [], // فارغ = جميع النطاقات مسموحة (للتوافق)
+    maxMessagesPerHour: 50,
+    maxMessageLength: 1000,
   },
   // المرحلة الثانية - Chat Window
   chatWindow: {
