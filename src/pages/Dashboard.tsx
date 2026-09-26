@@ -4,7 +4,7 @@
  *
  * ملاحظات الإصلاح:
  * - لا يوجد polling على الإطلاق — كل التحديثات تأتي عبر Supabase Realtime.
- * - قناة Realtime واحدة موحّدة للمحادثات والرسائل.
+ * - قناة Realtime واحدة موحّدة (محادثات + رسائل).
  * - لا يتم عرض body_encrypted إطلاقًا في الواجهة (يُستخدم body المفكوك من الخادم).
  * - عند الإرسال اليدوي نعتمد على رسالة الـ Backend (أو fallback مؤقت عند غيابها).
  * - إدارة unreadCount: تزداد للرسائل الواردة على محادثة غير مفتوحة، وتُصفَّر عند فتح المحادثة.
@@ -15,6 +15,9 @@
  * - عرض اسم العميل (customerName) فوق الرقم في القائمة ورأس المحادثة.
  * - عند وصول محادثة جديدة عبر Realtime نُعيد تحميل القائمة من الخادم 
  *   (لأن الرقم مشفّر في البياندة الواردة).
+ * - إصلاح: كان يُستدعى loadAll(true) عند وصول محادثة أو رسالة جديدة،
+ *   مما يتخطى جلب المحادثات من الخادم فلا تظهر إلا بعد إعادة تحميل الصفحة.
+ *   تم تغييره إلى loadAll(false) ليُعيد جلب القائمة كاملة.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import confetti from "canvas-confetti";
@@ -84,7 +87,6 @@ type DashState = {
 
 /* ═══════════════ أدوات ═══════════════ */
 
-/** رابط الشعار — يعمل على GitHub Pages والنطاق المخصص والمحلي. */
 const LOGO_URL = `${import.meta.env.BASE_URL}logo.png`;
 
 const fmtTime = (iso: string) =>
@@ -92,11 +94,9 @@ const fmtTime = (iso: string) =>
 const fmtDate = (iso: string) =>
   new Date(iso).toLocaleDateString("ar", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 
-/** توحيد اتجاه الرسالة القادم من الخادم إلى "in" | "out". */
 const normalizeDirection = (d: string | null | undefined): "in" | "out" =>
   d === "out" || d === "outbound" ? "out" : "in";
 
-/** استخراج نص الرسالة من صف قاعدة البيانات — لا نستخدم body_encrypted إطلاقًا. */
 const extractBody = (row: any): string => {
   if (!row) return "";
   if (typeof row.body === "string" && row.body.length > 0) return row.body;
@@ -122,7 +122,6 @@ export default function Dashboard() {
   const sb = useMemo(() => getSupabase(), []);
   const demo = sb === null;
 
-  /* ── المصادقة ── */
   const [authed, setAuthed] = useState(demo ? false : true);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -132,7 +131,6 @@ export default function Dashboard() {
   const [authNote, setAuthNote] = useState("");
   const [token, setToken] = useState<string | null>(null);
 
-  /* ── الحالة ── */
   const [st, setSt] = useState<DashState | null>(null);
   const [needClaim, setNeedClaim] = useState(false);
   const [claimVal, setClaimVal] = useState("");
@@ -150,7 +148,6 @@ export default function Dashboard() {
   const [answers, setAnswers] = useState<Record<string, { text: string; save: boolean }>>({});
   const [newSource, setNewSource] = useState<{ kind: "url" | "text"; url: string; text: string }>({ kind: "url", url: "", text: "" });
 
-  // Widgets state
   const [widgets, setWidgets] = useState<any[]>([]);
   const [widgetPreview, setWidgetPreview] = useState<any>(null);
   const [widgetForm, setWidgetForm] = useState<{ name: string; welcomeMessage: string; primaryColor: string; position: "left" | "right"; placeholder: string }>({
@@ -163,7 +160,6 @@ export default function Dashboard() {
   const [editingWidget, setEditingWidget] = useState<string | null>(null);
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
 
-  /* ── Human Agent Countdown State ── */
   const [humanAgentCountdown, setHumanAgentCountdown] = useState<Record<string, number>>({});
 
   const threadEndRef = useRef<HTMLDivElement>(null);
@@ -228,7 +224,7 @@ export default function Dashboard() {
     return () => clearInterval(interval);
   }, [token]);
 
-  /* ── جلسة Supabase (الوضع الحقيقي) ── */
+  /* ── جلسة Supabase ── */
   useEffect(() => {
     if (demo) return;
     let alive = true;
@@ -281,7 +277,6 @@ export default function Dashboard() {
   const loadAll = useCallback(async (skipConvs = false) => {
     if (!token) return;
     try {
-      // المرحلة 1: Summary فقط (سريع جدًا)
       const summary = await apiAuthFetch<any>(token, "/api/dashboard/summary");
 
       setSt((prev) => ({
@@ -298,7 +293,6 @@ export default function Dashboard() {
         loadingList: !skipConvs && (!prev || prev.convs.length === 0),
       }));
 
-      // المرحلة 2: البيانات الثقيلة في الخلفية
       if (!skipConvs) {
         Promise.all([
           apiAuthFetch<any[]>(token, "/api/dashboard/conversations"),
@@ -389,16 +383,17 @@ export default function Dashboard() {
     if (demo || !token || needClaim || !sb) return;
 
     /* ── INSERT: محادثة جديدة ──
-     * البياندة الواردة تحتوي على customer_phone_encrypted فقط
-     * (مشفّر ولا يمكن فكّه في المتصفح). لذلك نُعيد تحميل 
-     * القائمة من الخادم الذي يفكّه بدل إضافتها مباشرة.
+     * نُعيد تحميل القائمة من الخادم (loadAll(false))
+     * لأن الرقم مشفّر في البياندة الواردة.
+     * سابقًا كان loadAll(true) فلا يظهر شيء حتى إعادة التحميل.
      */
     const handleConvInsert = (payload: any) => {
       const row = payload.new ?? {};
       setSt((prev) => {
         if (!prev) return prev;
         if (prev.convs.some((c) => c.id === row.id)) return prev;
-        queueMicrotask(() => loadAll(true).catch(() => {}));
+        // ✅ التعديل: loadAll(false) بدلاً من loadAll(true)
+        queueMicrotask(() => loadAll(false).catch(() => {}));
         return prev;
       });
     };
@@ -407,7 +402,6 @@ export default function Dashboard() {
     const handleConvUpdate = (payload: any) => {
       const row = payload.new ?? {};
 
-      // ── كشف التحويل التلقائي من AI (ai_handoff) ──
       setSt((prev) => {
         if (!prev) return prev;
 
@@ -480,7 +474,9 @@ export default function Dashboard() {
         const target = prev.convs.find((c) => c.id === convId);
 
         if (!target) {
-          queueMicrotask(() => loadAll(true).catch(() => {}));
+          // ✅ التعديل: loadAll(false) بدلاً من loadAll(true)
+          // حتى تُجلب المحادثة الجديدة من الخادم وتظهر فورًا
+          queueMicrotask(() => loadAll(false).catch(() => {}));
           return prev;
         }
 
@@ -572,7 +568,6 @@ export default function Dashboard() {
     loadThread(activeConv).catch(() => {});
   }, [demo, activeConv, token, loadThread]);
 
-  /* تمرير تلقائي لأسفل الخيط */
   const activeThread = st?.convs.find((c) => c.id === activeConv) ?? null;
   useEffect(() => {
     threadEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -1121,7 +1116,6 @@ export default function Dashboard() {
     );
   }
 
-  /* ضم حساب */
   if (!demo && needClaim && !st) {
     return (
       <Shell>
@@ -1342,7 +1336,6 @@ export default function Dashboard() {
           ))}
         </div>
 
-        {/* ── المحادثات ── */}
         {tab === "convs" && (
           <div className="grid lg:grid-cols-[320px_1fr] gap-4 items-start">
             <aside className={`${cls.card} overflow-hidden ${mobileThread ? "hidden lg:block" : ""}`}>
@@ -1686,7 +1679,6 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* ── الأسئلة العالقة ── */}
         {tab === "unresolved" && (
           <div className="space-y-4">
             <p className="text-[12.5px] text-sage leading-6">
@@ -1743,7 +1735,6 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* ── المعرفة ── */}
         {tab === "knowledge" && (
           <div className="grid lg:grid-cols-[1fr_360px] gap-4 items-start">
             <section className={`${cls.card} overflow-hidden`}>
@@ -1825,7 +1816,6 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* ── Widgets ── */}
         {tab === "widgets" && (
           <div className="grid lg:grid-cols-[1fr_400px] gap-4 items-start">
             <section className={`${cls.card} overflow-hidden`}>
@@ -1962,7 +1952,6 @@ export default function Dashboard() {
         )}
       </main>
 
-      {/* ── Widget Preview Modal ── */}
       {widgetPreview && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-night/80 backdrop-blur-sm" onClick={() => setWidgetPreview(null)}>
           <div className="relative w-full max-w-sm bg-pine border border-verde/25 rounded-3xl p-6 msg-in shadow-[0_40px_120px_-30px_rgba(0,0,0,0.9)]" onClick={(e) => e.stopPropagation()}>
@@ -2008,7 +1997,6 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* ── نافذة الشحن ── */}
       {payOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true">
           <button className="absolute inset-0 bg-night/80 backdrop-blur-sm" onClick={() => setPayOpen(false)} aria-label="إغلاق" />
