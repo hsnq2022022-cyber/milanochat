@@ -44,6 +44,8 @@ type ConvItem = {
   id: string;
   phone: string;
   customerName?: string | null;
+  channel?: "whatsapp" | "instagram" | "facebook";
+  accountId?: string | null;
   transferred: boolean;
   paused: string | null;
   humanAgentExpiresAt?: string | null;

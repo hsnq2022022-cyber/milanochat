@@ -117,6 +117,10 @@ function shapeConversation(c: any) {
     id: c.id,
     customerPhone: decryptField(c.customer_phone_encrypted),
     customerName: c.customer_name || null,
+    channel: ["whatsapp", "instagram", "facebook"].includes(c.channel)
+      ? c.channel
+      : "whatsapp",
+    accountId: c.account_id ?? null,
     transferred: c.transferred,
     autoPausedReason: c.auto_paused_reason,
     humanAgentExpiresAt: c.human_agent_expires_at ?? null,
@@ -350,6 +354,8 @@ dashboardRouter.get("/conversations", async (req, res) => {
     .from("conversations")
     .select(`
       id,
+      channel,
+      account_id,
       customer_phone_encrypted,
       customer_name,
       transferred,
@@ -401,6 +407,8 @@ dashboardRouter.get("/conversations/:id", async (req, res) => {
     .from("conversations")
     .select(`
       id,
+      channel,
+      account_id,
       customer_phone_encrypted,
       customer_name,
       transferred,
