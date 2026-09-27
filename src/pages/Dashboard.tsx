@@ -23,11 +23,45 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import confetti from "canvas-confetti";
 import { apiAuthFetch, apiEnabled, api, backendMode, API, type WaSnapshot } from "../lib/api";
 import { getSupabase, getStoredClaim, clearStoredClaim } from "../lib/supabase";
+import { CHANNELS, ChannelBadge, detectChannel, type ChannelId } from "../lib/channels";
 import {
   IconWhatsapp, IconCheck, IconX, IconPlus, IconTrash, IconSend,
   IconLogout, IconRefresh, IconDatabase, IconCard, IconGlobe, IconMapPin,
   IconPen, IconQuestion, IconHandoff, IconLog, IconCoin, IconSparkle, IconChevronDown,
 } from "../components/Icons";
+
+/* ═══════════ أنواع القنوات (متوافقة مع /api/channels) ═══════════ */
+
+type ChannelAccount = {
+  id: string;
+  channel: ChannelId;
+  external_id: string;
+  display_name: string | null;
+  avatar_url: string | null;
+  status: "active" | "needs_reauth" | "disconnected";
+  agent_enabled: boolean;
+  auto_reply: boolean;
+  language: string | null;
+  handoff_rules: Record<string, unknown> | null;
+  agent_config: Record<string, unknown> | null;
+  token_expires_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type ChannelSummary = Record<ChannelId, { accounts: number; active: number; conversations: number }>;
+
+type MetaStatus = {
+  configured: boolean;
+  appReviewNote?: string;
+  developersUrl?: string;
+};
+
+const CHANNEL_STATUS_LABEL: Record<string, { text: string; cls: string }> = {
+  active: { text: "متصل", cls: "text-verde bg-verde/10 border-verde/30" },
+  needs_reauth: { text: "يحتاج إعادة تفويض", cls: "text-oro-soft bg-oro/10 border-oro/30" },
+  disconnected: { text: "غير متصل", cls: "text-sage bg-moss border-verde/20" },
+};
 
 /* ═══════════════ أنواع ═══════════════ */
 
@@ -44,6 +78,7 @@ type ConvItem = {
   id: string;
   phone: string;
   customerName?: string | null;
+  customerAvatar?: string | null;
   channel?: "whatsapp" | "instagram" | "facebook";
   accountId?: string | null;
   transferred: boolean;
@@ -163,6 +198,17 @@ export default function Dashboard() {
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
 
   const [humanAgentCountdown, setHumanAgentCountdown] = useState<Record<string, number>>({});
+
+  /* ── القنوات (Omnichannel) — بيانات حقيقية من /api/channels فقط، بدون Mock ── */
+  const [chAccounts, setChAccounts] = useState<ChannelAccount[]>([]);
+  const [chSummary, setChSummary] = useState<ChannelSummary | null>(null);
+  const [metaStatus, setMetaStatus] = useState<MetaStatus | null>(null);
+  const [chLoading, setChLoading] = useState(false);
+  const [chBusyId, setChBusyId] = useState<string | null>(null);
+  const [manageAcc, setManageAcc] = useState<ChannelAccount | null>(null);
+  const [handoffCfg, setHandoffCfg] = useState({ onRequest: true, onNoAnswer: true, keywords: "" });
+  const [convFilter, setConvFilter] = useState<"all" | ChannelId>("all");
+  const [waConnectedAt, setWaConnectedAt] = useState<string | null>(null);
 
   const threadEndRef = useRef<HTMLDivElement>(null);
   const toastTimer = useRef<number | null>(null);
@@ -316,6 +362,9 @@ export default function Dashboard() {
                   id: c.id,
                   phone: c.customerPhone || "",
                   customerName: c.customerName || null,
+                  channel: ["whatsapp", "instagram", "facebook"].includes(c.channel) ? c.channel : undefined,
+                  accountId: c.accountId ?? null,
+                  customerAvatar: c.customerAvatar || null,
                   transferred: c.transferred,
                   paused: c.autoPausedReason,
                   humanAgentExpiresAt: c.humanAgentExpiresAt,
@@ -576,6 +625,138 @@ export default function Dashboard() {
   }, [activeThread?.msgs.length]);
 
   /* ── إجراءات ── */
+
+  /* ═══════════ القنوات — تحميل من /api/channels (حقيقي، بدون Mock) ═══════════ */
+
+  const loadChannels = useCallback(async () => {
+    if (!token || demo) return;
+    setChLoading(true);
+    try {
+      const [accounts, summary] = await Promise.all([
+        apiAuthFetch<ChannelAccount[]>(token, "/api/channels/accounts"),
+        apiAuthFetch<ChannelSummary>(token, "/api/channels/summary"),
+      ]);
+      setChAccounts(accounts ?? []);
+      setChSummary(summary ?? null);
+    } catch (e) {
+      console.error("[Dashboard] channels load error:", e);
+    } finally {
+      setChLoading(false);
+    }
+  }, [token, demo]);
+
+  useEffect(() => {
+    if (demo || !authed || !token || needClaim) return;
+    loadChannels();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [demo, authed, token, needClaim]);
+
+  /* حالة إعداد Meta على الخادم — عامة بدون أسرار */
+  useEffect(() => {
+    if (demo || !apiEnabled) return;
+    apiAuthFetch<MetaStatus>(token!, "/api/channels/meta/status").then(setMetaStatus).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [demo, token]);
+
+  /* بعد عودة Meta OAuth: res.redirect إلى /#/dashboard?tab=channels&connected=1&fb=N&ig=M */
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search);
+    if (q.get("tab") === "channels") setTab("channels");
+    if (q.get("connected") === "1") {
+      const fb = Number(q.get("fb") ?? 0);
+      const ig = Number(q.get("ig") ?? 0);
+      showToast(
+        fb + ig > 0
+          ? `تم ربط ${fb > 0 ? `${fb} صفحة Facebook` : ""}${fb > 0 && ig > 0 ? " و" : ""}${ig > 0 ? `${ig} حساب Instagram` : ""} بنجاح ✅`
+          : "اكتمل تسجيل الدخول عبر Meta — لم يُعثر على صفحات أو حسابات إنستغرام مؤهلة ضمن الصلاحيات الممنوحة."
+      );
+      loadChannels();
+      window.history.replaceState({}, "", "#/dashboard");
+    }
+    const err = q.get("error");
+    if (err) {
+      const map: Record<string, string> = {
+        oauth_missing: "لم يكتمل تفويض Meta — أعد المحاولة.",
+        oauth_state: "انتهت صلاحية جلسة الربط — ابدأ الربط من جديد.",
+        oauth_channel: "قناة غير معروفة في طلب الربط.",
+        oauth_not_configured: "تطبيق Meta غير مُهيّأ على الخادم بعد — تواصل مع إدارة المنصة.",
+        oauth_token: "رفضت Meta تبادل الرمز — أعد المحاولة أو تحقق من صلاحيات التطبيق.",
+        oauth_failed: "حدث خطأ أثناء إتمام الربط — حاول مجددًا.",
+      };
+      showToast(map[err] ?? "تعذر إتمام ربط Meta.");
+      window.history.replaceState({}, "", "#/dashboard");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /** بدء تدفق OAuth الرسمي — الخادم يبني الرابط والصلاحيات، والواجهة لا ترى أي سر */
+  const startMetaOAuth = async (channel: "facebook" | "instagram") => {
+    if (!token) return;
+    try {
+      const r = await apiAuthFetch<{ url: string }>(
+        token,
+        `/api/channels/meta/oauth-url?channel=${channel}`
+      );
+      window.location.href = r.url;
+    } catch (e: any) {
+      showToast(e?.message ?? "تعذر بدء ربط Meta");
+    }
+  };
+
+  const patchAccount = async (id: string, patch: Partial<ChannelAccount>) => {
+    if (!token) return;
+    setChBusyId(id);
+    try {
+      const updated = await apiAuthFetch<ChannelAccount>(token, `/api/channels/accounts/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(patch),
+      });
+      setChAccounts((prev) => prev.map((a) => (a.id === id ? { ...a, ...updated } : a)));
+      showToast("تم حفظ الإعدادات");
+    } catch (e: any) {
+      showToast(e?.message ?? "فشل الحفظ");
+    } finally {
+      setChBusyId(null);
+    }
+  };
+
+  const disconnectAccount = async (acc: ChannelAccount) => {
+    if (!token) return;
+    if (!window.confirm(`فصل ${acc.display_name ?? acc.external_id}؟ ستوقف الرسائل الواردة لهذه القناة حتى إعادة الربط.`)) return;
+    setChBusyId(acc.id);
+    try {
+      await apiAuthFetch(token, `/api/channels/accounts/${acc.id}`, { method: "DELETE" });
+      showToast("تم فصل الحساب");
+      setManageAcc(null);
+      loadChannels();
+    } catch (e: any) {
+      showToast(e?.message ?? "فشل الفصل");
+    } finally {
+      setChBusyId(null);
+    }
+  };
+
+  const openManageAccount = (acc: ChannelAccount) => {
+    setManageAcc(acc);
+    const hr = (acc.handoff_rules ?? {}) as Record<string, unknown>;
+    setHandoffCfg({
+      onRequest: hr.onRequest !== false,
+      onNoAnswer: hr.onNoAnswer !== false,
+      keywords: Array.isArray(hr.keywords) ? (hr.keywords as string[]).join("، ") : "",
+    });
+  };
+
+  const saveHandoffRules = async () => {
+    if (!manageAcc || !token) return;
+    await patchAccount(manageAcc.id, {
+      handoff_rules: {
+        onRequest: handoffCfg.onRequest,
+        onNoAnswer: handoffCfg.onNoAnswer,
+        keywords: handoffCfg.keywords.split(/[،,]/).map((s) => s.trim()).filter(Boolean),
+      } as any,
+    });
+    setManageAcc((p) => (p ? { ...p, handoff_rules: { onRequest: handoffCfg.onRequest, onNoAnswer: handoffCfg.onNoAnswer, keywords: handoffCfg.keywords } } : p));
+  };
 
   const openConversation = (convId: string) => {
     setActiveConv(convId);
