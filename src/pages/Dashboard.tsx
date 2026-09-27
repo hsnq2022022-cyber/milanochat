@@ -207,6 +207,7 @@ export default function Dashboard() {
   const [metaStatus, setMetaStatus] = useState<MetaStatus | null>(null);
   const [chLoading, setChLoading] = useState(false);
   const [chBusyId, setChBusyId] = useState<string | null>(null);
+  const [chBusyPlatform, setChBusyPlatform] = useState<string | null>(null);
   const [manageAcc, setManageAcc] = useState<ChannelAccount | null>(null);
   const [handoffCfg, setHandoffCfg] = useState({ onRequest: true, onNoAnswer: true, keywords: "" });
   const [convFilter, setConvFilter] = useState<"all" | ChannelId>("all");
@@ -660,10 +661,32 @@ export default function Dashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [demo, token]);
 
-  /* بعد عودة Meta OAuth: res.redirect إلى /#/dashboard?tab=channels&connected=1&fb=N&ig=M */
+  /* بعد عودة Meta OAuth — يدعم الصيغتين القديمة والجديدة للتوجيه */
   useEffect(() => {
     const q = new URLSearchParams(window.location.search);
     if (q.get("tab") === "channels") setTab("channels");
+    // الصيغة الجديدة: ?channel_connected=facebook|instagram&accounts=N&name=...
+    const connected = q.get("channel_connected");
+    if (connected) {
+      const name = q.get("name");
+      showToast(
+        `تم ربط ${connected === "facebook" ? "Facebook Messenger" : "Instagram"} بنجاح ✅${name ? ` (${name})` : ""}`
+      );
+      loadChannels();
+      loadSocialChannels();
+      window.history.replaceState({}, "", "#/dashboard");
+    }
+    const chErr = q.get("channel_error");
+    if (chErr) {
+      const map: Record<string, string> = {
+        user_cancelled: "تم إلغاء الربط — لم تُمنح صلاحيات Meta.",
+        missing_params: "لم تكتمل بيانات العودة من Meta — أعد المحاولة.",
+        oauth_state: "انتهت صلاحية جلسة الربط — ابدأ الربط من جديد.",
+      };
+      const decoded = decodeURIComponent(chErr);
+      showToast("فشل الربط: " + (map[decoded] ?? decoded));
+      window.history.replaceState({}, "", "#/dashboard");
+    }
     if (q.get("connected") === "1") {
       const fb = Number(q.get("fb") ?? 0);
       const ig = Number(q.get("ig") ?? 0);
@@ -715,30 +738,63 @@ export default function Dashboard() {
       showToast("واتساب يُدار من بطاقة الاتصال في «نظرة عامة» — WhatsApp Cloud API");
       return;
     }
+    // سجل/حدّث القناة ثم تابع بتدفق OAuth الحقيقي عبر /api/auth/facebook/start
     try {
       await apiAuthFetch(token, "/api/dashboard/channels/connect", {
         method: "POST",
         body: JSON.stringify({ platform, tenantId: st?.tenantId }),
       });
-      await loadSocialChannels();
-    } catch (e: any) {
-      showToast(e?.message || "تعذر بدء الربط");
+    } catch {
+      /* الجدول قد لا يكون منفذاً بعد — لا نمنع بدء OAuth */
     }
-    // متابعة بتدفق OAuth الرسمي بعد تجهيز سجل القناة
     startMetaOAuth(platform);
   };
 
   /** بدء تدفق OAuth الرسمي — الخادم يبني الرابط والصلاحيات، والواجهة لا ترى أي سر */
   const startMetaOAuth = async (channel: "facebook" | "instagram") => {
     if (!token) return;
+    setChBusyPlatform(channel);
     try {
-      const r = await apiAuthFetch<{ url: string }>(
-        token,
-        `/api/channels/meta/oauth-url?channel=${channel}`
-      );
-      window.location.href = r.url;
+      // المسار الجديد (/api/auth/facebook/start) مع fallback للمسار القديم إن لم يكن منشوراً بعد
+      let r: { url: string };
+      try {
+        r = await apiAuthFetch<{ url: string }>(token, "/api/auth/facebook/start", {
+          method: "POST",
+          body: JSON.stringify({ platform: channel, tenantId: st?.tenantId }),
+        });
+      } catch {
+        r = await apiAuthFetch<{ url: string }>(
+          token,
+          `/api/channels/meta/oauth-url?channel=${channel}`
+        );
+      }
+      if (r?.url) window.location.href = r.url;
+      else showToast("لم يُرجع الخادم رابط OAuth — تأكد من ضبط META_APP_ID/META_APP_SECRET");
     } catch (e: any) {
-      showToast(e?.message ?? "تعذر بدء ربط Meta");
+      const msg = String(e?.message ?? "");
+      showToast(
+        msg.includes("oauth_not_configured") || msg.includes("غير مُهيّأ")
+          ? "تطبيق Meta غير مُهيّأ على الخادم بعد — أضف META_APP_ID وMETA_APP_SECRET ثم أعد المحاولة"
+          : msg || "تعذر بدء ربط Meta"
+      );
+      setChBusyPlatform(null);
+    }
+  };
+
+  /** فصل قناة Facebook/Instagram عبر المسار الرسمي */
+  const disconnectSocialChannel = async (platform: "facebook" | "instagram") => {
+    if (!token || !st?.tenantId) return;
+    if (!window.confirm(`فصل ${platform === "facebook" ? "Facebook Messenger" : "Instagram"}؟ ستوقف الرسائل الواردة لهذه القناة حتى إعادة الربط.`)) return;
+    try {
+      await apiAuthFetch(token, "/api/auth/disconnect", {
+        method: "POST",
+        body: JSON.stringify({ platform, tenantId: st.tenantId }),
+      });
+      showToast("تم فصل القناة");
+      loadSocialChannels();
+      loadChannels();
+    } catch (e: any) {
+      showToast(e?.message || "تعذر الفصل");
     }
   };
 
@@ -2297,10 +2353,15 @@ export default function Dashboard() {
                     ))}
                   </ul>
                 ) : null}
-                <div className="mt-auto">
-                  <button onClick={() => handleConnectChannel("facebook")} className={`${cls.btn} w-full py-2.5 text-xs`} disabled={!apiEnabled}>
-                    {fbAccounts.length > 0 ? "ربط صفحة أخرى" : "ربط Facebook"}
+                <div className="mt-auto space-y-2">
+                  <button onClick={() => handleConnectChannel("facebook")} className={`${cls.btn} w-full py-2.5 text-xs`} disabled={!apiEnabled || chBusyPlatform === "facebook"}>
+                    {chBusyPlatform === "facebook" ? "جارٍ التحويل إلى Meta…" : fbAccounts.length > 0 ? "ربط صفحة أخرى" : "ربط Facebook"}
                   </button>
+                  {fbAccounts.length > 0 && (
+                    <button onClick={() => disconnectSocialChannel("facebook")} className="w-full py-2 text-[11px] font-bold text-red-300/80 hover:text-red-300 border border-red-400/20 rounded-xl transition-colors">
+                      فصل القناة
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -2341,10 +2402,15 @@ export default function Dashboard() {
                     ))}
                   </ul>
                 ) : null}
-                <div className="mt-auto">
-                  <button onClick={() => handleConnectChannel("instagram")} className={`${cls.btn} w-full py-2.5 text-xs`} disabled={!apiEnabled}>
-                    {igAccounts.length > 0 ? "ربط حساب آخر" : "ربط Instagram"}
+                <div className="mt-auto space-y-2">
+                  <button onClick={() => handleConnectChannel("instagram")} className={`${cls.btn} w-full py-2.5 text-xs`} disabled={!apiEnabled || chBusyPlatform === "instagram"}>
+                    {chBusyPlatform === "instagram" ? "جارٍ التحويل إلى Meta…" : igAccounts.length > 0 ? "ربط حساب آخر" : "ربط Instagram"}
                   </button>
+                  {igAccounts.length > 0 && (
+                    <button onClick={() => disconnectSocialChannel("instagram")} className="w-full py-2 text-[11px] font-bold text-red-300/80 hover:text-red-300 border border-red-400/20 rounded-xl transition-colors">
+                      فصل القناة
+                    </button>
+                  )}
                 </div>
               </div>
             </div>

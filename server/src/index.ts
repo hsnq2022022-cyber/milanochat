@@ -14,6 +14,7 @@ import { whatsappWebhookRouter } from "./routes/webhooks.js";
 import { widgetsRouter } from "./routes/widgets.js";
 import { paymentsRouter, webhooksRouter } from "./routes/payments.js";
 import { channelsRouter } from "./routes/channels.js";
+import { metaAuthRouter } from "./routes/auth-meta.js";
 import { handleIncomingMessage } from "./rag/reply.js";
 import { initWa, restorePersistedSessions } from "./wa/sessionManager.js";
 
@@ -78,6 +79,7 @@ app.use("/api/whatsapp", whatsappRouter);
 app.use("/api/webhooks/meta", whatsappWebhookRouter);
 app.use("/api/widgets", widgetsRouter);
 app.use("/api/channels", channelsRouter);
+app.use("/api/auth", metaAuthRouter);
 app.use("/api/payments", paymentsRouter);
 app.use("/api/webhooks", webhooksRouter);
 
