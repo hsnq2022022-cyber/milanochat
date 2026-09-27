@@ -4,10 +4,12 @@
  * - روابط بدء OAuth الرسمية لتطبيق Meta (Facebook / Instagram)
  * - ملاحظة: WhatsApp يبقى عبر مسار الربط الحالي (/api/whatsapp)
  */
+import crypto from "node:crypto";
 import { Router, type Request, type Response, type NextFunction } from "express";
 import { db, authClient } from "../db.js";
 import { config } from "../config.js";
-import { encryptField } from "../crypto.js";
+import { encryptField, decryptField } from "../crypto.js";
+import { answerFromKnowledge } from "../rag/qa.js";
 
 export const channelsRouter = Router();
 
@@ -208,20 +210,22 @@ channelsRouter.get("/meta/callback", async (req, res) => {
 
     // جلب الصفحات التي يديرها المستخدم
     const pagesRes = await fetch(
-      `https://graph.facebook.com/v21.0/me/accounts?access_token=${tokenJson.access_token}`
+      `https://graph.facebook.com/v21.0/me/accounts?fields=id,name,picture&access_token=${tokenJson.access_token}`
     );
     const pagesJson: any = await pagesRes.json();
     const pages: any[] = pagesJson.data ?? [];
 
+    let facebookSaved = 0;
     for (const p of pages) {
       if (!p?.id) continue;
-      const channel = parsed.channel === "instagram" ? "instagram" : "facebook";
+      const picture = typeof p.picture?.data?.url === "string" ? p.picture.data.url : null;
       const { error } = await db.from("channel_accounts").upsert(
         {
           tenant_id: parsed.tenantId,
-          channel,
+          channel: "facebook",
           external_id: String(p.id),
           display_name: p.name ?? null,
+          avatar_url: picture,
           status: "active",
           access_token_encrypted: encryptField(p.access_token ?? tokenJson.access_token),
           token_expires_at: tokenJson.expires_in
@@ -232,11 +236,307 @@ channelsRouter.get("/meta/callback", async (req, res) => {
         { onConflict: "tenant_id,channel,external_id" }
       );
       if (error) console.error("[channels] upsert failed:", error);
+      else facebookSaved += 1;
     }
 
-    res.redirect("/#/dashboard?tab=channels&connected=1");
+    /* Instagram: لكل صفحة مرتبطة — جلب الحساب الاحترافي المؤهل عبر edge_to_ig */
+    let instagramSaved = 0;
+    if (parsed.channel === "instagram") {
+      for (const p of pages) {
+        if (!p?.id) continue;
+        try {
+          const igRes = await fetch(
+            `https://graph.facebook.com/v21.0/${p.id}?fields=instagram_type_v3,instagram_user_account&access_token=${tokenJson.access_token}`
+          );
+          const ig: any = await igRes.json();
+          const igId = ig?.instagram_user_account?.id ?? ig?.instagram_business_account?.id;
+          if (!igId) continue; // الصفحة غير مرتبطة بحساب إنستغرام احترافي مؤهل
+          const username = ig?.instagram_user_account?.username ?? ig?.instagram_business_account?.username ?? null;
+          const { error } = await db.from("channel_accounts").upsert(
+            {
+              tenant_id: parsed.tenantId,
+              channel: "instagram",
+              external_id: String(igId),
+              display_name: username ?? ig?.name ?? String(igId),
+              avatar_url: typeof ig?.instagram_user_account?.picture?.data?.url === "string"
+                ? ig.instagram_user_account.picture.data.url
+                : null,
+              status: "active",
+              access_token_encrypted: encryptField(p.access_token ?? tokenJson.access_token),
+              token_expires_at: tokenJson.expires_in
+                ? new Date(Date.now() + Number(tokenJson.expires_in) * 1000).toISOString()
+                : null,
+              updated_at: new Date().toISOString(),
+            },
+            { onConflict: "tenant_id,channel,external_id" }
+          );
+          if (error) console.error("[channels] ig upsert failed:", error);
+          else instagramSaved += 1;
+        } catch (e) {
+          console.error("[channels] ig lookup failed for page", p.id, e);
+        }
+      }
+    }
+
+    const q = new URLSearchParams({
+      tab: "channels",
+      connected: "1",
+      fb: String(facebookSaved),
+      ig: String(instagramSaved),
+    });
+    res.redirect(`/#/dashboard?${q.toString()}`);
   } catch (err) {
     console.error("[channels] oauth callback error:", err);
     res.redirect("/#/dashboard?error=oauth_failed");
   }
 });
+
+/** حالة إعداد تطبيق Meta على الخادم — بدون كشف أي أسرار */
+channelsRouter.get("/meta/status", (_req, res) => {
+  const configured = Boolean(process.env.META_APP_ID && process.env.META_APP_SECRET);
+  res.json({
+    configured,
+    appReviewNote:
+      "حالة مراجعة صلاحيات Meta تُتابَع يدويًا من لوحة Meta Developers — المنصة لا تدّعي موافقة تلقائية.",
+    developersUrl: "https://developers.facebook.com/apps",
+  });
+});
+
+/* ═══════════════ Webhooks رسمية لـ Messenger / Instagram ═══════════════ */
+
+/** التحقق الابتدائي من webhook (تُضاف في Meta Developers لنفس المسار) */
+channelsRouter.get("/meta/webhook", (req, res) => {
+  const mode = req.query["hub.mode"];
+  const token = req.query["hub.verify_token"];
+  const challenge = req.query["hub.challenge"];
+  const expected = process.env.META_WEBHOOK_VERIFY_TOKEN;
+  if (mode === "subscribe" && expected && token === expected) {
+    return res.status(200).send(String(challenge ?? ""));
+  }
+  return res.sendStatus(403);
+});
+
+/** استخراج نص رسالة واردة من payload من Messenger/Instagram */
+function extractText(m: any): string {
+  if (typeof m?.text === "string") return m.text;
+  const atts = Array.isArray(m?.attachments) ? m.attachments : [];
+  const parts = atts
+    .map((a: any) => (typeof a?.title === "string" ? a.title : ""))
+    .filter(Boolean);
+  return parts.join(" ") || "[رسالة غير نصية]";
+}
+
+/**
+ * استقبال رسائل Messenger و Instagram Messaging الرسمية.
+ * نفس بنية payload للقناتين (entry[].messaging[]).
+ */
+channelsRouter.post("/meta/webhook", async (req: Request, res: Response) => {
+  try {
+    // تحقق من التوقيع إن وُجد META_APP_SECRET (توقيعات Messenger/IG بنفس آلية X-Hub-Signature-256)
+    const secret = process.env.META_APP_SECRET;
+    const sig = String(req.headers["x-hub-signature-256"] ?? "");
+    if (secret && req.rawBody) {
+      const expected =
+        "sha256=" +
+        crypto.createHmac("sha256", secret).update(req.rawBody).digest("hex");
+      if (!sig || !timingSafeEqualStr(sig, expected)) {
+        return res.sendStatus(401);
+      }
+    }
+
+    const body: any = req.body ?? {};
+    const entries: any[] = Array.isArray(body.entry) ? body.entry : [];
+
+    // رد سريع — المعالجة تتم asynchronously مثل مسار واتساب
+    res.sendStatus(200);
+
+    for (const entry of entries) {
+      for (const ev of Array.isArray(entry.messaging) ? entry.messaging : []) {
+        try {
+          await handleMetaMessagingEvent(ev);
+        } catch (e) {
+          console.error("[channels] messaging event failed:", e);
+        }
+      }
+    }
+  } catch (err) {
+    console.error("[channels] webhook error:", err);
+    if (!res.headersSent) res.sendStatus(500);
+  }
+});
+
+function timingSafeEqualStr(a: string, b: string): boolean {
+  const ba = Buffer.from(a);
+  const bb = Buffer.from(b);
+  return ba.length === bb.length && crypto.timingSafeEqual(ba, bb);
+}
+
+async function handleMetaMessagingEvent(ev: any) {
+  const item = ev?.message;
+  if (!item || item.is_echo) return; // تجاهل صدى ردودنا
+  const text = extractText(item);
+  if (!text) return;
+
+  const senderId: string = String(ev.sender?.id ?? "");
+  const recipientId: string = String(ev.recipient?.id ?? "");
+  if (!senderId || !recipientId) return;
+
+  // منع تكرار الـ webhook عبر المعرّف الخارجي للرسالة
+  const externalMessageId: string | null =
+    typeof item.mid === "string" ? item.mid : null;
+  if (externalMessageId) {
+    const { data: dup } = await db
+      .from("messages")
+      .select("id")
+      .eq("external_message_id", externalMessageId)
+      .limit(1);
+    if (dup && dup.length > 0) return;
+  }
+
+  // تحديد الحساب المضيف (صفحة فيسبوك أو حساب إنستغرام احترافي)
+  const { data: account } = await db
+    .from("channel_accounts")
+    .select("id, tenant_id, channel, external_id, status, agent_enabled, auto_reply")
+    .eq("external_id", recipientId)
+    .in("channel", ["facebook", "instagram"])
+    .maybeSingle();
+
+  if (!account) {
+    console.warn("[channels] webhook for unknown page id:", recipientId);
+    return;
+  }
+  if (account.status !== "active") return;
+
+  const channel = account.channel as "facebook" | "instagram";
+  const chatId = `${channel}:${senderId}`;
+
+  const { data: tenant } = await db
+    .from("tenants")
+    .select("id, business_name, credits_remaining")
+    .eq("id", account.tenant_id)
+    .maybeSingle();
+  if (!tenant) return;
+
+  // إنشاء/تحديث المحادثة
+  let conv = (
+    await db
+      .from("conversations")
+      .select("*")
+      .eq("tenant_id", tenant.id)
+      .eq("wa_chat_id", chatId)
+      .maybeSingle()
+  ).data;
+
+  if (!conv) {
+    const { data } = await db
+      .from("conversations")
+      .insert({
+        tenant_id: tenant.id,
+        wa_chat_id: chatId,
+        customer_phone_encrypted: encryptField(chatId),
+        channel,
+        account_id: account.id,
+        last_message_at: new Date().toISOString(),
+      })
+      .select("*")
+      .single();
+    conv = data;
+  } else if (conv.account_id !== account.id || conv.channel !== channel) {
+    await db
+      .from("conversations")
+      .update({ account_id: account.id, channel })
+      .eq("id", conv.id);
+  }
+  if (!conv) return;
+
+  // حفظ الرسالة الواردة
+  await db.from("messages").insert({
+    conversation_id: conv.id,
+    tenant_id: tenant.id,
+    direction: "in",
+    body_encrypted: encryptField(text),
+    kind: "text",
+    is_auto: false,
+    external_message_id: externalMessageId,
+  });
+
+  await db
+    .from("conversations")
+    .update({ last_message_at: new Date().toISOString() })
+    .eq("id", conv.id);
+
+  // تشغيل الوكيل الذكي إذا كان مفعلاً على الحساب والمحادثة ليست لبشري
+  const shouldReply =
+    account.agent_enabled &&
+    account.auto_reply &&
+    !conv.transferred &&
+    Number(tenant.credits_remaining ?? 0) > 0;
+
+  if (!shouldReply) return;
+
+  try {
+    const result = await answerFromKnowledge(tenant.id, tenant.business_name ?? "", text);
+    const replyText =
+      result.confident && result.answer?.trim()
+        ? result.answer.trim()
+        : "شكراً لتواصلك — سيعاود فريقنا الرد قريباً.";
+
+    // إرسال الرد أولاً عبر Graph API الرسمي
+    await sendMetaMessage(channel, account, senderId, replyText);
+
+    await db.from("messages").insert({
+      conversation_id: conv.id,
+      tenant_id: tenant.id,
+      direction: "out",
+      body_encrypted: encryptField(replyText),
+      kind: result.confident ? "answer" : "refusal",
+      is_auto: true,
+    });
+
+    await db
+      .from("conversations")
+      .update({ last_message_at: new Date().toISOString() })
+      .eq("id", conv.id);
+  } catch (e) {
+    console.error("[channels] AI reply failed:", e);
+  }
+}
+
+/** إرسال رد عبر Graph API الرسمي — الرموز تبقى على الخادم فقط ولا تُكشف للواجهة */
+async function sendMetaMessage(
+  channel: "facebook" | "instagram",
+  account: any,
+  recipientId: string,
+  text: string
+) {
+  const full: any = await fetchAccountWithToken(account.id);
+  const token = decryptField(full?.access_token_encrypted);
+  if (!token) throw new Error("رمز الوصول غير متوفر — أعد الربط");
+
+  const endpoint =
+    channel === "instagram"
+      ? `https://graph.facebook.com/v21.0/${account.external_id}/messages`
+      : "https://graph.facebook.com/v21.0/me/messages";
+
+  const res = await fetch(endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      recipient: { id: recipientId },
+      message: { text },
+      access_token: token,
+    }),
+  });
+  const json: any = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json?.error?.message ?? `HTTP ${res.status}`);
+}
+
+/** جلب صف الحساب كاملاً مع الرمز المشفر (service role فقط داخل الخادم) */
+async function fetchAccountWithToken(accountId: string) {
+  const { data } = await db
+    .from("channel_accounts")
+    .select("id, channel, external_id, access_token_encrypted, status")
+    .eq("id", accountId)
+    .maybeSingle();
+  return data;
+}
