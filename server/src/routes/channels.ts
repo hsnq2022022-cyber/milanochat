@@ -335,10 +335,11 @@ channelsRouter.post("/meta/webhook", async (req: Request, res: Response) => {
     // تحقق من التوقيع إن وُجد META_APP_SECRET (توقيعات Messenger/IG بنفس آلية X-Hub-Signature-256)
     const secret = process.env.META_APP_SECRET;
     const sig = String(req.headers["x-hub-signature-256"] ?? "");
-    if (secret && req.rawBody) {
+    const rawBody: Buffer | undefined = (req as any).rawBody;
+    if (secret && rawBody) {
       const expected =
         "sha256=" +
-        crypto.createHmac("sha256", secret).update(req.rawBody).digest("hex");
+        crypto.createHmac("sha256", secret).update(rawBody).digest("hex");
       if (!sig || !timingSafeEqualStr(sig, expected)) {
         return res.sendStatus(401);
       }
@@ -427,6 +428,28 @@ async function handleMetaMessagingEvent(ev: any) {
       .maybeSingle()
   ).data;
 
+  // محاولة جلب اسم/صورة المرسل من Meta (اختياري — لا يوقف المعالجة عند الفشل)
+  let senderName: string | null = null;
+  let senderAvatar: string | null = null;
+  try {
+    const full: any = await fetchAccountWithToken(account.id);
+    const token = decryptField(full?.access_token_encrypted);
+    if (token) {
+      const profileEndpoint =
+        channel === "instagram"
+          ? `https://graph.facebook.com/v21.0/${senderId}?fields=name,profile_picture&access_token=${token}`
+          : `https://graph.facebook.com/v21.0/${senderId}?fields=name,picture&access_token=${token}`;
+      const pres = await fetch(profileEndpoint);
+      if (pres.ok) {
+        const pj: any = await pres.json();
+        senderName = pj?.name ?? null;
+        senderAvatar = pj?.profile_picture ?? pj?.picture?.data?.url ?? null;
+      }
+    }
+  } catch {
+    /* تجاهل — الاسم اختياري */
+  }
+
   if (!conv) {
     const { data } = await db
       .from("conversations")
@@ -436,16 +459,22 @@ async function handleMetaMessagingEvent(ev: any) {
         customer_phone_encrypted: encryptField(chatId),
         channel,
         account_id: account.id,
+        customer_name: senderName,
+        customer_avatar: senderAvatar,
         last_message_at: new Date().toISOString(),
       })
       .select("*")
       .single();
     conv = data;
-  } else if (conv.account_id !== account.id || conv.channel !== channel) {
-    await db
-      .from("conversations")
-      .update({ account_id: account.id, channel })
-      .eq("id", conv.id);
+  } else {
+    const patch: any = {};
+    if (conv.account_id !== account.id) patch.account_id = account.id;
+    if (conv.channel !== channel) patch.channel = channel;
+    if (senderName && !conv.customer_name) patch.customer_name = senderName;
+    if (senderAvatar && !conv.customer_avatar) patch.customer_avatar = senderAvatar;
+    if (Object.keys(patch).length > 0) {
+      await db.from("conversations").update(patch).eq("id", conv.id);
+    }
   }
   if (!conv) return;
 

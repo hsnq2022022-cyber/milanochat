@@ -46,12 +46,16 @@ const corsOptions: CorsOptions = {
 };
 app.use(cors(corsOptions));
 
-// نحتفظ بالنص الخام للتحقق من توقيع الـ webhooks
+// نحتفظ بالنص الخام للتحقق من توقيع الـ webhooks (واتساب + Meta Messenger/Instagram)
 app.use(
   express.json({
     limit: "1mb",
     verify: (req: any, _res, buf) => {
-      if (req.originalUrl?.startsWith("/api/webhooks")) req.rawBody = buf;
+      if (
+        req.originalUrl?.startsWith("/api/webhooks") ||
+        req.originalUrl?.startsWith("/api/channels/meta/webhook")
+      )
+        req.rawBody = buf;
     },
   })
 );
