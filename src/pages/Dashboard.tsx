@@ -4,7 +4,7 @@
  *
  * ملاحظات الإصلاح:
  * - لا يوجد polling على الإطلاق — كل التحديثات تأتي عبر Supabase Realtime.
- * - قناة Realtime واحدة موحّدة للمحادثات والرسائل.
+ * - قناة Realtime واحدة موحّدة (محادثات + رسائل).
  * - لا يتم عرض body_encrypted إطلاقًا في الواجهة (يُستخدم body المفكوك من الخادم).
  * - عند الإرسال اليدوي نعتمد على رسالة الـ Backend (أو fallback مؤقت عند غيابها).
  * - إدارة unreadCount: تزداد للرسائل الواردة على محادثة غير مفتوحة، وتُصفَّر عند فتح المحادثة.
@@ -15,16 +15,54 @@
  * - عرض اسم العميل (customerName) فوق الرقم في القائمة ورأس المحادثة.
  * - عند وصول محادثة جديدة عبر Realtime نُعيد تحميل القائمة من الخادم 
  *   (لأن الرقم مشفّر في البياندة الواردة).
+ * - إصلاح: كان يُستدعى loadAll(true) عند وصول محادثة أو رسالة جديدة،
+ *   مما يتخطى جلب المحادثات من الخادم فلا تظهر إلا بعد إعادة تحميل الصفحة.
+ *   تم تغييره إلى loadAll(false) ليُعيد جلب القائمة كاملة.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import confetti from "canvas-confetti";
 import { apiAuthFetch, apiEnabled, api, backendMode, API, type WaSnapshot } from "../lib/api";
 import { getSupabase, getStoredClaim, clearStoredClaim } from "../lib/supabase";
+import { CHANNELS, ChannelBadge, detectChannel, type ChannelId } from "../lib/channels";
 import {
   IconWhatsapp, IconCheck, IconX, IconPlus, IconTrash, IconSend,
   IconLogout, IconRefresh, IconDatabase, IconCard, IconGlobe, IconMapPin,
   IconPen, IconQuestion, IconHandoff, IconLog, IconCoin, IconSparkle, IconChevronDown,
+  IconFacebook, IconInstagram,
 } from "../components/Icons";
+
+/* ═══════════ أنواع القنوات (متوافقة مع /api/channels) ═══════════ */
+
+type ChannelAccount = {
+  id: string;
+  channel: ChannelId;
+  external_id: string;
+  display_name: string | null;
+  avatar_url: string | null;
+  status: "active" | "needs_reauth" | "disconnected";
+  agent_enabled: boolean;
+  auto_reply: boolean;
+  language: string | null;
+  handoff_rules: Record<string, unknown> | null;
+  agent_config: Record<string, unknown> | null;
+  token_expires_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type ChannelSummary = Record<ChannelId, { accounts: number; active: number; conversations: number }>;
+
+type MetaStatus = {
+  configured: boolean;
+  appReviewNote?: string;
+  developersUrl?: string;
+};
+
+const CHANNEL_STATUS_LABEL: Record<string, { text: string; cls: string }> = {
+  active: { text: "متصل", cls: "text-verde bg-verde/10 border-verde/30" },
+  needs_reauth: { text: "يحتاج إعادة تفويض", cls: "text-oro-soft bg-oro/10 border-oro/30" },
+  disconnected: { text: "غير متصل", cls: "text-sage bg-moss border-verde/20" },
+};
 
 /* ═══════════════ أنواع ═══════════════ */
 
@@ -41,6 +79,9 @@ type ConvItem = {
   id: string;
   phone: string;
   customerName?: string | null;
+  customerAvatar?: string | null;
+  channel?: "whatsapp" | "instagram" | "facebook";
+  accountId?: string | null;
   transferred: boolean;
   paused: string | null;
   humanAgentExpiresAt?: string | null;
@@ -84,7 +125,6 @@ type DashState = {
 
 /* ═══════════════ أدوات ═══════════════ */
 
-/** رابط الشعار — يعمل على GitHub Pages والنطاق المخصص والمحلي. */
 const LOGO_URL = `${import.meta.env.BASE_URL}logo.png`;
 
 const fmtTime = (iso: string) =>
@@ -92,11 +132,9 @@ const fmtTime = (iso: string) =>
 const fmtDate = (iso: string) =>
   new Date(iso).toLocaleDateString("ar", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 
-/** توحيد اتجاه الرسالة القادم من الخادم إلى "in" | "out". */
 const normalizeDirection = (d: string | null | undefined): "in" | "out" =>
   d === "out" || d === "outbound" ? "out" : "in";
 
-/** استخراج نص الرسالة من صف قاعدة البيانات — لا نستخدم body_encrypted إطلاقًا. */
 const extractBody = (row: any): string => {
   if (!row) return "";
   if (typeof row.body === "string" && row.body.length > 0) return row.body;
@@ -122,7 +160,6 @@ export default function Dashboard() {
   const sb = useMemo(() => getSupabase(), []);
   const demo = sb === null;
 
-  /* ── المصادقة ── */
   const [authed, setAuthed] = useState(demo ? false : true);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -132,14 +169,14 @@ export default function Dashboard() {
   const [authNote, setAuthNote] = useState("");
   const [token, setToken] = useState<string | null>(null);
 
-  /* ── الحالة ── */
   const [st, setSt] = useState<DashState | null>(null);
   const [needClaim, setNeedClaim] = useState(false);
   const [claimVal, setClaimVal] = useState("");
   const [claimErr, setClaimErr] = useState("");
   const [claimBusy, setClaimBusy] = useState(false);
 
-  const [tab, setTab] = useState<"convs" | "unresolved" | "knowledge" | "widgets">("convs");
+  const [tab, setTab] = useState<"convs" | "unresolved" | "knowledge" | "widgets" | "channels">("convs");
+  const [socialChannels, setSocialChannels] = useState<any[]>([]);
   const [activeConv, setActiveConv] = useState<string | null>(null);
   const [mobileThread, setMobileThread] = useState(false);
   const [draft, setDraft] = useState("");
@@ -150,7 +187,6 @@ export default function Dashboard() {
   const [answers, setAnswers] = useState<Record<string, { text: string; save: boolean }>>({});
   const [newSource, setNewSource] = useState<{ kind: "url" | "text"; url: string; text: string }>({ kind: "url", url: "", text: "" });
 
-  // Widgets state
   const [widgets, setWidgets] = useState<any[]>([]);
   const [widgetPreview, setWidgetPreview] = useState<any>(null);
   const [widgetForm, setWidgetForm] = useState<{ name: string; welcomeMessage: string; primaryColor: string; position: "left" | "right"; placeholder: string }>({
@@ -163,8 +199,19 @@ export default function Dashboard() {
   const [editingWidget, setEditingWidget] = useState<string | null>(null);
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
 
-  /* ── Human Agent Countdown State ── */
   const [humanAgentCountdown, setHumanAgentCountdown] = useState<Record<string, number>>({});
+
+  /* ── القنوات (Omnichannel) — بيانات حقيقية من /api/channels فقط، بدون Mock ── */
+  const [chAccounts, setChAccounts] = useState<ChannelAccount[]>([]);
+  const [chSummary, setChSummary] = useState<ChannelSummary | null>(null);
+  const [metaStatus, setMetaStatus] = useState<MetaStatus | null>(null);
+  const [chLoading, setChLoading] = useState(false);
+  const [chBusyId, setChBusyId] = useState<string | null>(null);
+  const [chBusyPlatform, setChBusyPlatform] = useState<string | null>(null);
+  const [manageAcc, setManageAcc] = useState<ChannelAccount | null>(null);
+  const [handoffCfg, setHandoffCfg] = useState({ onRequest: true, onNoAnswer: true, keywords: "" });
+  const [convFilter, setConvFilter] = useState<"all" | ChannelId>("all");
+  const [waConnectedAt, setWaConnectedAt] = useState<string | null>(null);
 
   const threadEndRef = useRef<HTMLDivElement>(null);
   const toastTimer = useRef<number | null>(null);
@@ -228,7 +275,7 @@ export default function Dashboard() {
     return () => clearInterval(interval);
   }, [token]);
 
-  /* ── جلسة Supabase (الوضع الحقيقي) ── */
+  /* ── جلسة Supabase ── */
   useEffect(() => {
     if (demo) return;
     let alive = true;
@@ -281,7 +328,6 @@ export default function Dashboard() {
   const loadAll = useCallback(async (skipConvs = false) => {
     if (!token) return;
     try {
-      // المرحلة 1: Summary فقط (سريع جدًا)
       const summary = await apiAuthFetch<any>(token, "/api/dashboard/summary");
 
       setSt((prev) => ({
@@ -298,7 +344,6 @@ export default function Dashboard() {
         loadingList: !skipConvs && (!prev || prev.convs.length === 0),
       }));
 
-      // المرحلة 2: البيانات الثقيلة في الخلفية
       if (!skipConvs) {
         Promise.all([
           apiAuthFetch<any[]>(token, "/api/dashboard/conversations"),
@@ -320,6 +365,9 @@ export default function Dashboard() {
                   id: c.id,
                   phone: c.customerPhone || "",
                   customerName: c.customerName || null,
+                  channel: ["whatsapp", "instagram", "facebook"].includes(c.channel) ? c.channel : undefined,
+                  accountId: c.accountId ?? null,
+                  customerAvatar: c.customerAvatar || null,
                   transferred: c.transferred,
                   paused: c.autoPausedReason,
                   humanAgentExpiresAt: c.humanAgentExpiresAt,
@@ -389,16 +437,17 @@ export default function Dashboard() {
     if (demo || !token || needClaim || !sb) return;
 
     /* ── INSERT: محادثة جديدة ──
-     * البياندة الواردة تحتوي على customer_phone_encrypted فقط
-     * (مشفّر ولا يمكن فكّه في المتصفح). لذلك نُعيد تحميل 
-     * القائمة من الخادم الذي يفكّه بدل إضافتها مباشرة.
+     * نُعيد تحميل القائمة من الخادم (loadAll(false))
+     * لأن الرقم مشفّر في البياندة الواردة.
+     * سابقًا كان loadAll(true) فلا يظهر شيء حتى إعادة التحميل.
      */
     const handleConvInsert = (payload: any) => {
       const row = payload.new ?? {};
       setSt((prev) => {
         if (!prev) return prev;
         if (prev.convs.some((c) => c.id === row.id)) return prev;
-        queueMicrotask(() => loadAll(true).catch(() => {}));
+        // ✅ التعديل: loadAll(false) بدلاً من loadAll(true)
+        queueMicrotask(() => loadAll(false).catch(() => {}));
         return prev;
       });
     };
@@ -407,7 +456,6 @@ export default function Dashboard() {
     const handleConvUpdate = (payload: any) => {
       const row = payload.new ?? {};
 
-      // ── كشف التحويل التلقائي من AI (ai_handoff) ──
       setSt((prev) => {
         if (!prev) return prev;
 
@@ -480,7 +528,9 @@ export default function Dashboard() {
         const target = prev.convs.find((c) => c.id === convId);
 
         if (!target) {
-          queueMicrotask(() => loadAll(true).catch(() => {}));
+          // ✅ التعديل: loadAll(false) بدلاً من loadAll(true)
+          // حتى تُجلب المحادثة الجديدة من الخادم وتظهر فورًا
+          queueMicrotask(() => loadAll(false).catch(() => {}));
           return prev;
         }
 
@@ -572,13 +622,236 @@ export default function Dashboard() {
     loadThread(activeConv).catch(() => {});
   }, [demo, activeConv, token, loadThread]);
 
-  /* تمرير تلقائي لأسفل الخيط */
   const activeThread = st?.convs.find((c) => c.id === activeConv) ?? null;
   useEffect(() => {
     threadEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [activeThread?.msgs.length]);
 
   /* ── إجراءات ── */
+
+  /* ═══════════ القنوات — تحميل من /api/channels (حقيقي، بدون Mock) ═══════════ */
+
+  const loadChannels = useCallback(async () => {
+    if (!token || demo) return;
+    setChLoading(true);
+    try {
+      const [accounts, summary] = await Promise.all([
+        apiAuthFetch<ChannelAccount[]>(token, "/api/channels/accounts"),
+        apiAuthFetch<ChannelSummary>(token, "/api/channels/summary"),
+      ]);
+      setChAccounts(accounts ?? []);
+      setChSummary(summary ?? null);
+    } catch (e) {
+      console.error("[Dashboard] channels load error:", e);
+    } finally {
+      setChLoading(false);
+    }
+  }, [token, demo]);
+
+  useEffect(() => {
+    if (demo || !authed || !token || needClaim) return;
+    loadChannels();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [demo, authed, token, needClaim]);
+
+  /* حالة إعداد Meta على الخادم — عامة بدون أسرار */
+  useEffect(() => {
+    if (demo || !apiEnabled) return;
+    apiAuthFetch<MetaStatus>(token!, "/api/channels/meta/status").then(setMetaStatus).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [demo, token]);
+
+  /* بعد عودة Meta OAuth — يدعم الصيغتين القديمة والجديدة للتوجيه */
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search);
+    if (q.get("tab") === "channels") setTab("channels");
+    // الصيغة الجديدة: ?channel_connected=facebook|instagram&accounts=N&name=...
+    const connected = q.get("channel_connected");
+    if (connected) {
+      const name = q.get("name");
+      showToast(
+        `تم ربط ${connected === "facebook" ? "Facebook Messenger" : "Instagram"} بنجاح ✅${name ? ` (${name})` : ""}`
+      );
+      loadChannels();
+      loadSocialChannels();
+      window.history.replaceState({}, "", "#/dashboard");
+    }
+    const chErr = q.get("channel_error");
+    if (chErr) {
+      const map: Record<string, string> = {
+        user_cancelled: "تم إلغاء الربط — لم تُمنح صلاحيات Meta.",
+        missing_params: "لم تكتمل بيانات العودة من Meta — أعد المحاولة.",
+        oauth_state: "انتهت صلاحية جلسة الربط — ابدأ الربط من جديد.",
+      };
+      const decoded = decodeURIComponent(chErr);
+      showToast("فشل الربط: " + (map[decoded] ?? decoded));
+      window.history.replaceState({}, "", "#/dashboard");
+    }
+    if (q.get("connected") === "1") {
+      const fb = Number(q.get("fb") ?? 0);
+      const ig = Number(q.get("ig") ?? 0);
+      showToast(
+        fb + ig > 0
+          ? `تم ربط ${fb > 0 ? `${fb} صفحة Facebook` : ""}${fb > 0 && ig > 0 ? " و" : ""}${ig > 0 ? `${ig} حساب Instagram` : ""} بنجاح ✅`
+          : "اكتمل تسجيل الدخول عبر Meta — لم يُعثر على صفحات أو حسابات إنستغرام مؤهلة ضمن الصلاحيات الممنوحة."
+      );
+      loadChannels();
+      window.history.replaceState({}, "", "#/dashboard");
+    }
+    const err = q.get("error");
+    if (err) {
+      const map: Record<string, string> = {
+        oauth_missing: "لم يكتمل تفويض Meta — أعد المحاولة.",
+        oauth_state: "انتهت صلاحية جلسة الربط — ابدأ الربط من جديد.",
+        oauth_channel: "قناة غير معروفة في طلب الربط.",
+        oauth_not_configured: "تطبيق Meta غير مُهيّأ على الخادم بعد — تواصل مع إدارة المنصة.",
+        oauth_token: "رفضت Meta تبادل الرمز — أعد المحاولة أو تحقق من صلاحيات التطبيق.",
+        oauth_failed: "حدث خطأ أثناء إتمام الربط — حاول مجددًا.",
+      };
+      showToast(map[err] ?? "تعذر إتمام ربط Meta.");
+      window.history.replaceState({}, "", "#/dashboard");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const loadSocialChannels = useCallback(async () => {
+    if (!token || demo) return;
+    try {
+      const data = await apiAuthFetch<any[]>(
+        token,
+        `/api/dashboard/channels?tenantId=${encodeURIComponent(st?.tenantId ?? "")}`
+      );
+      setSocialChannels(Array.isArray(data) ? data : []);
+    } catch (e) {
+      console.error("[Dashboard] social channels load error:", e);
+    }
+  }, [token, demo, st?.tenantId]);
+
+  useEffect(() => {
+    if (tab === "channels") loadSocialChannels();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab]);
+
+  const handleConnectChannel = async (platform: "whatsapp" | "facebook" | "instagram") => {
+    if (!token) return;
+    if (platform === "whatsapp") {
+      showToast("واتساب يُدار من بطاقة الاتصال في «نظرة عامة» — WhatsApp Cloud API");
+      return;
+    }
+    // سجل/حدّث القناة ثم تابع بتدفق OAuth الحقيقي عبر /api/auth/facebook/start
+    try {
+      await apiAuthFetch(token, "/api/dashboard/channels/connect", {
+        method: "POST",
+        body: JSON.stringify({ platform, tenantId: st?.tenantId }),
+      });
+    } catch {
+      /* الجدول قد لا يكون منفذاً بعد — لا نمنع بدء OAuth */
+    }
+    startMetaOAuth(platform);
+  };
+
+  /** بدء تدفق OAuth الرسمي — الخادم يبني الرابط والصلاحيات، والواجهة لا ترى أي سر */
+  const startMetaOAuth = async (channel: "facebook" | "instagram") => {
+    if (!token) return;
+    setChBusyPlatform(channel);
+    try {
+      // المسار الجديد (/api/auth/facebook/start) مع fallback للمسار القديم إن لم يكن منشوراً بعد
+      let r: { url: string };
+      try {
+        r = await apiAuthFetch<{ url: string }>(token, "/api/auth/facebook/start", {
+          method: "POST",
+          body: JSON.stringify({ platform: channel, tenantId: st?.tenantId }),
+        });
+      } catch {
+        r = await apiAuthFetch<{ url: string }>(
+          token,
+          `/api/channels/meta/oauth-url?channel=${channel}`
+        );
+      }
+      if (r?.url) window.location.href = r.url;
+      else showToast("لم يُرجع الخادم رابط OAuth — تأكد من ضبط META_APP_ID/META_APP_SECRET");
+    } catch (e: any) {
+      const msg = String(e?.message ?? "");
+      showToast(
+        msg.includes("oauth_not_configured") || msg.includes("غير مُهيّأ")
+          ? "تطبيق Meta غير مُهيّأ على الخادم بعد — أضف META_APP_ID وMETA_APP_SECRET ثم أعد المحاولة"
+          : msg || "تعذر بدء ربط Meta"
+      );
+      setChBusyPlatform(null);
+    }
+  };
+
+  /** فصل قناة Facebook/Instagram عبر المسار الرسمي */
+  const disconnectSocialChannel = async (platform: "facebook" | "instagram") => {
+    if (!token || !st?.tenantId) return;
+    if (!window.confirm(`فصل ${platform === "facebook" ? "Facebook Messenger" : "Instagram"}؟ ستوقف الرسائل الواردة لهذه القناة حتى إعادة الربط.`)) return;
+    try {
+      await apiAuthFetch(token, "/api/auth/disconnect", {
+        method: "POST",
+        body: JSON.stringify({ platform, tenantId: st.tenantId }),
+      });
+      showToast("تم فصل القناة");
+      loadSocialChannels();
+      loadChannels();
+    } catch (e: any) {
+      showToast(e?.message || "تعذر الفصل");
+    }
+  };
+
+  const patchAccount = async (id: string, patch: Partial<ChannelAccount>) => {
+    if (!token) return;
+    setChBusyId(id);
+    try {
+      const updated = await apiAuthFetch<ChannelAccount>(token, `/api/channels/accounts/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(patch),
+      });
+      setChAccounts((prev) => prev.map((a) => (a.id === id ? { ...a, ...updated } : a)));
+      showToast("تم حفظ الإعدادات");
+    } catch (e: any) {
+      showToast(e?.message ?? "فشل الحفظ");
+    } finally {
+      setChBusyId(null);
+    }
+  };
+
+  const disconnectAccount = async (acc: ChannelAccount) => {
+    if (!token) return;
+    if (!window.confirm(`فصل ${acc.display_name ?? acc.external_id}؟ ستوقف الرسائل الواردة لهذه القناة حتى إعادة الربط.`)) return;
+    setChBusyId(acc.id);
+    try {
+      await apiAuthFetch(token, `/api/channels/accounts/${acc.id}`, { method: "DELETE" });
+      showToast("تم فصل الحساب");
+      setManageAcc(null);
+      loadChannels();
+    } catch (e: any) {
+      showToast(e?.message ?? "فشل الفصل");
+    } finally {
+      setChBusyId(null);
+    }
+  };
+
+  const openManageAccount = (acc: ChannelAccount) => {
+    setManageAcc(acc);
+    const hr = (acc.handoff_rules ?? {}) as Record<string, unknown>;
+    setHandoffCfg({
+      onRequest: hr.onRequest !== false,
+      onNoAnswer: hr.onNoAnswer !== false,
+      keywords: Array.isArray(hr.keywords) ? (hr.keywords as string[]).join("، ") : "",
+    });
+  };
+
+  const saveHandoffRules = async () => {
+    if (!manageAcc || !token) return;
+    await patchAccount(manageAcc.id, {
+      handoff_rules: {
+        onRequest: handoffCfg.onRequest,
+        onNoAnswer: handoffCfg.onNoAnswer,
+        keywords: handoffCfg.keywords.split(/[،,]/).map((s) => s.trim()).filter(Boolean),
+      } as any,
+    });
+    setManageAcc((p) => (p ? { ...p, handoff_rules: { onRequest: handoffCfg.onRequest, onNoAnswer: handoffCfg.onNoAnswer, keywords: handoffCfg.keywords } } : p));
+  };
 
   const openConversation = (convId: string) => {
     setActiveConv(convId);
@@ -1121,7 +1394,6 @@ export default function Dashboard() {
     );
   }
 
-  /* ضم حساب */
   if (!demo && needClaim && !st) {
     return (
       <Shell>
@@ -1187,7 +1459,17 @@ export default function Dashboard() {
     { id: "unresolved" as const, label: "العالقة", icon: <IconQuestion className="w-4 h-4" />, badge: st.openUnresolved },
     { id: "knowledge" as const, label: "المعرفة", icon: <IconDatabase className="w-4 h-4" /> },
     { id: "widgets" as const, label: "Widgets", icon: <span className="text-sm">💬</span> },
+    { id: "channels" as const, label: "القنوات", icon: <IconGlobe className="w-4 h-4" /> },
   ];
+
+  /* مؤشرات حالة القناة — من /api/dashboard/channels + /api/channels فقط (بدون Mock) */
+  const socialRow = (platform: string) =>
+    socialChannels.find((c) => c.platform === platform);
+  const chAccountFor = (channel: ChannelId) =>
+    chAccounts.find((a) => a.channel === channel && a.status !== "disconnected");
+  const waLive = st.waStatus === "connected" || !!st.phone;
+  const fbAccounts = chAccounts.filter((a) => a.channel === "facebook");
+  const igAccounts = chAccounts.filter((a) => a.channel === "instagram");
 
   return (
     <Shell>
@@ -1317,10 +1599,10 @@ export default function Dashboard() {
           </section>
         </div>
 
-        <div className="relative bg-pine/50 border border-verde/12 rounded-2xl p-1.5 grid grid-cols-4 mb-6 max-w-lg">
+        <div className="relative bg-pine/50 border border-verde/12 rounded-2xl p-1.5 grid grid-cols-5 mb-6 max-w-2xl">
           <span
-            className="absolute top-1.5 bottom-1.5 w-[calc((100%-0.75rem)/4)] bg-moss rounded-xl border border-verde/25 transition-transform duration-300 ease-out"
-            style={{ insetInlineStart: "0.375rem", transform: `translateX(${tab === "convs" ? 0 : tab === "unresolved" ? "-100%" : tab === "knowledge" ? "-200%" : "-300%"})` }}
+            className="absolute top-1.5 bottom-1.5 w-[calc((100%-0.75rem)/5)] bg-moss rounded-xl border border-verde/25 transition-transform duration-300 ease-out"
+            style={{ insetInlineStart: "0.375rem", transform: `translateX(${tab === "convs" ? 0 : tab === "unresolved" ? "-100%" : tab === "knowledge" ? "-200%" : tab === "widgets" ? "-300%" : "-400%"})` }}
             aria-hidden="true"
           />
           {TABS.map((t) => (
@@ -1342,13 +1624,33 @@ export default function Dashboard() {
           ))}
         </div>
 
-        {/* ── المحادثات ── */}
         {tab === "convs" && (
           <div className="grid lg:grid-cols-[320px_1fr] gap-4 items-start">
             <aside className={`${cls.card} overflow-hidden ${mobileThread ? "hidden lg:block" : ""}`}>
               <div className="px-4 py-3.5 border-b border-verde/10 flex items-center justify-between">
-                <p className="text-xs font-bold text-sage">الوارد على واتساب</p>
+                <p className="text-xs font-bold text-sage">صندوق المحادثات الموحد</p>
                 <span className="w-2 h-2 rounded-full bg-verde live-dot" />
+              </div>
+              {/* فلاتر القناة — تعمل فعليًا على البيانات القادمة من قاعدة البيانات */}
+              <div className="px-3 py-2.5 border-b border-verde/8 flex gap-1.5 flex-wrap">
+                {([
+                  ["all", "الكل"],
+                  ["whatsapp", "واتساب"],
+                  ["instagram", "إنستغرام"],
+                  ["facebook", "فيسبوك"],
+                ] as const).map(([id, label]) => (
+                  <button
+                    key={id}
+                    onClick={() => setConvFilter(id)}
+                    className={`text-[10.5px] font-bold px-2.5 py-1 rounded-full border transition-all ${
+                      convFilter === id
+                        ? "bg-moss text-oro border-oro/40"
+                        : "text-sage border-verde/15 hover:text-bone"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
               </div>
               <ul className="max-h-[520px] overflow-y-auto qa-scroll">
                 {st.loadingList ? (
@@ -1363,11 +1665,13 @@ export default function Dashboard() {
                       </div>
                     </li>
                   ))
-                ) : st.convs.length === 0 ? (
+                ) : st.convs.filter((c) => convFilter === "all" || (c.channel ?? "whatsapp") === convFilter).length === 0 ? (
                   <li className="px-5 py-10 text-center text-xs text-sage/70 leading-6">
-                    لا محادثات بعد — أرسل رسالة من أي رقم واتساب لموظفك.
+                    لا محادثات بعد — أرسل رسالة من أي رقم واتساب لموظفك، أو اربط قناة Facebook/Instagram من تبويب «القنوات».
                   </li>
-                ) : st.convs.map((c) => {
+                ) : st.convs
+                  .filter((c) => convFilter === "all" || (c.channel ?? "whatsapp") === convFilter)
+                  .map((c) => {
                   const sel = c.id === activeConv;
                   return (
                     <li key={c.id}>
@@ -1381,11 +1685,14 @@ export default function Dashboard() {
                       >
                         <div className="flex items-center justify-between gap-2 mb-1">
                           <div className="flex flex-col gap-0.5 min-w-0 flex-1">
-                            {c.customerName && (
-                              <span className="text-[13px] font-bold text-bone truncate">
-                                {c.customerName}
-                              </span>
-                            )}
+                            <span className="inline-flex items-center gap-1.5 min-w-0">
+                              <ChannelBadge channel={(c.channel ?? "whatsapp") as ChannelId} />
+                              {c.customerName && (
+                                <span className="text-[13px] font-bold text-bone truncate">
+                                  {c.customerName}
+                                </span>
+                              )}
+                            </span>
                             <span
                               className={
                                 c.customerName
@@ -1686,7 +1993,6 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* ── الأسئلة العالقة ── */}
         {tab === "unresolved" && (
           <div className="space-y-4">
             <p className="text-[12.5px] text-sage leading-6">
@@ -1743,7 +2049,6 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* ── المعرفة ── */}
         {tab === "knowledge" && (
           <div className="grid lg:grid-cols-[1fr_360px] gap-4 items-start">
             <section className={`${cls.card} overflow-hidden`}>
@@ -1825,7 +2130,6 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* ── Widgets ── */}
         {tab === "widgets" && (
           <div className="grid lg:grid-cols-[1fr_400px] gap-4 items-start">
             <section className={`${cls.card} overflow-hidden`}>
@@ -1960,9 +2264,262 @@ export default function Dashboard() {
             </aside>
           </div>
         )}
+        {tab === "channels" && (
+          <div className="space-y-6">
+            <div>
+              <h2 className="font-display font-bold text-2xl text-bone">القنوات والحسابات</h2>
+              <p className="text-sm text-sage mt-1">
+                اربط قنوات التواصل الخاصة بنشاطك التجاري وأدر جميع محادثاتك من مكان واحد.
+              </p>
+            </div>
+
+            {!metaStatus?.configured && !demo && apiEnabled && (
+              <div className={`${cls.card} p-4 border-oro/40 bg-oro/5`}>
+                <p className="text-xs text-oro-soft font-semibold leading-6">
+                  ⚠️ تطبيق Meta غير مُهيّأ على الخادم بعد — أزرار ربط Facebook وInstagram لن تكتمل حتى ضبط
+                  متغيرات META_APP_ID / META_APP_SECRET، وتُقدَّم صلاحيات المراسلة لمراجعة Meta.
+                </p>
+              </div>
+            )}
+
+            <div className="grid md:grid-cols-3 gap-4">
+              {/* WhatsApp */}
+              <div className={`${cls.card} p-5 flex flex-col`}>
+                <div className="flex items-center justify-between mb-3">
+                  <div className="w-12 h-12 rounded-2xl flex items-center justify-center shrink-0" style={{ background: "#25D366" }}>
+                    <IconWhatsapp className="w-6 h-6 text-white" />
+                  </div>
+                  <span className={`text-[10px] font-bold px-2 py-1 rounded-full border ${
+                    waLive
+                      ? "bg-verde/10 text-verde border-verde/30"
+                      : socialRow("whatsapp")?.is_connected
+                        ? "bg-oro/10 text-oro-soft border-oro/30"
+                        : "bg-moss text-sage border-verde/20"
+                  }`}>
+                    {waLive ? "متصل" : socialRow("whatsapp")?.is_connected ? "بانتظار التحقق" : "غير متصل"}
+                  </span>
+                </div>
+                <h3 className="font-display font-bold text-lg text-bone mb-1">WhatsApp Business</h3>
+                <p className="text-xs text-sage mb-2 leading-5">الرسائل عبر WhatsApp Cloud API الرسمي من Meta.</p>
+                {st.phone && (
+                  <p className="text-[11px] text-mist mb-3 tabular-nums" dir="ltr">+{st.phone.replace(/\D/g, "")}</p>
+                )}
+                <div className="mt-auto space-y-2">
+                  <button onClick={() => setTab("convs")} className={`${cls.btnGhost} w-full py-2.5 text-xs`}>
+                    إدارة المحادثات
+                  </button>
+                  {!waLive && (
+                    <button onClick={() => handleConnectChannel("whatsapp")} className={`${cls.btn} w-full py-2.5 text-xs`}>
+                      إعداد الربط
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Facebook Messenger */}
+              <div className={`${cls.card} p-5 flex flex-col`}>
+                <div className="flex items-center justify-between mb-3">
+                  <div className="w-12 h-12 rounded-2xl flex items-center justify-center shrink-0" style={{ background: "#1877F2" }}>
+                    <IconFacebook className="w-6 h-6 text-white" />
+                  </div>
+                  <span className={`text-[10px] font-bold px-2 py-1 rounded-full border ${
+                    fbAccounts.some((a) => a.status === "active")
+                      ? "bg-verde/10 text-verde border-verde/30"
+                      : fbAccounts.length > 0
+                        ? "bg-oro/10 text-oro-soft border-oro/30"
+                        : "bg-moss text-sage border-verde/20"
+                  }`}>
+                    {fbAccounts.some((a) => a.status === "active")
+                      ? "متصل"
+                      : fbAccounts.length > 0
+                        ? "يحتاج إعادة تفويض"
+                        : "غير متصل"}
+                  </span>
+                </div>
+                <h3 className="font-display font-bold text-lg text-bone mb-1">Facebook Messenger</h3>
+                <p className="text-xs text-sage mb-3 leading-5">اربط صفحات Facebook لإدارة رسائل Messenger من صندوق المحادثات.</p>
+                {fbAccounts.length > 0 ? (
+                  <ul className="space-y-1.5 mb-3">
+                    {fbAccounts.map((a) => (
+                      <li key={a.id} className="flex items-center gap-2 bg-night/50 border border-verde/10 rounded-xl px-3 py-2">
+                        {a.avatar_url ? (
+                          <img src={a.avatar_url} alt="" className="w-6 h-6 rounded-full object-cover" />
+                        ) : (
+                          <span className="w-6 h-6 rounded-full bg-[#1877F2]/15 text-[#6ea3f5] flex items-center justify-center"><IconFacebook className="w-3.5 h-3.5" /></span>
+                        )}
+                        <span className="text-[11.5px] text-bone font-semibold truncate flex-1">{a.display_name ?? a.external_id}</span>
+                        <button onClick={() => openManageAccount(a)} className="text-[10px] font-bold text-oro hover:text-bone transition-colors shrink-0">إدارة</button>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+                <div className="mt-auto space-y-2">
+                  <button onClick={() => handleConnectChannel("facebook")} className={`${cls.btn} w-full py-2.5 text-xs`} disabled={!apiEnabled || chBusyPlatform === "facebook"}>
+                    {chBusyPlatform === "facebook" ? "جارٍ التحويل إلى Meta…" : fbAccounts.length > 0 ? "ربط صفحة أخرى" : "ربط Facebook"}
+                  </button>
+                  {fbAccounts.length > 0 && (
+                    <button onClick={() => disconnectSocialChannel("facebook")} className="w-full py-2 text-[11px] font-bold text-red-300/80 hover:text-red-300 border border-red-400/20 rounded-xl transition-colors">
+                      فصل القناة
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Instagram */}
+              <div className={`${cls.card} p-5 flex flex-col`}>
+                <div className="flex items-center justify-between mb-3">
+                  <div className="w-12 h-12 rounded-2xl flex items-center justify-center shrink-0" style={{ background: "linear-gradient(45deg, #F58529, #DD2A7B, #8134AF)" }}>
+                    <IconInstagram className="w-6 h-6 text-white" />
+                  </div>
+                  <span className={`text-[10px] font-bold px-2 py-1 rounded-full border ${
+                    igAccounts.some((a) => a.status === "active")
+                      ? "bg-verde/10 text-verde border-verde/30"
+                      : igAccounts.length > 0
+                        ? "bg-oro/10 text-oro-soft border-oro/30"
+                        : "bg-moss text-sage border-verde/20"
+                  }`}>
+                    {igAccounts.some((a) => a.status === "active")
+                      ? "متصل"
+                      : igAccounts.length > 0
+                        ? "يحتاج إعادة تفويض"
+                        : "غير متصل"}
+                  </span>
+                </div>
+                <h3 className="font-display font-bold text-lg text-bone mb-1">Instagram DM</h3>
+                <p className="text-xs text-sage mb-3 leading-5">اربط حساب Instagram الاحترافي لإدارة الرسائل من لوحة واحدة.</p>
+                {igAccounts.length > 0 ? (
+                  <ul className="space-y-1.5 mb-3">
+                    {igAccounts.map((a) => (
+                      <li key={a.id} className="flex items-center gap-2 bg-night/50 border border-verde/10 rounded-xl px-3 py-2">
+                        {a.avatar_url ? (
+                          <img src={a.avatar_url} alt="" className="w-6 h-6 rounded-full object-cover" />
+                        ) : (
+                          <span className="w-6 h-6 rounded-full bg-[#DD2A7B]/15 text-[#f07ab5] flex items-center justify-center"><IconInstagram className="w-3.5 h-3.5" /></span>
+                        )}
+                        <span className="text-[11.5px] text-bone font-semibold truncate flex-1" dir="ltr">{a.display_name ?? a.external_id}</span>
+                        <button onClick={() => openManageAccount(a)} className="text-[10px] font-bold text-oro hover:text-bone transition-colors shrink-0">إدارة</button>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+                <div className="mt-auto space-y-2">
+                  <button onClick={() => handleConnectChannel("instagram")} className={`${cls.btn} w-full py-2.5 text-xs`} disabled={!apiEnabled || chBusyPlatform === "instagram"}>
+                    {chBusyPlatform === "instagram" ? "جارٍ التحويل إلى Meta…" : igAccounts.length > 0 ? "ربط حساب آخر" : "ربط Instagram"}
+                  </button>
+                  {igAccounts.length > 0 && (
+                    <button onClick={() => disconnectSocialChannel("instagram")} className="w-full py-2 text-[11px] font-bold text-red-300/80 hover:text-red-300 border border-red-400/20 rounded-xl transition-colors">
+                      فصل القناة
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <p className="text-[10.5px] text-sage/60 leading-5">
+              بيانات القنوات أعلاه حقيقية من حساباتك المرتبطة — لا تُعرض أي حسابات تجريبية. دعم مراسلة Instagram
+              يتطلب حسابًا احترافيًا مرتبطًا بصفحة Facebook وصلاحيات معتمدة من Meta.
+            </p>
+          </div>
+        )}
+
+        {manageAcc && (
+          <div className="fixed inset-0 z-50 flex items-stretch justify-start" role="dialog" aria-modal="true">
+            <button className="absolute inset-0 bg-night/80 backdrop-blur-sm" onClick={() => setManageAcc(null)} aria-label="إغلاق" />
+            <div className="relative ms-auto h-full w-full max-w-md bg-pine border-s border-verde/25 overflow-y-auto p-6 space-y-5 msg-in">
+              <div className="flex items-center justify-between">
+                <h3 className="font-display font-bold text-lg text-bone">إدارة الحساب</h3>
+                <button onClick={() => setManageAcc(null)} className="p-2 text-sage hover:text-bone transition-colors" aria-label="إغلاق">
+                  <IconX className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className={`${cls.card} p-4 space-y-2`}>
+                <div className="flex items-center gap-3">
+                  {manageAcc.avatar_url ? (
+                    <img src={manageAcc.avatar_url} alt="" className="w-12 h-12 rounded-full object-cover" />
+                  ) : (
+                    <span className="w-12 h-12 rounded-full bg-moss flex items-center justify-center text-verde">
+                      {manageAcc.channel === "instagram" ? <IconInstagram className="w-6 h-6" /> : <IconFacebook className="w-6 h-6" />}
+                    </span>
+                  )}
+                  <div className="min-w-0">
+                    <p className="text-sm font-bold text-bone truncate">{manageAcc.display_name ?? manageAcc.external_id}</p>
+                    <p className="text-[11px] text-sage">{CHANNELS[manageAcc.channel].label} · {CHANNEL_STATUS_LABEL[manageAcc.status]?.text ?? manageAcc.status}</p>
+                  </div>
+                </div>
+                <p className="text-[10.5px] text-sage/70 tabular-nums" dir="ltr">ID: {manageAcc.external_id}</p>
+                <p className="text-[10.5px] text-sage/70">تاريخ الربط: {fmtDate(manageAcc.created_at)}</p>
+              </div>
+
+              <div className={`${cls.card} p-4 space-y-3`}>
+                <p className="text-xs font-bold text-sage">وكيل الذكاء الاصطناعي</p>
+                <label className="flex items-center justify-between gap-2 cursor-pointer">
+                  <span className="text-[12.5px] text-bone">تفعيل الوكيل</span>
+                  <input
+                    type="checkbox"
+                    checked={manageAcc.agent_enabled}
+                    onChange={(e) => {
+                      const v = e.target.checked;
+                      setManageAcc((p) => (p ? { ...p, agent_enabled: v } : p));
+                      patchAccount(manageAcc.id, { agent_enabled: v });
+                    }}
+                    className="accent-verde w-4 h-4"
+                  />
+                </label>
+                <label className="flex items-center justify-between gap-2 cursor-pointer">
+                  <span className="text-[12.5px] text-bone">الرد التلقائي على العملاء</span>
+                  <input
+                    type="checkbox"
+                    checked={manageAcc.auto_reply}
+                    onChange={(e) => {
+                      const v = e.target.checked;
+                      setManageAcc((p) => (p ? { ...p, auto_reply: v } : p));
+                      patchAccount(manageAcc.id, { auto_reply: v });
+                    }}
+                    className="accent-verde w-4 h-4"
+                  />
+                </label>
+                <p className="text-[10.5px] text-sage/70 leading-5">
+                  عند إيقاف الرد التلقائي تصل الرسائل إلى صندوق المحادثات دون رد آلي، ويتولاها فريقك يدويًا.
+                </p>
+              </div>
+
+              <div className={`${cls.card} p-4 space-y-3`}>
+                <p className="text-xs font-bold text-sage">التحويل إلى موظف (Human Handoff)</p>
+                <label className="flex items-center justify-between gap-2 cursor-pointer">
+                  <span className="text-[12.5px] text-bone">تحويل عند طلب العميل</span>
+                  <input type="checkbox" checked={handoffCfg.onRequest} onChange={(e) => setHandoffCfg({ ...handoffCfg, onRequest: e.target.checked })} className="accent-verde w-4 h-4" />
+                </label>
+                <label className="flex items-center justify-between gap-2 cursor-pointer">
+                  <span className="text-[12.5px] text-bone">تحويل عند عدم معرفة الإجابة</span>
+                  <input type="checkbox" checked={handoffCfg.onNoAnswer} onChange={(e) => setHandoffCfg({ ...handoffCfg, onNoAnswer: e.target.checked })} className="accent-verde w-4 h-4" />
+                </label>
+                <div>
+                  <label className="block text-[11px] text-sage mb-1">كلمات مفتاحية للتحويل (مفصولة بفواصل)</label>
+                  <input value={handoffCfg.keywords} onChange={(e) => setHandoffCfg({ ...handoffCfg, keywords: e.target.value })} className={cls.input} placeholder="شكوى، استرجاع، human" />
+                </div>
+                <button onClick={saveHandoffRules} className={`${cls.btn} w-full py-2.5 text-xs`}>حفظ قواعد التحويل</button>
+              </div>
+
+              <div className="flex gap-2">
+                <button
+                  onClick={() => startMetaOAuth(manageAcc.channel as "facebook" | "instagram")}
+                  className={`${cls.btnGhost} flex-1 py-2.5 text-xs`}
+                >
+                  إعادة الاتصال
+                </button>
+                <button
+                  onClick={() => disconnectAccount(manageAcc)}
+                  className="inline-flex items-center justify-center gap-2 border border-red-500/40 text-red-400 font-semibold text-sm px-4 py-2.5 rounded-xl hover:bg-red-500/10 transition-all text-xs flex-1"
+                >
+                  فصل الحساب
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </main>
 
-      {/* ── Widget Preview Modal ── */}
       {widgetPreview && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-night/80 backdrop-blur-sm" onClick={() => setWidgetPreview(null)}>
           <div className="relative w-full max-w-sm bg-pine border border-verde/25 rounded-3xl p-6 msg-in shadow-[0_40px_120px_-30px_rgba(0,0,0,0.9)]" onClick={(e) => e.stopPropagation()}>
@@ -2008,7 +2565,6 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* ── نافذة الشحن ── */}
       {payOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true">
           <button className="absolute inset-0 bg-night/80 backdrop-blur-sm" onClick={() => setPayOpen(false)} aria-label="إغلاق" />

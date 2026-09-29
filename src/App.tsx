@@ -4,6 +4,7 @@ import Hero from "./components/Hero";
 import { Marquee, Footer } from "./components/Extras";
 import Guarantees from "./components/Guarantees";
 import ChatDemo from "./components/ChatDemo";
+import ChannelsSection from "./components/ChannelsSection";
 import Pricing from "./components/Pricing";
 import FAQ from "./components/FAQ";
 
@@ -55,6 +56,7 @@ export default function App() {
       <main>
         <Hero />
         <Marquee />
+        <ChannelsSection />
         <Guarantees />
         <ChatDemo />
         <Pricing />

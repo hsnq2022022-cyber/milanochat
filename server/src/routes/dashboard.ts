@@ -117,6 +117,11 @@ function shapeConversation(c: any) {
     id: c.id,
     customerPhone: decryptField(c.customer_phone_encrypted),
     customerName: c.customer_name || null,
+    customerAvatar: c.customer_avatar || null,
+    channel: ["whatsapp", "instagram", "facebook"].includes(c.channel)
+      ? c.channel
+      : "whatsapp",
+    accountId: c.account_id ?? null,
     transferred: c.transferred,
     autoPausedReason: c.auto_paused_reason,
     humanAgentExpiresAt: c.human_agent_expires_at ?? null,
@@ -222,6 +227,87 @@ dashboardRouter.get("/wa/bindings", async (req, res) => {
   res.json(data || []);
 });
 
+/* ───────── القنوات الاجتماعية (WhatsApp / Facebook / Instagram) ───────── */
+
+const SUPPORTED_PLATFORMS = ["whatsapp", "facebook", "instagram"] as const;
+
+/** قائمة قنوات النشاط التجاري */
+dashboardRouter.get("/channels", async (req, res) => {
+  const tenant = await ownedTenant(
+    (req as AuthedRequest).userId!,
+    req.query.tenantId as string
+  );
+  if (!tenant) return res.status(404).json({ error: "لا يوجد حساب" });
+
+  const { data, error } = await db
+    .from("channels")
+    .select("*")
+    .eq("tenant_id", tenant.id);
+
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data || []);
+});
+
+/** بدء ربط قناة (إنشاء سجل القناة إن لم يكن موجودًا) */
+dashboardRouter.post("/channels/connect", async (req, res) => {
+  const tenant = await ownedTenant(
+    (req as AuthedRequest).userId!,
+    req.body?.tenantId
+  );
+  if (!tenant) return res.status(404).json({ error: "لا يوجد حساب" });
+
+  const platform = String(req.body?.platform || "");
+  if (!SUPPORTED_PLATFORMS.includes(platform as any)) {
+    return res.status(400).json({ error: "قناة غير مدعومة" });
+  }
+
+  const { data: existing } = await db
+    .from("channels")
+    .select("*")
+    .eq("tenant_id", tenant.id)
+    .eq("platform", platform)
+    .maybeSingle();
+
+  if (existing) return res.json(existing);
+
+  const { data, error } = await db
+    .from("channels")
+    .insert({ tenant_id: tenant.id, platform, is_connected: false })
+    .select()
+    .single();
+
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
+});
+
+/** فصل قناة (تصفير بيانات الحساب مع الإبقاء على السجل) */
+dashboardRouter.post("/channels/disconnect", async (req, res) => {
+  const tenant = await ownedTenant(
+    (req as AuthedRequest).userId!,
+    req.body?.tenantId
+  );
+  if (!tenant) return res.status(404).json({ error: "لا يوجد حساب" });
+
+  const platform = String(req.body?.platform || "");
+  if (!SUPPORTED_PLATFORMS.includes(platform as any)) {
+    return res.status(400).json({ error: "قناة غير مدعومة" });
+  }
+
+  const { error } = await db
+    .from("channels")
+    .update({
+      is_connected: false,
+      platform_account_id: null,
+      account_name: null,
+      account_avatar: null,
+    })
+    .eq("tenant_id", tenant.id)
+    .eq("platform", platform);
+
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ ok: true });
+});
+
 /** ملخص: الرصيد، الاتصال، العدادات */
 dashboardRouter.get("/summary", async (req, res) => {
   const tenant = await ownedTenant(
@@ -283,6 +369,10 @@ dashboardRouter.get("/conversations/summary", async (req, res) => {
     .from("conversations")
     .select(`
       id,
+      customer_name,
+      customer_avatar,
+      channel,
+      account_id,
       transferred,
       auto_paused_reason,
       human_agent_expires_at,
@@ -325,6 +415,10 @@ dashboardRouter.get("/conversations/summary", async (req, res) => {
 
       return {
         id: c.id,
+        customerName: c.customer_name || null,
+        customerAvatar: c.customer_avatar || null,
+        channel: ["whatsapp", "instagram", "facebook"].includes(c.channel) ? c.channel : "whatsapp",
+        accountId: c.account_id ?? null,
         transferred: c.transferred,
         autoPausedReason: c.auto_paused_reason,
         humanAgentExpiresAt: c.human_agent_expires_at ?? null,
@@ -350,6 +444,8 @@ dashboardRouter.get("/conversations", async (req, res) => {
     .from("conversations")
     .select(`
       id,
+      channel,
+      account_id,
       customer_phone_encrypted,
       customer_name,
       transferred,
@@ -401,6 +497,8 @@ dashboardRouter.get("/conversations/:id", async (req, res) => {
     .from("conversations")
     .select(`
       id,
+      channel,
+      account_id,
       customer_phone_encrypted,
       customer_name,
       transferred,
