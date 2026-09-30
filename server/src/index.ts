@@ -1,6 +1,11 @@
 /**
  * Milano Server — Express entry
  * التشغيل: cd server && npm install && cp .env.example .env && npm run dev
+ *
+ * ملاحظات الإصدار (v3):
+ * - تُسجَّل كل الراوترات على المسارات الصحيحة.
+ * - نحتفظ بـ rawBody للتحقق من توقيع Meta Webhooks (X-Hub-Signature-256).
+ * - نحتفظ بـ rawBody لـ webhooks WhatsApp و Instagram و Meta Messenger.
  */
 import express from "express";
 import cors, { type CorsOptions } from "cors";
@@ -24,7 +29,9 @@ const app = express();
 
 app.disable("x-powered-by");
 
-// CORS متعدد الأصول: قائمة صريحة + نمط للمعاينات السحابية + الطلبات بلا Origin (Postman/webhooks)
+/* ═══════════════════════════════════════════════════════════
+   CORS — قائمة صريحة + نمط للمعاينات السحابية + طلبات بلا Origin
+   ═══════════════════════════════════════════════════════════ */
 const corsOptions: CorsOptions = {
   origin: (origin, callback) => {
     if (
@@ -48,54 +55,97 @@ const corsOptions: CorsOptions = {
 };
 app.use(cors(corsOptions));
 
-// نحتفظ بالنص الخام للتحقق من توقيع الـ webhooks (واتساب + Meta Messenger/Instagram)
+/* ═══════════════════════════════════════════════════════════
+   Body parser — نحتفظ بـ rawBody للتحقق من توقيع Meta Webhooks
+   ═══════════════════════════════════════════════════════════ */
 app.use(
   express.json({
     limit: "1mb",
     verify: (req: any, _res, buf) => {
+      const url = req.originalUrl ?? "";
       if (
-        req.originalUrl?.startsWith("/api/webhooks") ||
-        req.originalUrl?.startsWith("/api/channels/meta/webhook")
-      )
+        url.startsWith("/api/webhooks") ||
+        url.startsWith("/api/channels/meta/webhook")
+      ) {
         req.rawBody = buf;
+      }
     },
   })
 );
 
-// ── المسارات ──
-app.get("/health", (_req, res) => res.json({ ok: true, service: "milano-server" }));
+/* ═══════════════════════════════════════════════════════════
+   مسارات عامة
+   ═══════════════════════════════════════════════════════════ */
+app.get("/health", (_req, res) =>
+  res.json({ ok: true, service: "milano-server" })
+);
 
 app.get("/privacy", (_req, res) =>
   res.sendFile(path.join(__dirname, "..", "PRIVACY_POLICY_ar.md"))
 );
 
-// تقديم widget.js
+/* تقديم widget.js */
 app.get("/widget.js", (_req, res) => {
   res.sendFile(path.join(__dirname, "..", "public", "widget.js"));
 });
 
+/* ═══════════════════════════════════════════════════════════
+   الراوترات
+   ═══════════════════════════════════════════════════════════ */
+
+/* الفواتير والاشتراكات */
 app.use("/api/tenants", tenantsRouter);
+
+/* لوحة التحكم */
 app.use("/api/dashboard", dashboardRouter);
+
+/* WhatsApp Cloud API — إدارة الجلسات والإرسال */
 app.use("/api/whatsapp", whatsappRouter);
+
+/* WhatsApp Webhook (Meta Cloud API) */
 app.use("/api/webhooks/meta", whatsappWebhookRouter);
+
+/* Widgets (Chat Widget) */
 app.use("/api/widgets", widgetsRouter);
+
+/* القنوات الاجتماعية (Facebook / Instagram / WhatsApp) */
 app.use("/api/channels", channelsRouter);
+
+/* OAuth Flow لـ Meta (Facebook Login + Instagram) */
 app.use("/api/auth", metaAuthRouter);
+
+/* بوابات الدفع */
 app.use("/api/payments", paymentsRouter);
+
+/* Webhooks الدفع */
 app.use("/api/webhooks", webhooksRouter);
+
+/* Instagram Webhook (مسارات /api/webhooks/instagram) */
 app.use("/api/webhooks", instagramWebhookRouter);
 
-// معالج أخطاء عام
+/* ═══════════════════════════════════════════════════════════
+   معالج الأخطاء العام
+   ═══════════════════════════════════════════════════════════ */
 app.use((err: any, _req: any, res: any, _next: any) => {
   console.error("[server] unhandled:", err);
   res.status(500).json({ error: "خطأ داخلي" });
 });
 
-// ── الإقلاع ──
+/* ═══════════════════════════════════════════════════════════
+   الإقلاع
+   ═══════════════════════════════════════════════════════════ */
 initWa(handleIncomingMessage);
 
 app.listen(config.port, () => {
   console.log(`\n  Milano server يعمل على المنفذ ${config.port}`);
   console.log(`  الواجهة المسموحة: ${config.frontendOrigin}\n`);
-  restorePersistedSessions().catch((e) => console.error("[boot] restore failed:", e));
+  console.log(`  [routes] /api/dashboard  ✓`);
+  console.log(`  [routes] /api/channels   ✓`);
+  console.log(`  [routes] /api/auth       ✓`);
+  console.log(`  [routes] /api/webhooks   ✓`);
+  console.log(`  [routes] /api/whatsapp   ✓`);
+  console.log(`  [routes] /api/widgets    ✓\n`);
+  restorePersistedSessions().catch((e) =>
+    console.error("[boot] restore failed:", e)
+  );
 });
