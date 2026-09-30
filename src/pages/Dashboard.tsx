@@ -686,6 +686,11 @@ export default function Dashboard() {
         user_cancelled: "تم إلغاء الربط — لم تُمنح صلاحيات Meta.",
         missing_params: "لم تكتمل بيانات العودة من Meta — أعد المحاولة.",
         oauth_state: "انتهت صلاحية جلسة الربط — ابدأ الربط من جديد.",
+        "oauth_state:state_signature": "تعذر التحقق من جلسة الربط — غالبًا أُعيد نشر الخادم أثناء إتمام التفويض. أعد الضغط على «ربط Instagram».",
+        "oauth_state:state_expired": "انتهت صلاحية جلسة الربط (أكثر من 15 دقيقة) — ابدأ الربط من جديد.",
+        "oauth_state:state_reused": "تم استخدام جلسة الربط مسبقًا — أعد الضغط على «ربط Instagram».",
+        oauth_token_exchange: "رفضت Meta تبادل الرمز — تحقق من مطابقة Valid OAuth Redirect URI في إعدادات التطبيق.",
+        config_redirect_uri: "إعداد PUBLIC_URL على الخادم غير صحيح — تواصل مع الإدارة.",
       };
       const decoded = decodeURIComponent(chErr);
       showToast("فشل الربط: " + (map[decoded] ?? decoded));

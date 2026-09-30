@@ -82,27 +82,28 @@ async function ownedTenant(userId: string, tenantId?: string) {
   return data;
 }
 
-/* ═══════════ state: JWT موقّع HMAC بلا حالة (stateless) — آمن مع تعدد النسخ/restart ═══════════
-   التصميم السابق كان يخزن state في Map داخل عملية Node الواحدة. هذا يفشل حتمًا في الإنتاج لأن:
-   1) /facebook/start قد يصل لنسخة (instance) وcallback يصل لنسخة أخرى — الذاكرة غير مشتركة.
-   2) أي restart/deploy أثناء وجود المستخدم على شاشة Facebook يفرّغ الذاكرة → oauth_state.
-   الحل: التوقيع فقط — الـ payload يحمل (u=userId, t=tenantId, p=platform, i=nonce, exp)،
-   والتحقق يتم بمطابقة التوقيع + عدم انتهاء exp. منع إعادة الاستخدام لم يعد مطلوبًا للأمان
-   ضد CSRF (التوقيع هو الضامن)، وcode نفسه يُستهلك لدى Meta ولا يعمل إلا مرة واحدة. */
+/* ═══════════ state: توقيع HMAC ثابت-المصدر + سجل استهلاك واحد — آمن مع تعدد النسخ/restart/إعادة النشر ═══════════
+   التصميم الأول كان يخزن state في Map داخل عملية Node الواحدة — يفشل عند تعدد النسخ/restart.
+   التصميم الثاني (HMAC فقط) أثبت فشله الميداني: كل deploy يعيد توليد META_APP_STATE_SECRET
+   (كان يسقط إلى crypto.randomBytes) فتصبح كل states ما قبل النشر غير قابلة للتحقق → oauth_state.
+   الحل النهائي:
+   1) السر يُشتق حصريًا من META_APP_SECRET الثابت في Railway (لا sources متذبذبة).
+   2) السجل الوحيد الموثوق لعدم إعادة الاستخدام/الإبطال هو جدول meta_oauth_states في Supabase
+      — مشترك بين كل النسخ، ويصمد أمام restarts وإعادة النشر. */
 
 type OAuthStatePayload = {
   u: string; // userId
   t: string; // tenantId
   p: string; // platform
-  i: string; // nonce عشوائي (لتمييز الجلسات في اللوجات)
+  i: string; // nonce مطابق لعمود id في meta_oauth_states
   exp: number; // unix seconds
 };
 
 const STATE_TTL_SEC = 15 * 60;
 
 function stateSecret(): string {
-  const secret = process.env.META_APP_STATE_SECRET || process.env.FIELD_ENCRYPTION_KEY || process.env.META_APP_SECRET || "";
-  if (!secret) throw new Error("لا يوجد سر لتوقيع state — اضبط FIELD_ENCRYPTION_KEY أو META_APP_STATE_SECRET");
+  const secret = process.env.META_APP_SECRET || "";
+  if (!secret) throw new Error("META_APP_SECRET مفقود — لا يمكن توقيع/التحقق من OAuth state");
   return secret;
 }
 
@@ -110,43 +111,98 @@ function hmacSign(body: string): string {
   return crypto.createHmac("sha256", stateSecret()).update(body).digest("base64url");
 }
 
-/** إنشاء state موقّع مرتبط بالمستخدم والـ tenant — بلا تخزين في الذاكرة */
-function createOAuthState(rec: { platform: string; tenantId: string; userId: string }): string {
+/** إنشاء state موقّع + تسجيله في قاعدة البيانات (السجل الوحيد للاستهلاك) */
+async function createOAuthState(rec: {
+  platform: string;
+  tenantId: string;
+  userId: string;
+}): Promise<{ state: string; nonce: string } | null> {
+  const nonce = crypto.randomBytes(12).toString("hex");
   const payload: OAuthStatePayload = {
     u: rec.userId,
     t: rec.tenantId,
     p: rec.platform,
-    i: crypto.randomBytes(8).toString("hex"),
+    i: nonce,
     exp: Math.floor(Date.now() / 1000) + STATE_TTL_SEC,
   };
   const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
-  return `${body}.${hmacSign(body)}`;
+  const state = `${body}.${hmacSign(body)}`;
+
+  const expiresAt = new Date(payload.exp * 1000).toISOString();
+  const { error } = await db.from("meta_oauth_states").insert({
+    id: nonce,
+    user_id: rec.userId,
+    tenant_id: rec.tenantId,
+    platform: rec.platform,
+    expires_at: expiresAt,
+    consumed: false,
+  });
+  if (error) {
+    // إن كان الجدول غير منشأ بعد — نتابع بوضع HMAC-only (توافق خلفي) مع تحذير واضح
+    console.warn("[Meta Auth] meta_oauth_states insert failed (يتطلب migration 0007):", error.message);
+  }
+  return { state, nonce };
 }
 
-/** التحقق من التوقيع وعدم الانتهاء — يعيد بيانات الجلسة أو null */
-function consumeOAuthState(state: string): { platform: string; tenantId: string; userId: string } | null {
+/** التحقق من التوقيع + عدم الانتهاء + الاستهلاك لمرة واحدة من قاعدة البيانات.
+ *  يعيد { ok:true, session } أو { ok:false, reason } — السبب يُسجل ويُعاد للواجهة للتشخيص. */
+async function consumeOAuthState(
+  state: string
+): Promise<{ ok: true; session: { platform: string; tenantId: string; userId: string } } | { ok: false; reason: string }> {
+  let decoded: Partial<OAuthStatePayload> | null = null;
   try {
     const dot = state.lastIndexOf(".");
-    if (dot <= 0) return null;
+    if (dot <= 0) return { ok: false, reason: "state_format" };
     const body = state.slice(0, dot);
     const sig = state.slice(dot + 1);
     const expected = hmacSign(body);
     if (sig.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected)))
-      return null;
-    const decoded = JSON.parse(Buffer.from(body, "base64url").toString()) as Partial<OAuthStatePayload>;
-    if (!decoded?.u || !decoded?.t || !decoded?.p || !decoded?.exp) return null;
-    if (Math.floor(Date.now() / 1000) > decoded.exp) return null; // منتهي الصلاحية
-    if (decoded.p !== "facebook" && decoded.p !== "instagram") return null;
-    return { userId: decoded.u, tenantId: decoded.t, platform: decoded.p };
+      return { ok: false, reason: "state_signature" };
+    decoded = JSON.parse(Buffer.from(body, "base64url").toString()) as Partial<OAuthStatePayload>;
+    if (!decoded?.u || !decoded?.t || !decoded?.p || !decoded?.exp) return { ok: false, reason: "state_payload" };
+    if (decoded.p !== "facebook" && decoded.p !== "instagram") return { ok: false, reason: "state_platform" };
   } catch {
-    return null;
+    return { ok: false, reason: "state_parse" };
   }
+
+  if (Math.floor(Date.now() / 1000) > decoded!.exp!) return { ok: false, reason: "state_expired" };
+
+  // الاستهلاك لمرة واحدة من السجل المشترك (يعمل عبر كل النسخ وعمليات النشر)
+  const { data: row, error: selErr } = await db
+    .from("meta_oauth_states")
+    .select("id, consumed")
+    .eq("id", decoded!.i!)
+    .maybeSingle();
+  if (selErr) {
+    // تعذر قراءة الجدول (غير منشأ) — نتجاهل فحص الاستهلاك ونقبل state صالح التوقيع
+    console.warn("[Meta Auth] meta_oauth_states select failed — تجاهل فحص الاستهلاك:", selErr.message);
+  } else if (!row) {
+    // الجدول منشأ لكن السجل غير موجود (مثلاً state أُنشئ قبل تطبيق migration) — نتجاهل الفحص بحذر
+    console.warn("[Meta Auth] meta_oauth_states: no record for nonce — تجاهل فحص الاستهلاك");
+  } else if (row.consumed) {
+    return { ok: false, reason: "state_reused" };
+  } else {
+    const { error: updErr } = await db
+      .from("meta_oauth_states")
+      .update({ consumed: true })
+      .eq("id", decoded!.i!)
+      .eq("consumed", false);
+    if (updErr) console.warn("[Meta Auth] mark consumed failed:", updErr.message);
+  }
+
+  return { ok: true, session: { userId: decoded!.u!, tenantId: decoded!.t!, platform: decoded!.p! } };
 }
 
-/* تحقق الملكية عبر bearer token (نفس نمط requireAuth في channels.ts) */
+/* تحقق الملكية عبر bearer token.
+   ملاحظة: تدفق OAuth الحالي في الواجهة يستخدم POST + Authorization header (apiAuthFetch)،
+   لكن لدعم أي فتح مباشر للرابط (GET مع ?t=<token>) نقرأ التوكن من query أيضًا. */
 async function requireUser(req: any, res: any, next: any) {
   const header = String(req.headers.authorization ?? "");
-  const token = header.startsWith("Bearer ") ? header.slice(7) : null;
+  const token = header.startsWith("Bearer ")
+    ? header.slice(7)
+    : req.requestMethod === "GET"
+      ? String(req.query?.t ?? "") || null
+      : null;
   if (!token) return res.status(401).json({ error: "غير مصرح" });
   try {
     const { data, error } = await authClient.auth.getUser(token);
@@ -170,20 +226,32 @@ protectedRoutes.use(requireUser);
    فكان callback يحصل على 401 {"error":"غير مصرح"} قبل تنفيذ معالجه. */
 metaAuthRouter.get("/facebook/callback", async (req: any, res) => {
   const frontBase = frontendDashboardUrl();
-  const fail = (code: string) =>
-    res.redirect(`${frontBase}?channel_error=${encodeURIComponent(code)}`);
+  const fail = (code: string) => {
+    console.warn("[Meta Auth] callback FAILED →", code);
+    return res.redirect(`${frontBase}?channel_error=${encodeURIComponent(code)}`);
+  };
+
+  console.log("[Meta Auth] callback ENTERED — params:", Object.keys(req.query ?? {}));
 
   const { code, state, error: metaError } = req.query as Record<string, string>;
   if (metaError) return fail(metaError === "access_denied" ? "user_cancelled" : metaError);
   if (!code || !state) return fail("missing_params");
 
-  const session = consumeOAuthState(String(state));
-  if (!session) return fail("oauth_state");
+  const stateResult = await consumeOAuthState(String(state));
+  if (!stateResult.ok) return fail(`oauth_state:${stateResult.reason}`);
 
-  const { platform, tenantId, userId } = session;
+  const { platform, tenantId, userId } = stateResult.session;
+  console.log("[Meta Auth] callback state OK — platform:", platform, "nonce verified");
+
   const appId = process.env.META_APP_ID!;
   const appSecret = process.env.META_APP_SECRET!;
-  const redirectUri = buildMetaCallbackUrl();
+  let redirectUri: string;
+  try {
+    redirectUri = buildMetaCallbackUrl();
+  } catch (e: any) {
+    console.error("[Meta Auth] redirect_uri build failed:", e?.message);
+    return fail("config_redirect_uri");
+  }
 
   console.log("[Meta Auth] OAuth callback → redirect_uri:", redirectUri, "platform:", platform);
 
@@ -195,8 +263,9 @@ metaAuthRouter.get("/facebook/callback", async (req: any, res) => {
     const tokenData: any = await tokenRes.json();
     if (!tokenData.access_token) {
       console.error("[Meta Auth] token exchange failed:", tokenData?.error?.message ?? "unknown");
-      throw new Error("رفضت Meta تبادل الرمز — تحقق من مطابقة redirect_uri وإعداد التطبيق.");
+      return fail("oauth_token_exchange");
     }
+    console.log("[Meta Auth] token exchange OK");
 
     // تحويل إلى long-lived
     let accessToken = tokenData.access_token;
@@ -219,6 +288,8 @@ metaAuthRouter.get("/facebook/callback", async (req: any, res) => {
     const pagesRes = await fetch(`${GRAPH_API}/me/accounts?fields=id,name,picture&access_token=${accessToken}`);
     const pagesData: any = await pagesRes.json();
     const pages: any[] = pagesData.data ?? [];
+    console.log("[Meta Auth] /me/accounts → pages:", pages.length, pages.map((p) => p?.id).join(","));
+    if (pagesData.error) console.error("[Meta Auth] /me/accounts error:", pagesData.error?.message ?? "unknown");
 
     let saved = 0;
     let lastAccountName = "";
@@ -255,6 +326,7 @@ metaAuthRouter.get("/facebook/callback", async (req: any, res) => {
         );
         const ig: any = await igRes.json();
         const igAcc = ig?.instagram_user_account ?? ig?.instagram_business_account;
+        console.log(`[Meta Auth] page ${p.id} IG discovery:`, igAcc?.id ? `found ${igAcc.username ?? igAcc.id}` : `not found (${ig?.error?.message ?? "no linked account"})`);
         if (!igAcc?.id) continue; // غير مؤهل — لا نحفظ حسابات شخصية
 
         const username = igAcc.username ? `@${igAcc.username}` : ig?.name ?? null;
@@ -296,9 +368,13 @@ metaAuthRouter.get("/facebook/callback", async (req: any, res) => {
         if (!error) {
           saved += 1;
           lastAccountName = username ?? lastAccountName;
+        } else {
+          console.error("[Meta Auth] channel_accounts upsert FAILED:", error.message);
         }
       }
     }
+
+    console.log("[Meta Auth] callback done — accounts saved:", saved, "platform:", platform);
 
     if (saved === 0) {
       return fail(
@@ -354,12 +430,14 @@ metaAuthRouter.post("/facebook/start", async (req: any, res) => {
   let state: string;
   try {
     redirectUri = buildMetaCallbackUrl();
-    state = createOAuthState({ platform, tenantId: tenant.id, userId: req.userId });
+    const st = await createOAuthState({ platform, tenantId: tenant.id, userId: req.userId });
+    if (!st) throw new Error("تعذر إنشاء جلسة OAuth");
+    state = st.state;
   } catch (e: any) {
     console.error("[Meta Auth] إعداد OAuth غير صالح:", e?.message);
     return res.status(500).json({
       error: "oauth_misconfigured",
-      message: "إعداد PUBLIC_URL غير صحيح على الخادم (يجب أن يكون https بلا مسار).",
+      message: "إعداد PUBLIC_URL/الأسرار غير صحيحة على الخادم.",
     });
   }
 
