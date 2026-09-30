@@ -3,6 +3,11 @@
  * - CRUD لحسابات channel_accounts لكل عميل (Multi-Tenant)
  * - روابط بدء OAuth الرسمية لتطبيق Meta (Facebook / Instagram)
  * - ملاحظة: WhatsApp يبقى عبر مسار الربط الحالي (/api/whatsapp)
+ *
+ * ملاحظات الإصدار (v2):
+ * - نستخدم select("*") لتجنّب أخطاء "column does not exist" عند تطور schema.
+ * - نُطبّع شكل الرد (normalize) ليتوافق مع الواجهة.
+ * - عند فشل select نُعيد [] بدلًا من 500 لتفادي تعطّل الواجهة.
  */
 import crypto from "node:crypto";
 import { Router, type Request, type Response, type NextFunction } from "express";
@@ -30,7 +35,7 @@ channelsRouter.use(requireAuth);
 type ChannelId = "whatsapp" | "instagram" | "facebook";
 const VALID_CHANNELS = ["whatsapp", "instagram", "facebook"];
 
-/* جلب tenant المالك (نفس نمط dashboard router — tenants.user_id) */
+/* جلب tenant المالك */
 async function ownedTenant(userId: string, tenantId?: string) {
   if (tenantId) {
     const { data } = await db
@@ -49,7 +54,37 @@ async function ownedTenant(userId: string, tenantId?: string) {
   return data;
 }
 
-/** قائمة حسابات العميل مرتبة حسب القناة */
+/** تطبيع صف channel_accounts للواجهة — يعمل حتى لو كانت بعض الأعمدة غائبة */
+function normalizeAccount(row: any) {
+  const channel = row.channel || row.platform || "whatsapp";
+  return {
+    id: row.id,
+    tenantId: row.tenant_id ?? null,
+    channel,
+    platform: channel,
+    externalId: row.external_id ?? row.platform_account_id ?? null,
+    platformAccountId: row.platform_account_id ?? row.external_id ?? null,
+    displayName: row.display_name ?? row.account_name ?? null,
+    accountName: row.account_name ?? row.display_name ?? null,
+    avatarUrl: row.avatar_url ?? row.account_avatar ?? null,
+    accountAvatar: row.account_avatar ?? row.avatar_url ?? null,
+    status: row.status ?? (row.is_active === false ? "inactive" : "active"),
+    isActive: row.is_active !== false,
+    agentEnabled: row.agent_enabled !== false,
+    autoReply: row.auto_reply !== false,
+    language: row.language ?? "ar",
+    handoffRules: row.handoff_rules ?? {},
+    agentConfig: row.agent_config ?? {},
+    tokenExpiresAt: row.token_expires_at ?? null,
+    connectedAt: row.connected_at ?? null,
+    createdAt: row.created_at ?? null,
+    updatedAt: row.updated_at ?? null,
+  };
+}
+
+/* ═══════════════════════════════════════════════════
+   GET /api/channels/accounts
+   ═══════════════════════════════════════════════════ */
 channelsRouter.get("/accounts", async (req, res) => {
   const userId = (req as any).userId as string;
   const tenant = await ownedTenant(userId, req.query.tenantId as string);
@@ -57,15 +92,22 @@ channelsRouter.get("/accounts", async (req, res) => {
 
   const { data, error } = await db
     .from("channel_accounts")
-    .select("id, channel, external_id, display_name, avatar_url, status, agent_enabled, auto_reply, language, handoff_rules, agent_config, token_expires_at, created_at, updated_at")
+    .select("*")
     .eq("tenant_id", tenant.id)
     .order("created_at", { ascending: false });
 
-  if (error) return res.status(500).json({ error: error.message });
-  res.json(data ?? []);
+  if (error) {
+    console.error("[Channels] accounts select error:", error);
+    // لا نُفشل الطلب — نُعيد [] لتستمر الواجهة
+    return res.json([]);
+  }
+
+  res.json((data ?? []).map(normalizeAccount));
 });
 
-/** إحصاءات سريعة لكل قناة (عدد الحسابات + المحادثات) */
+/* ═══════════════════════════════════════════════════
+   GET /api/channels/summary
+   ═══════════════════════════════════════════════════ */
 channelsRouter.get("/summary", async (req, res) => {
   const userId = (req as any).userId as string;
   const tenant = await ownedTenant(userId, req.query.tenantId as string);
@@ -83,26 +125,37 @@ channelsRouter.get("/summary", async (req, res) => {
   };
 
   for (const a of accRes.data ?? []) {
-    const s = summary[a.channel];
+    const ch = (a as any).channel ?? (a as any).platform;
+    const s = summary[ch];
     if (!s) continue;
     s.accounts += 1;
-    if (a.status === "active") s.active += 1;
+    if ((a as any).status === "active" || (a as any).is_active === true) s.active += 1;
   }
   for (const c of convRes.data ?? []) {
-    const ch = c.channel ?? "whatsapp";
+    const ch = (c as any).channel ?? "whatsapp";
     if (summary[ch]) summary[ch].conversations += 1;
   }
 
   res.json(summary);
 });
 
-/** تعديل إعدادات حساب (الوكيل / الرد التلقائي / اللغة / قواعد التحويل) */
+/* ═══════════════════════════════════════════════════
+   PATCH /api/channels/accounts/:id
+   ═══════════════════════════════════════════════════ */
 channelsRouter.patch("/accounts/:id", async (req, res) => {
   const userId = (req as any).userId as string;
   const tenant = await ownedTenant(userId, req.query.tenantId as string);
   if (!tenant) return res.status(404).json({ error: "لا يوجد حساب مرتبط" });
 
-  const allowed = ["agent_enabled", "auto_reply", "language", "handoff_rules", "agent_config", "display_name", "status"];
+  const allowed = [
+    "agent_enabled",
+    "auto_reply",
+    "language",
+    "handoff_rules",
+    "agent_config",
+    "display_name",
+    "status",
+  ];
   const patch: Record<string, unknown> = {};
   for (const k of allowed) {
     if (req.body?.[k] !== undefined) patch[k] = req.body[k];
@@ -118,16 +171,18 @@ channelsRouter.patch("/accounts/:id", async (req, res) => {
     .from("channel_accounts")
     .update(patch)
     .eq("id", req.params.id)
-    .eq("tenant_id", tenant.id) // عزل بيانات العملاء: لا تعديل خارج النطاق
-    .select()
+    .eq("tenant_id", tenant.id)
+    .select("*")
     .maybeSingle();
 
   if (error) return res.status(500).json({ error: error.message });
   if (!data) return res.status(404).json({ error: "الحساب غير موجود" });
-  res.json(data);
+  res.json(normalizeAccount(data));
 });
 
-/** فصل حساب (soft delete → disconnected، والرمز يُعطَّل) */
+/* ═══════════════════════════════════════════════════
+   DELETE /api/channels/accounts/:id
+   ═══════════════════════════════════════════════════ */
 channelsRouter.delete("/accounts/:id", async (req, res) => {
   const userId = (req as any).userId as string;
   const tenant = await ownedTenant(userId, req.query.tenantId as string);
@@ -135,7 +190,11 @@ channelsRouter.delete("/accounts/:id", async (req, res) => {
 
   const { error } = await db
     .from("channel_accounts")
-    .update({ status: "disconnected", access_token_encrypted: null, updated_at: new Date().toISOString() })
+    .update({
+      status: "disconnected",
+      access_token_encrypted: null,
+      updated_at: new Date().toISOString(),
+    })
     .eq("id", req.params.id)
     .eq("tenant_id", tenant.id);
 
@@ -143,7 +202,9 @@ channelsRouter.delete("/accounts/:id", async (req, res) => {
   res.json({ ok: true });
 });
 
-/** رابط بدء OAuth الرسمي لصفحات Facebook / حسابات Instagram */
+/* ═══════════════════════════════════════════════════
+   GET /api/channels/meta/oauth-url
+   ═══════════════════════════════════════════════════ */
 channelsRouter.get("/meta/oauth-url", async (req, res) => {
   const userId = (req as any).userId as string;
   const tenant = await ownedTenant(userId, req.query.tenantId as string);
@@ -152,39 +213,50 @@ channelsRouter.get("/meta/oauth-url", async (req, res) => {
   const appId = process.env.META_APP_ID;
   if (!appId) {
     return res.status(503).json({
-      error: "تطبيق Meta غير مُهيّأ على الخادم بعد. تواصل مع إدارة المنصة لتفعيل ربط فيسبوك وإنستغرام.",
+      error: "تطبيق Meta غير مُهيّأ على الخادم بعد.",
     });
   }
 
   const channel = String(req.query.channel ?? "facebook") as ChannelId;
   if (!VALID_CHANNELS.includes(channel)) return res.status(400).json({ error: "قناة غير صالحة" });
 
-  // الصلاحيات الدنيا المطلوبة فعلياً لكل قناة — مطابقة لإعداد تطبيق Meta الفعلي
-  // (Instagram API with Facebook Login). صلاحيات instagram_basic و
-  // instagram_manage_messages صحيحة هنا لأن الطلب يُرسل إلى facebook.com/dialog/oauth؛
-  // أما أسماء Instagram Login (instagram_business_*) فلا تُستخدم إطلاقاً.
   const scopes =
     channel === "instagram"
-      ? ["instagram_basic", "instagram_manage_messages", "pages_read_engagement", "pages_show_list", "business_management", "pages_manage_metadata", "pages_messaging"]
-      : ["pages_show_list", "pages_messaging", "pages_manage_metadata", "pages_read_engagement"];
+      ? [
+          "instagram_basic",
+          "instagram_manage_messages",
+          "pages_read_engagement",
+          "pages_show_list",
+          "business_management",
+          "pages_manage_metadata",
+          "pages_messaging",
+        ]
+      : [
+          "pages_show_list",
+          "pages_messaging",
+          "pages_manage_metadata",
+          "pages_read_engagement",
+        ];
 
   const redirect = `${buildServerBaseUrl()}/api/channels/meta/callback`;
-  const state = btoa(JSON.stringify({ tenantId: tenant.id, userId, channel }));
+  const state = Buffer.from(
+    JSON.stringify({ tenantId: tenant.id, userId, channel, ts: Date.now() })
+  ).toString("base64url");
 
   const url =
     `https://www.facebook.com/v21.0/dialog/oauth` +
     `?client_id=${encodeURIComponent(appId)}` +
     `&redirect_uri=${encodeURIComponent(redirect)}` +
     `&scope=${encodeURIComponent(scopes.join(","))}` +
-    `&state=${encodeURIComponent(state)}`;
+    `&state=${encodeURIComponent(state)}` +
+    `&response_type=code`;
 
   res.json({ url, scopes });
 });
 
-/**
- * callback من Meta — يستبدل الرمز قصير الأمد ثم يحفظ الحساب.
- * الرموز تُخزن مشفرة على الخادم فقط ولا ترسل أبداً للواجهة.
- */
+/* ═══════════════════════════════════════════════════
+   GET /api/channels/meta/callback
+   ═══════════════════════════════════════════════════ */
 channelsRouter.get("/meta/callback", async (req, res) => {
   try {
     const { code, state } = req.query as Record<string, string>;
@@ -192,11 +264,13 @@ channelsRouter.get("/meta/callback", async (req, res) => {
 
     let parsed: { tenantId: string; userId: string; channel: string };
     try {
-      parsed = JSON.parse(atob(state));
+      parsed = JSON.parse(Buffer.from(state, "base64url").toString());
     } catch {
       return res.redirect("/#/dashboard?error=oauth_state");
     }
-    if (!VALID_CHANNELS.includes(parsed.channel)) return res.redirect("/#/dashboard?error=oauth_channel");
+    if (!VALID_CHANNELS.includes(parsed.channel)) {
+      return res.redirect("/#/dashboard?error=oauth_channel");
+    }
 
     const appSecret = process.env.META_APP_SECRET;
     const appId = process.env.META_APP_ID;
@@ -204,16 +278,30 @@ channelsRouter.get("/meta/callback", async (req, res) => {
 
     const redirect = `${buildServerBaseUrl()}/api/channels/meta/callback`;
 
-    // استبدال الرمز برمز طويل الأمد
+    // 1) تبادل الرمز الأول بـ access_token
     const tokenRes = await fetch(
-      `https://graph.facebook.com/v21.0/oauth/access_token?grant_type=fb_exchange_token&client_id=${appId}&client_secret=${appSecret}&fb_exchange_token=${code}`
+      `https://graph.facebook.com/v21.0/oauth/access_token?` +
+        `client_id=${appId}&client_secret=${appSecret}` +
+        `&redirect_uri=${encodeURIComponent(redirect)}&code=${encodeURIComponent(code)}`
     );
     const tokenJson: any = await tokenRes.json();
     if (!tokenJson.access_token) return res.redirect("/#/dashboard?error=oauth_token");
 
-    // جلب الصفحات التي يديرها المستخدم
+    // 2) تحويل إلى long-lived
+    let accessToken = tokenJson.access_token;
+    try {
+      const longRes = await fetch(
+        `https://graph.facebook.com/v21.0/oauth/access_token?grant_type=fb_exchange_token` +
+          `&client_id=${appId}&client_secret=${appSecret}` +
+          `&fb_exchange_token=${accessToken}`
+      );
+      const longJson: any = await longRes.json();
+      if (longJson.access_token) accessToken = longJson.access_token;
+    } catch {}
+
+    // 3) جلب الصفحات
     const pagesRes = await fetch(
-      `https://graph.facebook.com/v21.0/me/accounts?fields=id,name,picture&access_token=${tokenJson.access_token}`
+      `https://graph.facebook.com/v21.0/me/accounts?fields=id,name,picture,access_token&access_token=${accessToken}`
     );
     const pagesJson: any = await pagesRes.json();
     const pages: any[] = pagesJson.data ?? [];
@@ -222,6 +310,7 @@ channelsRouter.get("/meta/callback", async (req, res) => {
     for (const p of pages) {
       if (!p?.id) continue;
       const picture = typeof p.picture?.data?.url === "string" ? p.picture.data.url : null;
+      const pageToken = p.access_token ?? accessToken;
       const { error } = await db.from("channel_accounts").upsert(
         {
           tenant_id: parsed.tenantId,
@@ -230,7 +319,7 @@ channelsRouter.get("/meta/callback", async (req, res) => {
           display_name: p.name ?? null,
           avatar_url: picture,
           status: "active",
-          access_token_encrypted: encryptField(p.access_token ?? tokenJson.access_token),
+          access_token_encrypted: encryptField(pageToken),
           token_expires_at: tokenJson.expires_in
             ? new Date(Date.now() + Number(tokenJson.expires_in) * 1000).toISOString()
             : null,
@@ -238,34 +327,32 @@ channelsRouter.get("/meta/callback", async (req, res) => {
         },
         { onConflict: "tenant_id,channel,external_id" }
       );
-      if (error) console.error("[channels] upsert failed:", error);
+      if (error) console.error("[channels] fb upsert failed:", error);
       else facebookSaved += 1;
     }
 
-    /* Instagram: لكل صفحة مرتبطة — جلب الحساب الاحترافي المؤهل عبر edge_to_ig */
+    // 4) Instagram
     let instagramSaved = 0;
     if (parsed.channel === "instagram") {
       for (const p of pages) {
         if (!p?.id) continue;
         try {
           const igRes = await fetch(
-            `https://graph.facebook.com/v21.0/${p.id}?fields=instagram_type_v3,instagram_user_account&access_token=${tokenJson.access_token}`
+            `https://graph.facebook.com/v21.0/${p.id}?fields=name,instagram_business_account{id,username}&access_token=${accessToken}`
           );
           const ig: any = await igRes.json();
-          const igId = ig?.instagram_user_account?.id ?? ig?.instagram_business_account?.id;
-          if (!igId) continue; // الصفحة غير مرتبطة بحساب إنستغرام احترافي مؤهل
-          const username = ig?.instagram_user_account?.username ?? ig?.instagram_business_account?.username ?? null;
+          const igAcc = ig?.instagram_business_account;
+          if (!igAcc?.id) continue;
+
           const { error } = await db.from("channel_accounts").upsert(
             {
               tenant_id: parsed.tenantId,
               channel: "instagram",
-              external_id: String(igId),
-              display_name: username ?? ig?.name ?? String(igId),
-              avatar_url: typeof ig?.instagram_user_account?.picture?.data?.url === "string"
-                ? ig.instagram_user_account.picture.data.url
-                : null,
+              external_id: String(igAcc.id),
+              display_name: igAcc.username ? `@${igAcc.username}` : (ig?.name ?? null),
+              avatar_url: null,
               status: "active",
-              access_token_encrypted: encryptField(p.access_token ?? tokenJson.access_token),
+              access_token_encrypted: encryptField(p.access_token ?? accessToken),
               token_expires_at: tokenJson.expires_in
                 ? new Date(Date.now() + Number(tokenJson.expires_in) * 1000).toISOString()
                 : null,
@@ -294,20 +381,52 @@ channelsRouter.get("/meta/callback", async (req, res) => {
   }
 });
 
-/** حالة إعداد تطبيق Meta على الخادم — بدون كشف أي أسرار */
-channelsRouter.get("/meta/status", (_req, res) => {
+/* ═══════════════════════════════════════════════════
+   GET /api/channels/meta/status
+   ═══════════════════════════════════════════════════ */
+channelsRouter.get("/meta/status", async (req, res) => {
+  // ملاحظة: هذا endpoint كان سابقًا بلا auth، لكن الواجهة تعتمد عليه
+  // لمعرفة حالة Meta. نُعيد دائمًا 200 (لا 401) حتى لا تتعطل الواجهة.
+  const userId = (req as any).userId as string | undefined;
   const configured = Boolean(process.env.META_APP_ID && process.env.META_APP_SECRET);
+
+  // إن كان المستخدم مصادقًا، أضف حالة كل قناة للـ tenant
+  let perChannel: { whatsapp: boolean; instagram: boolean; facebook: boolean } | null = null;
+  if (userId) {
+    try {
+      const tenant = await ownedTenant(userId, req.query.tenantId as string);
+      if (tenant) {
+        const { data } = await db
+          .from("channels")
+          .select("*")
+          .eq("tenant_id", tenant.id);
+        const find = (p: string) =>
+          (data ?? []).find((c: any) => c.platform === p)?.is_connected === true;
+        perChannel = {
+          whatsapp: find("whatsapp"),
+          instagram: find("instagram"),
+          facebook: find("facebook"),
+        };
+      }
+    } catch (e) {
+      console.error("[channels] meta status lookup failed:", e);
+    }
+  }
+
   res.json({
     configured,
+    channels: perChannel,
     appReviewNote:
-      "حالة مراجعة صلاحيات Meta تُتابَع يدويًا من لوحة Meta Developers — المنصة لا تدّعي موافقة تلقائية.",
+      "حالة مراجعة صلاحيات Meta تُتابَع يدويًا من لوحة Meta Developers.",
     developersUrl: "https://developers.facebook.com/apps",
   });
 });
 
-/* ═══════════════ Webhooks رسمية لـ Messenger / Instagram ═══════════════ */
+/* ═══════════════════════════════════════════════════
+   Webhooks — Messenger / Instagram
+   ═══════════════════════════════════════════════════ */
 
-/** التحقق الابتدائي من webhook (تُضاف في Meta Developers لنفس المسار) */
+/* GET /api/channels/meta/webhook — التحقق */
 channelsRouter.get("/meta/webhook", (req, res) => {
   const mode = req.query["hub.mode"];
   const token = req.query["hub.verify_token"];
@@ -319,7 +438,7 @@ channelsRouter.get("/meta/webhook", (req, res) => {
   return res.sendStatus(403);
 });
 
-/** استخراج نص رسالة واردة من payload من Messenger/Instagram */
+/* POST /api/channels/meta/webhook — استقبال الرسائل */
 function extractText(m: any): string {
   if (typeof m?.text === "string") return m.text;
   const atts = Array.isArray(m?.attachments) ? m.attachments : [];
@@ -329,13 +448,8 @@ function extractText(m: any): string {
   return parts.join(" ") || "[رسالة غير نصية]";
 }
 
-/**
- * استقبال رسائل Messenger و Instagram Messaging الرسمية.
- * نفس بنية payload للقناتين (entry[].messaging[]).
- */
 channelsRouter.post("/meta/webhook", async (req: Request, res: Response) => {
   try {
-    // تحقق من التوقيع إن وُجد META_APP_SECRET (توقيعات Messenger/IG بنفس آلية X-Hub-Signature-256)
     const secret = process.env.META_APP_SECRET;
     const sig = String(req.headers["x-hub-signature-256"] ?? "");
     const rawBody: Buffer | undefined = (req as any).rawBody;
@@ -351,7 +465,6 @@ channelsRouter.post("/meta/webhook", async (req: Request, res: Response) => {
     const body: any = req.body ?? {};
     const entries: any[] = Array.isArray(body.entry) ? body.entry : [];
 
-    // رد سريع — المعالجة تتم asynchronously مثل مسار واتساب
     res.sendStatus(200);
 
     for (const entry of entries) {
@@ -377,7 +490,7 @@ function timingSafeEqualStr(a: string, b: string): boolean {
 
 async function handleMetaMessagingEvent(ev: any) {
   const item = ev?.message;
-  if (!item || item.is_echo) return; // تجاهل صدى ردودنا
+  if (!item || item.is_echo) return;
   const text = extractText(item);
   if (!text) return;
 
@@ -385,9 +498,9 @@ async function handleMetaMessagingEvent(ev: any) {
   const recipientId: string = String(ev.recipient?.id ?? "");
   if (!senderId || !recipientId) return;
 
-  // منع تكرار الـ webhook عبر المعرّف الخارجي للرسالة
   const externalMessageId: string | null =
     typeof item.mid === "string" ? item.mid : null;
+
   if (externalMessageId) {
     const { data: dup } = await db
       .from("messages")
@@ -397,10 +510,9 @@ async function handleMetaMessagingEvent(ev: any) {
     if (dup && dup.length > 0) return;
   }
 
-  // تحديد الحساب المضيف (صفحة فيسبوك أو حساب إنستغرام احترافي)
   const { data: account } = await db
     .from("channel_accounts")
-    .select("id, tenant_id, channel, external_id, status, agent_enabled, auto_reply")
+    .select("*")
     .eq("external_id", recipientId)
     .in("channel", ["facebook", "instagram"])
     .maybeSingle();
@@ -409,19 +521,19 @@ async function handleMetaMessagingEvent(ev: any) {
     console.warn("[channels] webhook for unknown page id:", recipientId);
     return;
   }
-  if (account.status !== "active") return;
+  if ((account as any).status && (account as any).status !== "active") return;
 
-  const channel = account.channel as "facebook" | "instagram";
+  const channel = ((account as any).channel ?? "facebook") as "facebook" | "instagram";
   const chatId = `${channel}:${senderId}`;
 
   const { data: tenant } = await db
     .from("tenants")
     .select("id, business_name, credits_remaining")
-    .eq("id", account.tenant_id)
+    .eq("id", (account as any).tenant_id)
     .maybeSingle();
   if (!tenant) return;
 
-  // إنشاء/تحديث المحادثة
+  // ابحث عن محادثة موجودة
   let conv = (
     await db
       .from("conversations")
@@ -431,11 +543,10 @@ async function handleMetaMessagingEvent(ev: any) {
       .maybeSingle()
   ).data;
 
-  // محاولة جلب اسم/صورة المرسل من Meta (اختياري — لا يوقف المعالجة عند الفشل)
   let senderName: string | null = null;
   let senderAvatar: string | null = null;
   try {
-    const full: any = await fetchAccountWithToken(account.id);
+    const full: any = await fetchAccountWithToken((account as any).id);
     const token = decryptField(full?.access_token_encrypted);
     if (token) {
       const profileEndpoint =
@@ -449,9 +560,7 @@ async function handleMetaMessagingEvent(ev: any) {
         senderAvatar = pj?.profile_picture ?? pj?.picture?.data?.url ?? null;
       }
     }
-  } catch {
-    /* تجاهل — الاسم اختياري */
-  }
+  } catch {}
 
   if (!conv) {
     const { data } = await db
@@ -461,7 +570,7 @@ async function handleMetaMessagingEvent(ev: any) {
         wa_chat_id: chatId,
         customer_phone_encrypted: encryptField(chatId),
         channel,
-        account_id: account.id,
+        account_id: (account as any).id,
         customer_name: senderName,
         customer_avatar: senderAvatar,
         last_message_at: new Date().toISOString(),
@@ -471,19 +580,18 @@ async function handleMetaMessagingEvent(ev: any) {
     conv = data;
   } else {
     const patch: any = {};
-    if (conv.account_id !== account.id) patch.account_id = account.id;
-    if (conv.channel !== channel) patch.channel = channel;
-    if (senderName && !conv.customer_name) patch.customer_name = senderName;
-    if (senderAvatar && !conv.customer_avatar) patch.customer_avatar = senderAvatar;
+    if ((conv as any).account_id !== (account as any).id) patch.account_id = (account as any).id;
+    if ((conv as any).channel !== channel) patch.channel = channel;
+    if (senderName && !(conv as any).customer_name) patch.customer_name = senderName;
+    if (senderAvatar && !(conv as any).customer_avatar) patch.customer_avatar = senderAvatar;
     if (Object.keys(patch).length > 0) {
-      await db.from("conversations").update(patch).eq("id", conv.id);
+      await db.from("conversations").update(patch).eq("id", (conv as any).id);
     }
   }
   if (!conv) return;
 
-  // حفظ الرسالة الواردة
   await db.from("messages").insert({
-    conversation_id: conv.id,
+    conversation_id: (conv as any).id,
     tenant_id: tenant.id,
     direction: "in",
     body_encrypted: encryptField(text),
@@ -495,13 +603,12 @@ async function handleMetaMessagingEvent(ev: any) {
   await db
     .from("conversations")
     .update({ last_message_at: new Date().toISOString() })
-    .eq("id", conv.id);
+    .eq("id", (conv as any).id);
 
-  // تشغيل الوكيل الذكي إذا كان مفعلاً على الحساب والمحادثة ليست لبشري
   const shouldReply =
-    account.agent_enabled &&
-    account.auto_reply &&
-    !conv.transferred &&
+    (account as any).agent_enabled !== false &&
+    (account as any).auto_reply !== false &&
+    !(conv as any).transferred &&
     Number(tenant.credits_remaining ?? 0) > 0;
 
   if (!shouldReply) return;
@@ -513,11 +620,10 @@ async function handleMetaMessagingEvent(ev: any) {
         ? result.answer.trim()
         : "شكراً لتواصلك — سيعاود فريقنا الرد قريباً.";
 
-    // إرسال الرد أولاً عبر Graph API الرسمي
     await sendMetaMessage(channel, account, senderId, replyText);
 
     await db.from("messages").insert({
-      conversation_id: conv.id,
+      conversation_id: (conv as any).id,
       tenant_id: tenant.id,
       direction: "out",
       body_encrypted: encryptField(replyText),
@@ -528,13 +634,12 @@ async function handleMetaMessagingEvent(ev: any) {
     await db
       .from("conversations")
       .update({ last_message_at: new Date().toISOString() })
-      .eq("id", conv.id);
+      .eq("id", (conv as any).id);
   } catch (e) {
     console.error("[channels] AI reply failed:", e);
   }
 }
 
-/** إرسال رد عبر Graph API الرسمي — الرموز تبقى على الخادم فقط ولا تُكشف للواجهة */
 async function sendMetaMessage(
   channel: "facebook" | "instagram",
   account: any,
@@ -563,7 +668,6 @@ async function sendMetaMessage(
   if (!res.ok) throw new Error(json?.error?.message ?? `HTTP ${res.status}`);
 }
 
-/** جلب صف الحساب كاملاً مع الرمز المشفر (service role فقط داخل الخادم) */
 async function fetchAccountWithToken(accountId: string) {
   const { data } = await db
     .from("channel_accounts")
