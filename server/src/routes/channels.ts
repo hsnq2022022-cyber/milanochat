@@ -159,14 +159,13 @@ channelsRouter.get("/meta/oauth-url", async (req, res) => {
   const channel = String(req.query.channel ?? "facebook") as ChannelId;
   if (!VALID_CHANNELS.includes(channel)) return res.status(400).json({ error: "قناة غير صالحة" });
 
-  // الصلاحيات الدنيا المطلوبة فعلياً لكل قناة — لا نطلب صلاحيات غير مستخدمة
+  // الصلاحيات الدنيا المطلوبة فعلياً لكل قناة — مطابقة لإعداد تطبيق Meta الفعلي
+  // (Instagram API with Facebook Login). صلاحيات instagram_basic و
+  // instagram_manage_messages صحيحة هنا لأن الطلب يُرسل إلى facebook.com/dialog/oauth؛
+  // أما أسماء Instagram Login (instagram_business_*) فلا تُستخدم إطلاقاً.
   const scopes =
     channel === "instagram"
-      // صلاحيات Facebook Login فقط — أي اسم instagram_* (قديم أو instagram_business_*)
-      // يُرفض هنا بـ Invalid Scopes لأنه خاص بـ Instagram Login.
-      // ربط IG يتم عبر الصفحات: pages_show_list + pages_read_engagement
-      // + pages_manage_metadata (webhooks) + pages_messaging (الردود).
-      ? ["pages_show_list", "pages_messaging", "pages_manage_metadata", "pages_read_engagement", "business_management"]
+      ? ["instagram_basic", "instagram_manage_messages", "pages_read_engagement", "pages_show_list", "business_management", "pages_manage_metadata", "pages_messaging"]
       : ["pages_show_list", "pages_messaging", "pages_manage_metadata", "pages_read_engagement"];
 
   const redirect = `${buildServerBaseUrl()}/api/channels/meta/callback`;

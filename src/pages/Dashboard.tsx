@@ -755,7 +755,8 @@ export default function Dashboard() {
   };
 
   /** بدء تدفق OAuth الرسمي — الخادم يبني الرابط والصلاحيات، والواجهة لا ترى أي سر
-   * instagram → تدفق Instagram Login المستقل (/api/auth/instagram/start)
+   * instagram → Instagram API with Facebook Login (نفس مسار /api/auth/facebook/start
+   *              بـ platform=instagram — حسب إعداد تطبيق Meta الفعلي)
    * facebook   → تدفق Facebook Login الحالي (بدون تغيير)
    */
   const startMetaOAuth = async (channel: "facebook" | "instagram") => {
@@ -763,10 +764,9 @@ export default function Dashboard() {
     setChBusyPlatform(channel);
     try {
       // المسار الجديد مع fallback للمسار القديم إن لم يكن منشوراً بعد
-      const startPath = channel === "instagram" ? "/api/auth/instagram/start" : "/api/auth/facebook/start";
       let r: { url: string };
       try {
-        r = await apiAuthFetch<{ url: string }>(token, startPath, {
+        r = await apiAuthFetch<{ url: string }>(token, "/api/auth/facebook/start", {
           method: "POST",
           body: JSON.stringify({ platform: channel, tenantId: st?.tenantId }),
         });

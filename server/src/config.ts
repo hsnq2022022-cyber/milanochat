@@ -94,11 +94,6 @@ export function buildMetaCallbackUrl(): string {
   return `${buildServerBaseUrl()}/api/auth/facebook/callback`;
 }
 
-/** رابط callback الرسمي لـ Instagram Login — مبني من PUBLIC_URL فقط، لا META_REDIRECT_URI */
-export function buildInstagramCallbackUrl(): string {
-  return `${buildServerBaseUrl()}/api/auth/instagram/callback`;
-}
-
 export const config = {
   port: Number(opt("PORT", "4000")),
 
