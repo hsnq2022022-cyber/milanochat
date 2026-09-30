@@ -33,11 +33,16 @@ const SCOPES: Record<string, string[]> = {
     "business_management",
   ],
   instagram: [
-    "instagram_basic",
-    "instagram_manage_messages",
+    // صلاحيات Facebook Login الرسمية المقابلة لـ Instagram Graph API / Messaging API.
+    // الأسماء instagram_basic وinstagram_manage_messages غير معترف بها في
+    // www.facebook.com/dialog/oauth (Invalid Scopes) — المكافئ الصحيح هو
+    // instagram_business_* المطلوب عبر منتج "Instagram" في تطبيق Meta.
+    "instagram_business_basic",
+    "instagram_business_manage_messages",
     "pages_show_list",
     "pages_messaging",
     "pages_manage_metadata",
+    "pages_read_engagement",
     "business_management",
   ],
 };

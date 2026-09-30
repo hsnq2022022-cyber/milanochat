@@ -162,7 +162,9 @@ channelsRouter.get("/meta/oauth-url", async (req, res) => {
   // الصلاحيات الدنيا المطلوبة فعلياً لكل قناة — لا نطلب صلاحيات غير مستخدمة
   const scopes =
     channel === "instagram"
-      ? ["pages_show_list", "pages_messaging", "pages_manage_metadata", "instagram_basic", "instagram_manage_messages"]
+      // ملاحظة: instagram_basic / instagram_manage_messages أسماء غير معترف بها في Facebook Login
+      // (Invalid Scopes). المكافئ الرسمي عبر Facebook Login هو instagram_business_*.
+      ? ["pages_show_list", "pages_messaging", "pages_manage_metadata", "pages_read_engagement", "instagram_business_basic", "instagram_business_manage_messages"]
       : ["pages_show_list", "pages_messaging", "pages_manage_metadata", "pages_read_engagement"];
 
   const redirect = `${buildServerBaseUrl()}/api/channels/meta/callback`;
