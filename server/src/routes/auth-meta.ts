@@ -322,7 +322,7 @@ metaAuthRouter.get("/facebook/callback", async (req: any, res) => {
       } else if (platform === "instagram") {
         // حساب Instagram الاحترافي المرتبط بالصفحة هو المؤهل للمراسلة فقط
         const igRes = await fetch(
-          `${GRAPH_API}/${p.id}?fields=name,instagram_business_account{id,username,picture_url}&access_token=${pageToken}`
+          `${GRAPH_API}/${p.id}?fields=name,instagram_business_account{id,username}&access_token=${pageToken}`
         );
         const ig: any = await igRes.json();
         const igAcc = ig?.instagram_business_account;
