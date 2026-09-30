@@ -1,13 +1,6 @@
 /**
  * مسارات القنوات والحسابات — Omnichannel
- * - CRUD لحسابات channel_accounts لكل عميل (Multi-Tenant)
- * - روابط بدء OAuth الرسمية لتطبيق Meta (Facebook / Instagram)
- * - ملاحظة: WhatsApp يبقى عبر مسار الربط الحالي (/api/whatsapp)
- *
- * ملاحظات الإصدار (v2):
- * - نستخدم select("*") لتجنّب أخطاء "column does not exist" عند تطور schema.
- * - نُطبّع شكل الرد (normalize) ليتوافق مع الواجهة.
- * - عند فشل select نُعيد [] بدلًا من 500 لتفادي تعطّل الواجهة.
+ * v3 — /meta/status عام (بدون auth)، باقي المسارات محمية.
  */
 import crypto from "node:crypto";
 import { Router, type Request, type Response, type NextFunction } from "express";
@@ -30,12 +23,9 @@ async function requireAuth(req: Request, res: Response, next: NextFunction) {
   next();
 }
 
-channelsRouter.use(requireAuth);
-
 type ChannelId = "whatsapp" | "instagram" | "facebook";
 const VALID_CHANNELS = ["whatsapp", "instagram", "facebook"];
 
-/* جلب tenant المالك */
 async function ownedTenant(userId: string, tenantId?: string) {
   if (tenantId) {
     const { data } = await db
@@ -54,7 +44,6 @@ async function ownedTenant(userId: string, tenantId?: string) {
   return data;
 }
 
-/** تطبيع صف channel_accounts للواجهة — يعمل حتى لو كانت بعض الأعمدة غائبة */
 function normalizeAccount(row: any) {
   const channel = row.channel || row.platform || "whatsapp";
   return {
@@ -83,350 +72,50 @@ function normalizeAccount(row: any) {
 }
 
 /* ═══════════════════════════════════════════════════
-   GET /api/channels/accounts
+   مسارات عامة (بدون auth) — تُسجَّل قبل requireAuth
    ═══════════════════════════════════════════════════ */
-channelsRouter.get("/accounts", async (req, res) => {
-  const userId = (req as any).userId as string;
-  const tenant = await ownedTenant(userId, req.query.tenantId as string);
-  if (!tenant) return res.status(404).json({ error: "لا يوجد حساب مرتبط" });
 
-  const { data, error } = await db
-    .from("channel_accounts")
-    .select("*")
-    .eq("tenant_id", tenant.id)
-    .order("created_at", { ascending: false });
-
-  if (error) {
-    console.error("[Channels] accounts select error:", error);
-    // لا نُفشل الطلب — نُعيد [] لتستمر الواجهة
-    return res.json([]);
-  }
-
-  res.json((data ?? []).map(normalizeAccount));
-});
-
-/* ═══════════════════════════════════════════════════
-   GET /api/channels/summary
-   ═══════════════════════════════════════════════════ */
-channelsRouter.get("/summary", async (req, res) => {
-  const userId = (req as any).userId as string;
-  const tenant = await ownedTenant(userId, req.query.tenantId as string);
-  if (!tenant) return res.status(404).json({ error: "لا يوجد حساب مرتبط" });
-
-  const [accRes, convRes] = await Promise.all([
-    db.from("channel_accounts").select("channel, status").eq("tenant_id", tenant.id),
-    db.from("conversations").select("channel").eq("tenant_id", tenant.id),
-  ]);
-
-  const summary: Record<string, { accounts: number; active: number; conversations: number }> = {
-    whatsapp: { accounts: 0, active: 0, conversations: 0 },
-    instagram: { accounts: 0, active: 0, conversations: 0 },
-    facebook: { accounts: 0, active: 0, conversations: 0 },
-  };
-
-  for (const a of accRes.data ?? []) {
-    const ch = (a as any).channel ?? (a as any).platform;
-    const s = summary[ch];
-    if (!s) continue;
-    s.accounts += 1;
-    if ((a as any).status === "active" || (a as any).is_active === true) s.active += 1;
-  }
-  for (const c of convRes.data ?? []) {
-    const ch = (c as any).channel ?? "whatsapp";
-    if (summary[ch]) summary[ch].conversations += 1;
-  }
-
-  res.json(summary);
-});
-
-/* ═══════════════════════════════════════════════════
-   PATCH /api/channels/accounts/:id
-   ═══════════════════════════════════════════════════ */
-channelsRouter.patch("/accounts/:id", async (req, res) => {
-  const userId = (req as any).userId as string;
-  const tenant = await ownedTenant(userId, req.query.tenantId as string);
-  if (!tenant) return res.status(404).json({ error: "لا يوجد حساب مرتبط" });
-
-  const allowed = [
-    "agent_enabled",
-    "auto_reply",
-    "language",
-    "handoff_rules",
-    "agent_config",
-    "display_name",
-    "status",
-  ];
-  const patch: Record<string, unknown> = {};
-  for (const k of allowed) {
-    if (req.body?.[k] !== undefined) patch[k] = req.body[k];
-  }
-  if (patch.status && !["active", "needs_reauth", "disconnected"].includes(String(patch.status))) {
-    return res.status(400).json({ error: "حالة غير صالحة" });
-  }
-  if (Object.keys(patch).length === 0) return res.status(400).json({ error: "لا توجد حقول للتعديل" });
-
-  patch.updated_at = new Date().toISOString();
-
-  const { data, error } = await db
-    .from("channel_accounts")
-    .update(patch)
-    .eq("id", req.params.id)
-    .eq("tenant_id", tenant.id)
-    .select("*")
-    .maybeSingle();
-
-  if (error) return res.status(500).json({ error: error.message });
-  if (!data) return res.status(404).json({ error: "الحساب غير موجود" });
-  res.json(normalizeAccount(data));
-});
-
-/* ═══════════════════════════════════════════════════
-   DELETE /api/channels/accounts/:id
-   ═══════════════════════════════════════════════════ */
-channelsRouter.delete("/accounts/:id", async (req, res) => {
-  const userId = (req as any).userId as string;
-  const tenant = await ownedTenant(userId, req.query.tenantId as string);
-  if (!tenant) return res.status(404).json({ error: "لا يوجد حساب مرتبط" });
-
-  const { error } = await db
-    .from("channel_accounts")
-    .update({
-      status: "disconnected",
-      access_token_encrypted: null,
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", req.params.id)
-    .eq("tenant_id", tenant.id);
-
-  if (error) return res.status(500).json({ error: error.message });
-  res.json({ ok: true });
-});
-
-/* ═══════════════════════════════════════════════════
-   GET /api/channels/meta/oauth-url
-   ═══════════════════════════════════════════════════ */
-channelsRouter.get("/meta/oauth-url", async (req, res) => {
-  const userId = (req as any).userId as string;
-  const tenant = await ownedTenant(userId, req.query.tenantId as string);
-  if (!tenant) return res.status(404).json({ error: "لا يوجد حساب مرتبط" });
-
-  const appId = process.env.META_APP_ID;
-  if (!appId) {
-    return res.status(503).json({
-      error: "تطبيق Meta غير مُهيّأ على الخادم بعد.",
-    });
-  }
-
-  const channel = String(req.query.channel ?? "facebook") as ChannelId;
-  if (!VALID_CHANNELS.includes(channel)) return res.status(400).json({ error: "قناة غير صالحة" });
-
-  const scopes =
-    channel === "instagram"
-      ? [
-          "instagram_basic",
-          "instagram_manage_messages",
-          "pages_read_engagement",
-          "pages_show_list",
-          "business_management",
-          "pages_manage_metadata",
-          "pages_messaging",
-        ]
-      : [
-          "pages_show_list",
-          "pages_messaging",
-          "pages_manage_metadata",
-          "pages_read_engagement",
-        ];
-
-  const redirect = `${buildServerBaseUrl()}/api/channels/meta/callback`;
-  const state = Buffer.from(
-    JSON.stringify({ tenantId: tenant.id, userId, channel, ts: Date.now() })
-  ).toString("base64url");
-
-  const url =
-    `https://www.facebook.com/v21.0/dialog/oauth` +
-    `?client_id=${encodeURIComponent(appId)}` +
-    `&redirect_uri=${encodeURIComponent(redirect)}` +
-    `&scope=${encodeURIComponent(scopes.join(","))}` +
-    `&state=${encodeURIComponent(state)}` +
-    `&response_type=code`;
-
-  res.json({ url, scopes });
-});
-
-/* ═══════════════════════════════════════════════════
-   GET /api/channels/meta/callback
-   ═══════════════════════════════════════════════════ */
-channelsRouter.get("/meta/callback", async (req, res) => {
-  try {
-    const { code, state } = req.query as Record<string, string>;
-    if (!code || !state) return res.redirect("/#/dashboard?error=oauth_missing");
-
-    let parsed: { tenantId: string; userId: string; channel: string };
-    try {
-      parsed = JSON.parse(Buffer.from(state, "base64url").toString());
-    } catch {
-      return res.redirect("/#/dashboard?error=oauth_state");
-    }
-    if (!VALID_CHANNELS.includes(parsed.channel)) {
-      return res.redirect("/#/dashboard?error=oauth_channel");
-    }
-
-    const appSecret = process.env.META_APP_SECRET;
-    const appId = process.env.META_APP_ID;
-    if (!appSecret || !appId) return res.redirect("/#/dashboard?error=oauth_not_configured");
-
-    const redirect = `${buildServerBaseUrl()}/api/channels/meta/callback`;
-
-    // 1) تبادل الرمز الأول بـ access_token
-    const tokenRes = await fetch(
-      `https://graph.facebook.com/v21.0/oauth/access_token?` +
-        `client_id=${appId}&client_secret=${appSecret}` +
-        `&redirect_uri=${encodeURIComponent(redirect)}&code=${encodeURIComponent(code)}`
-    );
-    const tokenJson: any = await tokenRes.json();
-    if (!tokenJson.access_token) return res.redirect("/#/dashboard?error=oauth_token");
-
-    // 2) تحويل إلى long-lived
-    let accessToken = tokenJson.access_token;
-    try {
-      const longRes = await fetch(
-        `https://graph.facebook.com/v21.0/oauth/access_token?grant_type=fb_exchange_token` +
-          `&client_id=${appId}&client_secret=${appSecret}` +
-          `&fb_exchange_token=${accessToken}`
-      );
-      const longJson: any = await longRes.json();
-      if (longJson.access_token) accessToken = longJson.access_token;
-    } catch {}
-
-    // 3) جلب الصفحات
-    const pagesRes = await fetch(
-      `https://graph.facebook.com/v21.0/me/accounts?fields=id,name,picture,access_token&access_token=${accessToken}`
-    );
-    const pagesJson: any = await pagesRes.json();
-    const pages: any[] = pagesJson.data ?? [];
-
-    let facebookSaved = 0;
-    for (const p of pages) {
-      if (!p?.id) continue;
-      const picture = typeof p.picture?.data?.url === "string" ? p.picture.data.url : null;
-      const pageToken = p.access_token ?? accessToken;
-      const { error } = await db.from("channel_accounts").upsert(
-        {
-          tenant_id: parsed.tenantId,
-          channel: "facebook",
-          external_id: String(p.id),
-          display_name: p.name ?? null,
-          avatar_url: picture,
-          status: "active",
-          access_token_encrypted: encryptField(pageToken),
-          token_expires_at: tokenJson.expires_in
-            ? new Date(Date.now() + Number(tokenJson.expires_in) * 1000).toISOString()
-            : null,
-          updated_at: new Date().toISOString(),
-        },
-        { onConflict: "tenant_id,channel,external_id" }
-      );
-      if (error) console.error("[channels] fb upsert failed:", error);
-      else facebookSaved += 1;
-    }
-
-    // 4) Instagram
-    let instagramSaved = 0;
-    if (parsed.channel === "instagram") {
-      for (const p of pages) {
-        if (!p?.id) continue;
-        try {
-          const igRes = await fetch(
-            `https://graph.facebook.com/v21.0/${p.id}?fields=name,instagram_business_account{id,username}&access_token=${accessToken}`
-          );
-          const ig: any = await igRes.json();
-          const igAcc = ig?.instagram_business_account;
-          if (!igAcc?.id) continue;
-
-          const { error } = await db.from("channel_accounts").upsert(
-            {
-              tenant_id: parsed.tenantId,
-              channel: "instagram",
-              external_id: String(igAcc.id),
-              display_name: igAcc.username ? `@${igAcc.username}` : (ig?.name ?? null),
-              avatar_url: null,
-              status: "active",
-              access_token_encrypted: encryptField(p.access_token ?? accessToken),
-              token_expires_at: tokenJson.expires_in
-                ? new Date(Date.now() + Number(tokenJson.expires_in) * 1000).toISOString()
-                : null,
-              updated_at: new Date().toISOString(),
-            },
-            { onConflict: "tenant_id,channel,external_id" }
-          );
-          if (error) console.error("[channels] ig upsert failed:", error);
-          else instagramSaved += 1;
-        } catch (e) {
-          console.error("[channels] ig lookup failed for page", p.id, e);
-        }
-      }
-    }
-
-    const q = new URLSearchParams({
-      tab: "channels",
-      connected: "1",
-      fb: String(facebookSaved),
-      ig: String(instagramSaved),
-    });
-    res.redirect(`/#/dashboard?${q.toString()}`);
-  } catch (err) {
-    console.error("[channels] oauth callback error:", err);
-    res.redirect("/#/dashboard?error=oauth_failed");
-  }
-});
-
-/* ═══════════════════════════════════════════════════
-   GET /api/channels/meta/status
-   ═══════════════════════════════════════════════════ */
+/* GET /api/channels/meta/status — حالة Meta (عام) */
 channelsRouter.get("/meta/status", async (req, res) => {
-  // ملاحظة: هذا endpoint كان سابقًا بلا auth، لكن الواجهة تعتمد عليه
-  // لمعرفة حالة Meta. نُعيد دائمًا 200 (لا 401) حتى لا تتعطل الواجهة.
-  const userId = (req as any).userId as string | undefined;
   const configured = Boolean(process.env.META_APP_ID && process.env.META_APP_SECRET);
 
-  // إن كان المستخدم مصادقًا، أضف حالة كل قناة للـ tenant
+  // محاولة قراءة حالة القنوات للمستخدم إن أُرسل token
   let perChannel: { whatsapp: boolean; instagram: boolean; facebook: boolean } | null = null;
-  if (userId) {
+
+  const header = String(req.headers.authorization ?? "");
+  const bearer = header.startsWith("Bearer ") ? header.slice(7) : null;
+
+  if (bearer) {
     try {
-      const tenant = await ownedTenant(userId, req.query.tenantId as string);
-      if (tenant) {
-        const { data } = await db
-          .from("channels")
-          .select("*")
-          .eq("tenant_id", tenant.id);
-        const find = (p: string) =>
-          (data ?? []).find((c: any) => c.platform === p)?.is_connected === true;
-        perChannel = {
-          whatsapp: find("whatsapp"),
-          instagram: find("instagram"),
-          facebook: find("facebook"),
-        };
+      const { data: userData } = await authClient.auth.getUser(bearer);
+      const userId = userData?.user?.id;
+      if (userId) {
+        const tenant = await ownedTenant(userId, req.query.tenantId as string);
+        if (tenant) {
+          const { data } = await db.from("channels").select("*").eq("tenant_id", tenant.id);
+          const find = (p: string) =>
+            (data ?? []).find((c: any) => c.platform === p)?.is_connected === true;
+          perChannel = {
+            whatsapp: find("whatsapp"),
+            instagram: find("instagram"),
+            facebook: find("facebook"),
+          };
+        }
       }
-    } catch (e) {
-      console.error("[channels] meta status lookup failed:", e);
+    } catch {
+      /* تجاهل — نُعيد configured فقط */
     }
   }
 
   res.json({
     configured,
     channels: perChannel,
-    appReviewNote:
-      "حالة مراجعة صلاحيات Meta تُتابَع يدويًا من لوحة Meta Developers.",
+    appReviewNote: "حالة مراجعة صلاحيات Meta تُتابَع يدويًا من لوحة Meta Developers.",
     developersUrl: "https://developers.facebook.com/apps",
   });
 });
 
-/* ═══════════════════════════════════════════════════
-   Webhooks — Messenger / Instagram
-   ═══════════════════════════════════════════════════ */
-
-/* GET /api/channels/meta/webhook — التحقق */
+/* GET /api/channels/meta/webhook — التحقق من Webhook (عام) */
 channelsRouter.get("/meta/webhook", (req, res) => {
   const mode = req.query["hub.mode"];
   const token = req.query["hub.verify_token"];
@@ -438,7 +127,7 @@ channelsRouter.get("/meta/webhook", (req, res) => {
   return res.sendStatus(403);
 });
 
-/* POST /api/channels/meta/webhook — استقبال الرسائل */
+/* POST /api/channels/meta/webhook — استقبال رسائل (عام) */
 function extractText(m: any): string {
   if (typeof m?.text === "string") return m.text;
   const atts = Array.isArray(m?.attachments) ? m.attachments : [];
@@ -455,8 +144,7 @@ channelsRouter.post("/meta/webhook", async (req: Request, res: Response) => {
     const rawBody: Buffer | undefined = (req as any).rawBody;
     if (secret && rawBody) {
       const expected =
-        "sha256=" +
-        crypto.createHmac("sha256", secret).update(rawBody).digest("hex");
+        "sha256=" + crypto.createHmac("sha256", secret).update(rawBody).digest("hex");
       if (!sig || !timingSafeEqualStr(sig, expected)) {
         return res.sendStatus(401);
       }
@@ -533,7 +221,6 @@ async function handleMetaMessagingEvent(ev: any) {
     .maybeSingle();
   if (!tenant) return;
 
-  // ابحث عن محادثة موجودة
   let conv = (
     await db
       .from("conversations")
@@ -676,3 +363,264 @@ async function fetchAccountWithToken(accountId: string) {
     .maybeSingle();
   return data;
 }
+
+/* ═══════════════════════════════════════════════════
+   من هنا فصاعدًا — كل المسارات محمية بـ auth
+   ═══════════════════════════════════════════════════ */
+
+/* GET /api/channels/accounts */
+channelsRouter.get("/accounts", requireAuth, async (req, res) => {
+  const userId = (req as any).userId as string;
+  const tenant = await ownedTenant(userId, req.query.tenantId as string);
+  if (!tenant) return res.status(404).json({ error: "لا يوجد حساب مرتبط" });
+
+  const { data, error } = await db
+    .from("channel_accounts")
+    .select("*")
+    .eq("tenant_id", tenant.id)
+    .order("created_at", { ascending: false });
+
+  if (error) {
+    console.error("[Channels] accounts select error:", error);
+    return res.json([]);
+  }
+
+  res.json((data ?? []).map(normalizeAccount));
+});
+
+/* GET /api/channels/summary */
+channelsRouter.get("/summary", requireAuth, async (req, res) => {
+  const userId = (req as any).userId as string;
+  const tenant = await ownedTenant(userId, req.query.tenantId as string);
+  if (!tenant) return res.status(404).json({ error: "لا يوجد حساب مرتبط" });
+
+  const [accRes, convRes] = await Promise.all([
+    db.from("channel_accounts").select("channel, status").eq("tenant_id", tenant.id),
+    db.from("conversations").select("channel").eq("tenant_id", tenant.id),
+  ]);
+
+  const summary: Record<string, { accounts: number; active: number; conversations: number }> = {
+    whatsapp: { accounts: 0, active: 0, conversations: 0 },
+    instagram: { accounts: 0, active: 0, conversations: 0 },
+    facebook: { accounts: 0, active: 0, conversations: 0 },
+  };
+
+  for (const a of accRes.data ?? []) {
+    const ch = (a as any).channel ?? (a as any).platform;
+    const s = summary[ch];
+    if (!s) continue;
+    s.accounts += 1;
+    if ((a as any).status === "active" || (a as any).is_active === true) s.active += 1;
+  }
+  for (const c of convRes.data ?? []) {
+    const ch = (c as any).channel ?? "whatsapp";
+    if (summary[ch]) summary[ch].conversations += 1;
+  }
+
+  res.json(summary);
+});
+
+/* PATCH /api/channels/accounts/:id */
+channelsRouter.patch("/accounts/:id", requireAuth, async (req, res) => {
+  const userId = (req as any).userId as string;
+  const tenant = await ownedTenant(userId, req.query.tenantId as string);
+  if (!tenant) return res.status(404).json({ error: "لا يوجد حساب مرتبط" });
+
+  const allowed = [
+    "agent_enabled", "auto_reply", "language", "handoff_rules",
+    "agent_config", "display_name", "status",
+  ];
+  const patch: Record<string, unknown> = {};
+  for (const k of allowed) {
+    if (req.body?.[k] !== undefined) patch[k] = req.body[k];
+  }
+  if (patch.status && !["active", "needs_reauth", "disconnected"].includes(String(patch.status))) {
+    return res.status(400).json({ error: "حالة غير صالحة" });
+  }
+  if (Object.keys(patch).length === 0) return res.status(400).json({ error: "لا توجد حقول للتعديل" });
+
+  patch.updated_at = new Date().toISOString();
+
+  const { data, error } = await db
+    .from("channel_accounts")
+    .update(patch)
+    .eq("id", req.params.id)
+    .eq("tenant_id", tenant.id)
+    .select("*")
+    .maybeSingle();
+
+  if (error) return res.status(500).json({ error: error.message });
+  if (!data) return res.status(404).json({ error: "الحساب غير موجود" });
+  res.json(normalizeAccount(data));
+});
+
+/* DELETE /api/channels/accounts/:id */
+channelsRouter.delete("/accounts/:id", requireAuth, async (req, res) => {
+  const userId = (req as any).userId as string;
+  const tenant = await ownedTenant(userId, req.query.tenantId as string);
+  if (!tenant) return res.status(404).json({ error: "لا يوجد حساب مرتبط" });
+
+  const { error } = await db
+    .from("channel_accounts")
+    .update({
+      status: "disconnected",
+      access_token_encrypted: null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", req.params.id)
+    .eq("tenant_id", tenant.id);
+
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ ok: true });
+});
+
+/* GET /api/channels/meta/oauth-url */
+channelsRouter.get("/meta/oauth-url", requireAuth, async (req, res) => {
+  const userId = (req as any).userId as string;
+  const tenant = await ownedTenant(userId, req.query.tenantId as string);
+  if (!tenant) return res.status(404).json({ error: "لا يوجد حساب مرتبط" });
+
+  const appId = process.env.META_APP_ID;
+  if (!appId) {
+    return res.status(503).json({ error: "تطبيق Meta غير مُهيّأ على الخادم بعد." });
+  }
+
+  const channel = String(req.query.channel ?? "facebook") as ChannelId;
+  if (!VALID_CHANNELS.includes(channel)) return res.status(400).json({ error: "قناة غير صالحة" });
+
+  const scopes =
+    channel === "instagram"
+      ? ["instagram_basic", "instagram_manage_messages", "pages_read_engagement",
+         "pages_show_list", "business_management", "pages_manage_metadata", "pages_messaging"]
+      : ["pages_show_list", "pages_messaging", "pages_manage_metadata", "pages_read_engagement"];
+
+  const redirect = `${buildServerBaseUrl()}/api/channels/meta/callback`;
+  const state = Buffer.from(
+    JSON.stringify({ tenantId: tenant.id, userId, channel, ts: Date.now() })
+  ).toString("base64url");
+
+  const url =
+    `https://www.facebook.com/v21.0/dialog/oauth` +
+    `?client_id=${encodeURIComponent(appId)}` +
+    `&redirect_uri=${encodeURIComponent(redirect)}` +
+    `&scope=${encodeURIComponent(scopes.join(","))}` +
+    `&state=${encodeURIComponent(state)}` +
+    `&response_type=code`;
+
+  res.json({ url, scopes });
+});
+
+/* GET /api/channels/meta/callback — عام لأن Meta تعود إليه */
+channelsRouter.get("/meta/callback", async (req, res) => {
+  try {
+    const { code, state } = req.query as Record<string, string>;
+    if (!code || !state) return res.redirect("/#/dashboard?error=oauth_missing");
+
+    let parsed: { tenantId: string; userId: string; channel: string };
+    try {
+      parsed = JSON.parse(Buffer.from(state, "base64url").toString());
+    } catch {
+      return res.redirect("/#/dashboard?error=oauth_state");
+    }
+    if (!VALID_CHANNELS.includes(parsed.channel)) return res.redirect("/#/dashboard?error=oauth_channel");
+
+    const appSecret = process.env.META_APP_SECRET;
+    const appId = process.env.META_APP_ID;
+    if (!appSecret || !appId) return res.redirect("/#/dashboard?error=oauth_not_configured");
+
+    const redirect = `${buildServerBaseUrl()}/api/channels/meta/callback`;
+
+    const tokenRes = await fetch(
+      `https://graph.facebook.com/v21.0/oauth/access_token?` +
+        `client_id=${appId}&client_secret=${appSecret}` +
+        `&redirect_uri=${encodeURIComponent(redirect)}&code=${encodeURIComponent(code)}`
+    );
+    const tokenJson: any = await tokenRes.json();
+    if (!tokenJson.access_token) return res.redirect("/#/dashboard?error=oauth_token");
+
+    let accessToken = tokenJson.access_token;
+    try {
+      const longRes = await fetch(
+        `https://graph.facebook.com/v21.0/oauth/access_token?grant_type=fb_exchange_token` +
+          `&client_id=${appId}&client_secret=${appSecret}&fb_exchange_token=${accessToken}`
+      );
+      const longJson: any = await longRes.json();
+      if (longJson.access_token) accessToken = longJson.access_token;
+    } catch {}
+
+    const pagesRes = await fetch(
+      `https://graph.facebook.com/v21.0/me/accounts?fields=id,name,picture,access_token&access_token=${accessToken}`
+    );
+    const pagesJson: any = await pagesRes.json();
+    const pages: any[] = pagesJson.data ?? [];
+
+    let facebookSaved = 0;
+    for (const p of pages) {
+      if (!p?.id) continue;
+      const picture = typeof p.picture?.data?.url === "string" ? p.picture.data.url : null;
+      const { error } = await db.from("channel_accounts").upsert(
+        {
+          tenant_id: parsed.tenantId,
+          channel: "facebook",
+          external_id: String(p.id),
+          display_name: p.name ?? null,
+          avatar_url: picture,
+          status: "active",
+          access_token_encrypted: encryptField(p.access_token ?? accessToken),
+          token_expires_at: tokenJson.expires_in
+            ? new Date(Date.now() + Number(tokenJson.expires_in) * 1000).toISOString()
+            : null,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "tenant_id,channel,external_id" }
+      );
+      if (!error) facebookSaved += 1;
+    }
+
+    let instagramSaved = 0;
+    if (parsed.channel === "instagram") {
+      for (const p of pages) {
+        if (!p?.id) continue;
+        try {
+          const igRes = await fetch(
+            `https://graph.facebook.com/v21.0/${p.id}?fields=name,instagram_business_account{id,username}&access_token=${accessToken}`
+          );
+          const ig: any = await igRes.json();
+          const igAcc = ig?.instagram_business_account;
+          if (!igAcc?.id) continue;
+
+          const { error } = await db.from("channel_accounts").upsert(
+            {
+              tenant_id: parsed.tenantId,
+              channel: "instagram",
+              external_id: String(igAcc.id),
+              display_name: igAcc.username ? `@${igAcc.username}` : (ig?.name ?? null),
+              avatar_url: null,
+              status: "active",
+              access_token_encrypted: encryptField(p.access_token ?? accessToken),
+              token_expires_at: tokenJson.expires_in
+                ? new Date(Date.now() + Number(tokenJson.expires_in) * 1000).toISOString()
+                : null,
+              updated_at: new Date().toISOString(),
+            },
+            { onConflict: "tenant_id,channel,external_id" }
+          );
+          if (!error) instagramSaved += 1;
+        } catch (e) {
+          console.error("[channels] ig lookup failed for page", p.id, e);
+        }
+      }
+    }
+
+    const q = new URLSearchParams({
+      tab: "channels",
+      connected: "1",
+      fb: String(facebookSaved),
+      ig: String(instagramSaved),
+    });
+    res.redirect(`/#/dashboard?${q.toString()}`);
+  } catch (err) {
+    console.error("[channels] oauth callback error:", err);
+    res.redirect("/#/dashboard?error=oauth_failed");
+  }
+});
