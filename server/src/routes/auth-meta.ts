@@ -5,7 +5,7 @@
  *   Instagram API with Facebook Login
  * المستخدم يسجّل الدخول عبر facebook.com/dialog/oauth، ثم يجلب الخادم
  * /me/accounts ويستخرج حساب Instagram الاحترافي المرتبط بالصفحة
- * (instagram_user_account / instagram_business_account) ويحفظه في
+ * (instagram_business_account) ويحفظه في
  * channel_accounts بقناة "instagram".
  *
  * الصلاحيات المطلوبة لقناة instagram هي المطابقة حرفياً لشاشة أذونات التطبيق:
@@ -322,10 +322,10 @@ metaAuthRouter.get("/facebook/callback", async (req: any, res) => {
       } else if (platform === "instagram") {
         // حساب Instagram الاحترافي المرتبط بالصفحة هو المؤهل للمراسلة فقط
         const igRes = await fetch(
-          `${GRAPH_API}/${p.id}?fields=name,instagram_user_account{id,username,picture},instagram_business_account{id,username,picture_url}&access_token=${accessToken}`
+          `${GRAPH_API}/${p.id}?fields=name,instagram_business_account{id,username,picture_url}&access_token=${pageToken}`
         );
         const ig: any = await igRes.json();
-        const igAcc = ig?.instagram_user_account ?? ig?.instagram_business_account;
+        const igAcc = ig?.instagram_business_account;
         console.log(`[Meta Auth] page ${p.id} IG discovery:`, igAcc?.id ? `found ${igAcc.username ?? igAcc.id}` : `not found (${ig?.error?.message ?? "no linked account"})`);
         if (!igAcc?.id) continue; // غير مؤهل — لا نحفظ حسابات شخصية
 
