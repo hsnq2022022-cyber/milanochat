@@ -1,10 +1,16 @@
 /**
  * مسارات ربط Meta عبر OAuth — Facebook Pages + Instagram Professional
  *
- * التدفق المعتمد: Facebook Login → Instagram Graph API / Messaging API
- * (هذا هو التدفق الرسمي الوحيد الذي يدعم رسائل العملاء على حسابات
- * Instagram الاحترافية عبر Instagram Messaging API — وليس Instagram Login
- * المباشر الذي لا يمنح instagram_manage_messages للتطبيقات الخارجية).
+ * التدفق المعتمد: Facebook Login → اكتشاف الصفحة الوسيطة → Instagram Messaging API
+ * المستخدم يسجّل الدخول عبر facebook.com/dialog/oauth بصلاحيات pages_* فقط،
+ * ثم يجلب الخادم /me/accounts ويستخرج حساب Instagram الاحترافي المرتبط
+ * بالصفحة (instagram_user_account / instagram_business_account).
+ * لا تُطلب أي صلاحية instagram_* في هذا التدفق:
+ *   - instagram_basic / instagram_manage_messages → مُلغاة من Facebook Login.
+ *   - instagram_business_basic / instagram_business_manage_messages → خاصة
+ *     بـ Instagram Login وترفضها شاشة Facebook (Invalid Scopes).
+ * إدارة الرسائل تتم عبر اشتراك Webhook لأحداث messages + منتج Instagram
+ * المفعّل في App Dashboard (إعدادات لوحة تحكم، ليست scopes).
  *
  * المسارات:
  *   Dashboard → POST /api/auth/facebook/start (platform, tenantId)
