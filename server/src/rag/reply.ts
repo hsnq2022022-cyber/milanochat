@@ -25,6 +25,73 @@ import { answerFromKnowledge } from "./qa.js";
 
 import { sendText } from "../wa/sessionManager.js";
 
+/**
+ * إرسال رد على قناة اجتماعية (إنستغرام/فيسبوك) عبر Graph API Conversations.
+ * يحدد الحساب المضيف من channel_accounts بالبحث عن المحادثة ثم بادئة المعرّف،
+ * والرمز يُفك تشفيره داخل الخادم فقط ولا يغادره أبداً.
+ */
+async function sendSocialMessage(
+  tenantId: string,
+  channel: "instagram" | "facebook",
+  chatId: string,
+  text: string
+): Promise<void> {
+  const sep = chatId.indexOf(":");
+  const senderId = sep >= 0 ? chatId.slice(sep + 1) : chatId;
+
+  // تحديد حساب القناة المستضيف لهذه المحادثة
+  const { data: conv } = await db
+    .from("conversations")
+    .select("account_id")
+    .eq("tenant_id", tenantId)
+    .eq("wa_chat_id", chatId)
+    .maybeSingle();
+
+  let account: any = null;
+  if (conv?.account_id) {
+    const { data } = await db
+      .from("channel_accounts")
+      .select("id, external_id, access_token_encrypted, status")
+      .eq("id", conv.account_id)
+      .maybeSingle();
+    account = data;
+  }
+  if (!account) {
+    const { data } = await db
+      .from("channel_accounts")
+      .select("id, external_id, access_token_encrypted, status")
+      .eq("tenant_id", tenantId)
+      .eq("channel", channel)
+      .eq("status", "active")
+      .limit(1)
+      .maybeSingle();
+    account = data;
+  }
+  if (!account?.external_id) {
+    throw new Error(`لا يوجد حساب ${channel} مرتبط لإرسال الرد`);
+  }
+
+  const token = decryptField(account.access_token_encrypted);
+  if (!token) throw new Error("رمز الوصول غير متوفر — أعد الربط");
+
+  const res = await fetch(
+    `https://graph.facebook.com/v21.0/${account.external_id}/messages`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        recipient: { id: senderId },
+        message: { text },
+        access_token: token,
+      }),
+    }
+  );
+  const json: any = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(json?.error?.message ?? `Graph API HTTP ${res.status}`);
+  }
+}
+
 const REFUSAL_TEXT =
   "عذرًا، ما عندي معلومات مؤكدة عن هذا الموضوع. لو تحتاج شيء ثاني أنا موجود، وأقدر أحوّلك لأحد الموظفين لو حبيت.";
 
@@ -104,10 +171,13 @@ export async function handleIncomingMessage(
   tenantId: string,
   chatId: string,
   customerText: string,
-  waMessageId: string | null
+  waMessageId: string | null,
+  opts?: { channel?: "whatsapp" | "instagram" | "facebook"; skipSend?: boolean }
 ): Promise<void> {
+  const channel = opts?.channel ?? "whatsapp";
+
   console.log(
-    `[WA] incoming tenant=${tenantId} chat=${chatId} text="${customerText.slice(
+    `[${channel}] incoming tenant=${tenantId} chat=${chatId} text="${customerText.slice(
       0,
       100
     )}"`
@@ -195,7 +265,6 @@ export async function handleIncomingMessage(
             new Date().toISOString(),
         })
         .eq("id", conv.id);
-
       if (updateError) {
         console.error(
           "[WA] conversation timestamp update failed:",
@@ -212,6 +281,8 @@ export async function handleIncomingMessage(
           tenant_id: tenantId,
           wa_chat_id: chatId,
           customer_phone_encrypted: phoneEnc,
+          // المحادثات غير واتساب تحمل بادئة القناة في wa_chat_id — نسجل القناة صراحة
+          ...(channel !== "whatsapp" ? { channel } : {}),
         })
         .select()
         .single();
@@ -398,23 +469,31 @@ export async function handleIncomingMessage(
     );
 
     /**
-     * 11. إرسال الرد الحقيقي إلى WhatsApp.
+     * 11. إرسال الرد الحقيقي إلى القناة.
+     *     - واتساب: عبر Cloud API (sendText).
+     *     - إنستغرام/فيسبوك: عبر Graph API Conversations من حساب channel_accounts.
      */
     console.log(
-      `[WA] sending reply kind=${kind} text="${replyText.slice(
+      `[${channel}] sending reply kind=${kind} text="${replyText.slice(
         0,
         120
       )}"`
     );
 
-    await sendText(
-      tenantId,
-      chatId,
-      replyText
-    );
+    if (opts?.skipSend) {
+      // المتصل (webhook handler) يتكفل بالإرسال — لا نكرر المحاولة
+    } else if (channel === "whatsapp") {
+      await sendText(
+        tenantId,
+        chatId,
+        replyText
+      );
+    } else {
+      await sendSocialMessage(tenantId, channel, chatId, replyText);
+    }
 
     console.log(
-      `[WA] reply sent tenant=${tenantId} chat=${chatId}`
+      `[${channel}] reply sent tenant=${tenantId} chat=${chatId}`
     );
 
     /**

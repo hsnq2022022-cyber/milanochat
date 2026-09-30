@@ -32,6 +32,68 @@ export const corsOriginPatterns: RegExp[] = [
   /\.qwenlm\.io$/,
 ];
 
+/**
+ * المصدر الوحيد الموثوق لبناء روابط OAuth (callback/webhook) على الخادم.
+ * - META_REDIRECT_URI اختياري لتثبيت القيمة حرفياً كما هي مسجلة في Meta؛
+ *   إن وُجد يجب أن يكون https ولا يحمل مساراً أو شرطة مائلة نهائية زائدة،
+ *   وإلا يُتجاهل مع تسجيل تحذير (مصدر واحد فقط هو المعتمد).
+ * - PUBLIC_URL إلزامي في الإنتاج ويجب أن يكون https بلا مسار.
+ * - لا يسجل أي أسرار — العنوان نفسه ليس سراً.
+ */
+export function buildServerBaseUrl(): string {
+  const isProd = process.env.NODE_ENV === "production";
+  const override = opt("META_REDIRECT_URI").trim().replace(/\/+$/, "");
+
+  if (override) {
+    try {
+      const u = new URL(override);
+      const pathOk = u.pathname === "" || u.pathname === "/";
+      const schemeOk = u.protocol === "https:" || (!isProd && u.protocol === "http:");
+      if (schemeOk && pathOk && u.hostname) return `${u.protocol}//${u.host}`;
+      console.warn(
+        "[config] META_REDIRECT_URI غير صالح (يجب أن يكون جذر https بلا مسار) — سيتم الاعتماد على PUBLIC_URL:",
+        override
+      );
+    } catch {
+      console.warn("[config] META_REDIRECT_URI ليس رابطاً مطلقاً صالحاً — سيتم الاعتماد على PUBLIC_URL");
+    }
+  }
+
+  const pub = opt("PUBLIC_URL").trim();
+  if (!pub) {
+    throw new Error(
+      "[config] PUBLIC_URL مفقود — اضبطه على Railway كرابط الجذر الكامل مثل: https://milanochat-production.up.railway.app"
+    );
+  }
+  let u: URL;
+  try {
+    u = new URL(pub);
+  } catch {
+    throw new Error(`[config] PUBLIC_URL ليس رابطاً مطلقاً صالحاً: ${pub}`);
+  }
+  if (u.protocol !== "https:") {
+    if (isProd) {
+      throw new Error(
+        `[config] PUBLIC_URL يجب أن يبدأ بـ https:// في بيئة الإنتاج: ${pub}`
+      );
+    }
+    if (u.protocol !== "http:") {
+      throw new Error(`[config] بروتوكول PUBLIC_URL غير مدعوم: ${pub}`);
+    }
+  }
+  if (u.pathname !== "" && u.pathname !== "/") {
+    throw new Error(
+      `[config] PUBLIC_URL يجب أن يكون جذر النطاق بدون مسار (${u.pathname} غير مسموح): ${pub}`
+    );
+  }
+  return `${u.protocol}//${u.host}`;
+}
+
+/** رابط callback الرسمي لـ Meta OAuth — ثابت عبر كل مراحل التدفق */
+export function buildMetaCallbackUrl(): string {
+  return `${buildServerBaseUrl()}/api/auth/facebook/callback`;
+}
+
 export const config = {
   port: Number(opt("PORT", "4000")),
 

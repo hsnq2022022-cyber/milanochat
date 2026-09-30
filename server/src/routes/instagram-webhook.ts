@@ -1,8 +1,19 @@
+/**
+ * Instagram Messaging Webhook — مسار التحقق والاستقبال على النطاق المخصص للـ webhook.
+ *
+ * - GET  /api/webhooks/instagram  → تحقق Meta (hub.verify_token = INSTAGRAM_VERIFY_TOKEN)
+ * - POST /api/webhooks/instagram  → أحداث entry[].messaging[] لحسابات Instagram
+ *   الاحترافية المرتبطة عبر channel_accounts (external_id = IG account id أو page id).
+ *
+ * المعالجة تُمرَّر إلى نفس محرك الرد الآلي (handleIncomingMessage) بحيث تعمل
+ * قاعدة المعرفة والتحويل لبشري وخصم الرصيد كما في واتساب، والإرسال يتم عبر
+ * Graph API Conversations من الخادم فقط.
+ */
 import { Router } from "express";
 import type { Request, Response } from "express";
+import crypto from "node:crypto";
 import { db } from "../db.js";
 import { handleIncomingMessage } from "../rag/reply.js";
-import { encryptField } from "../crypto.js";
 
 export const instagramWebhookRouter = Router();
 
@@ -20,17 +31,30 @@ instagramWebhookRouter.get("/instagram", (req: Request, res: Response) => {
     challenge: challenge ? "present" : "missing",
   });
 
-  if (mode === "subscribe" && token === VERIFY_TOKEN) {
+  if (mode === "subscribe" && VERIFY_TOKEN && token === VERIFY_TOKEN) {
     console.log("[Instagram Webhook] ✓ Verified successfully");
     return res.status(200).send(challenge);
   }
 
   console.error("[Instagram Webhook] ✗ Verification failed", {
     expected: VERIFY_TOKEN ? "set" : "empty",
-    received: token,
   });
   return res.status(403).send("Verify failed");
 });
+
+/* تحقق توقيع X-Hub-Signature-256 إن كان META_APP_SECRET مضبوطاً */
+function verifySignature(req: Request): boolean {
+  const secret = process.env.META_APP_SECRET;
+  if (!secret) return true; // لم يُضبط السر بعد — لا نكسر التدفق الحالي
+  const sig = String(req.headers["x-hub-signature-256"] ?? "");
+  const rawBody: Buffer | undefined = (req as any).rawBody;
+  if (!sig || !rawBody) return false;
+  const expected =
+    "sha256=" + crypto.createHmac("sha256", secret).update(rawBody).digest("hex");
+  const a = Buffer.from(sig);
+  const b = Buffer.from(expected);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
 
 // ─── 2. استقبال الرسائل (POST) ───
 instagramWebhookRouter.post("/instagram", async (req: Request, res: Response) => {
@@ -38,7 +62,12 @@ instagramWebhookRouter.post("/instagram", async (req: Request, res: Response) =>
   res.status(200).send("EVENT_RECEIVED");
 
   try {
-    const body = req.body;
+    if (!verifySignature(req)) {
+      console.error("[Instagram Webhook] Invalid signature — ignored");
+      return;
+    }
+
+    const body: any = req.body;
     console.log(
       "[Instagram Webhook] Received:",
       JSON.stringify(body).slice(0, 300)
@@ -50,26 +79,36 @@ instagramWebhookRouter.post("/instagram", async (req: Request, res: Response) =>
 
     for (const entry of body.entry || []) {
       const platformId = String(entry.id || "");
+      if (!platformId) continue;
 
-      console.log("[Instagram Webhook] Entry ID:", platformId);
-
-      // ابحث عن القناة المرتبطة (channel_accounts)
-      const { data: channel } = await db
+      // ابحث عن القناة المرتبطة (channel_accounts) — قد يكون entry.id هو
+      // معرّف حساب IG نفسه أو معرّف صفحة Facebook المرتبطة به
+      let { data: account } = await db
         .from("channel_accounts")
-        .select("tenant_id, channel")
+        .select("tenant_id, channel, external_id, status, agent_enabled, auto_reply")
         .eq("external_id", platformId)
+        .in("channel", ["instagram", "facebook"])
         .maybeSingle();
 
-      if (!channel) {
+      if (!account) {
+        const { data: byPage } = await db
+          .from("channel_accounts")
+          .select("tenant_id, channel, external_id, status, agent_enabled, auto_reply")
+          .eq("external_id", platformId)
+          .eq("channel", "facebook")
+          .maybeSingle();
+        account = byPage;
+      }
+
+      if (!account) {
         console.warn(
           `[Instagram Webhook] No tenant bound for external_id: ${platformId}`
         );
         continue;
       }
+      if (account.status !== "active") continue;
 
-      console.log(
-        `[Instagram Webhook] Found tenant: ${channel.tenant_id}, platform: ${channel.channel}`
-      );
+      const channel = account.channel === "facebook" ? "facebook" : "instagram";
 
       // معالجة messaging events
       const messaging = entry.messaging || [];
@@ -83,88 +122,31 @@ instagramWebhookRouter.post("/instagram", async (req: Request, res: Response) =>
 
         if (!senderId || !text) continue;
 
-        console.log(
-          `[Instagram Webhook] Message from ${senderId}: ${text.slice(0, 50)}`
-        );
-
         // معرّف المحادثة يحمل بادئة القناة (منصة:معرّف العميل) — يمنع تصادم المعرفات بين القنوات
-        const chatId = `${channel.channel}:${senderId}`;
+        const chatId = `${channel}:${senderId}`;
 
-        // ابحث عن محادثة موجودة
-        const { data: existing } = await db
-          .from("conversations")
-          .select("id")
-          .eq("tenant_id", channel.tenant_id)
-          .eq("wa_chat_id", chatId)
-          .maybeSingle();
+        // منع تكرار الـ webhook عبر المعرّف الخارجي للرسالة (mid)
+        const msgId: string | null =
+          typeof event.message?.mid === "string" ? event.message.mid : `ig_${Date.now()}`;
 
-        let convId = existing?.id;
-
-        // أنشئ محادثة جديدة إن لم توجد
-        if (!convId) {
-          const { data: newConv, error: convErr } = await db
-            .from("conversations")
-            .insert({
-              tenant_id: channel.tenant_id,
-              wa_chat_id: chatId,
-              channel: channel.channel,
-              customer_phone_encrypted: encryptField(senderId),
-              last_message_at: new Date().toISOString(),
-            })
+        if (event.message?.mid) {
+          const { data: dup } = await db
+            .from("messages")
             .select("id")
-            .single();
-
-          if (convErr) {
-            console.error("[Instagram Webhook] Create conv error:", convErr);
+            .eq("wa_message_id", msgId)
+            .limit(1);
+          if (dup && dup.length > 0) {
+            console.log(`[Instagram Webhook] Duplicate skipped: ${msgId}`);
             continue;
           }
-
-          convId = newConv?.id;
-          console.log(`[Instagram Webhook] Created new conv: ${convId}`);
         }
 
-        if (!convId) continue;
-
-        // احفظ الرسالة (منع التكرار عبر mid)
-        const msgId = event.message?.mid || `ig_${Date.now()}`;
-
-        const { data: existingMsg } = await db
-          .from("messages")
-          .select("id")
-          .eq("wa_message_id", msgId)
-          .maybeSingle();
-
-        if (existingMsg) {
-          console.log(`[Instagram Webhook] Duplicate skipped: ${msgId}`);
-          continue;
-        }
-
+        // أنشئ/حدّث المحادثة وادفع الرسالة إلى محرك الرد الآلي الموحد
+        // (handleIncomingMessage يتكفل بالحفظ والقناة والوكيل والإرسال)
         try {
-          await db.from("messages").insert({
-            conversation_id: convId,
-            tenant_id: channel.tenant_id,
-            direction: "in",
-            body_encrypted: encryptField(text),
-            kind: "customer",
-            is_auto: false,
-            wa_message_id: msgId,
-            created_at: new Date().toISOString(),
+          await handleIncomingMessage(account.tenant_id, chatId, text, msgId, {
+            channel: channel as "instagram" | "facebook",
           });
-          console.log(`[Instagram Webhook] Message saved: ${msgId}`);
-        } catch (e: any) {
-          if (e?.code === "23505") continue;
-          console.error("[Instagram Webhook] Insert msg error:", e);
-          continue;
-        }
-
-        // شغّل الرد الآلي
-        try {
-          await handleIncomingMessage(
-            channel.tenant_id,
-            senderId,
-            text,
-            msgId
-          );
         } catch (e) {
           console.error("[Instagram Webhook] AI reply error:", e);
         }

@@ -7,7 +7,7 @@
 import crypto from "node:crypto";
 import { Router, type Request, type Response, type NextFunction } from "express";
 import { db, authClient } from "../db.js";
-import { config } from "../config.js";
+import { config, buildServerBaseUrl } from "../config.js";
 import { encryptField, decryptField } from "../crypto.js";
 import { answerFromKnowledge } from "../rag/qa.js";
 
@@ -165,7 +165,7 @@ channelsRouter.get("/meta/oauth-url", async (req, res) => {
       ? ["pages_show_list", "pages_messaging", "pages_manage_metadata", "instagram_basic", "instagram_manage_messages"]
       : ["pages_show_list", "pages_messaging", "pages_manage_metadata", "pages_read_engagement"];
 
-  const redirect = `${config.publicUrl}/api/channels/meta/callback`;
+  const redirect = `${buildServerBaseUrl()}/api/channels/meta/callback`;
   const state = btoa(JSON.stringify({ tenantId: tenant.id, userId, channel }));
 
   const url =
@@ -199,7 +199,7 @@ channelsRouter.get("/meta/callback", async (req, res) => {
     const appId = process.env.META_APP_ID;
     if (!appSecret || !appId) return res.redirect("/#/dashboard?error=oauth_not_configured");
 
-    const redirect = `${config.publicUrl}/api/channels/meta/callback`;
+    const redirect = `${buildServerBaseUrl()}/api/channels/meta/callback`;
 
     // استبدال الرمز برمز طويل الأمد
     const tokenRes = await fetch(
