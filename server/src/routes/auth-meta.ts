@@ -8,23 +8,13 @@
  * (instagram_business_account) ويحفظه في
  * channel_accounts بقناة "instagram".
  *
- * الصلاحيات المطلوبة لقناة instagram هي المطابقة حرفياً لشاشة أذونات التطبيق:
- *   لإدارة محتوى Instagram: instagram_basic, pages_read_engagement,
- *                            business_management, pages_show_list
- *   لرسائل Instagram:        instagram_basic, instagram_manage_messages,
- *                            pages_read_engagement
- * ملاحظة: لا تُستخدم أبداً أسماء Instagram Login (instagram_business_basic /
- * instagram_business_manage_messages) في هذا التدفق — فهي خاصة بنقطة
- * www.instagram.com/oauth/authorize وترفضها شاشة Facebook.
- *
- * المسارات:
- *   Dashboard → POST /api/auth/facebook/start (platform=facebook|instagram, tenantId)
- *   ← { url } رابط Meta OAuth الرسمي بـ state عشوائي موقّع ومخزن لمرة واحدة
- *   المستخدم يفوّض في Meta → GET /api/auth/facebook/callback
- *   ← تبادل الرمز برمز طويل الأمد من الخادم فقط، جلب الصفحات/حسابات IG
- *     المؤهلة، الحفظ في channel_accounts (تشفير على الخادم فقط)،
- *     ثم redirect إلى GitHub Pages مع باراميترات نجاح/فشل.
+ * إصلاح مهم (v3):
+ * - عند نجاح OAuth: نكتب في channel_accounts (بيانات الحساب) + في channels
+ *   (حالة القناة للواجهة). كان الكود السابق يستخدم update فقط على channels،
+ *   فيفشل بصمت إذا لم يكن الصف موجودًا → الواجهة تظل تظهر "غير متصل".
+ *   الآن نستخدم check + (update أو insert) — يعمل حتى بدون UNIQUE constraint.
  */
+
 import express, { Router } from "express";
 import crypto from "node:crypto";
 import { db, authClient } from "../db.js";
@@ -44,14 +34,6 @@ const SCOPES: Record<string, string[]> = {
     "business_management",
   ],
   instagram: [
-    // Instagram API with Facebook Login — الأذونات مطابقة لشاشة تطبيق Meta الفعلي:
-    //   instagram_basic           → قراءة ملف تعريف حساب IG المرتبط بالصفحة
-    //   instagram_manage_messages → استقبال رسائل العملاء والرد عليها (Messaging)
-    //   pages_read_engagement     → قراءة بيانات الصفحة وحساب IG المرتبط
-    //   pages_show_list           → GET /me/accounts (اكتشاف الصفحات)
-    //   business_management       → الوصول لأصول Business Manager عند الحاجة
-    //   pages_manage_metadata     → اشتراك Webhooks وتفعيل أحداث messages
-    //   pages_messaging           → إرسال الردود عبر Messenger/IG Messaging
     "instagram_basic",
     "instagram_manage_messages",
     "pages_read_engagement",
@@ -82,21 +64,14 @@ async function ownedTenant(userId: string, tenantId?: string) {
   return data;
 }
 
-/* ═══════════ state: توقيع HMAC ثابت-المصدر + سجل استهلاك واحد — آمن مع تعدد النسخ/restart/إعادة النشر ═══════════
-   التصميم الأول كان يخزن state في Map داخل عملية Node الواحدة — يفشل عند تعدد النسخ/restart.
-   التصميم الثاني (HMAC فقط) أثبت فشله الميداني: كل deploy يعيد توليد META_APP_STATE_SECRET
-   (كان يسقط إلى crypto.randomBytes) فتصبح كل states ما قبل النشر غير قابلة للتحقق → oauth_state.
-   الحل النهائي:
-   1) السر يُشتق حصريًا من META_APP_SECRET الثابت في Railway (لا sources متذبذبة).
-   2) السجل الوحيد الموثوق لعدم إعادة الاستخدام/الإبطال هو جدول meta_oauth_states في Supabase
-      — مشترك بين كل النسخ، ويصمد أمام restarts وإعادة النشر. */
+/* ═══════════ state: توقيع HMAC ثابت-المصدر + سجل استهلاك واحد ═══════════ */
 
 type OAuthStatePayload = {
-  u: string; // userId
-  t: string; // tenantId
-  p: string; // platform
-  i: string; // nonce مطابق لعمود id في meta_oauth_states
-  exp: number; // unix seconds
+  u: string;
+  t: string;
+  p: string;
+  i: string;
+  exp: number;
 };
 
 const STATE_TTL_SEC = 15 * 60;
@@ -111,7 +86,6 @@ function hmacSign(body: string): string {
   return crypto.createHmac("sha256", stateSecret()).update(body).digest("base64url");
 }
 
-/** إنشاء state موقّع + تسجيله في قاعدة البيانات (السجل الوحيد للاستهلاك) */
 async function createOAuthState(rec: {
   platform: string;
   tenantId: string;
@@ -138,17 +112,17 @@ async function createOAuthState(rec: {
     consumed: false,
   });
   if (error) {
-    // إن كان الجدول غير منشأ بعد — نتابع بوضع HMAC-only (توافق خلفي) مع تحذير واضح
-    console.warn("[Meta Auth] meta_oauth_states insert failed (يتطلب migration 0007):", error.message);
+    console.warn("[Meta Auth] meta_oauth_states insert failed:", error.message);
   }
   return { state, nonce };
 }
 
-/** التحقق من التوقيع + عدم الانتهاء + الاستهلاك لمرة واحدة من قاعدة البيانات.
- *  يعيد { ok:true, session } أو { ok:false, reason } — السبب يُسجل ويُعاد للواجهة للتشخيص. */
 async function consumeOAuthState(
   state: string
-): Promise<{ ok: true; session: { platform: string; tenantId: string; userId: string } } | { ok: false; reason: string }> {
+): Promise<
+  | { ok: true; session: { platform: string; tenantId: string; userId: string } }
+  | { ok: false; reason: string }
+> {
   let decoded: Partial<OAuthStatePayload> | null = null;
   try {
     const dot = state.lastIndexOf(".");
@@ -156,29 +130,31 @@ async function consumeOAuthState(
     const body = state.slice(0, dot);
     const sig = state.slice(dot + 1);
     const expected = hmacSign(body);
-    if (sig.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected)))
+    if (
+      sig.length !== expected.length ||
+      !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))
+    )
       return { ok: false, reason: "state_signature" };
     decoded = JSON.parse(Buffer.from(body, "base64url").toString()) as Partial<OAuthStatePayload>;
-    if (!decoded?.u || !decoded?.t || !decoded?.p || !decoded?.exp) return { ok: false, reason: "state_payload" };
-    if (decoded.p !== "facebook" && decoded.p !== "instagram") return { ok: false, reason: "state_platform" };
+    if (!decoded?.u || !decoded?.t || !decoded?.p || !decoded?.exp)
+      return { ok: false, reason: "state_payload" };
+    if (decoded.p !== "facebook" && decoded.p !== "instagram")
+      return { ok: false, reason: "state_platform" };
   } catch {
     return { ok: false, reason: "state_parse" };
   }
 
   if (Math.floor(Date.now() / 1000) > decoded!.exp!) return { ok: false, reason: "state_expired" };
 
-  // الاستهلاك لمرة واحدة من السجل المشترك (يعمل عبر كل النسخ وعمليات النشر)
   const { data: row, error: selErr } = await db
     .from("meta_oauth_states")
     .select("id, consumed")
     .eq("id", decoded!.i!)
     .maybeSingle();
   if (selErr) {
-    // تعذر قراءة الجدول (غير منشأ) — نتجاهل فحص الاستهلاك ونقبل state صالح التوقيع
-    console.warn("[Meta Auth] meta_oauth_states select failed — تجاهل فحص الاستهلاك:", selErr.message);
+    console.warn("[Meta Auth] meta_oauth_states select failed:", selErr.message);
   } else if (!row) {
-    // الجدول منشأ لكن السجل غير موجود (مثلاً state أُنشئ قبل تطبيق migration) — نتجاهل الفحص بحذر
-    console.warn("[Meta Auth] meta_oauth_states: no record for nonce — تجاهل فحص الاستهلاك");
+    console.warn("[Meta Auth] meta_oauth_states: no record for nonce");
   } else if (row.consumed) {
     return { ok: false, reason: "state_reused" };
   } else {
@@ -190,12 +166,13 @@ async function consumeOAuthState(
     if (updErr) console.warn("[Meta Auth] mark consumed failed:", updErr.message);
   }
 
-  return { ok: true, session: { userId: decoded!.u!, tenantId: decoded!.t!, platform: decoded!.p! } };
+  return {
+    ok: true,
+    session: { userId: decoded!.u!, tenantId: decoded!.t!, platform: decoded!.p! },
+  };
 }
 
-/* تحقق الملكية عبر bearer token.
-   ملاحظة: تدفق OAuth الحالي في الواجهة يستخدم POST + Authorization header (apiAuthFetch)،
-   لكن لدعم أي فتح مباشر للرابط (GET مع ?t=<token>) نقرأ التوكن من query أيضًا. */
+/* تحقق الملكية عبر bearer token */
 async function requireUser(req: any, res: any, next: any) {
   const header = String(req.headers.authorization ?? "");
   const token = header.startsWith("Bearer ")
@@ -214,16 +191,10 @@ async function requireUser(req: any, res: any, next: any) {
   }
 }
 
-/* مسارات محمية بجلسة المستخدم (تُستدعى من Dashboard ببearer token) */
 const protectedRoutes = express.Router();
 protectedRoutes.use(requireUser);
 
-/* مسار عام — Meta تعود إليه مباشرة في المتصفح بدون أي Authorization header.
-   الأمان هنا لا يعتمد على الجلسة إطلاقاً، بل على state الموقّع HMAC + الاستهلاك
-   لمرة واحدة (consumeOAuthState) الذي يربط العملية بالمستخدم والـ tenant الصحيحين.
-   ملاحظة حرجة: هذا المسار يجب أن يُسجل قبل metaAuthRouter.use(requireUser)،
-   لأن router.use middleware يُطبَّق على كل طلب يطابق الراوتر بغض النظر عن Method،
-   فكان callback يحصل على 401 {"error":"غير مصرح"} قبل تنفيذ معالجه. */
+/* ═══════════ مسار عام — Meta تعود إليه مباشرة ═══════════ */
 metaAuthRouter.get("/facebook/callback", async (req: any, res) => {
   const frontBase = frontendDashboardUrl();
   const fail = (code: string) => {
@@ -256,7 +227,6 @@ metaAuthRouter.get("/facebook/callback", async (req: any, res) => {
   console.log("[Meta Auth] OAuth callback → redirect_uri:", redirectUri, "platform:", platform);
 
   try {
-    // تبادل الرمز قصير الأمد — من الخادم فقط
     const tokenRes = await fetch(
       `${GRAPH_API}/oauth/access_token?client_id=${encodeURIComponent(appId)}&client_secret=${encodeURIComponent(appSecret)}&redirect_uri=${encodeURIComponent(redirectUri)}&code=${encodeURIComponent(code)}`
     );
@@ -267,7 +237,6 @@ metaAuthRouter.get("/facebook/callback", async (req: any, res) => {
     }
     console.log("[Meta Auth] token exchange OK");
 
-    // تحويل إلى long-lived
     let accessToken = tokenData.access_token;
     try {
       const longRes = await fetch(
@@ -284,8 +253,9 @@ metaAuthRouter.get("/facebook/callback", async (req: any, res) => {
         ? new Date(Date.now() + Number(tokenData.expires_in) * 1000).toISOString()
         : null;
 
-    // جلب الصفحات التي يستطيع المستخدم إدارتها
-    const pagesRes = await fetch(`${GRAPH_API}/me/accounts?fields=id,name,picture&access_token=${accessToken}`);
+    const pagesRes = await fetch(
+      `${GRAPH_API}/me/accounts?fields=id,name,picture&access_token=${accessToken}`
+    );
     const pagesData: any = await pagesRes.json();
     const pages: any[] = pagesData.data ?? [];
     console.log("[Meta Auth] /me/accounts → pages:", pages.length, pages.map((p) => p?.id).join(","));
@@ -293,6 +263,7 @@ metaAuthRouter.get("/facebook/callback", async (req: any, res) => {
 
     let saved = 0;
     let lastAccountName = "";
+    let lastAccountId = "";
 
     for (const p of pages) {
       if (!p?.id) continue;
@@ -308,7 +279,6 @@ metaAuthRouter.get("/facebook/callback", async (req: any, res) => {
             display_name: p.name ?? null,
             avatar_url: picture,
             status: "active",
-            // الرمز يُحفظ مشفراً على الخادم فقط — لا يصل الواجهة أبداً
             access_token_encrypted: encryptField(pageToken),
             token_expires_at: expiresAt,
             updated_at: new Date().toISOString(),
@@ -318,16 +288,19 @@ metaAuthRouter.get("/facebook/callback", async (req: any, res) => {
         if (!error) {
           saved += 1;
           lastAccountName = p.name ?? lastAccountName;
+          lastAccountId = String(p.id);
         }
       } else if (platform === "instagram") {
-        // حساب Instagram الاحترافي المرتبط بالصفحة هو المؤهل للمراسلة فقط
         const igRes = await fetch(
           `${GRAPH_API}/${p.id}?fields=name,instagram_business_account{id,username}&access_token=${pageToken}`
         );
         const ig: any = await igRes.json();
         const igAcc = ig?.instagram_business_account;
-        console.log(`[Meta Auth] page ${p.id} IG discovery:`, igAcc?.id ? `found ${igAcc.username ?? igAcc.id}` : `not found (${ig?.error?.message ?? "no linked account"})`);
-        if (!igAcc?.id) continue; // غير مؤهل — لا نحفظ حسابات شخصية
+        console.log(
+          `[Meta Auth] page ${p.id} IG discovery:`,
+          igAcc?.id ? `found ${igAcc.username ?? igAcc.id}` : `not found (${ig?.error?.message ?? "no linked account"})`
+        );
+        if (!igAcc?.id) continue;
 
         const username = igAcc.username ? `@${igAcc.username}` : ig?.name ?? null;
         const igPicture =
@@ -337,7 +310,6 @@ metaAuthRouter.get("/facebook/callback", async (req: any, res) => {
               ? igAcc.picture_url
               : picture;
 
-        // سياسة الملكية الحصرية: نفس الحساب لا يُربط بأكثر من tenant
         const { data: taken } = await db
           .from("channel_accounts")
           .select("tenant_id, status")
@@ -368,6 +340,7 @@ metaAuthRouter.get("/facebook/callback", async (req: any, res) => {
         if (!error) {
           saved += 1;
           lastAccountName = username ?? lastAccountName;
+          lastAccountId = String(igAcc.id);
         } else {
           console.error("[Meta Auth] channel_accounts upsert FAILED:", error.message);
         }
@@ -384,16 +357,42 @@ metaAuthRouter.get("/facebook/callback", async (req: any, res) => {
       );
     }
 
-    // تحديث سجل القناة في جدول channels إن وُجد (best effort — لا نفترض تنفيذه)
-    await db
+    /* ═══════════════════════════════════════════════════════════
+       إصلاح v3: كتابة حالة القناة في جدول channels بطريقة آمنة.
+       - update فقط كان يفشل بصمت إذا لم يكن الصف موجودًا.
+       - الآن: نبحث عن الصف أولًا، ثم نعمل update أو insert.
+       ═══════════════════════════════════════════════════════════ */
+    const { data: existingChannel } = await db
       .from("channels")
-      .update({
+      .select("id")
+      .eq("tenant_id", tenantId)
+      .eq("platform", platform)
+      .maybeSingle();
+
+    if (existingChannel?.id) {
+      const { error: chUpdErr } = await db
+        .from("channels")
+        .update({
+          is_connected: true,
+          connected_at: new Date().toISOString(),
+          account_name: lastAccountName || null,
+          platform_account_id: lastAccountId || null,
+        })
+        .eq("id", existingChannel.id);
+      if (chUpdErr) console.warn("[Meta Auth] channels update failed:", chUpdErr.message);
+      else console.log("[Meta Auth] channels row UPDATED for", platform);
+    } else {
+      const { error: chInsErr } = await db.from("channels").insert({
+        tenant_id: tenantId,
+        platform,
         is_connected: true,
         connected_at: new Date().toISOString(),
         account_name: lastAccountName || null,
-      })
-      .eq("tenant_id", tenantId)
-      .eq("platform", platform);
+        platform_account_id: lastAccountId || null,
+      });
+      if (chInsErr) console.warn("[Meta Auth] channels insert failed:", chInsErr.message);
+      else console.log("[Meta Auth] channels row INSERTED for", platform);
+    }
 
     res.redirect(
       `${frontBase}?channel_connected=${platform}&accounts=${saved}&name=${encodeURIComponent(lastAccountName)}`
@@ -404,17 +403,17 @@ metaAuthRouter.get("/facebook/callback", async (req: any, res) => {
   }
 });
 
-/* ما تبقى من مسارات: محمي بجلسة المستخدم */
+/* ═══════════ مسارات محمية بجلسة المستخدم ═══════════ */
 metaAuthRouter.use(protectedRoutes);
 
-// 1) بدء OAuth — الخادم يبني الرابط، الأسرار لا تغادره أبداً
+// 1) بدء OAuth
 metaAuthRouter.post("/facebook/start", async (req: any, res) => {
   const appId = process.env.META_APP_ID;
   const appSecret = process.env.META_APP_SECRET;
   if (!appId || !appSecret) {
     return res.status(400).json({
       error: "oauth_not_configured",
-      message: "تطبيق Meta غير مُهيّأ على الخادم بعد (META_APP_ID / META_APP_SECRET).",
+      message: "تطبيق Meta غير مُهيّأ على الخادم بعد.",
     });
   }
 
@@ -452,7 +451,7 @@ metaAuthRouter.post("/facebook/start", async (req: any, res) => {
   res.json({ url });
 });
 
-// 3) فصل قناة
+// 2) فصل قناة
 metaAuthRouter.post("/disconnect", async (req: any, res) => {
   const { platform } = req.body ?? {};
   if (platform !== "facebook" && platform !== "instagram") {
@@ -461,7 +460,6 @@ metaAuthRouter.post("/disconnect", async (req: any, res) => {
   const tenant = await ownedTenant(req.userId, req.body?.tenantId);
   if (!tenant) return res.status(403).json({ error: "تعذر التحقق من ملكية النشاط" });
 
-  // حذف الرموز من الحسابات + إغلاق السجل
   await db
     .from("channel_accounts")
     .update({
@@ -474,7 +472,12 @@ metaAuthRouter.post("/disconnect", async (req: any, res) => {
 
   await db
     .from("channels")
-    .update({ is_connected: false, account_name: null, account_avatar: null, platform_account_id: null })
+    .update({
+      is_connected: false,
+      account_name: null,
+      account_avatar: null,
+      platform_account_id: null,
+    })
     .eq("tenant_id", tenant.id)
     .eq("platform", platform);
 
