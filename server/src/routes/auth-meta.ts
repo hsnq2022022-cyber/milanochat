@@ -33,12 +33,22 @@ const SCOPES: Record<string, string[]> = {
     "business_management",
   ],
   instagram: [
-    // صلاحيات Facebook Login الرسمية المقابلة لـ Instagram Graph API / Messaging API.
-    // الأسماء instagram_basic وinstagram_manage_messages غير معترف بها في
-    // www.facebook.com/dialog/oauth (Invalid Scopes) — المكافئ الصحيح هو
-    // instagram_business_* المطلوب عبر منتج "Instagram" في تطبيق Meta.
-    "instagram_business_basic",
-    "instagram_business_manage_messages",
+    // صلاحيات Facebook Login فقط — لا تُطلب أي صلاحية instagram_* هنا.
+    // أسباب الرفض التي ظهرت سابقاً ("Invalid Scopes"):
+    //   • instagram_basic / instagram_manage_messages → مُلغاة من Facebook Login.
+    //   • instagram_business_basic / instagram_business_manage_messages → خاصة
+    //     بـ Instagram Login (www.instagram.com/oauth/authorize) وترفضها
+    //     facebook.com/dialog/oauth.
+    // ربط Instagram عبر Facebook Login يتم بالصفحة الوسيطة:
+    //   pages_show_list        → GET /me/accounts (اكتشاف الصفحات)
+    //   pages_read_engagement  → قراءة بيانات الصفحة + حساب IG المرتبط
+    //                            (instagram_user_account / instagram_business_account)
+    //   pages_manage_metadata  → اشتراك Webhooks وتفعيل أحداث messages
+    //   pages_messaging        → إرسال الردود (Messenger/IG Messaging عبر الصفحة)
+    //   business_management    → الوصول لأصول Business Manager عند الحاجة
+    // ملاحظة: إدارة الرسائل المباشرة لحساب IG تتطلب أيضاً تفعيل منتج
+    // "Instagram" + اشتراك webhook لأحداث messages في App Dashboard —
+    // وهي إعدادات لوحة تحكم وليست scopes في هذا الطلب.
     "pages_show_list",
     "pages_messaging",
     "pages_manage_metadata",
