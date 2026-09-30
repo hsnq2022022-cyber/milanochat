@@ -2,17 +2,14 @@
  * لوحة التحكم — كل المسارات تتطلب توكن Supabase Auth صالح.
  * تشمل: الملخص، المحادثات، الرد اليدوي، الأسئلة العالقة، مصادر المعرفة، ربط الحساب.
  *
- * ملاحظات النسخة (v4):
- * - تمت إضافة human_agent_expires_at إلى رد قائمة المحادثات.
- * - تمت إضافة GET /conversations/:id لجلب محادثة واحدة.
- * - تمت إضافة GET /conversations/summary لتحديث خفيف.
- * - تمت إضافة POST /conversations/:id/mark-read.
- * - شكل رد /reply موحَّد.
+ * ملاحظات النسخة (v5):
+ * - dashboardRouter فقط (channelsRouter انتقل إلى channels.ts).
+ * - human_agent_expires_at في رد قائمة المحادثات.
+ * - GET /conversations/:id لجلب محادثة واحدة.
+ * - GET /conversations/summary لتحديث خفيف.
+ * - POST /conversations/:id/mark-read.
  * - عرض customer_name في قائمة المحادثات.
- * - NEW: تمت إضافة channelsRouter منفصل لدعم المسارات:
- *     GET /api/channels/accounts
- *     GET /api/channels/meta/status
- *   مع الاستعلام الآمن (select *) لتجنب أخطاء الأعمدة الناقصة.
+ * - POST /claim لضم الحساب.
  */
 
 import { Router } from "express";
@@ -61,7 +58,7 @@ async function ownedTenant(userId: string, tenantId?: string) {
 }
 
 /* ═══════════════════════════════════════════════════════════
-   1) dashboardRouter — /api/dashboard/*
+   dashboardRouter — /api/dashboard/*
    ═══════════════════════════════════════════════════════════ */
 
 export const dashboardRouter = Router();
@@ -94,7 +91,13 @@ function shapeConversation(c: any) {
   return {
     id: c.id,
     customerPhone: c.customer_phone_encrypted
-      ? (() => { try { return decryptField(c.customer_phone_encrypted); } catch { return null; } })()
+      ? (() => {
+          try {
+            return decryptField(c.customer_phone_encrypted);
+          } catch {
+            return null;
+          }
+        })()
       : null,
     customerName: c.customer_name || null,
     customerAvatar: c.customer_avatar || null,
@@ -126,7 +129,8 @@ dashboardRouter.post("/claim", async (req, res) => {
     .select("id")
     .maybeSingle();
 
-  if (error || !data) return res.status(404).json({ error: "رمز غير صالح أو مستخدم" });
+  if (error || !data)
+    return res.status(404).json({ error: "رمز غير صالح أو مستخدم" });
   res.json({ tenantId: data.id });
 });
 
@@ -165,85 +169,6 @@ dashboardRouter.get("/wa/bindings", async (req, res) => {
   res.json(data || []);
 });
 
-/* ─── القنوات الاجتماعية ─── */
-const SUPPORTED_PLATFORMS = ["whatsapp", "facebook", "instagram"] as const;
-
-/* GET /channels — قائمة القنوات */
-dashboardRouter.get("/channels", async (req, res) => {
-  const tenant = await ownedTenant(
-    (req as AuthedRequest).userId!,
-    req.query.tenantId as string
-  );
-  if (!tenant) return res.status(404).json({ error: "لا يوجد حساب" });
-
-  const { data, error } = await db
-    .from("channels")
-    .select("*")
-    .eq("tenant_id", tenant.id);
-  if (error) return res.status(500).json({ error: error.message });
-  res.json(data || []);
-});
-
-/* POST /channels/connect */
-dashboardRouter.post("/channels/connect", async (req, res) => {
-  const tenant = await ownedTenant(
-    (req as AuthedRequest).userId!,
-    req.body?.tenantId
-  );
-  if (!tenant) return res.status(404).json({ error: "لا يوجد حساب" });
-
-  const platform = String(req.body?.platform || "");
-  if (!SUPPORTED_PLATFORMS.includes(platform as any)) {
-    return res.status(400).json({ error: "قناة غير مدعومة" });
-  }
-
-  const { data: existing } = await db
-    .from("channels")
-    .select("*")
-    .eq("tenant_id", tenant.id)
-    .eq("platform", platform)
-    .maybeSingle();
-
-  if (existing) return res.json(existing);
-
-  const { data, error } = await db
-    .from("channels")
-    .insert({ tenant_id: tenant.id, platform, is_connected: false })
-    .select()
-    .single();
-
-  if (error) return res.status(500).json({ error: error.message });
-  res.json(data);
-});
-
-/* POST /channels/disconnect */
-dashboardRouter.post("/channels/disconnect", async (req, res) => {
-  const tenant = await ownedTenant(
-    (req as AuthedRequest).userId!,
-    req.body?.tenantId
-  );
-  if (!tenant) return res.status(404).json({ error: "لا يوجد حساب" });
-
-  const platform = String(req.body?.platform || "");
-  if (!SUPPORTED_PLATFORMS.includes(platform as any)) {
-    return res.status(400).json({ error: "قناة غير مدعومة" });
-  }
-
-  const { error } = await db
-    .from("channels")
-    .update({
-      is_connected: false,
-      platform_account_id: null,
-      account_name: null,
-      account_avatar: null,
-    })
-    .eq("tenant_id", tenant.id)
-    .eq("platform", platform);
-
-  if (error) return res.status(500).json({ error: error.message });
-  res.json({ ok: true });
-});
-
 /* ─── /summary ─── */
 dashboardRouter.get("/summary", async (req, res) => {
   const tenant = await ownedTenant(
@@ -253,9 +178,14 @@ dashboardRouter.get("/summary", async (req, res) => {
   if (!tenant) return res.status(404).json({ error: "لا يوجد حساب مرتبط" });
 
   const [openQ, convCount, wa] = await Promise.all([
-    db.from("unresolved_questions").select("id", { count: "exact", head: true })
-      .eq("tenant_id", tenant.id).eq("status", "open"),
-    db.from("conversations").select("id", { count: "exact", head: true })
+    db
+      .from("unresolved_questions")
+      .select("id", { count: "exact", head: true })
+      .eq("tenant_id", tenant.id)
+      .eq("status", "open"),
+    db
+      .from("conversations")
+      .select("id", { count: "exact", head: true })
       .eq("tenant_id", tenant.id),
     waStatus(tenant.id),
   ]);
@@ -530,7 +460,9 @@ dashboardRouter.get("/conversations/:id/human-status", async (req, res) => {
 
   const { data, error } = await db
     .from("conversations")
-    .select("transferred, auto_paused_reason, human_agent_expires_at, human_agent_activated_by")
+    .select(
+      "transferred, auto_paused_reason, human_agent_expires_at, human_agent_activated_by"
+    )
     .eq("id", req.params.id)
     .eq("tenant_id", tenant.id)
     .single();
@@ -566,7 +498,9 @@ dashboardRouter.get("/unresolved", async (req, res) => {
 
   const { data } = await db
     .from("unresolved_questions")
-    .select("id, question_encrypted, status, manual_answer, added_to_kb, created_at, conversation_id, best_similarity")
+    .select(
+      "id, question_encrypted, status, manual_answer, added_to_kb, created_at, conversation_id, best_similarity"
+    )
     .eq("tenant_id", tenant.id)
     .order("created_at", { ascending: false })
     .limit(100);
@@ -622,8 +556,15 @@ dashboardRouter.post("/unresolved/:id/resolve", async (req, res) => {
 
   if (sendToCustomer && (q as any).conversation_id) {
     try {
-      await sendManualReply(tenant.id, (q as any).conversation_id, answer.trim(), false);
-    } catch {}
+      await sendManualReply(
+        tenant.id,
+        (q as any).conversation_id,
+        answer.trim(),
+        false
+      );
+    } catch {
+      /* الواتساب غير متصل — تُحفظ الإجابة على الأقل */
+    }
   }
 
   res.json({ ok: true });
@@ -656,7 +597,10 @@ dashboardRouter.post("/knowledge", async (req, res) => {
   const { url, text } = req.body ?? {};
   const result = url?.trim()
     ? await ingestSource(tenant.id, { kind: "url", url: url.trim() })
-    : await ingestSource(tenant.id, { kind: "text", text: String(text ?? "") });
+    : await ingestSource(tenant.id, {
+        kind: "text",
+        text: String(text ?? ""),
+      });
 
   res.json(result);
 });
@@ -686,88 +630,4 @@ dashboardRouter.post("/wa/connect", async (req, res) => {
 
   const snap = await ensureSession(tenant.id);
   res.json({ status: snap.state });
-});
-
-/* ═══════════════════════════════════════════════════════════
-   2) channelsRouter — /api/channels/*
-   هذا الراوتر الجديد للـ endpoints التي تنادي عليها الواجهة.
-   استخدمه: في index.ts أضف:
-     import { channelsRouter } from "./routes/dashboard.js";
-     app.use("/api/channels", channelsRouter);
-   ═══════════════════════════════════════════════════════════ */
-
-export const channelsRouter = Router();
-channelsRouter.use(requireAuth);
-
-/* GET /api/channels/accounts — قائمة الحسابات المرتبطة */
-channelsRouter.get("/accounts", async (req, res) => {
-  const tenant = await ownedTenant(
-    (req as AuthedRequest).userId!,
-    req.query.tenantId as string
-  );
-  if (!tenant) return res.status(404).json({ error: "لا يوجد حساب" });
-
-  // select("*") — يستبعد تلقائيًا الأعمدة غير الموجودة
-  const { data, error } = await db
-    .from("channel_accounts")
-    .select("*")
-    .eq("tenant_id", tenant.id)
-    .order("created_at", { ascending: false });
-
-  if (error) {
-    console.error("[Channels] accounts load error:", error);
-    // بدل 500 — نُعيد قائمة فارغة للسماح للواجهة بالعمل
-    return res.json([]);
-  }
-
-  // تطبيع الحقول لتتوافق مع الواجهة
-  const normalized = (data ?? []).map((row: any) => ({
-    id: row.id,
-    tenantId: row.tenant_id,
-    channel: row.channel || row.platform || "whatsapp",
-    platform: row.platform || row.channel || "whatsapp",
-    externalId: row.external_id || row.platform_account_id || null,
-    platformAccountId: row.platform_account_id || row.external_id || null,
-    displayName: row.display_name || row.account_name || null,
-    accountName: row.account_name || row.display_name || null,
-    avatarUrl: row.avatar_url || row.account_avatar || null,
-    accountAvatar: row.account_avatar || row.avatar_url || null,
-    status: row.status || (row.is_active === false ? "inactive" : "active"),
-    isActive: row.is_active !== false,
-    agentEnabled: row.agent_enabled !== false,
-    connectedAt: row.connected_at || null,
-    createdAt: row.created_at || null,
-    updatedAt: row.updated_at || null,
-    tokenExpiresAt: row.token_expires_at || null,
-  }));
-
-  res.json(normalized);
-});
-
-/* GET /api/channels/meta/status — حالة ربط Meta (إنستغرام/فيسبوك) */
-channelsRouter.get("/meta/status", async (req, res) => {
-  const tenant = await ownedTenant(
-    (req as AuthedRequest).userId!,
-    req.query.tenantId as string
-  );
-  if (!tenant) return res.status(404).json({ error: "لا يوجد حساب" });
-
-  const { data, error } = await db
-    .from("channels")
-    .select("*")
-    .eq("tenant_id", tenant.id);
-
-  if (error) {
-    console.error("[Channels] meta status error:", error);
-    return res.json({ instagram: false, facebook: false, whatsapp: false });
-  }
-
-  const find = (p: string) =>
-    (data ?? []).find((c: any) => c.platform === p)?.is_connected === true;
-
-  res.json({
-    whatsapp: find("whatsapp"),
-    instagram: find("instagram"),
-    facebook: find("facebook"),
-  });
 });
