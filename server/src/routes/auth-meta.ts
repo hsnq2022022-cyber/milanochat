@@ -25,7 +25,7 @@
  *     المؤهلة، الحفظ في channel_accounts (تشفير على الخادم فقط)،
  *     ثم redirect إلى GitHub Pages مع باراميترات نجاح/فشل.
  */
-import { Router } from "express";
+import express, { Router } from "express";
 import crypto from "node:crypto";
 import { db, authClient } from "../db.js";
 import { config, buildMetaCallbackUrl } from "../config.js";
@@ -164,52 +164,16 @@ async function requireUser(req: any, res: any, next: any) {
   }
 }
 
-metaAuthRouter.use(requireUser);
+/* مسارات محمية بجلسة المستخدم (تُستدعى من Dashboard ببearer token) */
+const protectedRoutes = express.Router();
+protectedRoutes.use(requireUser);
 
-// 1) بدء OAuth — الخادم يبني الرابط، الأسرار لا تغادره أبداً
-metaAuthRouter.post("/facebook/start", async (req: any, res) => {
-  const appId = process.env.META_APP_ID;
-  const appSecret = process.env.META_APP_SECRET;
-  if (!appId || !appSecret) {
-    return res.status(400).json({
-      error: "oauth_not_configured",
-      message: "تطبيق Meta غير مُهيّأ على الخادم بعد (META_APP_ID / META_APP_SECRET).",
-    });
-  }
-
-  const { platform } = req.body ?? {};
-  if (platform !== "facebook" && platform !== "instagram") {
-    return res.status(400).json({ error: "قناة غير مدعومة" });
-  }
-
-  const tenant = await ownedTenant(req.userId, req.body?.tenantId);
-  if (!tenant) return res.status(403).json({ error: "تعذر التحقق من ملكية النشاط التجاري" });
-
-  let redirectUri: string;
-  let state: string;
-  try {
-    redirectUri = buildMetaCallbackUrl();
-    state = createOAuthState({ platform, tenantId: tenant.id, userId: req.userId });
-  } catch (e: any) {
-    console.error("[Meta Auth] إعداد OAuth غير صالح:", e?.message);
-    return res.status(500).json({
-      error: "oauth_misconfigured",
-      message: "إعداد PUBLIC_URL غير صحيح على الخادم (يجب أن يكون https بلا مسار).",
-    });
-  }
-
-  console.log("[Meta Auth] OAuth start → redirect_uri:", redirectUri, "platform:", platform);
-
-  const scopes = SCOPES[platform];
-  const url =
-    `https://www.facebook.com/v21.0/dialog/oauth?client_id=${encodeURIComponent(appId)}` +
-    `&redirect_uri=${encodeURIComponent(redirectUri)}` +
-    `&state=${encodeURIComponent(state)}&scope=${encodeURIComponent(scopes.join(","))}&response_type=code`;
-
-  res.json({ url });
-});
-
-// 2) callback — بدون auth (Meta تعود إليه مباشرة)، الأمان بالتوقيع + الاستهلاك لمرة واحدة
+/* مسار عام — Meta تعود إليه مباشرة في المتصفح بدون أي Authorization header.
+   الأمان هنا لا يعتمد على الجلسة إطلاقاً، بل على state الموقّع HMAC + الاستهلاك
+   لمرة واحدة (consumeOAuthState) الذي يربط العملية بالمستخدم والـ tenant الصحيحين.
+   ملاحظة حرجة: هذا المسار يجب أن يُسجل قبل metaAuthRouter.use(requireUser)،
+   لأن router.use middleware يُطبَّق على كل طلب يطابق الراوتر بغض النظر عن Method،
+   فكان callback يحصل على 401 {"error":"غير مصرح"} قبل تنفيذ معالجه. */
 metaAuthRouter.get("/facebook/callback", async (req: any, res) => {
   const frontBase = frontendDashboardUrl();
   const fail = (code: string) =>
@@ -368,6 +332,52 @@ metaAuthRouter.get("/facebook/callback", async (req: any, res) => {
     console.error("[Meta Auth] callback error:", e);
     fail(e?.message ? String(e.message).slice(0, 120) : "unknown");
   }
+});
+
+/* ما تبقى من مسارات: محمي بجلسة المستخدم */
+metaAuthRouter.use(protectedRoutes);
+
+// 1) بدء OAuth — الخادم يبني الرابط، الأسرار لا تغادره أبداً
+metaAuthRouter.post("/facebook/start", async (req: any, res) => {
+  const appId = process.env.META_APP_ID;
+  const appSecret = process.env.META_APP_SECRET;
+  if (!appId || !appSecret) {
+    return res.status(400).json({
+      error: "oauth_not_configured",
+      message: "تطبيق Meta غير مُهيّأ على الخادم بعد (META_APP_ID / META_APP_SECRET).",
+    });
+  }
+
+  const { platform } = req.body ?? {};
+  if (platform !== "facebook" && platform !== "instagram") {
+    return res.status(400).json({ error: "قناة غير مدعومة" });
+  }
+
+  const tenant = await ownedTenant(req.userId, req.body?.tenantId);
+  if (!tenant) return res.status(403).json({ error: "تعذر التحقق من ملكية النشاط التجاري" });
+
+  let redirectUri: string;
+  let state: string;
+  try {
+    redirectUri = buildMetaCallbackUrl();
+    state = createOAuthState({ platform, tenantId: tenant.id, userId: req.userId });
+  } catch (e: any) {
+    console.error("[Meta Auth] إعداد OAuth غير صالح:", e?.message);
+    return res.status(500).json({
+      error: "oauth_misconfigured",
+      message: "إعداد PUBLIC_URL غير صحيح على الخادم (يجب أن يكون https بلا مسار).",
+    });
+  }
+
+  console.log("[Meta Auth] OAuth start → redirect_uri:", redirectUri, "platform:", platform);
+
+  const scopes = SCOPES[platform];
+  const url =
+    `https://www.facebook.com/v21.0/dialog/oauth?client_id=${encodeURIComponent(appId)}` +
+    `&redirect_uri=${encodeURIComponent(redirectUri)}` +
+    `&state=${encodeURIComponent(state)}&scope=${encodeURIComponent(scopes.join(","))}&response_type=code`;
+
+  res.json({ url });
 });
 
 // 3) فصل قناة
