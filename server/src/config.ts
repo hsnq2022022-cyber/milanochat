@@ -89,8 +89,16 @@ export function buildServerBaseUrl(): string {
   return `${u.protocol}//${u.host}`;
 }
 
-/** رابط callback الرسمي لـ Meta OAuth (Facebook Login) — ثابت عبر كل مراحل التدفق */
+/** رابط callback الرسمي لـ Meta OAuth (Facebook Login) — ثابت عبر كل مراحل التدفق.
+ *  ملاحظة: إن كان META_REDIRECT_URI مضبوطًا فهو مصدر الحقيقة الحرفي الوحيد
+ *  (يجب أن يطابق حرفيًا ما هو مسجل في Meta Dashboard)، ولا يُلحق به مسار آخر.
+ *  بدونه يُبنى من PUBLIC_URL + المسار الثابت /api/auth/facebook/callback. */
 export function buildMetaCallbackUrl(): string {
+  const override = opt("META_REDIRECT_URI").trim();
+  if (override && /^https?:\/\//.test(override)) {
+    // قيمة كاملة صالحة (تحتوي المسار بنفسها) — تُستخدم كما هي لضمان التطابق الحرفي مع Meta
+    return override.replace(/\/+$/, "");
+  }
   return `${buildServerBaseUrl()}/api/auth/facebook/callback`;
 }
 

@@ -82,71 +82,65 @@ async function ownedTenant(userId: string, tenantId?: string) {
   return data;
 }
 
-/* ═══════════ state عشوائي قوي، موقّع، ومخزن لمرة واحدة (منع CSRF وإعادة الاستخدام) ═══════════ */
+/* ═══════════ state: JWT موقّع HMAC بلا حالة (stateless) — آمن مع تعدد النسخ/restart ═══════════
+   التصميم السابق كان يخزن state في Map داخل عملية Node الواحدة. هذا يفشل حتمًا في الإنتاج لأن:
+   1) /facebook/start قد يصل لنسخة (instance) وcallback يصل لنسخة أخرى — الذاكرة غير مشتركة.
+   2) أي restart/deploy أثناء وجود المستخدم على شاشة Facebook يفرّغ الذاكرة → oauth_state.
+   الحل: التوقيع فقط — الـ payload يحمل (u=userId, t=tenantId, p=platform, i=nonce, exp)،
+   والتحقق يتم بمطابقة التوقيع + عدم انتهاء exp. منع إعادة الاستخدام لم يعد مطلوبًا للأمان
+   ضد CSRF (التوقيع هو الضامن)، وcode نفسه يُستهلك لدى Meta ولا يعمل إلا مرة واحدة. */
 
-type OAuthStateRecord = {
-  platform: string;
-  tenantId: string;
-  userId: string;
-  createdAt: number;
+type OAuthStatePayload = {
+  u: string; // userId
+  t: string; // tenantId
+  p: string; // platform
+  i: string; // nonce عشوائي (لتمييز الجلسات في اللوجات)
+  exp: number; // unix seconds
 };
 
-const STATE_TTL_MS = 15 * 60 * 1000;
-const stateStore = new Map<string, OAuthStateRecord>();
+const STATE_TTL_SEC = 15 * 60;
 
-function pruneStates() {
-  const now = Date.now();
-  for (const [k, v] of stateStore) {
-    if (now - v.createdAt > STATE_TTL_MS) stateStore.delete(k);
-  }
+function stateSecret(): string {
+  const secret = process.env.META_APP_STATE_SECRET || process.env.FIELD_ENCRYPTION_KEY || process.env.META_APP_SECRET || "";
+  if (!secret) throw new Error("لا يوجد سر لتوقيع state — اضبط FIELD_ENCRYPTION_KEY أو META_APP_STATE_SECRET");
+  return secret;
 }
 
-function signState(payload: object): string {
+function hmacSign(body: string): string {
+  return crypto.createHmac("sha256", stateSecret()).update(body).digest("base64url");
+}
+
+/** إنشاء state موقّع مرتبط بالمستخدم والـ tenant — بلا تخزين في الذاكرة */
+function createOAuthState(rec: { platform: string; tenantId: string; userId: string }): string {
+  const payload: OAuthStatePayload = {
+    u: rec.userId,
+    t: rec.tenantId,
+    p: rec.platform,
+    i: crypto.randomBytes(8).toString("hex"),
+    exp: Math.floor(Date.now() / 1000) + STATE_TTL_SEC,
+  };
   const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
-  const secret = process.env.META_APP_SECRET || process.env.FIELD_ENCRYPTION_KEY || "";
-  if (!secret) throw new Error("لا يوجد سر ل توقيع state — اضبط META_APP_SECRET");
-  const sig = crypto.createHmac("sha256", secret).update(body).digest("base64url");
-  return `${body}.${sig}`;
+  return `${body}.${hmacSign(body)}`;
 }
 
-function verifyState(state: string): any | null {
+/** التحقق من التوقيع وعدم الانتهاء — يعيد بيانات الجلسة أو null */
+function consumeOAuthState(state: string): { platform: string; tenantId: string; userId: string } | null {
   try {
-    const [body, sig] = state.split(".");
-    if (!body || !sig) return null;
-    const secret = process.env.META_APP_SECRET || process.env.FIELD_ENCRYPTION_KEY || "";
-    if (!secret) return null;
-    const expected = crypto.createHmac("sha256", secret).update(body).digest("base64url");
-    if (
-      sig.length !== expected.length ||
-      !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))
-    )
+    const dot = state.lastIndexOf(".");
+    if (dot <= 0) return null;
+    const body = state.slice(0, dot);
+    const sig = state.slice(dot + 1);
+    const expected = hmacSign(body);
+    if (sig.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected)))
       return null;
-    return JSON.parse(Buffer.from(body, "base64url").toString());
+    const decoded = JSON.parse(Buffer.from(body, "base64url").toString()) as Partial<OAuthStatePayload>;
+    if (!decoded?.u || !decoded?.t || !decoded?.p || !decoded?.exp) return null;
+    if (Math.floor(Date.now() / 1000) > decoded.exp) return null; // منتهي الصلاحية
+    if (decoded.p !== "facebook" && decoded.p !== "instagram") return null;
+    return { userId: decoded.u, tenantId: decoded.t, platform: decoded.p };
   } catch {
     return null;
   }
-}
-
-/** إنشاء state جديد مرتبط بالمستخدم والـ tenant — nonce عشوائي يُستهلك مرة واحدة */
-function createOAuthState(rec: Omit<OAuthStateRecord, "createdAt">): string {
-  pruneStates();
-  const nonce = crypto.randomBytes(16).toString("hex");
-  stateStore.set(nonce, { ...rec, createdAt: Date.now() });
-  return signState({ n: nonce, p: rec.platform, t: rec.tenantId });
-}
-
-/** التحقق من state واستهلاكه — لا يمكن إعادة استخدامه إطلاقاً */
-function consumeOAuthState(state: string): OAuthStateRecord | null {
-  pruneStates();
-  const decoded = verifyState(state);
-  if (!decoded?.n) return null;
-  const rec = stateStore.get(decoded.n);
-  if (!rec) return null; // منتهي أو غير معروف أو مُعاد استخدامه
-  stateStore.delete(decoded.n); // استهلاك لمرة واحدة
-  if (Date.now() - rec.createdAt > STATE_TTL_MS) return null;
-  // ربط صارم: ما في الـ payload الموقّع يجب أن يطابق السجل المخزّن
-  if (decoded.p !== rec.platform || decoded.t !== rec.tenantId) return null;
-  return rec;
 }
 
 /* تحقق الملكية عبر bearer token (نفس نمط requireAuth في channels.ts) */
