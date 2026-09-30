@@ -672,6 +672,10 @@ export default function Dashboard() {
       showToast(
         `تم ربط ${connected === "facebook" ? "Facebook Messenger" : "Instagram"} بنجاح ✅${name ? ` (${name})` : ""}`
       );
+      // حساب شخصي غير مؤهل للمراسلة — تنبيه صادق بدل حالة وهمية
+      if (q.get("note") === "personal_account") {
+        setTimeout(() => showToast("تنبيه: الحساب شخصي — حوّله إلى احترافي/أعمال لتفعيل استقبال الرسائل والرد الآلي"), 1200);
+      }
       loadChannels();
       loadSocialChannels();
       window.history.replaceState({}, "", "#/dashboard");
@@ -750,15 +754,19 @@ export default function Dashboard() {
     startMetaOAuth(platform);
   };
 
-  /** بدء تدفق OAuth الرسمي — الخادم يبني الرابط والصلاحيات، والواجهة لا ترى أي سر */
+  /** بدء تدفق OAuth الرسمي — الخادم يبني الرابط والصلاحيات، والواجهة لا ترى أي سر
+   * instagram → تدفق Instagram Login المستقل (/api/auth/instagram/start)
+   * facebook   → تدفق Facebook Login الحالي (بدون تغيير)
+   */
   const startMetaOAuth = async (channel: "facebook" | "instagram") => {
     if (!token) return;
     setChBusyPlatform(channel);
     try {
-      // المسار الجديد (/api/auth/facebook/start) مع fallback للمسار القديم إن لم يكن منشوراً بعد
+      // المسار الجديد مع fallback للمسار القديم إن لم يكن منشوراً بعد
+      const startPath = channel === "instagram" ? "/api/auth/instagram/start" : "/api/auth/facebook/start";
       let r: { url: string };
       try {
-        r = await apiAuthFetch<{ url: string }>(token, "/api/auth/facebook/start", {
+        r = await apiAuthFetch<{ url: string }>(token, startPath, {
           method: "POST",
           body: JSON.stringify({ platform: channel, tenantId: st?.tenantId }),
         });

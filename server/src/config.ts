@@ -89,9 +89,14 @@ export function buildServerBaseUrl(): string {
   return `${u.protocol}//${u.host}`;
 }
 
-/** رابط callback الرسمي لـ Meta OAuth — ثابت عبر كل مراحل التدفق */
+/** رابط callback الرسمي لـ Meta OAuth (Facebook Login) — ثابت عبر كل مراحل التدفق */
 export function buildMetaCallbackUrl(): string {
   return `${buildServerBaseUrl()}/api/auth/facebook/callback`;
+}
+
+/** رابط callback الرسمي لـ Instagram Login — مبني من PUBLIC_URL فقط، لا META_REDIRECT_URI */
+export function buildInstagramCallbackUrl(): string {
+  return `${buildServerBaseUrl()}/api/auth/instagram/callback`;
 }
 
 export const config = {
