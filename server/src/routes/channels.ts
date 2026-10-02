@@ -2,6 +2,7 @@
  * مسارات القنوات والحسابات — Omnichannel
  * v3 — /meta/status عام (بدون auth)، باقي المسارات محمية.
  */
+import { sendMetaDirectMessage, senderProfileUrl } from "../metaSend.js";
 import crypto from "node:crypto";
 import { Router, type Request, type Response, type NextFunction } from "express";
 import { db, authClient } from "../db.js";
@@ -236,15 +237,12 @@ async function handleMetaMessagingEvent(ev: any) {
     const full: any = await fetchAccountWithToken((account as any).id);
     const token = decryptField(full?.access_token_encrypted);
     if (token) {
-      const profileEndpoint =
-        channel === "instagram"
-          ? `https://graph.facebook.com/v21.0/${senderId}?fields=name,profile_picture&access_token=${token}`
-          : `https://graph.facebook.com/v21.0/${senderId}?fields=name,picture&access_token=${token}`;
+      const profileEndpoint = senderProfileUrl(channel, senderId, token);
       const pres = await fetch(profileEndpoint);
       if (pres.ok) {
         const pj: any = await pres.json();
         senderName = pj?.name ?? null;
-        senderAvatar = pj?.profile_picture ?? pj?.picture?.data?.url ?? null;
+        senderAvatar = pj?.profile_picture ?? pj?.profile_pic ?? pj?.picture?.data?.url ?? null;
       }
     }
   } catch {}
@@ -337,22 +335,13 @@ async function sendMetaMessage(
   const token = decryptField(full?.access_token_encrypted);
   if (!token) throw new Error("رمز الوصول غير متوفر — أعد الربط");
 
-  const endpoint =
-    channel === "instagram"
-      ? `https://graph.facebook.com/v21.0/${account.external_id}/messages`
-      : "https://graph.facebook.com/v21.0/me/messages";
-
-  const res = await fetch(endpoint, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      recipient: { id: recipientId },
-      message: { text },
-      access_token: token,
-    }),
+  await sendMetaDirectMessage({
+    channel,
+    externalId: String(account.external_id),
+    token,
+    recipientId,
+    text,
   });
-  const json: any = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(json?.error?.message ?? `HTTP ${res.status}`);
 }
 
 async function fetchAccountWithToken(accountId: string) {
