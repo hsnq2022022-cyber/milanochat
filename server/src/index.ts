@@ -2,10 +2,11 @@
  * Milano Server — Express entry
  * التشغيل: cd server && npm install && cp .env.example .env && npm run dev
  *
- * ملاحظات الإصدار (v3):
+ * ملاحظات الإصدار (v4):
  * - تُسجَّل كل الراوترات على المسارات الصحيحة.
  * - نحتفظ بـ rawBody للتحقق من توقيع Meta Webhooks (X-Hub-Signature-256).
  * - نحتفظ بـ rawBody لـ webhooks WhatsApp و Instagram و Meta Messenger.
+ * - NEW: logging middleware قبل الراوترات لتتبع وصول POST من Meta.
  */
 import express from "express";
 import cors, { type CorsOptions } from "cors";
@@ -51,6 +52,7 @@ const corsOptions: CorsOptions = {
     "X-Tenant-Token",
     "X-Requested-With",
     "Apikey",
+    "X-Hub-Signature-256",
   ],
 };
 app.use(cors(corsOptions));
@@ -71,6 +73,32 @@ app.use(
       }
     },
   })
+);
+
+/* ═══════════════════════════════════════════════════════════
+   [تشخيص] تسجيل كل طلب يصل لمسارات Webhooks — قبل الراوترات
+   ═══════════════════════════════════════════════════════════
+   هذا يساعد على كشف:
+   - هل Meta ترسل أي POST أصلاً؟
+   - هل يوجد X-Hub-Signature-256؟
+   - ما نوع User-Agent الوارد؟
+   - على أي URL بالضبط يصل الطلب؟
+   ═══════════════════════════════════════════════════════════ */
+app.use(
+  ["/api/webhooks", "/api/channels/meta/webhook"],
+  (req: any, _res, next) => {
+    if (req.method === "POST" || req.method === "GET") {
+      const sig = req.headers["x-hub-signature-256"];
+      const ua = String(req.headers["user-agent"] ?? "").slice(0, 80);
+      console.log(
+        `[webhook-in] ${req.method} ${req.originalUrl}` +
+          ` | sig=${sig ? "yes" : "no"}` +
+          ` | rawBody=${req.rawBody ? `${req.rawBody.length}b` : "none"}` +
+          ` | ua=${ua}`
+      );
+    }
+    next();
+  }
 );
 
 /* ═══════════════════════════════════════════════════════════
@@ -144,7 +172,8 @@ app.listen(config.port, () => {
   console.log(`  [routes] /api/auth       ✓`);
   console.log(`  [routes] /api/webhooks   ✓`);
   console.log(`  [routes] /api/whatsapp   ✓`);
-  console.log(`  [routes] /api/widgets    ✓\n`);
+  console.log(`  [routes] /api/widgets    ✓`);
+  console.log(`  [webhook-in] logging is ACTIVE\n`);
   restorePersistedSessions().catch((e) =>
     console.error("[boot] restore failed:", e)
   );
