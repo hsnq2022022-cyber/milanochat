@@ -1,21 +1,20 @@
 /**
- * Instagram Messaging Webhook — مسار التحقق والاستقبال على النطاق المخصص للـ webhook.
+ * Instagram Messaging Webhook — مسار التحقق والاستقبال.
  *
- * - GET  /api/webhooks/instagram  → تحقق Meta (hub.verify_token = INSTAGRAM_VERIFY_TOKEN)
- * - POST /api/webhooks/instagram  → أحداث entry[].messaging[] لحسابات Instagram
- *   الاحترافية المرتبطة عبر channel_accounts (external_id = IG account id أو page id).
+ * يدعم بنيتين مختلفتين للـ payload:
  *
- * المعالجة تُمرَّر إلى نفس محرك الرد الآلي (handleIncomingMessage) بحيث تعمل
- * قاعدة المعرفة والتحويل لبشري وخصم الرصيد كما في واتساب، والإرسال يتم عبر
- * Graph API Conversations من الخادم فقط.
+ * 1) Messenger-style (Instagram via Facebook Login):
+ *    entry[].messaging[] = [{ sender, recipient, message }]
+ *    entry[].id = Instagram Business Account ID (رقم طويل)
  *
- * ملاحظة مهمة (v2):
- * - Instagram API with Instagram Login يستخدم App Secret مستقل عن Facebook App.
- * - لذلك verifySignature تجرّب كل الأسرار المتاحة على Railway:
- *     INSTAGRAM_APP_SECRET  (المفضل لـ Instagram)
- *     META_APP_SECRET       (Facebook App Secret — للتوافق)
- *     FACEBOOK_APP_SECRET   (احتياطي)
- * - هذا يمنع ظهور "Invalid signature — ignored" عند اختلاف السرّ.
+ * 2) Instagram Login API (البنية الجديدة — 2024):
+ *    entry[].changes[] = [{ field: "messages", value: {...} }]
+ *    entry[].id = "0" (في اختبارات Meta) أو IG Account ID (في الإنتاج)
+ *    entry[].changes[].value.recipient.id = IG Business Account ID
+ *
+ * الكود يستخرج الرسائل من كلا البنيتين، ويبحث عن الحساب بـ:
+ *   - entry.id
+ *   - أو changes[].value.recipient.id
  */
 import { Router } from "express";
 import type { Request, Response } from "express";
@@ -36,7 +35,6 @@ instagramWebhookRouter.get("/instagram", (req: Request, res: Response) => {
   console.log("[Instagram Webhook] Verification request:", {
     mode,
     token: token ? "present" : "missing",
-    challenge: challenge ? "present" : "missing",
   });
 
   if (mode === "subscribe" && VERIFY_TOKEN && token === VERIFY_TOKEN) {
@@ -44,26 +42,16 @@ instagramWebhookRouter.get("/instagram", (req: Request, res: Response) => {
     return res.status(200).send(challenge);
   }
 
-  console.error("[Instagram Webhook] ✗ Verification failed", {
-    expected: VERIFY_TOKEN ? "set" : "empty",
-  });
   return res.status(403).send("Verify failed");
 });
 
 /**
- * تحقق توقيع X-Hub-Signature-256 مع محاولة كل السرّين المتاحين.
- *
- * المنطق:
- * - نجمع كل الأسرار المضبوطة على Railway.
- * - نحسب التوقيع لكل واحد.
- * - إذا طابق أي واحد → التوقيع صحيح.
- * - إذا لم يُضبط أي سر → نمرّر الطلب (لا نُكسر التدفق).
+ * تحقق التوقيع مع تجربة كل الأسرار المتاحة.
  */
 function verifySignature(req: Request): { ok: boolean; tried: number; rawLen: number } {
   const rawBody: Buffer | undefined = (req as any).rawBody;
   const sig = String(req.headers["x-hub-signature-256"] ?? "");
 
-  // اجمع الأسرار المتاحة (بدون تكرار)
   const secrets = Array.from(
     new Set(
       [
@@ -74,17 +62,14 @@ function verifySignature(req: Request): { ok: boolean; tried: number; rawLen: nu
     )
   );
 
-  // لم يُضبط أي سر — نمرّر (لا نُكسر التدفق الحالي)
   if (secrets.length === 0) {
     return { ok: true, tried: 0, rawLen: rawBody?.length ?? 0 };
   }
 
-  // لا يوجد rawBody أو signature → فشل
   if (!rawBody || !sig) {
     return { ok: false, tried: secrets.length, rawLen: rawBody?.length ?? 0 };
   }
 
-  // جرّب كل سر
   for (const secret of secrets) {
     const expected =
       "sha256=" + crypto.createHmac("sha256", secret).update(rawBody).digest("hex");
@@ -98,9 +83,78 @@ function verifySignature(req: Request): { ok: boolean; tried: number; rawLen: nu
   return { ok: false, tried: secrets.length, rawLen: rawBody.length };
 }
 
+/**
+ * استخراج كل الرسائل من entry — من كلا البنيتين.
+ * يعيد [{ sender, text, mid, recipientId }]
+ */
+function extractMessagesFromEntry(entry: any): Array<{
+  senderId: string;
+  recipientId: string;
+  text: string;
+  mid: string | null;
+}> {
+  const out: Array<{
+    senderId: string;
+    recipientId: string;
+    text: string;
+    mid: string | null;
+  }> = [];
+
+  // 1) البنية القديمة: entry.messaging[]
+  if (Array.isArray(entry.messaging)) {
+    for (const ev of entry.messaging) {
+      if (!ev?.message || ev.message.is_echo) continue;
+      const senderId = String(ev.sender?.id ?? "");
+      const recipientId = String(ev.recipient?.id ?? "");
+      const text = typeof ev.message.text === "string" ? ev.message.text : "";
+      const mid = typeof ev.message.mid === "string" ? ev.message.mid : null;
+      if (senderId && text) {
+        out.push({ senderId, recipientId, text, mid });
+      }
+    }
+  }
+
+  // 2) البنية الجديدة: entry.changes[].value (field = "messages")
+  if (Array.isArray(entry.changes)) {
+    for (const change of entry.changes) {
+      if (change?.field !== "messages") continue;
+      const value = change.value;
+      if (!value) continue;
+
+      // بعض الحالات: value.messaging[] موجود
+      if (Array.isArray(value.messaging)) {
+        for (const ev of value.messaging) {
+          if (!ev?.message || ev.message.is_echo) continue;
+          const senderId = String(ev.sender?.id ?? "");
+          const recipientId = String(ev.recipient?.id ?? "");
+          const text = typeof ev.message.text === "string" ? ev.message.text : "";
+          const mid = typeof ev.message.mid === "string" ? ev.message.mid : null;
+          if (senderId && text) {
+            out.push({ senderId, recipientId, text, mid });
+          }
+        }
+        continue;
+      }
+
+      // الحالة الشائعة: value نفسه يحتوي sender/recipient/message
+      if (value.message && !value.message.is_echo) {
+        const senderId = String(value.sender?.id ?? "");
+        const recipientId = String(value.recipient?.id ?? "");
+        const text = typeof value.message.text === "string" ? value.message.text : "";
+        const mid = typeof value.message.mid === "string" ? value.message.mid : null;
+        if (senderId && text) {
+          out.push({ senderId, recipientId, text, mid });
+        }
+      }
+    }
+  }
+
+  return out;
+}
+
 // ─── 2. استقبال الرسائل (POST) ───
 instagramWebhookRouter.post("/instagram", async (req: Request, res: Response) => {
-  // رد 200 فورًا لـ Meta (خلال 5 ثوانٍ)
+  // رد 200 فورًا لـ Meta
   res.status(200).send("EVENT_RECEIVED");
 
   try {
@@ -108,15 +162,10 @@ instagramWebhookRouter.post("/instagram", async (req: Request, res: Response) =>
     if (!sigResult.ok) {
       console.error(
         "[Instagram Webhook] Invalid signature — ignored",
-        `| tried=${sigResult.tried} secrets`,
+        `| tried=${sigResult.tried}`,
         `| rawBody=${sigResult.rawLen}b`
       );
       return;
-    }
-    if (sigResult.tried > 1) {
-      console.log(
-        `[Instagram Webhook] Signature OK | tried=${sigResult.tried} secrets`
-      );
     }
 
     const body: any = req.body;
@@ -130,58 +179,48 @@ instagramWebhookRouter.post("/instagram", async (req: Request, res: Response) =>
     }
 
     for (const entry of body.entry || []) {
-      const platformId = String(entry.id || "");
-      if (!platformId) continue;
+      const entryId = String(entry.id || "");
 
-      // ابحث عن القناة المرتبطة (channel_accounts) — قد يكون entry.id هو
-      // معرّف حساب IG نفسه أو معرّف صفحة Facebook المرتبطة به
-      let { data: account } = await db
-        .from("channel_accounts")
-        .select("tenant_id, channel, external_id, status, agent_enabled, auto_reply")
-        .eq("external_id", platformId)
-        .in("channel", ["instagram", "facebook"])
-        .maybeSingle();
+      // استخرج كل الرسائل من entry — يدعم البنيتين
+      const messages = extractMessagesFromEntry(entry);
 
-      if (!account) {
-        const { data: byPage } = await db
-          .from("channel_accounts")
-          .select("tenant_id, channel, external_id, status, agent_enabled, auto_reply")
-          .eq("external_id", platformId)
-          .eq("channel", "facebook")
-          .maybeSingle();
-        account = byPage;
-      }
-
-      if (!account) {
-        console.warn(
-          `[Instagram Webhook] No tenant bound for external_id: ${platformId}`
-        );
+      if (messages.length === 0) {
+        console.log(`[Instagram Webhook] entry.id=${entryId} — no messages extracted`);
         continue;
       }
-      if (account.status !== "active") continue;
 
-      const channel = account.channel === "facebook" ? "facebook" : "instagram";
+      for (const msg of messages) {
+        // ابحث عن الحساب المضيف — نجرب entryId أولًا، ثم recipientId
+        const candidates = [entryId, msg.recipientId].filter((x) => x && x !== "0");
 
-      // معالجة messaging events
-      const messaging = entry.messaging || [];
+        let account: any = null;
+        for (const candidate of candidates) {
+          const { data } = await db
+            .from("channel_accounts")
+            .select("tenant_id, channel, external_id, status, agent_enabled, auto_reply")
+            .eq("external_id", candidate)
+            .in("channel", ["instagram", "facebook"])
+            .maybeSingle();
+          if (data) {
+            account = data;
+            break;
+          }
+        }
 
-      for (const event of messaging) {
-        // تجاهل رسائل الصدى (echo) الصادرة من التطبيق نفسه
-        if (!event.message || event.message.is_echo) continue;
+        if (!account) {
+          console.warn(
+            `[Instagram Webhook] No tenant bound for entryId=${entryId} recipientId=${msg.recipientId}`
+          );
+          continue;
+        }
+        if (account.status !== "active") continue;
 
-        const senderId = event.sender?.id;
-        const text = event.message?.text;
+        const channel = account.channel === "facebook" ? "facebook" : "instagram";
+        const chatId = `${channel}:${msg.senderId}`;
+        const msgId = msg.mid || `ig_${Date.now()}`;
 
-        if (!senderId || !text) continue;
-
-        // معرّف المحادثة يحمل بادئة القناة (منصة:معرّف العميل) — يمنع تصادم المعرفات بين القنوات
-        const chatId = `${channel}:${senderId}`;
-
-        // منع تكرار الـ webhook عبر المعرّف الخارجي للرسالة (mid)
-        const msgId: string | null =
-          typeof event.message?.mid === "string" ? event.message.mid : `ig_${Date.now()}`;
-
-        if (event.message?.mid) {
+        // منع التكرار
+        if (msg.mid) {
           const { data: dup } = await db
             .from("messages")
             .select("id")
@@ -193,12 +232,18 @@ instagramWebhookRouter.post("/instagram", async (req: Request, res: Response) =>
           }
         }
 
-        // أنشئ/حدّث المحادثة وادفع الرسالة إلى محرك الرد الآلي الموحد
-        // (handleIncomingMessage يتكفل بالحفظ والقناة والوكيل والإرسال)
+        console.log(
+          `[Instagram Webhook] Processing: sender=${msg.senderId} channel=${channel} tenant=${account.tenant_id}`
+        );
+
         try {
-          await handleIncomingMessage(account.tenant_id, chatId, text, msgId, {
-            channel: channel as "instagram" | "facebook",
-          });
+          await handleIncomingMessage(
+            account.tenant_id,
+            chatId,
+            msg.text,
+            msgId,
+            { channel: channel as "instagram" | "facebook" }
+          );
         } catch (e) {
           console.error("[Instagram Webhook] AI reply error:", e);
         }
