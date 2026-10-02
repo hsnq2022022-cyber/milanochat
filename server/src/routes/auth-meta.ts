@@ -44,6 +44,182 @@ const SCOPES: Record<string, string[]> = {
   ],
 };
 
+/* ═══════════ Instagram Login المباشر (بدون Facebook) ═══════════
+ * يُفعَّل تلقائياً عند ضبط INSTAGRAM_APP_ID و INSTAGRAM_APP_SECRET في Railway
+ * (من Meta: Instagram API setup with Instagram login). وإن لم يُضبطا يبقى
+ * المسار القديم عبر Facebook Login كما هو. */
+const IG_AUTHORIZE = "https://www.instagram.com/oauth/authorize";
+const IG_TOKEN_URL = "https://api.instagram.com/oauth/access_token";
+const IG_GRAPH_HOST = "https://graph.instagram.com";
+const IG_GRAPH_V = `${IG_GRAPH_HOST}/v21.0`;
+const IG_LOGIN_SCOPES = ["instagram_business_basic", "instagram_business_manage_messages"];
+
+function instagramLoginConfigured(): boolean {
+  return Boolean(process.env.INSTAGRAM_APP_ID && process.env.INSTAGRAM_APP_SECRET);
+}
+
+async function markChannelConnected(
+  tenantId: string,
+  platform: string,
+  accountName: string,
+  accountId: string
+) {
+  const { data: existing } = await db
+    .from("channels")
+    .select("id")
+    .eq("tenant_id", tenantId)
+    .eq("platform", platform)
+    .maybeSingle();
+  const row = {
+    is_connected: true,
+    connected_at: new Date().toISOString(),
+    account_name: accountName || null,
+    platform_account_id: accountId || null,
+  };
+  const { error } = existing?.id
+    ? await db.from("channels").update(row).eq("id", existing.id)
+    : await db.from("channels").insert({ tenant_id: tenantId, platform, ...row });
+  if (error) console.warn("[Meta Auth] channels write failed:", error.message);
+}
+
+async function handleInstagramLoginCallback(a: {
+  res: any;
+  code: string;
+  tenantId: string;
+  frontBase: string;
+  fail: (c: string) => any;
+}) {
+  const { res, tenantId, frontBase, fail } = a;
+  const code = a.code.replace(/#_$/, "");
+  const igAppId = process.env.INSTAGRAM_APP_ID!;
+  const igSecret = process.env.INSTAGRAM_APP_SECRET!;
+
+  let redirectUri: string;
+  try {
+    redirectUri = buildMetaCallbackUrl();
+  } catch (e: any) {
+    console.error("[Meta Auth] redirect_uri build failed:", e?.message);
+    return fail("config_redirect_uri");
+  }
+  console.log("[Meta Auth] Instagram Login callback → redirect_uri:", redirectUri);
+
+  try {
+    // 1) code → short-lived token
+    const tRes = await fetch(IG_TOKEN_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: igAppId,
+        client_secret: igSecret,
+        grant_type: "authorization_code",
+        redirect_uri: redirectUri,
+        code,
+      }),
+    });
+    const tJson: any = await tRes.json().catch(() => ({}));
+    const first = Array.isArray(tJson?.data) ? tJson.data[0] : tJson;
+    const shortToken: string | undefined = first?.access_token;
+    if (!shortToken) {
+      console.error(
+        "[Meta Auth] IG token exchange failed:",
+        tJson?.error_message ?? tJson?.error?.message ?? "unknown"
+      );
+      return fail("oauth_token_exchange");
+    }
+    console.log("[Meta Auth] IG token exchange OK");
+
+    // 2) short-lived → long-lived (60 يوماً)
+    let token = shortToken;
+    let expiresIn = 3600;
+    const lRes = await fetch(
+      `${IG_GRAPH_HOST}/access_token?grant_type=ig_exchange_token` +
+        `&client_secret=${encodeURIComponent(igSecret)}&access_token=${encodeURIComponent(shortToken)}`
+    );
+    const lJson: any = await lRes.json().catch(() => ({}));
+    if (lJson?.access_token) {
+      token = lJson.access_token;
+      expiresIn = Number(lJson.expires_in ?? 5184000);
+    } else {
+      console.warn("[Meta Auth] IG long-lived exchange failed:", lJson?.error?.message ?? "unknown");
+    }
+
+    // 3) بيانات الحساب
+    const pRes = await fetch(
+      `${IG_GRAPH_V}/me?fields=user_id,username,name,profile_picture_url,account_type` +
+        `&access_token=${encodeURIComponent(token)}`
+    );
+    const prof: any = await pRes.json().catch(() => ({}));
+    const igId = String(prof?.user_id ?? prof?.id ?? first?.user_id ?? "");
+    if (!igId) {
+      console.error("[Meta Auth] IG /me failed:", prof?.error?.message ?? "no id");
+      return fail("no_eligible_instagram");
+    }
+    console.log(
+      `[Meta Auth] IG profile: ${prof?.username ?? igId} type=${prof?.account_type ?? "?"}`
+    );
+    if (prof?.account_type && !["BUSINESS", "MEDIA_CREATOR"].includes(prof.account_type)) {
+      return fail("no_eligible_instagram — الحساب يجب أن يكون Business أو Creator");
+    }
+
+    const { data: taken } = await db
+      .from("channel_accounts")
+      .select("tenant_id")
+      .eq("channel", "instagram")
+      .eq("external_id", igId)
+      .neq("tenant_id", tenantId)
+      .eq("status", "active")
+      .maybeSingle();
+    if (taken) {
+      console.warn(`[Meta Auth] IG account ${igId} already owned by another tenant`);
+      return fail("account_already_linked");
+    }
+
+    // 4) الحفظ
+    const username = prof?.username ? `@${prof.username}` : prof?.name ?? null;
+    const { error: upErr } = await db.from("channel_accounts").upsert(
+      {
+        tenant_id: tenantId,
+        channel: "instagram",
+        external_id: igId,
+        display_name: username,
+        avatar_url: typeof prof?.profile_picture_url === "string" ? prof.profile_picture_url : null,
+        status: "active",
+        access_token_encrypted: encryptField(token),
+        token_expires_at: new Date(Date.now() + expiresIn * 1000).toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "tenant_id,channel,external_id" }
+    );
+    if (upErr) {
+      console.error("[Meta Auth] channel_accounts upsert FAILED:", upErr.message);
+      return fail("db_save_failed");
+    }
+
+    // 5) اشتراك الحساب في webhooks (كان يدوياً سابقاً)
+    try {
+      const sRes = await fetch(
+        `${IG_GRAPH_V}/me/subscribed_apps?subscribed_fields=messages,messaging_postbacks,messaging_seen` +
+          `&access_token=${encodeURIComponent(token)}`,
+        { method: "POST" }
+      );
+      const sJson: any = await sRes.json().catch(() => ({}));
+      if (sJson?.success) console.log("[Meta Auth] IG webhooks subscribed ✓");
+      else console.error("[Meta Auth] IG subscribed_apps FAILED:", sJson?.error?.message ?? JSON.stringify(sJson));
+    } catch (e: any) {
+      console.error("[Meta Auth] IG subscribed_apps error:", e?.message);
+    }
+
+    await markChannelConnected(tenantId, "instagram", username ?? "", igId);
+    console.log("[Meta Auth] Instagram Login done — account:", igId);
+    return res.redirect(
+      `${frontBase}?channel_connected=instagram&accounts=1&name=${encodeURIComponent(username ?? "")}`
+    );
+  } catch (e: any) {
+    console.error("[Meta Auth] Instagram Login callback error:", e);
+    return fail(e?.message ? String(e.message).slice(0, 120) : "unknown");
+  }
+}
+
 /* عنوان الواجهة بعد اكتمال OAuth — GitHub Pages مع Hash Routing ومسار المشروع */
 function frontendDashboardUrl(): string {
   const origin = (process.env.FRONTEND_ORIGIN || config.frontendOrigin || "")
@@ -213,6 +389,10 @@ metaAuthRouter.get("/facebook/callback", async (req: any, res) => {
 
   const { platform, tenantId, userId } = stateResult.session;
   console.log("[Meta Auth] callback state OK — platform:", platform, "nonce verified");
+
+  if (platform === "instagram" && instagramLoginConfigured()) {
+    return handleInstagramLoginCallback({ res, code: String(code), tenantId, frontBase, fail });
+  }
 
   const appId = process.env.META_APP_ID!;
   const appSecret = process.env.META_APP_SECRET!;
@@ -441,6 +621,15 @@ metaAuthRouter.post("/facebook/start", async (req: any, res) => {
   }
 
   console.log("[Meta Auth] OAuth start → redirect_uri:", redirectUri, "platform:", platform);
+
+  if (platform === "instagram" && instagramLoginConfigured()) {
+    const igUrl =
+      `${IG_AUTHORIZE}?force_reauth=true&client_id=${encodeURIComponent(process.env.INSTAGRAM_APP_ID!)}` +
+      `&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code` +
+      `&scope=${encodeURIComponent(IG_LOGIN_SCOPES.join(","))}&state=${encodeURIComponent(state)}`;
+    console.log("[Meta Auth] using Instagram Login (direct) for platform: instagram");
+    return res.json({ url: igUrl });
+  }
 
   const scopes = SCOPES[platform];
   const url =
