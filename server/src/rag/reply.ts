@@ -10,6 +10,7 @@
  * - تسجيل الرسائل الواردة والصادرة
  */
 
+import { sendMetaDirectMessage } from "../metaSend.js";
 import {
   db,
   type Conversation,
@@ -74,22 +75,13 @@ async function sendSocialMessage(
   const token = decryptField(account.access_token_encrypted);
   if (!token) throw new Error("رمز الوصول غير متوفر — أعد الربط");
 
-  const res = await fetch(
-    `https://graph.facebook.com/v21.0/${account.external_id}/messages`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        recipient: { id: senderId },
-        message: { text },
-        access_token: token,
-      }),
-    }
-  );
-  const json: any = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    throw new Error(json?.error?.message ?? `Graph API HTTP ${res.status}`);
-  }
+  await sendMetaDirectMessage({
+    channel,
+    externalId: String(account.external_id),
+    token,
+    recipientId: senderId,
+    text,
+  });
 }
 
 const REFUSAL_TEXT =
