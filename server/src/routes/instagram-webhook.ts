@@ -8,6 +8,14 @@
  * المعالجة تُمرَّر إلى نفس محرك الرد الآلي (handleIncomingMessage) بحيث تعمل
  * قاعدة المعرفة والتحويل لبشري وخصم الرصيد كما في واتساب، والإرسال يتم عبر
  * Graph API Conversations من الخادم فقط.
+ *
+ * ملاحظة مهمة (v2):
+ * - Instagram API with Instagram Login يستخدم App Secret مستقل عن Facebook App.
+ * - لذلك verifySignature تجرّب كل الأسرار المتاحة على Railway:
+ *     INSTAGRAM_APP_SECRET  (المفضل لـ Instagram)
+ *     META_APP_SECRET       (Facebook App Secret — للتوافق)
+ *     FACEBOOK_APP_SECRET   (احتياطي)
+ * - هذا يمنع ظهور "Invalid signature — ignored" عند اختلاف السرّ.
  */
 import { Router } from "express";
 import type { Request, Response } from "express";
@@ -42,18 +50,52 @@ instagramWebhookRouter.get("/instagram", (req: Request, res: Response) => {
   return res.status(403).send("Verify failed");
 });
 
-/* تحقق توقيع X-Hub-Signature-256 إن كان META_APP_SECRET مضبوطاً */
-function verifySignature(req: Request): boolean {
-  const secret = process.env.META_APP_SECRET;
-  if (!secret) return true; // لم يُضبط السر بعد — لا نكسر التدفق الحالي
-  const sig = String(req.headers["x-hub-signature-256"] ?? "");
+/**
+ * تحقق توقيع X-Hub-Signature-256 مع محاولة كل السرّين المتاحين.
+ *
+ * المنطق:
+ * - نجمع كل الأسرار المضبوطة على Railway.
+ * - نحسب التوقيع لكل واحد.
+ * - إذا طابق أي واحد → التوقيع صحيح.
+ * - إذا لم يُضبط أي سر → نمرّر الطلب (لا نُكسر التدفق).
+ */
+function verifySignature(req: Request): { ok: boolean; tried: number; rawLen: number } {
   const rawBody: Buffer | undefined = (req as any).rawBody;
-  if (!sig || !rawBody) return false;
-  const expected =
-    "sha256=" + crypto.createHmac("sha256", secret).update(rawBody).digest("hex");
-  const a = Buffer.from(sig);
-  const b = Buffer.from(expected);
-  return a.length === b.length && crypto.timingSafeEqual(a, b);
+  const sig = String(req.headers["x-hub-signature-256"] ?? "");
+
+  // اجمع الأسرار المتاحة (بدون تكرار)
+  const secrets = Array.from(
+    new Set(
+      [
+        process.env.INSTAGRAM_APP_SECRET,
+        process.env.META_APP_SECRET,
+        process.env.FACEBOOK_APP_SECRET,
+      ].filter((s): s is string => Boolean(s && s.length > 0))
+    )
+  );
+
+  // لم يُضبط أي سر — نمرّر (لا نُكسر التدفق الحالي)
+  if (secrets.length === 0) {
+    return { ok: true, tried: 0, rawLen: rawBody?.length ?? 0 };
+  }
+
+  // لا يوجد rawBody أو signature → فشل
+  if (!rawBody || !sig) {
+    return { ok: false, tried: secrets.length, rawLen: rawBody?.length ?? 0 };
+  }
+
+  // جرّب كل سر
+  for (const secret of secrets) {
+    const expected =
+      "sha256=" + crypto.createHmac("sha256", secret).update(rawBody).digest("hex");
+    const a = Buffer.from(sig);
+    const b = Buffer.from(expected);
+    if (a.length === b.length && crypto.timingSafeEqual(a, b)) {
+      return { ok: true, tried: secrets.length, rawLen: rawBody.length };
+    }
+  }
+
+  return { ok: false, tried: secrets.length, rawLen: rawBody.length };
 }
 
 // ─── 2. استقبال الرسائل (POST) ───
@@ -62,9 +104,19 @@ instagramWebhookRouter.post("/instagram", async (req: Request, res: Response) =>
   res.status(200).send("EVENT_RECEIVED");
 
   try {
-    if (!verifySignature(req)) {
-      console.error("[Instagram Webhook] Invalid signature — ignored");
+    const sigResult = verifySignature(req);
+    if (!sigResult.ok) {
+      console.error(
+        "[Instagram Webhook] Invalid signature — ignored",
+        `| tried=${sigResult.tried} secrets`,
+        `| rawBody=${sigResult.rawLen}b`
+      );
       return;
+    }
+    if (sigResult.tried > 1) {
+      console.log(
+        `[Instagram Webhook] Signature OK | tried=${sigResult.tried} secrets`
+      );
     }
 
     const body: any = req.body;
