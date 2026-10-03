@@ -310,53 +310,53 @@ instagramWebhookRouter.post("/instagram", async (req: Request, res: Response) =>
           token,
         });
 
-        // ─── توليد الرد وإرساله ───
-        try {
-          await handleIncomingMessage(
-            account.tenant_id,
-            chatId,
-            msg.text,
-            msgId,
-            { channel: channel as "instagram" | "facebook" }
-          );
-        } catch (e) {
-          console.error("[Instagram Webhook] AI reply error:", e);
-        }
+             // ─── معالجة الرسالة وحفظ بيانات المرسل بالتوازي ───
+        const messagePromise = handleIncomingMessage(
+          account.tenant_id,
+          chatId,
+          msg.text,
+          msgId,
+          { channel: channel as "instagram" | "facebook" }
+        ).catch((e) => console.error("[Instagram Webhook] AI reply error:", e));
 
-        // ─── حفظ الاسم والصورة في المحادثة (إن توفّرا) ───
-        // مهم: نكتب في customer_name و customer_avatar لأن الـ API يقرأ منهما
+        // حفظ الاسم والصورة بالتوازي (لا ننتظر توليد الرد)
+        // نحاول حتى 6 مرات لأن المحادثة قد لا تكون قد أُنشئت بعد
         if (profile.name || profile.avatar) {
-          try {
-            const patch: Record<string, string | null> = {};
-            if (profile.name) patch.customer_name = profile.name;
-            if (profile.avatar) patch.customer_avatar = profile.avatar;
+          const patch: Record<string, string | null> = {};
+          if (profile.name) patch.customer_name = profile.name;
+          if (profile.avatar) patch.customer_avatar = profile.avatar;
+
+          for (let attempt = 0; attempt < 6; attempt++) {
+            // انتظر قليلاً قبل كل محاولة
+            await new Promise((r) => setTimeout(r, 250));
+
+            const { data: convRow } = await db
+              .from("conversations")
+              .select("id")
+              .eq("tenant_id", account.tenant_id)
+              .eq("wa_chat_id", chatId)
+              .maybeSingle();
+
+            if (!convRow) continue; // المحادثة لم تُنشأ بعد
 
             const { error: updErr } = await db
               .from("conversations")
               .update(patch)
-              .eq("tenant_id", account.tenant_id)
-              .eq("wa_chat_id", chatId);
+              .eq("id", convRow.id);
 
-            if (updErr) {
-              console.warn(
-                "[Instagram Webhook] Failed to update sender profile:",
-                updErr.message
-              );
-            } else {
+            if (!updErr) {
               console.log(
                 "[Instagram Webhook] Sender profile saved to conversation:",
                 chatId,
                 patch
               );
+              break;
             }
-          } catch (e: any) {
-            console.warn(
-              "[Instagram Webhook] Sender profile update error:",
-              e?.message ?? String(e)
-            );
           }
         }
-      }
+
+        // انتظر انتهاء معالجة الرسالة (الرد)
+        await messagePromise;
     }
   } catch (e: any) {
     console.error("[Instagram Webhook] Fatal error:", e);
