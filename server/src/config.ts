@@ -1,4 +1,3 @@
-```ts
 import "dotenv/config";
 
 const req = (name: string, fallback?: string): string => {
@@ -257,4 +256,4 @@ export const config = {
     opt("RAG_TOP_K", "5")
   ),
 } as const;
-```
+
