@@ -1,4 +1,3 @@
-```ts
 /**
  * Instagram Messaging Webhook — مسار التحقق والاستقبال.
  *
@@ -733,4 +732,4 @@ instagramWebhookRouter.post(
     }
   }
 );
-```
+
