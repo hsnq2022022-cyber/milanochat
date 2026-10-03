@@ -671,12 +671,18 @@ export async function sendManualReply(
     throw new Error("نص الرسالة مطلوب");
   }
 
-  /** إرسال الرد أولاً. */
-  await sendText(
-    tenantId,
-    conversation.wa_chat_id,
-    cleanText
-  );
+  /** إرسال الرد حسب القناة. */
+  const chatId = conversation.wa_chat_id;
+  const channel: "whatsapp" | "instagram" | "facebook" =
+    chatId.startsWith("instagram:") ? "instagram"
+    : chatId.startsWith("facebook:") ? "facebook"
+    : "whatsapp";
+
+  if (channel === "whatsapp") {
+    await sendText(tenantId, chatId, cleanText);
+  } else {
+    await sendSocialMessage(tenantId, channel, chatId, cleanText);
+  }
 
   /**
    * حفظ الرسالة وإرجاع الصف الحقيقي الذي أنشأته قاعدة البيانات.

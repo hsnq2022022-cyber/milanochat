@@ -573,6 +573,48 @@ metaAuthRouter.get("/facebook/callback", async (req: any, res) => {
           saved += 1;
           lastAccountName = username ?? lastAccountName;
           lastAccountId = String(igAcc.id);
+
+          /* ═══════════════════════════════════════════════════════
+             اشتراك Page Webhooks — مطلوب لوصول أحداث Instagram DMs
+             عبر Facebook Login → Instagram API.
+             POST /{pageId}/subscribed_apps (graph.facebook.com)
+             فشل الاشتراك لا يمنع حفظ الحساب، لكنه يُسجَّل بوضوح.
+             ═══════════════════════════════════════════════════════ */
+          console.log(`[Meta Auth] Subscribing Page webhooks → page: ${p.id}`);
+          try {
+            const subRes = await fetch(
+              `${GRAPH_API}/${p.id}/subscribed_apps`,
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  access_token: pageToken,
+                  subscribed_fields: ["messages", "messaging_postbacks", "messaging_seen"],
+                }),
+              }
+            );
+            let subJson: any = null;
+            try {
+              subJson = await subRes.json();
+            } catch {
+              subJson = null;
+            }
+            // HTTP 200 وحده لا يكفي — نفحص response body
+            if (subRes.ok && subJson && (subJson.success === true || subJson.result === true)) {
+              console.log("[Meta Auth] Page webhooks subscribed ✓");
+            } else {
+              console.error(
+                "[Meta Auth] Page webhooks subscribe failed:",
+                `status=${subRes.status}`,
+                `body=${JSON.stringify(subJson ?? "(unparseable)")}`.slice(0, 400)
+              );
+            }
+          } catch (e: any) {
+            console.error(
+              "[Meta Auth] Page webhooks subscribe failed:",
+              e?.message ?? String(e)
+            );
+          }
         } else {
           console.error("[Meta Auth] channel_accounts upsert FAILED:", error.message);
         }
