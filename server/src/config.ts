@@ -1,3 +1,4 @@
+```ts
 import "dotenv/config";
 
 const req = (name: string, fallback?: string): string => {
@@ -33,89 +34,152 @@ export const corsOriginPatterns: RegExp[] = [
 ];
 
 /**
- * المصدر الوحيد الموثوق لبناء روابط OAuth (callback/webhook) على الخادم.
- * - META_REDIRECT_URI اختياري لتثبيت القيمة حرفياً كما هي مسجلة في Meta؛
- *   إن وُجد يجب أن يكون https ولا يحمل مساراً أو شرطة مائلة نهائية زائدة،
- *   وإلا يُتجاهل مع تسجيل تحذير (مصدر واحد فقط هو المعتمد).
- * - PUBLIC_URL إلزامي في الإنتاج ويجب أن يكون https بلا مسار.
- * - لا يسجل أي أسرار — العنوان نفسه ليس سراً.
+ * المصدر الأساسي لبناء عنوان الخادم المستخدم في OAuth/Webhooks.
+ *
+ * الأولوية:
+ * 1. PUBLIC_URL
+ *
+ * ملاحظة:
+ * - META_REDIRECT_URI و INSTAGRAM_REDIRECT_URI يتم التعامل معهما
+ *   بشكل مستقل في الدوال الخاصة بكل تدفق OAuth.
+ * - لا نستخدم META_REDIRECT_URI لبناء Instagram callback.
  */
 export function buildServerBaseUrl(): string {
   const isProd = process.env.NODE_ENV === "production";
-  const override = opt("META_REDIRECT_URI").trim().replace(/\/+$/, "");
-
-  if (override) {
-    try {
-      const u = new URL(override);
-      const pathOk = u.pathname === "" || u.pathname === "/";
-      const schemeOk = u.protocol === "https:" || (!isProd && u.protocol === "http:");
-      if (schemeOk && pathOk && u.hostname) return `${u.protocol}//${u.host}`;
-      console.warn(
-        "[config] META_REDIRECT_URI غير صالح (يجب أن يكون جذر https بلا مسار) — سيتم الاعتماد على PUBLIC_URL:",
-        override
-      );
-    } catch {
-      console.warn("[config] META_REDIRECT_URI ليس رابطاً مطلقاً صالحاً — سيتم الاعتماد على PUBLIC_URL");
-    }
-  }
 
   const pub = opt("PUBLIC_URL").trim();
+
   if (!pub) {
     throw new Error(
       "[config] PUBLIC_URL مفقود — اضبطه على Railway كرابط الجذر الكامل مثل: https://milanochat-production.up.railway.app"
     );
   }
+
   let u: URL;
+
   try {
     u = new URL(pub);
   } catch {
-    throw new Error(`[config] PUBLIC_URL ليس رابطاً مطلقاً صالحاً: ${pub}`);
+    throw new Error(
+      `[config] PUBLIC_URL ليس رابطاً مطلقاً صالحاً: ${pub}`
+    );
   }
+
   if (u.protocol !== "https:") {
     if (isProd) {
       throw new Error(
         `[config] PUBLIC_URL يجب أن يبدأ بـ https:// في بيئة الإنتاج: ${pub}`
       );
     }
+
     if (u.protocol !== "http:") {
-      throw new Error(`[config] بروتوكول PUBLIC_URL غير مدعوم: ${pub}`);
+      throw new Error(
+        `[config] بروتوكول PUBLIC_URL غير مدعوم: ${pub}`
+      );
     }
   }
+
   if (u.pathname !== "" && u.pathname !== "/") {
     throw new Error(
       `[config] PUBLIC_URL يجب أن يكون جذر النطاق بدون مسار (${u.pathname} غير مسموح): ${pub}`
     );
   }
+
   return `${u.protocol}//${u.host}`;
 }
 
-/** رابط callback الرسمي لـ Meta OAuth (Facebook Login) — ثابت عبر كل مراحل التدفق.
- *  ملاحظة: إن كان META_REDIRECT_URI مضبوطًا فهو مصدر الحقيقة الحرفي الوحيد
- *  (يجب أن يطابق حرفيًا ما هو مسجل في Meta Dashboard)، ولا يُلحق به مسار آخر.
- *  بدونه يُبنى من PUBLIC_URL + المسار الثابت /api/auth/facebook/callback. */
+/**
+ * رابط callback الخاص بـ Facebook OAuth.
+ *
+ * تدفق Facebook:
+ *
+ * facebook.com/dialog/oauth
+ *        ↓
+ * /api/auth/facebook/callback
+ *
+ * يمكن تثبيت الرابط حرفياً بواسطة:
+ *
+ * META_REDIRECT_URI
+ *
+ * وإذا لم يكن موجوداً، يتم بناؤه من PUBLIC_URL.
+ */
 export function buildMetaCallbackUrl(): string {
-  const override = opt("META_REDIRECT_URI").trim();
+  const override = opt("META_REDIRECT_URI")
+    .trim()
+    .replace(/\/+$/, "");
+
   if (override && /^https?:\/\//.test(override)) {
-    // قيمة كاملة صالحة (تحتوي المسار بنفسها) — تُستخدم كما هي لضمان التطابق الحرفي مع Meta
-    return override.replace(/\/+$/, "");
+    return override;
   }
+
   return `${buildServerBaseUrl()}/api/auth/facebook/callback`;
 }
 
 /**
- * رابط callback المستقل لتدفق Instagram Login المباشر (instagram.com/oauth/authorize).
- * - INSTAGRAM_REDIRECT_URI اختياري لتثبيت القيمة حرفياً كما هي مسجلة في
- *   Meta Developers (Valid OAuth Redirect URIs لمنتج Instagram Login).
- * - بدونه يُبنى من PUBLIC_URL + المسار الثابت /api/auth/instagram/callback.
- * ملاحظة: لا يستخدم META_REDIRECT_URI إطلاقًا — هذا مسار منفصل تمامًا عن Facebook.
+ * رابط callback المستقل لـ Instagram Login.
+ *
+ * تدفق Instagram:
+ *
+ * instagram.com/oauth/authorize
+ *        ↓
+ * /api/auth/instagram/callback
+ *
+ * مهم:
+ *
+ * هذا الرابط مستقل تماماً عن Facebook OAuth.
+ *
+ * لا يستخدم:
+ *
+ * META_REDIRECT_URI
+ *
+ * ويمكن تثبيته صراحة بواسطة:
+ *
+ * INSTAGRAM_REDIRECT_URI
+ *
+ * وإذا لم يكن موجوداً، يتم بناؤه تلقائياً من PUBLIC_URL.
  */
 export function buildInstagramCallbackUrl(): string {
-  const override = opt("INSTAGRAM_REDIRECT_URI").trim();
+  const override = opt("INSTAGRAM_REDIRECT_URI")
+    .trim()
+    .replace(/\/+$/, "");
+
   if (override && /^https?:\/\//.test(override)) {
-    // قيمة كاملة صالحة (تحتوي المسار بنفسها) — تُستخدم كما هي لضمان التطابق الحرفي مع Meta
-    return override.replace(/\/+$/, "");
+    return override;
   }
+
   return `${buildServerBaseUrl()}/api/auth/instagram/callback`;
+}
+
+/**
+ * إعدادات Instagram Login.
+ *
+ * هذه المتغيرات مستقلة عن:
+ *
+ * META_APP_ID
+ * META_APP_SECRET
+ *
+ * يجب ضبطها في Railway:
+ *
+ * INSTAGRAM_APP_ID
+ * INSTAGRAM_APP_SECRET
+ * INSTAGRAM_REDIRECT_URI
+ */
+export const instagramOAuth = {
+  appId: opt("INSTAGRAM_APP_ID"),
+  appSecret: opt("INSTAGRAM_APP_SECRET"),
+  redirectUri: opt("INSTAGRAM_REDIRECT_URI"),
+};
+
+/**
+ * هل Instagram Login مهيأ؟
+ *
+ * لا يتم فحص قيمة الـ secret أو تسجيلها في الـ logs.
+ */
+export function isInstagramLoginConfigured(): boolean {
+  return Boolean(
+    instagramOAuth.appId &&
+      instagramOAuth.appSecret
+  );
 }
 
 export const config = {
@@ -139,13 +203,21 @@ export const config = {
   llm: {
     provider: "gemini" as const,
     apiKey: req("GEMINI_API_KEY"),
-    model: opt("GEMINI_MODEL", "gemini-2.5-flash"),
+    model: opt(
+      "GEMINI_MODEL",
+      "gemini-2.5-flash"
+    ),
   },
 
   embed: {
     apiKey: req("GEMINI_API_KEY"),
-    model: opt("GEMINI_EMBED_MODEL", "gemini-embedding-001"),
-    dim: Number(opt("GEMINI_EMBED_DIM", "768")),
+    model: opt(
+      "GEMINI_EMBED_MODEL",
+      "gemini-embedding-001"
+    ),
+    dim: Number(
+      opt("GEMINI_EMBED_DIM", "768")
+    ),
   },
 
   moyasar: {
@@ -159,10 +231,32 @@ export const config = {
     phoneNumberId: opt("WHATSAPP_PHONE_NUMBER_ID"),
     businessAccountId: opt("WHATSAPP_BUSINESS_ACCOUNT_ID"),
     verifyToken: opt("WHATSAPP_VERIFY_TOKEN"),
-    graphApiVersion: opt("META_GRAPH_API_VERSION", "v19.0"),
+    graphApiVersion: opt(
+      "META_GRAPH_API_VERSION",
+      "v19.0"
+    ),
   },
-  
-  baseCredits: Number(opt("BASE_CREDITS", "1000")),  dataDir: opt("DATA_DIR", "./data"),
+
+  /**
+   * Instagram Login — إعدادات مستقلة عن Facebook.
+   *
+   * يستخدمها backend لبناء Instagram OAuth
+   * والتحقق من وجود credentials.
+   */
+  instagram: {
+    appId: instagramOAuth.appId,
+    appSecret: instagramOAuth.appSecret,
+    redirectUri: instagramOAuth.redirectUri,
+  },
+
+  baseCredits: Number(
+    opt("BASE_CREDITS", "1000")
+  ),
+
+  dataDir: opt(
+    "DATA_DIR",
+    "./data"
+  ),
 
   ragThreshold: Number(
     opt("SIMILARITY_THRESHOLD", "0.25")
@@ -172,3 +266,4 @@ export const config = {
     opt("RAG_TOP_K", "5")
   ),
 } as const;
+```
