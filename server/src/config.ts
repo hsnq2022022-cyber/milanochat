@@ -92,12 +92,20 @@ export function buildServerBaseUrl(): string {
 /** رابط callback الرسمي لـ Meta OAuth (Facebook Login) — ثابت عبر كل مراحل التدفق.
  *  ملاحظة: إن كان META_REDIRECT_URI مضبوطًا فهو مصدر الحقيقة الحرفي الوحيد
  *  (يجب أن يطابق حرفيًا ما هو مسجل في Meta Dashboard)، ولا يُلحق به مسار آخر.
- *  بدونه يُبنى من PUBLIC_URL + المسار الثابت /api/auth/facebook/callback. */
+ *  بدونه يُبنى من PUBLIC_URL + المسار الثابت /api/auth/facebook/callback.
+ *  استثناء متوافق مع الإنتاج: إذا كانت القيمة المضبوطة تنتهي بـ
+ *  /api/auth/instagram/callback (المسار المسجَّل حرفيًا في Facebook Business Login
+ *  بلوحة Meta) تُستخدم كما هي أيضًا — لأن نفس المسار يعالجه الخادم للتدفقين. */
 export function buildMetaCallbackUrl(): string {
   const override = opt("META_REDIRECT_URI").trim();
   if (override && /^https?:\/\//.test(override)) {
+    const normalized = override.replace(/\/+$/, "");
+    const isFullCallbackPath =
+      normalized.endsWith("/api/auth/facebook/callback") ||
+      normalized.endsWith("/api/auth/instagram/callback");
     // قيمة كاملة صالحة (تحتوي المسار بنفسها) — تُستخدم كما هي لضمان التطابق الحرفي مع Meta
-    return override.replace(/\/+$/, "");
+    if (isFullCallbackPath) return normalized;
+    // غير ذلك يُعامل كنطاق جذر فقط (سلوك buildServerBaseUrl) — وإلا يكسر تدفق Facebook
   }
   return `${buildServerBaseUrl()}/api/auth/facebook/callback`;
 }

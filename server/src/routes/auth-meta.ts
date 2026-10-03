@@ -393,11 +393,6 @@ metaAuthRouter.get("/instagram/callback", async (req: any, res) => {
 
   console.log("[Meta Auth] IG callback ENTERED — params:", Object.keys(req.query ?? {}));
 
-  if (!instagramLoginConfigured()) {
-    // لم يُضبط INSTAGRAM_APP_ID/SECRET — لا يمكن إتمام Instagram Login المباشر
-    return fail("instagram_login_not_configured");
-  }
-
   const { code, state, error: metaError } = req.query as Record<string, string>;
   if (metaError) return fail(metaError === "access_denied" ? "user_cancelled" : metaError);
   if (!code || !state) return fail("missing_params");
@@ -442,9 +437,12 @@ metaAuthRouter.get("/facebook/callback", async (req: any, res) => {
   const { platform, tenantId, userId } = stateResult.session;
   console.log("[Meta Auth] callback state OK — platform:", platform, "nonce verified");
 
-  if (platform === "instagram" && instagramLoginConfigured()) {
-    // التدفق المباشر الجديد يعود إلى /api/auth/instagram/callback — لكن إن وصل
-    // هنا من مسار قديم محفوظ، نكمل عبر Instagram Login مع redirect_uri الصحيح.
+  /* جسر احتياطي (غير مستخدم حاليًا): لا يُكمل Instagram Login المباشر إلا إذا
+     فُعِّل صراحةً بالعلم USE_INSTAGRAM_DIRECT_LOGIN=true بعد تسجيل redirect URI
+     الخاص به في لوحة Meta. خلاف ذلك يستمر المسار أدناه بتدفق Facebook Login. */
+  if (platform === "instagram" && process.env.USE_INSTAGRAM_DIRECT_LOGIN === "true" && instagramLoginConfigured()) {
+    // وصل code صادر عن تدفق Instagram Login المباشر المحفوظ في state سابق —
+    // نكمله عبر handleInstagramLoginCallback مع redirect_uri الصحيح.
     return handleInstagramLoginCallback({ res, code: String(code), tenantId, frontBase, fail });
   }
 
@@ -650,8 +648,15 @@ metaAuthRouter.post("/facebook/start", async (req: any, res) => {
   const tenant = await ownedTenant(req.userId, req.body?.tenantId);
   if (!tenant) return res.status(403).json({ error: "تعذر التحقق من ملكية النشاط التجاري" });
 
-  /* فرع Instagram Login المباشر — رابط وstate وredirect_uri خاصة به بالكامل */
-  if (platform === "instagram" && instagramLoginConfigured()) {
+  /* التوجيه الحالي: زر Instagram يستخدم "Instagram API with Facebook Login"
+     (المسار القديم أدناه عبر facebook.com/v21.0/dialog/oauth مع META_APP_ID
+     و SCOPES.instagram) — لأن إعداد Meta في الحساب الحالي يسجّل Redirect URIs
+     فقط ضمن Facebook Business Login، ولا يتوفر حقل OAuth redirect URIs لمنتج
+     Instagram Login. كود Instagram Login المباشر (instagram.com/oauth/authorize)
+     يبقى موجودًا وغير محذوف خلف العلم التجريبي USE_INSTAGRAM_DIRECT_LOGIN=true
+     (يُفعَّل فقط بعد تسجيل redirect URI الخاص به في لوحة Meta). */
+
+  if (platform === "instagram" && process.env.USE_INSTAGRAM_DIRECT_LOGIN === "true" && instagramLoginConfigured()) {
     let igRedirectUri: string;
     let igState: string;
     try {
