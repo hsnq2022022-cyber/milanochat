@@ -21,6 +21,8 @@ import type { Request, Response } from "express";
 import crypto from "node:crypto";
 import { db } from "../db.js";
 import { handleIncomingMessage } from "../rag/reply.js";
+import { senderProfileUrl, parseSenderProfile } from "../metaSend.js";
+import { decryptField } from "../crypto.js";
 
 export const instagramWebhookRouter = Router();
 
@@ -152,6 +154,54 @@ function extractMessagesFromEntry(entry: any): Array<{
   return out;
 }
 
+/**
+ * جلب بيانات المرسل (الاسم + الصورة) من Graph API.
+ * يفشل بهدوء: إن لم تنجح العملية تُعاد قيم null.
+ */
+async function fetchSenderProfile(opts: {
+  channel: "instagram" | "facebook";
+  senderId: string;
+  token: string | null;
+}): Promise<{ name: string | null; avatar: string | null }> {
+  const { channel, senderId, token } = opts;
+
+  if (!token || !senderId) {
+    return { name: null, avatar: null };
+  }
+
+  try {
+    const url = senderProfileUrl(channel, senderId, token);
+    const res = await fetch(url);
+
+    if (!res.ok) {
+      console.warn(
+        "[Instagram Webhook] Profile fetch HTTP:",
+        res.status,
+        "for sender",
+        senderId
+      );
+      return { name: null, avatar: null };
+    }
+
+    const pj: any = await res.json();
+    const parsed = parseSenderProfile(pj);
+
+    console.log("[Instagram Webhook] Sender profile fetched:", {
+      senderId,
+      name: parsed.name,
+      avatar: parsed.avatar ? "present" : "missing",
+    });
+
+    return parsed;
+  } catch (e: any) {
+    console.warn(
+      "[Instagram Webhook] Profile fetch error:",
+      e?.message ?? String(e)
+    );
+    return { name: null, avatar: null };
+  }
+}
+
 // ─── 2. استقبال الرسائل (POST) ───
 instagramWebhookRouter.post("/instagram", async (req: Request, res: Response) => {
   // رد 200 فورًا لـ Meta
@@ -197,7 +247,9 @@ instagramWebhookRouter.post("/instagram", async (req: Request, res: Response) =>
         for (const candidate of candidates) {
           const { data } = await db
             .from("channel_accounts")
-            .select("tenant_id, channel, external_id, status, agent_enabled, auto_reply")
+            .select(
+              "tenant_id, channel, external_id, status, agent_enabled, auto_reply, access_token_encrypted"
+            )
             .eq("external_id", candidate)
             .in("channel", ["instagram", "facebook"])
             .maybeSingle();
@@ -236,6 +288,26 @@ instagramWebhookRouter.post("/instagram", async (req: Request, res: Response) =>
           `[Instagram Webhook] Processing: sender=${msg.senderId} channel=${channel} tenant=${account.tenant_id}`
         );
 
+        // ─── جلب بيانات المرسل (الاسم + الصورة) ───
+        let token: string | null = null;
+        try {
+          if (account.access_token_encrypted) {
+            token = decryptField(account.access_token_encrypted) ?? null;
+          }
+        } catch (e: any) {
+          console.warn(
+            "[Instagram Webhook] Token decrypt failed:",
+            e?.message ?? String(e)
+          );
+        }
+
+        const profile = await fetchSenderProfile({
+          channel: channel as "instagram" | "facebook",
+          senderId: msg.senderId,
+          token,
+        });
+
+        // ─── توليد الرد وإرساله ───
         try {
           await handleIncomingMessage(
             account.tenant_id,
@@ -246,6 +318,37 @@ instagramWebhookRouter.post("/instagram", async (req: Request, res: Response) =>
           );
         } catch (e) {
           console.error("[Instagram Webhook] AI reply error:", e);
+        }
+
+        // ─── حفظ الاسم والصورة في المحادثة (إن توفّرا) ───
+        if (profile.name || profile.avatar) {
+          try {
+            const { error: updErr } = await db
+              .from("conversations")
+              .update({
+                sender_name: profile.name,
+                sender_avatar: profile.avatar,
+              })
+              .eq("tenant_id", account.tenant_id)
+              .eq("wa_chat_id", chatId);
+
+            if (updErr) {
+              console.warn(
+                "[Instagram Webhook] Failed to update sender profile:",
+                updErr.message
+              );
+            } else {
+              console.log(
+                "[Instagram Webhook] Sender profile saved to conversation:",
+                chatId
+              );
+            }
+          } catch (e: any) {
+            console.warn(
+              "[Instagram Webhook] Sender profile update error:",
+              e?.message ?? String(e)
+            );
+          }
         }
       }
     }
