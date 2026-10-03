@@ -1,10 +1,13 @@
+```ts
 import "dotenv/config";
 
 const req = (name: string, fallback?: string): string => {
   const v = process.env[name] ?? fallback;
 
   if (v === undefined || v === "") {
-    throw new Error(`[config] Required environment variable is missing: ${name}`);
+    throw new Error(
+      `[config] Required environment variable is missing: ${name}`
+    );
   }
 
   return v;
@@ -41,7 +44,6 @@ export const corsOriginPatterns: RegExp[] = [
  * ملاحظة:
  * - META_REDIRECT_URI و INSTAGRAM_REDIRECT_URI يتم التعامل معهما
  *   بشكل مستقل في الدوال الخاصة بكل تدفق OAuth.
- * - لا نستخدم META_REDIRECT_URI لبناء Instagram callback.
  */
 export function buildServerBaseUrl(): string {
   const isProd = process.env.NODE_ENV === "production";
@@ -88,19 +90,20 @@ export function buildServerBaseUrl(): string {
 }
 
 /**
- * رابط callback الخاص بـ Facebook OAuth.
- *
- * تدفق Facebook:
- *
- * facebook.com/dialog/oauth
- *        ↓
- * /api/auth/facebook/callback
+ * رابط callback الرسمي لـ Meta OAuth (Facebook Login).
  *
  * يمكن تثبيت الرابط حرفياً بواسطة:
  *
  * META_REDIRECT_URI
  *
- * وإذا لم يكن موجوداً، يتم بناؤه من PUBLIC_URL.
+ * ويجب أن يطابق حرفياً الرابط المسجل في Meta Dashboard.
+ *
+ * إذا لم يكن موجوداً، يتم بناؤه من PUBLIC_URL.
+ *
+ * ملاحظة:
+ * مسار /api/auth/instagram/callback يمكن استخدامه أيضاً
+ * لتدفق Instagram عبر Facebook Login، لأن الخادم يستطيع
+ * معالجة callback الخاص بـ Instagram من خلال نفس OAuth flow.
  */
 export function buildMetaCallbackUrl(): string {
   const override = opt("META_REDIRECT_URI")
@@ -108,34 +111,29 @@ export function buildMetaCallbackUrl(): string {
     .replace(/\/+$/, "");
 
   if (override && /^https?:\/\//.test(override)) {
-    return override;
+    const normalized = override.replace(/\/+$/, "");
+
+    const isFullCallbackPath =
+      normalized.endsWith("/api/auth/facebook/callback") ||
+      normalized.endsWith("/api/auth/instagram/callback");
+
+    if (isFullCallbackPath) {
+      return normalized;
+    }
+
+    return normalized;
   }
 
   return `${buildServerBaseUrl()}/api/auth/facebook/callback`;
 }
 
 /**
- * رابط callback المستقل لـ Instagram Login.
+ * رابط callback المستقل لـ Instagram Login المباشر.
  *
- * تدفق Instagram:
+ * هذا التدفق منفصل عن Facebook Login.
  *
- * instagram.com/oauth/authorize
- *        ↓
- * /api/auth/instagram/callback
- *
- * مهم:
- *
- * هذا الرابط مستقل تماماً عن Facebook OAuth.
- *
- * لا يستخدم:
- *
- * META_REDIRECT_URI
- *
- * ويمكن تثبيته صراحة بواسطة:
- *
- * INSTAGRAM_REDIRECT_URI
- *
- * وإذا لم يكن موجوداً، يتم بناؤه تلقائياً من PUBLIC_URL.
+ * يتم الاحتفاظ به حاليًا للتوافق مع الكود الموجود،
+ * حتى يتم إيقاف Instagram Login المباشر بالكامل من auth-meta.ts.
  */
 export function buildInstagramCallbackUrl(): string {
   const override = opt("INSTAGRAM_REDIRECT_URI")
@@ -150,18 +148,14 @@ export function buildInstagramCallbackUrl(): string {
 }
 
 /**
- * إعدادات Instagram Login.
+ * إعدادات Instagram Login المباشر.
  *
- * هذه المتغيرات مستقلة عن:
+ * ملاحظة:
+ * المسار الرئيسي المطلوب حاليًا هو Instagram API with Facebook Login،
+ * والذي يستخدم META_APP_ID و buildMetaCallbackUrl().
  *
- * META_APP_ID
- * META_APP_SECRET
- *
- * يجب ضبطها في Railway:
- *
- * INSTAGRAM_APP_ID
- * INSTAGRAM_APP_SECRET
- * INSTAGRAM_REDIRECT_URI
+ * هذه الإعدادات تبقى فقط للتوافق مع الكود القديم إلى أن تتم إزالة
+ * مسار Instagram Login المباشر.
  */
 export const instagramOAuth = {
   appId: opt("INSTAGRAM_APP_ID"),
@@ -170,9 +164,7 @@ export const instagramOAuth = {
 };
 
 /**
- * هل Instagram Login مهيأ؟
- *
- * لا يتم فحص قيمة الـ secret أو تسجيلها في الـ logs.
+ * هل Instagram Login المباشر مهيأ؟
  */
 export function isInstagramLoginConfigured(): boolean {
   return Boolean(
@@ -237,10 +229,10 @@ export const config = {
   },
 
   /**
-   * Instagram Login — إعدادات مستقلة عن Facebook.
+   * Instagram Login المباشر — إعدادات توافقية فقط.
    *
-   * يستخدمها backend لبناء Instagram OAuth
-   * والتحقق من وجود credentials.
+   * مسار Instagram عبر Facebook Login لا يستخدم هذه القيم
+   * في OAuth الأساسي.
    */
   instagram: {
     appId: instagramOAuth.appId,
@@ -265,4 +257,4 @@ export const config = {
     opt("RAG_TOP_K", "5")
   ),
 } as const;
-
+```
