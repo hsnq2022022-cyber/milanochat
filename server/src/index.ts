@@ -178,3 +178,11 @@ app.listen(config.port, () => {
     console.error("[boot] restore failed:", e)
   );
 });
+
+process.on("unhandledRejection", (reason: any) => {
+  console.error("[Server] Unhandled rejection:", reason);
+});
+
+process.on("uncaughtException", (err: any) => {
+  console.error("[Server] Uncaught exception:", err);
+});

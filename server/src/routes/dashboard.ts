@@ -624,14 +624,19 @@ dashboardRouter.post("/knowledge", async (req, res) => {
   if (!tenant) return res.status(404).json({ error: "لا يوجد حساب مرتبط" });
 
   const { url, text } = req.body ?? {};
-  const result = url?.trim()
-    ? await ingestSource(tenant.id, { kind: "url", url: url.trim() })
-    : await ingestSource(tenant.id, {
-        kind: "text",
-        text: String(text ?? ""),
-      });
+  try {
+    const result = url?.trim()
+      ? await ingestSource(tenant.id, { kind: "url", url: url.trim() })
+      : await ingestSource(tenant.id, {
+          kind: "text",
+          text: String(text ?? ""),
+        });
 
-  res.json(result);
+    res.json(result);
+  } catch (e: any) {
+    console.error("[Dashboard] knowledge ingest failed:", e);
+    res.status(500).json({ error: e?.message || "فشلت الفهرسة" });
+  }
 });
 
 dashboardRouter.delete("/knowledge/:sourceId", async (req, res) => {

@@ -436,7 +436,10 @@ export default function Dashboard() {
       body: JSON.stringify({ claimToken: saved }),
     })
       .then(() => clearStoredClaim())
-      .catch(() => {})
+      .catch(() => {
+        // إذا كان الرمز غير صالح (404)، احذفه لتجنب تكرار المحاولة
+        clearStoredClaim();
+      })
       .finally(() => loadAll());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [demo, token]);
