@@ -462,37 +462,38 @@ export default function Dashboard() {
       });
     };
 
-   const handleConvUpdate = (payload: any) => {
-  const row = payload.new ?? {};
-  setSt((prev) => {
-    if (!prev) return prev;
-    const exists = prev.convs.some((c) => c.id === row.id);
-    if (!exists) return prev;
-    return {
-      ...prev,
-      convs: prev.convs.map((c) => {
-        if (c.id !== row.id) return c;
-        const nowD = new Date();
-        const expiresAt = row.human_agent_expires_at ? new Date(row.human_agent_expires_at) : null;
-        const humanAgentActive = Boolean(row.transferred && expiresAt && expiresAt > nowD);
-        const remainingSeconds = humanAgentActive && expiresAt
-          ? Math.floor((expiresAt.getTime() - nowD.getTime()) / 1000)
-          : 0;
+    const handleConvUpdate = (payload: any) => {
+      const row = payload.new ?? {};
+      setSt((prev) => {
+        if (!prev) return prev;
+        const exists = prev.convs.some((c) => c.id === row.id);
+        if (!exists) return prev;
         return {
-          ...c,
-          // ✅ الإصلاح: تحديث الاسم والصورة عند وصولهما من الـ webhook
-          customerName: row.customer_name ?? c.customerName,
-          customerAvatar: row.customer_avatar ?? c.customerAvatar,
-          transferred: Boolean(row.transferred ?? c.transferred),
-          paused: row.auto_paused_reason ?? c.paused,
-          humanAgentExpiresAt: row.human_agent_expires_at ?? c.humanAgentExpiresAt,
-          humanAgentActive,
-          remainingSeconds,
+          ...prev,
+          convs: prev.convs.map((c) => {
+            if (c.id !== row.id) return c;
+            const nowD = new Date();
+            const expiresAt = row.human_agent_expires_at ? new Date(row.human_agent_expires_at) : null;
+            const humanAgentActive = Boolean(row.transferred && expiresAt && expiresAt > nowD);
+            const remainingSeconds = humanAgentActive && expiresAt
+              ? Math.floor((expiresAt.getTime() - nowD.getTime()) / 1000)
+              : 0;
+            return {
+              ...c,
+              // ✅ تحديث الاسم والصورة عند وصولهما من الـ webhook
+              customerName: row.customer_name ?? c.customerName,
+              customerAvatar: row.customer_avatar ?? c.customerAvatar,
+              transferred: Boolean(row.transferred ?? c.transferred),
+              paused: row.auto_paused_reason ?? c.paused,
+              humanAgentExpiresAt: row.human_agent_expires_at ?? c.humanAgentExpiresAt,
+              humanAgentActive,
+              remainingSeconds,
+            };
+          }),
         };
-      }),
+      });
     };
-  });
-};
+
     const handleMessageInsert = (payload: any) => {
       const row = payload.new ?? {};
       const convId: string = row.conversation_id;
@@ -1180,7 +1181,7 @@ export default function Dashboard() {
   const waLive = st.waStatus === "connected" || !!st.phone;
   const fbAccounts = chAccounts.filter((a) => a.channel === "facebook");
   const igAccounts = chAccounts.filter((a) => a.channel === "instagram");
-  
+
   return (
     <Shell>
       <header className="sticky top-0 z-40 bg-night/85 backdrop-blur-md border-b border-verde/12">
