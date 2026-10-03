@@ -669,20 +669,47 @@ channelsRouter.get("/meta/callback", async (req, res) => {
       for (const p of pages) {
         if (!p?.id) continue;
         try {
+          /* نطلب name + username + profile_picture_url من الحساب المهني
+             لعرض صورة الحساب في بطاقة القناة (متطلب instagram_business_basic). */
           const igRes = await fetch(
-            `https://graph.facebook.com/v21.0/${p.id}?fields=name,instagram_business_account{id,username}&access_token=${accessToken}`
+            `https://graph.facebook.com/v21.0/${p.id}?fields=name,instagram_business_account{id,username,name,profile_picture_url}&access_token=${accessToken}`
           );
           const ig: any = await igRes.json();
           const igAcc = ig?.instagram_business_account;
           if (!igAcc?.id) continue;
+
+          // تحديد أفضل اسم عرض: username ← name
+          const igUsername =
+            typeof igAcc?.username === "string" && igAcc.username.trim().length > 0
+              ? `@${igAcc.username.trim()}`
+              : null;
+          const igName =
+            typeof igAcc?.name === "string" && igAcc.name.trim().length > 0
+              ? igAcc.name.trim()
+              : null;
+          const displayName = igUsername ?? igName ?? (ig?.name ?? null);
+
+          // رابط الصورة: profile_picture_url (متاح لـ Instagram Business)
+          const avatarUrl =
+            typeof igAcc?.profile_picture_url === "string" &&
+            igAcc.profile_picture_url.length > 0
+              ? igAcc.profile_picture_url
+              : null;
+
+          console.log("[channels] IG account discovered:", {
+            id: igAcc.id,
+            username: igAcc.username ?? null,
+            name: igAcc.name ?? null,
+            avatar: avatarUrl ? "present" : "missing",
+          });
 
           const { error } = await db.from("channel_accounts").upsert(
             {
               tenant_id: parsed.tenantId,
               channel: "instagram",
               external_id: String(igAcc.id),
-              display_name: igAcc.username ? `@${igAcc.username}` : (ig?.name ?? null),
-              avatar_url: null,
+              display_name: displayName,
+              avatar_url: avatarUrl,
               status: "active",
               access_token_encrypted: encryptField(p.access_token ?? accessToken),
               token_expires_at: tokenJson.expires_in
@@ -693,6 +720,7 @@ channelsRouter.get("/meta/callback", async (req, res) => {
             { onConflict: "tenant_id,channel,external_id" }
           );
           if (!error) instagramSaved += 1;
+          else console.error("[channels] IG upsert failed:", error.message);
         } catch (e) {
           console.error("[channels] ig lookup failed for page", p.id, e);
         }
