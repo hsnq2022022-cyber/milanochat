@@ -37,102 +37,43 @@ type SendMetaDirectMessageOptions = {
 export async function sendMetaDirectMessage(
   opts: SendMetaDirectMessageOptions
 ): Promise<void> {
-  const {
-    channel,
-    externalId,
-    token,
-    recipientId,
-    text,
-  } = opts;
+  const { channel, externalId, token, recipientId, text } = opts;
 
-  if (!token) {
-    throw new Error("Missing Meta access token");
-  }
-
-  if (!recipientId) {
-    throw new Error("Missing recipient ID");
-  }
-
-  if (!text) {
-    throw new Error("Missing message text");
-  }
+  if (!token) throw new Error("Missing Meta access token");
+  if (!recipientId) throw new Error("Missing recipient ID");
+  if (!text) throw new Error("Missing message text");
 
   const payload = {
-    recipient: {
-      id: recipientId,
-    },
-    message: {
-      text,
-    },
+    recipient: { id: recipientId },
+    message: { text },
   };
 
   let url: string;
   let headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
-
   let body: Record<string, unknown>;
 
-  /**
-   * ------------------------------------------------------------
-   * Instagram Login
-   * ------------------------------------------------------------
-   *
-   * Instagram Login uses graph.instagram.com and the token
-   * in the Authorization header.
-   */
+  /* Instagram Login */
   if (channel === "instagram" && isInstagramLoginToken(token)) {
     url = `${IG_GRAPH}/me/messages`;
-
-    headers = {
-      ...headers,
-      Authorization: `Bearer ${token}`,
-    };
-
+    headers = { ...headers, Authorization: `Bearer ${token}` };
     body = payload;
   }
-
-  /**
-   * ------------------------------------------------------------
-   * Facebook Login → Instagram API
-   * ------------------------------------------------------------
-   *
-   * In the current project the Instagram account was discovered
-   * through:
-   *
-   * Page → instagram_business_account
-   *
-   * and the stored token is a Page Access Token (EAA...).
-   *
-   * Therefore use the Instagram Professional Account ID here.
-   */
+  /* Facebook Login → Instagram API */
   else if (channel === "instagram") {
     if (!externalId) {
       throw new Error(
         "Missing Instagram Business Account ID for Instagram message sending"
       );
     }
-
     url = `${FB_GRAPH}/${externalId}/messages`;
-
-    body = {
-      ...payload,
-      access_token: token,
-    };
+    body = { ...payload, access_token: token };
   }
-
-  /**
-   * ------------------------------------------------------------
-   * Facebook Messenger
-   * ------------------------------------------------------------
-   */
+  /* Facebook Messenger */
   else {
     url = `${FB_GRAPH}/me/messages`;
-
-    body = {
-      ...payload,
-      access_token: token,
-    };
+    body = { ...payload, access_token: token };
   }
 
   console.log("[MetaSend] Sending message", {
@@ -155,15 +96,11 @@ export async function sendMetaDirectMessage(
   });
 
   const responseText = await res.text();
-
   let json: any = {};
-
   try {
     json = responseText ? JSON.parse(responseText) : {};
   } catch {
-    json = {
-      raw: responseText,
-    };
+    json = { raw: responseText };
   }
 
   if (!res.ok) {
@@ -173,7 +110,6 @@ export async function sendMetaDirectMessage(
       endpoint: url,
       error: json?.error ?? json,
     });
-
     throw new Error(
       json?.error?.message ??
         json?.error?.error_user_msg ??
@@ -191,6 +127,15 @@ export async function sendMetaDirectMessage(
 
 /**
  * Build a URL for retrieving the sender profile.
+ *
+ * For Instagram Login we request:
+ *   name, username, profile_pic
+ *
+ * For Facebook Login → Instagram we request:
+ *   name, profile_picture (this flow does not expose `username`)
+ *
+ * For Messenger:
+ *   name, picture
  */
 export function senderProfileUrl(
   channel: "facebook" | "instagram",
@@ -203,10 +148,32 @@ export function senderProfileUrl(
     if (isInstagramLoginToken(token)) {
       return `${IG_GRAPH}/${senderId}?fields=name,username,profile_pic&access_token=${encodedToken}`;
     }
-
     return `${FB_GRAPH}/${senderId}?fields=name,profile_picture&access_token=${encodedToken}`;
   }
 
   return `${FB_GRAPH}/${senderId}?fields=name,picture&access_token=${encodedToken}`;
 }
 
+/**
+ * Extract a normalized profile from whatever Graph API returns.
+ * Returns { name, avatar } where both may be null.
+ */
+export function parseSenderProfile(pj: any): {
+  name: string | null;
+  avatar: string | null;
+} {
+  if (!pj) return { name: null, avatar: null };
+
+  const name =
+    (typeof pj.name === "string" && pj.name) ||
+    (typeof pj.username === "string" && `@${pj.username}`) ||
+    null;
+
+  const avatar =
+    (typeof pj.profile_pic === "string" && pj.profile_pic) ||
+    (typeof pj.profile_picture === "string" && pj.profile_picture) ||
+    (typeof pj.picture?.data?.url === "string" && pj.picture.data.url) ||
+    null;
+
+  return { name, avatar };
+}
