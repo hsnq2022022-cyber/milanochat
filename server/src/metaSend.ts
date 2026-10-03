@@ -11,6 +11,10 @@
  * ملاحظة مهمة لتدفق Facebook Login → Instagram API:
  *   `externalId` يجب أن يكون Instagram Professional Account ID (IG_ID)
  *   عند إرسال رسالة Instagram.
+ *
+ * HUMAN_AGENT: عند الإرسال اليدوي من لوحة التحكم (خارج نافذة 24 ساعة)،
+ *   نُضيف الوسم HUMAN_AGENT ليسمح Instagram بالرد حتى 7 أيام من آخر رسالة للعميل.
+ *   يُستخدم فقط عندما يكون المرسل إنسانًا (وليس AI Agent).
  */
 
 export const FB_GRAPH = "https://graph.facebook.com/v21.0";
@@ -29,6 +33,12 @@ type SendMetaDirectMessageOptions = {
   token: string;
   recipientId: string;
   text: string;
+  /**
+   * هل الرسالة مُرسلة يدويًا من موظف بشري؟
+   * عند true + قناة instagram → نُضيف HUMAN_AGENT tag.
+   * عند false أو غير محدد → رسالة آلية عادية.
+   */
+  isManual?: boolean;
 };
 
 /**
@@ -37,16 +47,24 @@ type SendMetaDirectMessageOptions = {
 export async function sendMetaDirectMessage(
   opts: SendMetaDirectMessageOptions
 ): Promise<void> {
-  const { channel, externalId, token, recipientId, text } = opts;
+  const { channel, externalId, token, recipientId, text, isManual } = opts;
 
   if (!token) throw new Error("Missing Meta access token");
   if (!recipientId) throw new Error("Missing recipient ID");
   if (!text) throw new Error("Missing message text");
 
-  const payload = {
+  // بناء الـ payload الأساسي
+  const payload: Record<string, unknown> = {
     recipient: { id: recipientId },
     message: { text },
   };
+
+  // إضافة وسم HUMAN_AGENT للردود اليدوية على Instagram
+  // ملاحظة: هذا الوسم مخصص فقط للردود البشرية خارج نافذة 24 ساعة
+  if (channel === "instagram" && isManual === true) {
+    payload.messaging_type = "MESSAGE_TAG";
+    payload.tag = "HUMAN_AGENT";
+  }
 
   let url: string;
   let headers: Record<string, string> = {
@@ -87,6 +105,9 @@ export async function sendMetaDirectMessage(
           ? "instagram-login"
           : "facebook-login-page-token"
         : "facebook",
+    isManual: isManual === true,
+    usingHumanAgentTag:
+      channel === "instagram" && isManual === true ? true : false,
   });
 
   const res = await fetch(url, {
@@ -108,6 +129,7 @@ export async function sendMetaDirectMessage(
       status: res.status,
       statusText: res.statusText,
       endpoint: url,
+      isManual: isManual === true,
       error: json?.error ?? json,
     });
     throw new Error(
@@ -121,6 +143,7 @@ export async function sendMetaDirectMessage(
     channel,
     externalId,
     recipientId,
+    isManual: isManual === true,
     response: json,
   });
 }
