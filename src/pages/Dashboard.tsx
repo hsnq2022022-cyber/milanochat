@@ -12,7 +12,7 @@
  * - توحيد "out"/"outbound" إلى "out" و "in"/"inbound" إلى "in".
  * - تحميل رسائل المحادثة يتم فقط عند فتحها (لا دورية مستمرة).
  * - الشعار يُحمَّل عبر import.meta.env.BASE_URL ليعمل على GitHub Pages.
- * - عرض اسم العميل (customerName) فوق الرقم في القائمة ورأس المحادثة.
+ * - عرض اسم العميل (customerName) وصورته (customerAvatar) فوق الرقم في القائمة ورأس المحادثة.
  * - عند وصول محادثة جديدة عبر Realtime نُعيد تحميل القائمة من الخادم 
  *   (لأن الرقم مشفّر في البياندة الواردة).
  * - إصلاح: كان يُستدعى loadAll(true) عند وصول محادثة أو رسالة جديدة،
@@ -139,6 +139,13 @@ const extractBody = (row: any): string => {
   if (!row) return "";
   if (typeof row.body === "string" && row.body.length > 0) return row.body;
   return "";
+};
+
+/** أيقونة القناة المناسبة لعرضها عند غياب صورة العميل */
+const ChannelIcon = ({ channel, className = "w-4.5 h-4.5" }: { channel?: ChannelId; className?: string }) => {
+  if (channel === "instagram") return <IconInstagram className={className} />;
+  if (channel === "facebook") return <IconFacebook className={className} />;
+  return <IconWhatsapp className={className} />;
 };
 
 const cls = {
@@ -436,17 +443,12 @@ export default function Dashboard() {
   useEffect(() => {
     if (demo || !token || needClaim || !sb) return;
 
-    /* ── INSERT: محادثة جديدة ──
-     * نُعيد تحميل القائمة من الخادم (loadAll(false))
-     * لأن الرقم مشفّر في البياندة الواردة.
-     * سابقًا كان loadAll(true) فلا يظهر شيء حتى إعادة التحميل.
-     */
+    /* ── INSERT: محادثة جديدة ── */
     const handleConvInsert = (payload: any) => {
       const row = payload.new ?? {};
       setSt((prev) => {
         if (!prev) return prev;
         if (prev.convs.some((c) => c.id === row.id)) return prev;
-        // ✅ التعديل: loadAll(false) بدلاً من loadAll(true)
         queueMicrotask(() => loadAll(false).catch(() => {}));
         return prev;
       });
@@ -528,8 +530,6 @@ export default function Dashboard() {
         const target = prev.convs.find((c) => c.id === convId);
 
         if (!target) {
-          // ✅ التعديل: loadAll(false) بدلاً من loadAll(true)
-          // حتى تُجلب المحادثة الجديدة من الخادم وتظهر فورًا
           queueMicrotask(() => loadAll(false).catch(() => {}));
           return prev;
         }
@@ -665,14 +665,12 @@ export default function Dashboard() {
   useEffect(() => {
     const q = new URLSearchParams(window.location.search);
     if (q.get("tab") === "channels") setTab("channels");
-    // الصيغة الجديدة: ?channel_connected=facebook|instagram&accounts=N&name=...
     const connected = q.get("channel_connected");
     if (connected) {
       const name = q.get("name");
       showToast(
         `تم ربط ${connected === "facebook" ? "Facebook Messenger" : "Instagram"} بنجاح ✅${name ? ` (${name})` : ""}`
       );
-      // حساب شخصي غير مؤهل للمراسلة — تنبيه صادق بدل حالة وهمية
       if (q.get("note") === "personal_account") {
         setTimeout(() => showToast("تنبيه: الحساب شخصي — حوّله إلى احترافي/أعمال لتفعيل استقبال الرسائل والرد الآلي"), 1200);
       }
@@ -747,7 +745,6 @@ export default function Dashboard() {
       showToast("واتساب يُدار من بطاقة الاتصال في «نظرة عامة» — WhatsApp Cloud API");
       return;
     }
-    // سجل/حدّث القناة ثم تابع بتدفق OAuth الحقيقي عبر /api/auth/facebook/start
     try {
       await apiAuthFetch(token, "/api/dashboard/channels/connect", {
         method: "POST",
@@ -759,16 +756,10 @@ export default function Dashboard() {
     startMetaOAuth(platform);
   };
 
-  /** بدء تدفق OAuth الرسمي — الخادم يبني الرابط والصلاحيات، والواجهة لا ترى أي سر
-   * instagram → Instagram API with Facebook Login (نفس مسار /api/auth/facebook/start
-   *              بـ platform=instagram — حسب إعداد تطبيق Meta الفعلي)
-   * facebook   → تدفق Facebook Login الحالي (بدون تغيير)
-   */
   const startMetaOAuth = async (channel: "facebook" | "instagram") => {
     if (!token) return;
     setChBusyPlatform(channel);
     try {
-      // المسار الجديد مع fallback للمسار القديم إن لم يكن منشوراً بعد
       let r: { url: string };
       try {
         r = await apiAuthFetch<{ url: string }>(token, "/api/auth/facebook/start", {
@@ -794,7 +785,6 @@ export default function Dashboard() {
     }
   };
 
-  /** فصل قناة Facebook/Instagram عبر المسار الرسمي */
   const disconnectSocialChannel = async (platform: "facebook" | "instagram") => {
     if (!token || !st?.tenantId) return;
     if (!window.confirm(`فصل ${platform === "facebook" ? "Facebook Messenger" : "Instagram"}؟ ستوقف الرسائل الواردة لهذه القناة حتى إعادة الربط.`)) return;
@@ -1644,7 +1634,7 @@ export default function Dashboard() {
                 <p className="text-xs font-bold text-sage">صندوق المحادثات الموحد</p>
                 <span className="w-2 h-2 rounded-full bg-verde live-dot" />
               </div>
-              {/* فلاتر القناة — تعمل فعليًا على البيانات القادمة من قاعدة البيانات */}
+              {/* فلاتر القناة */}
               <div className="px-3 py-2.5 border-b border-verde/8 flex gap-1.5 flex-wrap">
                 {([
                   ["all", "الكل"],
@@ -1686,6 +1676,8 @@ export default function Dashboard() {
                   .filter((c) => convFilter === "all" || (c.channel ?? "whatsapp") === convFilter)
                   .map((c) => {
                   const sel = c.id === activeConv;
+                  const ch = (c.channel ?? "whatsapp") as ChannelId;
+                  const displayName = c.customerName || c.phone || "—";
                   return (
                     <li key={c.id}>
                       <button
@@ -1696,55 +1688,66 @@ export default function Dashboard() {
                             : `border-verde/8 ${sel ? "bg-moss/80" : "hover:bg-night/50"}`
                         }`}
                       >
-                        <div className="flex items-center justify-between gap-2 mb-1">
-                          <div className="flex flex-col gap-0.5 min-w-0 flex-1">
-                            <span className="inline-flex items-center gap-1.5 min-w-0">
-                              <ChannelBadge channel={(c.channel ?? "whatsapp") as ChannelId} />
-                              {c.customerName && (
-                                <span className="text-[13px] font-bold text-bone truncate">
-                                  {c.customerName}
+                        <div className="flex items-start gap-3">
+                          {/* صورة العميل أو أيقونة القناة */}
+                          {c.customerAvatar ? (
+                            <img
+                              src={c.customerAvatar}
+                              alt=""
+                              className="w-11 h-11 rounded-full object-cover border border-verde/25 shrink-0 bg-moss"
+                              referrerPolicy="no-referrer"
+                              loading="lazy"
+                              onError={(e) => {
+                                (e.currentTarget as HTMLImageElement).style.display = "none";
+                              }}
+                            />
+                          ) : (
+                            <span className="w-11 h-11 rounded-full bg-moss border border-verde/25 text-verde flex items-center justify-center shrink-0">
+                              <ChannelIcon channel={ch} className="w-5 h-5" />
+                            </span>
+                          )}
+
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center justify-between gap-2 mb-0.5">
+                              <span className="text-[13px] font-bold text-bone truncate">
+                                {displayName}
+                              </span>
+                              <span className="text-[10px] text-sage tabular-nums shrink-0">
+                                {fmtTime(c.lastAt)}
+                              </span>
+                            </div>
+                            {c.customerName && c.phone && (
+                              <p className="text-[10px] text-sage tabular-nums mb-0.5" dir="ltr">
+                                {c.phone}
+                              </p>
+                            )}
+                            <p className="text-[11.5px] text-sage truncate">
+                              {c.lastMessagePreview ?? c.msgs[c.msgs.length - 1]?.body ?? "—"}
+                            </p>
+                            <div className="flex gap-1.5 mt-1.5 flex-wrap items-center">
+                              <ChannelBadge channel={ch} />
+                              {c.transferred && (
+                                <span className="text-[9.5px] font-bold text-oro-soft bg-oro/10 border border-oro/30 rounded-full px-2 py-0.5 inline-flex items-center gap-1">
+                                  <IconHandoff className="w-3 h-3" /> محوّلة لبشري
                                 </span>
                               )}
-                            </span>
-                            <span
-                              className={
-                                c.customerName
-                                  ? "text-[10px] text-sage tabular-nums"
-                                  : "text-[13px] font-bold text-bone tabular-nums"
-                              }
-                              dir="ltr"
-                            >
-                              {c.phone || "—"}
-                            </span>
+                              {c.paused === "credits" && (
+                                <span className="text-[9.5px] font-bold text-oro-soft bg-oro/10 border border-oro/30 rounded-full px-2 py-0.5">
+                                  موقوفة — نفد الرصيد
+                                </span>
+                              )}
+                              {c.paused === "ai_handoff" && !c.humanAgentActive && (
+                                <span className="text-[9.5px] font-bold text-oro-soft bg-oro/10 border border-oro/30 rounded-full px-2 py-0.5 inline-flex items-center gap-1">
+                                  🔔 يحتاج مساعدتك
+                                </span>
+                              )}
+                              {typeof c.unreadCount === "number" && c.unreadCount > 0 && !sel && (
+                                <span className="text-[9.5px] font-bold text-white bg-verde rounded-full px-2 py-0.5 inline-flex items-center gap-1">
+                                  {c.unreadCount} جديدة
+                                </span>
+                              )}
+                            </div>
                           </div>
-                          <span className="text-[10px] text-sage tabular-nums shrink-0">
-                            {fmtTime(c.lastAt)}
-                          </span>
-                        </div>
-                        <p className="text-[11.5px] text-sage truncate">
-                          {c.lastMessagePreview ?? c.msgs[c.msgs.length - 1]?.body ?? "—"}
-                        </p>
-                        <div className="flex gap-1.5 mt-1.5 flex-wrap">
-                          {c.transferred && (
-                            <span className="text-[9.5px] font-bold text-oro-soft bg-oro/10 border border-oro/30 rounded-full px-2 py-0.5 inline-flex items-center gap-1">
-                              <IconHandoff className="w-3 h-3" /> محوّلة لبشري
-                            </span>
-                          )}
-                          {c.paused === "credits" && (
-                            <span className="text-[9.5px] font-bold text-oro-soft bg-oro/10 border border-oro/30 rounded-full px-2 py-0.5">
-                              موقوفة — نفد الرصيد
-                            </span>
-                          )}
-                          {c.paused === "ai_handoff" && !c.humanAgentActive && (
-                            <span className="text-[9.5px] font-bold text-oro-soft bg-oro/10 border border-oro/30 rounded-full px-2 py-0.5 inline-flex items-center gap-1">
-                              🔔 الموظف الذكي يحتاج مساعدتك
-                            </span>
-                          )}
-                          {typeof c.unreadCount === "number" && c.unreadCount > 0 && !sel && (
-                            <span className="text-[9.5px] font-bold text-white bg-verde rounded-full px-2 py-0.5 inline-flex items-center gap-1">
-                              {c.unreadCount} جديدة
-                            </span>
-                          )}
                         </div>
                       </button>
                     </li>
@@ -1765,25 +1768,34 @@ export default function Dashboard() {
                     <button onClick={() => setMobileThread(false)} className="lg:hidden text-sage hover:text-bone transition-colors" aria-label="عودة">
                       <IconChevronDown className="w-4 h-4 rotate-90" />
                     </button>
-                    <span className="w-9 h-9 rounded-full bg-moss border border-verde/30 text-verde flex items-center justify-center">
-                      <IconWhatsapp className="w-4.5 h-4.5" />
-                    </span>
+
+                    {/* صورة العميل أو أيقونة القناة في رأس المحادثة */}
+                    {active.customerAvatar ? (
+                      <img
+                        src={active.customerAvatar}
+                        alt=""
+                        className="w-9 h-9 rounded-full object-cover border border-verde/30 shrink-0 bg-moss"
+                        referrerPolicy="no-referrer"
+                        loading="lazy"
+                        onError={(e) => {
+                          (e.currentTarget as HTMLImageElement).style.display = "none";
+                        }}
+                      />
+                    ) : (
+                      <span className="w-9 h-9 rounded-full bg-moss border border-verde/30 text-verde flex items-center justify-center shrink-0">
+                        <ChannelIcon channel={(active.channel ?? "whatsapp") as ChannelId} className="w-4.5 h-4.5" />
+                      </span>
+                    )}
+
                     <div className="flex-1 min-w-0">
-                      {active.customerName && (
-                        <p className="text-[13px] font-bold text-bone truncate">
-                          {active.customerName}
+                      <p className="text-[13px] font-bold text-bone truncate">
+                        {active.customerName || active.phone || "—"}
+                      </p>
+                      {active.customerName && active.phone && (
+                        <p className="text-[10.5px] text-sage tabular-nums" dir="ltr">
+                          {active.phone}
                         </p>
                       )}
-                      <p
-                        className={
-                          active.customerName
-                            ? "text-[10.5px] text-sage tabular-nums"
-                            : "text-[13px] font-bold text-bone tabular-nums"
-                        }
-                        dir="ltr"
-                      >
-                        {active.phone || "—"}
-                      </p>
                       <p className="text-[10.5px] text-sage mt-0.5">
                         {active.humanAgentActive
                           ? `Human Agent Active — ${Math.floor((active.remainingSeconds ?? 0) / 60)}:${String((active.remainingSeconds ?? 0) % 60).padStart(2, '0')} متبقي`
@@ -2461,192 +2473,4 @@ export default function Dashboard() {
                   </div>
                 </div>
                 <p className="text-[10.5px] text-sage/70 tabular-nums" dir="ltr">ID: {manageAcc.external_id}</p>
-                <p className="text-[10.5px] text-sage/70">تاريخ الربط: {fmtDate(manageAcc.created_at)}</p>
-              </div>
-
-              <div className={`${cls.card} p-4 space-y-3`}>
-                <p className="text-xs font-bold text-sage">وكيل الذكاء الاصطناعي</p>
-                <label className="flex items-center justify-between gap-2 cursor-pointer">
-                  <span className="text-[12.5px] text-bone">تفعيل الوكيل</span>
-                  <input
-                    type="checkbox"
-                    checked={manageAcc.agent_enabled}
-                    onChange={(e) => {
-                      const v = e.target.checked;
-                      setManageAcc((p) => (p ? { ...p, agent_enabled: v } : p));
-                      patchAccount(manageAcc.id, { agent_enabled: v });
-                    }}
-                    className="accent-verde w-4 h-4"
-                  />
-                </label>
-                <label className="flex items-center justify-between gap-2 cursor-pointer">
-                  <span className="text-[12.5px] text-bone">الرد التلقائي على العملاء</span>
-                  <input
-                    type="checkbox"
-                    checked={manageAcc.auto_reply}
-                    onChange={(e) => {
-                      const v = e.target.checked;
-                      setManageAcc((p) => (p ? { ...p, auto_reply: v } : p));
-                      patchAccount(manageAcc.id, { auto_reply: v });
-                    }}
-                    className="accent-verde w-4 h-4"
-                  />
-                </label>
-                <p className="text-[10.5px] text-sage/70 leading-5">
-                  عند إيقاف الرد التلقائي تصل الرسائل إلى صندوق المحادثات دون رد آلي، ويتولاها فريقك يدويًا.
-                </p>
-              </div>
-
-              <div className={`${cls.card} p-4 space-y-3`}>
-                <p className="text-xs font-bold text-sage">التحويل إلى موظف (Human Handoff)</p>
-                <label className="flex items-center justify-between gap-2 cursor-pointer">
-                  <span className="text-[12.5px] text-bone">تحويل عند طلب العميل</span>
-                  <input type="checkbox" checked={handoffCfg.onRequest} onChange={(e) => setHandoffCfg({ ...handoffCfg, onRequest: e.target.checked })} className="accent-verde w-4 h-4" />
-                </label>
-                <label className="flex items-center justify-between gap-2 cursor-pointer">
-                  <span className="text-[12.5px] text-bone">تحويل عند عدم معرفة الإجابة</span>
-                  <input type="checkbox" checked={handoffCfg.onNoAnswer} onChange={(e) => setHandoffCfg({ ...handoffCfg, onNoAnswer: e.target.checked })} className="accent-verde w-4 h-4" />
-                </label>
-                <div>
-                  <label className="block text-[11px] text-sage mb-1">كلمات مفتاحية للتحويل (مفصولة بفواصل)</label>
-                  <input value={handoffCfg.keywords} onChange={(e) => setHandoffCfg({ ...handoffCfg, keywords: e.target.value })} className={cls.input} placeholder="شكوى، استرجاع، human" />
-                </div>
-                <button onClick={saveHandoffRules} className={`${cls.btn} w-full py-2.5 text-xs`}>حفظ قواعد التحويل</button>
-              </div>
-
-              <div className="flex gap-2">
-                <button
-                  onClick={() => startMetaOAuth(manageAcc.channel as "facebook" | "instagram")}
-                  className={`${cls.btnGhost} flex-1 py-2.5 text-xs`}
-                >
-                  إعادة الاتصال
-                </button>
-                <button
-                  onClick={() => disconnectAccount(manageAcc)}
-                  className="inline-flex items-center justify-center gap-2 border border-red-500/40 text-red-400 font-semibold text-sm px-4 py-2.5 rounded-xl hover:bg-red-500/10 transition-all text-xs flex-1"
-                >
-                  فصل الحساب
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-      </main>
-
-      {widgetPreview && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-night/80 backdrop-blur-sm" onClick={() => setWidgetPreview(null)}>
-          <div className="relative w-full max-w-sm bg-pine border border-verde/25 rounded-3xl p-6 msg-in shadow-[0_40px_120px_-30px_rgba(0,0,0,0.9)]" onClick={(e) => e.stopPropagation()}>
-            <button onClick={() => setWidgetPreview(null)} className="absolute top-4 left-4 text-sage hover:text-bone transition-colors" aria-label="إغلاق">
-              <IconX className="w-5 h-5" />
-            </button>
-            <h3 className="font-display font-bold text-xl text-bone mb-4 text-center">معاينة Widget</h3>
-            <div className="bg-bone rounded-2xl p-4 mb-4">
-              <div className="bg-white rounded-xl shadow-lg overflow-hidden" style={{ height: "400px" }}>
-                <div className="h-12 flex items-center gap-2 px-4 text-white" style={{ background: widgetPreview.primary_color }}>
-                  <span className="text-lg">💬</span>
-                  <div>
-                    <p className="text-sm font-bold">{widgetPreview.name}</p>
-                    <p className="text-[10px] opacity-90">{st?.businessName}</p>
-                  </div>
-                </div>
-                <div className="flex-1 p-4 bg-gray-50" style={{ height: "calc(100% - 48px - 60px)" }}>
-                  <div className="bg-white rounded-lg p-3 text-sm text-gray-800 shadow-sm">
-                    {widgetPreview.welcome_message}
-                  </div>
-                </div>
-                <div className="h-15 bg-white border-t border-gray-200 flex items-center gap-2 p-2">
-                  <input className="flex-1 px-3 py-2 border border-gray-300 rounded-full text-sm" placeholder={widgetPreview.placeholder} readOnly />
-                  <button className="w-9 h-9 rounded-full flex items-center justify-center text-white" style={{ background: widgetPreview.primary_color }}>
-                    →
-                  </button>
-                </div>
-              </div>
-            </div>
-            <div className="bg-night/60 border border-verde/15 rounded-xl p-3">
-              <p className="text-[11px] text-sage mb-2">كود التضمين:</p>
-              <code className="text-[10px] text-verde break-all" dir="ltr">
-                {`<script src="${API}/widget.js" data-token="${widgetPreview.public_token}"></script>`}
-              </code>
-              <button
-                onClick={() => copyEmbedCode(widgetPreview.public_token)}
-                className="mt-2 text-[11px] font-bold text-oro hover:text-bone transition-colors"
-              >
-                {copiedCode === widgetPreview.public_token ? "✓ تم النسخ" : "نسخ الكود"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {payOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true">
-          <button className="absolute inset-0 bg-night/80 backdrop-blur-sm" onClick={() => setPayOpen(false)} aria-label="إغلاق" />
-          <div className="relative w-full max-w-lg bg-pine border border-verde/25 rounded-3xl p-6 msg-in shadow-[0_40px_120px_-30px_rgba(0,0,0,0.9)]">
-            <button onClick={() => setPayOpen(false)} className="absolute top-4 left-4 text-sage hover:text-bone transition-colors" aria-label="إغلاق">
-              <IconX className="w-5 h-5" />
-            </button>
-            <h3 className="font-display font-bold text-xl text-bone mb-1">اشحن رصيد الردود</h3>
-            <p className="text-[11.5px] text-sage mb-5">
-              التفعيل يتم تلقائيًا فور تأكيد بوابة الدفع (Moyasar){demo && " — هنا محاكاة فقط"}.
-            </p>
-            <div className="space-y-3">
-              {[
-                { id: "starter", name: "البداية", credits: 1000, price: 99 },
-                { id: "growth", name: "النمو", credits: 3000, price: 249, hot: true },
-                { id: "scale", name: "التوسع", credits: 10000, price: 649 },
-              ].map((p) => (
-                <button
-                  key={p.id}
-                  onClick={() => recharge(p.id)}
-                  className={`w-full flex items-center gap-4 rounded-2xl border p-4 text-start transition-all duration-300 active:scale-[0.98] group ${
-                    p.hot
-                      ? "border-oro/60 bg-oro/5 hover:bg-oro/10 hover:shadow-[0_12px_40px_-12px_rgba(232,178,75,0.35)]"
-                      : "border-verde/20 bg-night/40 hover:border-verde/45"
-                  }`}
-                >
-                  <span className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${p.hot ? "bg-oro/15 text-oro" : "bg-moss text-verde"}`}>
-                    <IconCoin className="w-5 h-5" />
-                  </span>
-                  <span className="flex-1">
-                    <span className="block text-sm font-bold text-bone">
-                      {p.name}
-                      {p.hot && <span className="text-[9.5px] text-oro-soft border border-oro/40 rounded-full px-2 py-0.5 ms-2 align-middle">الأكثر طلبًا</span>}
-                    </span>
-                    <span className="block text-[11px] text-sage mt-0.5 tabular-nums">{p.credits.toLocaleString("en")} رد ذكي</span>
-                  </span>
-                  <span className="font-display font-bold text-xl text-bone tabular-nums group-hover:text-oro transition-colors">
-                    {p.price} <span className="text-[11px] text-sage font-body">ريال</span>
-                  </span>
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {toast && (
-        <div className="fixed bottom-6 inset-x-0 z-50 flex justify-center px-4 pointer-events-none">
-          <p className="bg-pine border border-verde/35 text-bone text-[12.5px] font-semibold rounded-full px-5 py-2.5 shadow-[0_16px_50px_-12px_rgba(0,0,0,0.8)] msg-in">
-            {toast}
-          </p>
-        </div>
-      )}
-    </Shell>
-  );
-}
-
-/* ═══════════ الإطار العام ═══════════ */
-
-function Shell({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="relative min-h-screen bg-night text-bone font-body overflow-x-clip" dir="rtl">
-      <div className="fixed inset-0 -z-10 pointer-events-none" aria-hidden="true">
-        <div className="absolute inset-0 bg-night" />
-        <div className="absolute inset-0 bg-[radial-gradient(1100px_600px_at_80%_-10%,rgba(46,194,126,0.09),transparent_60%)]" />
-        <div className="absolute inset-0 bg-[radial-gradient(900px_600px_at_-5%_60%,rgba(232,178,75,0.05),transparent_60%)]" />
-      </div>
-      <div className="noise-layer" aria-hidden="true" />
-      {children}
-    </div>
-  );
-}
+                <p className="text-[10.5px] text-s
