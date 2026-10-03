@@ -12,10 +12,6 @@
  *    entry[].id = "0" (في اختبارات Meta) أو IG Account ID (في الإنتاج)
  *    entry[].changes[].value.recipient.id = IG Business Account ID
  *
- * الكود يستخرج الرسائل من كلا البنيتين، ويبحث عن الحساب بـ:
- *   - entry.id
- *   - أو changes[].value.recipient.id
- *
  * ملاحظة مهمة: نكتب الاسم والصورة في أعمدة `customer_name` و `customer_avatar`
  * لأن الـ API (Dashboard) يقرأ منهما لعرض اسم المرسل في الواجهة.
  */
@@ -126,7 +122,6 @@ function extractMessagesFromEntry(entry: any): Array<{
       const value = change.value;
       if (!value) continue;
 
-      // بعض الحالات: value.messaging[] موجود
       if (Array.isArray(value.messaging)) {
         for (const ev of value.messaging) {
           if (!ev?.message || ev.message.is_echo) continue;
@@ -141,7 +136,6 @@ function extractMessagesFromEntry(entry: any): Array<{
         continue;
       }
 
-      // الحالة الشائعة: value نفسه يحتوي sender/recipient/message
       if (value.message && !value.message.is_echo) {
         const senderId = String(value.sender?.id ?? "");
         const recipientId = String(value.recipient?.id ?? "");
@@ -205,6 +199,57 @@ async function fetchSenderProfile(opts: {
   }
 }
 
+/**
+ * يحاول حفظ بيانات المرسل في المحادثة.
+ * يعيد المحاولة عدة مرات لأن المحادثة قد لا تكون قد أُنشئت بعد.
+ */
+async function saveSenderProfile(opts: {
+  tenantId: string;
+  chatId: string;
+  name: string | null;
+  avatar: string | null;
+}) {
+  const { tenantId, chatId, name, avatar } = opts;
+
+  if (!name && !avatar) return;
+
+  const patch: Record<string, string | null> = {};
+  if (name) patch.customer_name = name;
+  if (avatar) patch.customer_avatar = avatar;
+
+  for (let attempt = 0; attempt < 8; attempt++) {
+    await new Promise((r) => setTimeout(r, 250));
+
+    const { data: convRow } = await db
+      .from("conversations")
+      .select("id")
+      .eq("tenant_id", tenantId)
+      .eq("wa_chat_id", chatId)
+      .maybeSingle();
+
+    if (!convRow) continue;
+
+    const { error: updErr } = await db
+      .from("conversations")
+      .update(patch)
+      .eq("id", convRow.id);
+
+    if (!updErr) {
+      console.log(
+        "[Instagram Webhook] Sender profile saved to conversation:",
+        chatId,
+        patch
+      );
+      return;
+    }
+  }
+
+  console.warn(
+    "[Instagram Webhook] Failed to save sender profile after retries:",
+    chatId
+  );
+}
+
 // ─── 2. استقبال الرسائل (POST) ───
 instagramWebhookRouter.post("/instagram", async (req: Request, res: Response) => {
   // رد 200 فورًا لـ Meta
@@ -234,7 +279,6 @@ instagramWebhookRouter.post("/instagram", async (req: Request, res: Response) =>
     for (const entry of body.entry || []) {
       const entryId = String(entry.id || "");
 
-      // استخرج كل الرسائل من entry — يدعم البنيتين
       const messages = extractMessagesFromEntry(entry);
 
       if (messages.length === 0) {
@@ -243,7 +287,6 @@ instagramWebhookRouter.post("/instagram", async (req: Request, res: Response) =>
       }
 
       for (const msg of messages) {
-        // ابحث عن الحساب المضيف — نجرب entryId أولًا، ثم recipientId
         const candidates = [entryId, msg.recipientId].filter((x) => x && x !== "0");
 
         let account: any = null;
@@ -310,8 +353,8 @@ instagramWebhookRouter.post("/instagram", async (req: Request, res: Response) =>
           token,
         });
 
-             // ─── معالجة الرسالة وحفظ بيانات المرسل بالتوازي ───
-        const messagePromise = handleIncomingMessage(
+        // ─── تشغيل معالجة الرسالة في الخلفية (لا ننتظرها) ───
+        handleIncomingMessage(
           account.tenant_id,
           chatId,
           msg.text,
@@ -319,44 +362,19 @@ instagramWebhookRouter.post("/instagram", async (req: Request, res: Response) =>
           { channel: channel as "instagram" | "facebook" }
         ).catch((e) => console.error("[Instagram Webhook] AI reply error:", e));
 
-        // حفظ الاسم والصورة بالتوازي (لا ننتظر توليد الرد)
-        // نحاول حتى 6 مرات لأن المحادثة قد لا تكون قد أُنشئت بعد
-        if (profile.name || profile.avatar) {
-          const patch: Record<string, string | null> = {};
-          if (profile.name) patch.customer_name = profile.name;
-          if (profile.avatar) patch.customer_avatar = profile.avatar;
-
-          for (let attempt = 0; attempt < 6; attempt++) {
-            // انتظر قليلاً قبل كل محاولة
-            await new Promise((r) => setTimeout(r, 250));
-
-            const { data: convRow } = await db
-              .from("conversations")
-              .select("id")
-              .eq("tenant_id", account.tenant_id)
-              .eq("wa_chat_id", chatId)
-              .maybeSingle();
-
-            if (!convRow) continue; // المحادثة لم تُنشأ بعد
-
-            const { error: updErr } = await db
-              .from("conversations")
-              .update(patch)
-              .eq("id", convRow.id);
-
-            if (!updErr) {
-              console.log(
-                "[Instagram Webhook] Sender profile saved to conversation:",
-                chatId,
-                patch
-              );
-              break;
-            }
-          }
-        }
-
-        // انتظر انتهاء معالجة الرسالة (الرد)
-        await messagePromise;
+        // ─── حفظ بيانات المرسل بالتوازي (يعيد المحاولة حتى تُنشأ المحادثة) ───
+        saveSenderProfile({
+          tenantId: account.tenant_id,
+          chatId,
+          name: profile.name,
+          avatar: profile.avatar,
+        }).catch((e) =>
+          console.warn(
+            "[Instagram Webhook] saveSenderProfile error:",
+            e?.message ?? String(e)
+          )
+        );
+      }
     }
   } catch (e: any) {
     console.error("[Instagram Webhook] Fatal error:", e);
