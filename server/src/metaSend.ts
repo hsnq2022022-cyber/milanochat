@@ -1,26 +1,26 @@
 /**
- * Helpers for sending/reading Messenger and Instagram messages via Graph API.
+ * مساعدات إرسال/قراءة رسائل Messenger و Instagram عبر Graph API.
  *
- * Instagram supports two authentication flows:
+ * يدعم نوعين من رموز Instagram:
+ *  - Instagram Login (الجديد): رمز يبدأ بـ "IG" ويُستخدم مع graph.instagram.com
+ *  - Facebook Login (القديم): رمز صفحة/مستخدم يبدأ بـ "EAA" ويُستخدم مع graph.facebook.com
  *
- * 1) Instagram Login:
- *    - token usually starts with "IG"
- *    - uses graph.instagram.com
+ * التمييز بين النوعين يتم بالبادئة في هذا الملف فقط، حتى لا نحتاج
+ * إلى عمود جديد في قاعدة البيانات.
  *
- * 2) Facebook Login for Instagram API:
- *    - Page/User access token usually starts with "EAA"
- *    - uses graph.facebook.com
- *
- * IMPORTANT:
- * For Facebook Login → Instagram API, `externalId` must be the
- * Instagram Professional Account ID when sending an Instagram message.
+ * ملاحظة مهمة لتدفق Facebook Login → Instagram API:
+ *   `externalId` يجب أن يكون Instagram Professional Account ID (IG_ID)
+ *   عند إرسال رسالة Instagram.
  */
 
 export const FB_GRAPH = "https://graph.facebook.com/v21.0";
 export const IG_GRAPH = "https://graph.instagram.com/v21.0";
 
+/**
+ * هل الرمز من نوع Instagram Login؟ (يبدأ بـ IG)
+ */
 export function isInstagramLoginToken(token: string): boolean {
-  return token.startsWith("IG");
+  return typeof token === "string" && token.startsWith("IG");
 }
 
 type SendMetaDirectMessageOptions = {
@@ -32,7 +32,7 @@ type SendMetaDirectMessageOptions = {
 };
 
 /**
- * Send a direct message through Facebook/Instagram Graph API.
+ * إرسال رسالة مباشرة عبر Facebook/Instagram Graph API.
  */
 export async function sendMetaDirectMessage(
   opts: SendMetaDirectMessageOptions
@@ -54,13 +54,13 @@ export async function sendMetaDirectMessage(
   };
   let body: Record<string, unknown>;
 
-  /* Instagram Login */
+  /* ─── Instagram Login (رموز IG) ─── */
   if (channel === "instagram" && isInstagramLoginToken(token)) {
     url = `${IG_GRAPH}/me/messages`;
     headers = { ...headers, Authorization: `Bearer ${token}` };
     body = payload;
   }
-  /* Facebook Login → Instagram API */
+  /* ─── Facebook Login → Instagram API (رموز EAA) ─── */
   else if (channel === "instagram") {
     if (!externalId) {
       throw new Error(
@@ -70,7 +70,7 @@ export async function sendMetaDirectMessage(
     url = `${FB_GRAPH}/${externalId}/messages`;
     body = { ...payload, access_token: token };
   }
-  /* Facebook Messenger */
+  /* ─── Facebook Messenger ─── */
   else {
     url = `${FB_GRAPH}/me/messages`;
     body = { ...payload, access_token: token };
@@ -126,16 +126,11 @@ export async function sendMetaDirectMessage(
 }
 
 /**
- * Build a URL for retrieving the sender profile.
+ * بناء رابط جلب بيانات المرسل (اسم + صورة).
  *
- * For Instagram Login we request:
- *   name, username, profile_pic
- *
- * For Facebook Login → Instagram we request:
- *   name, profile_picture (this flow does not expose `username`)
- *
- * For Messenger:
- *   name, picture
+ * - Instagram Login: نطلب name, username, profile_pic
+ * - Facebook Login → Instagram: نطلب name, profile_picture (لا يوفّر username)
+ * - Messenger: نطلب name, picture
  */
 export function senderProfileUrl(
   channel: "facebook" | "instagram",
@@ -155,25 +150,50 @@ export function senderProfileUrl(
 }
 
 /**
- * Extract a normalized profile from whatever Graph API returns.
- * Returns { name, avatar } where both may be null.
+ * استخراج بروفايل موحّد من أي استجابة يعيدها Graph API.
+ *
+ * الأولوية للاسم الكامل (`name`)، وإن لم يتوفر نستخدم اسم المستخدم
+ * (`@username`) كبديل. وإن لم يتوفر أي منهما نُعيد null.
+ *
+ * الصورة: نجرّب `profile_pic` (Instagram Login) ثم `profile_picture`
+ * (Facebook Login) ثم `picture.data.url` (Messenger).
  */
 export function parseSenderProfile(pj: any): {
   name: string | null;
   avatar: string | null;
 } {
-  if (!pj) return { name: null, avatar: null };
+  if (!pj || typeof pj !== "object") {
+    return { name: null, avatar: null };
+  }
 
-  const name =
-    (typeof pj.name === "string" && pj.name) ||
-    (typeof pj.username === "string" && `@${pj.username}`) ||
-    null;
+  /* ── الاسم ── */
+  let name: string | null = null;
 
-  const avatar =
-    (typeof pj.profile_pic === "string" && pj.profile_pic) ||
-    (typeof pj.profile_picture === "string" && pj.profile_picture) ||
-    (typeof pj.picture?.data?.url === "string" && pj.picture.data.url) ||
-    null;
+  if (typeof pj.name === "string" && pj.name.trim().length > 0) {
+    name = pj.name.trim();
+  } else if (
+    typeof pj.username === "string" &&
+    pj.username.trim().length > 0
+  ) {
+    name = `@${pj.username.trim()}`;
+  }
+
+  /* ── الصورة ── */
+  let avatar: string | null = null;
+
+  if (typeof pj.profile_pic === "string" && pj.profile_pic.length > 0) {
+    avatar = pj.profile_pic;
+  } else if (
+    typeof pj.profile_picture === "string" &&
+    pj.profile_picture.length > 0
+  ) {
+    avatar = pj.profile_picture;
+  } else if (
+    typeof pj.picture?.data?.url === "string" &&
+    pj.picture.data.url.length > 0
+  ) {
+    avatar = pj.picture.data.url;
+  }
 
   return { name, avatar };
 }
