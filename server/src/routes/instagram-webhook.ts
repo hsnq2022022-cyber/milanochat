@@ -15,6 +15,9 @@
  * الكود يستخرج الرسائل من كلا البنيتين، ويبحث عن الحساب بـ:
  *   - entry.id
  *   - أو changes[].value.recipient.id
+ *
+ * ملاحظة مهمة: نكتب الاسم والصورة في أعمدة `customer_name` و `customer_avatar`
+ * لأن الـ API (Dashboard) يقرأ منهما لعرض اسم المرسل في الواجهة.
  */
 import { Router } from "express";
 import type { Request, Response } from "express";
@@ -321,14 +324,16 @@ instagramWebhookRouter.post("/instagram", async (req: Request, res: Response) =>
         }
 
         // ─── حفظ الاسم والصورة في المحادثة (إن توفّرا) ───
+        // مهم: نكتب في customer_name و customer_avatar لأن الـ API يقرأ منهما
         if (profile.name || profile.avatar) {
           try {
+            const patch: Record<string, string | null> = {};
+            if (profile.name) patch.customer_name = profile.name;
+            if (profile.avatar) patch.customer_avatar = profile.avatar;
+
             const { error: updErr } = await db
               .from("conversations")
-              .update({
-                sender_name: profile.name,
-                sender_avatar: profile.avatar,
-              })
+              .update(patch)
               .eq("tenant_id", account.tenant_id)
               .eq("wa_chat_id", chatId);
 
@@ -340,7 +345,8 @@ instagramWebhookRouter.post("/instagram", async (req: Request, res: Response) =>
             } else {
               console.log(
                 "[Instagram Webhook] Sender profile saved to conversation:",
-                chatId
+                chatId,
+                patch
               );
             }
           } catch (e: any) {
