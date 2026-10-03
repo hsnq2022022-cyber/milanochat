@@ -204,6 +204,35 @@ dashboardRouter.get("/summary", async (req, res) => {
   });
 });
 
+/* ─── /agent-prompt (رسالة توجيه الوكيل) ─── */
+dashboardRouter.get("/agent-prompt", async (req, res) => {
+  const userId = (req as AuthedRequest).userId!;
+  const tenant = await ownedTenant(userId, req.query.tenantId as string);
+  if (!tenant) return res.status(404).json({ error: "لا يوجد حساب مرتبط" });
+
+  res.json({ prompt: tenant.agent_system_prompt ?? null });
+});
+
+dashboardRouter.post("/agent-prompt", async (req, res) => {
+  const userId = (req as AuthedRequest).userId!;
+  const { prompt } = req.body ?? {};
+  if (typeof prompt !== "string")
+    return res.status(400).json({ error: "prompt يجب أن يكون نصًا" });
+  if (prompt.length > 8000)
+    return res.status(400).json({ error: "prompt يتجاوز الحد الأقصى (8000 حرف)" });
+
+  const tenant = await ownedTenant(userId, req.body?.tenantId);
+  if (!tenant) return res.status(404).json({ error: "لا يوجد حساب مرتبط" });
+
+  const { error } = await db
+    .from("tenants")
+    .update({ agent_system_prompt: prompt })
+    .eq("id", tenant.id);
+
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ ok: true });
+});
+
 /* ─── /conversations/summary ─── */
 dashboardRouter.get("/conversations/summary", async (req, res) => {
   const tenant = await ownedTenant(

@@ -208,6 +208,8 @@ export default function Dashboard() {
   const [toast, setToast] = useState("");
   const [answers, setAnswers] = useState<Record<string, { text: string; save: boolean }>>({});
   const [newSource, setNewSource] = useState<{ kind: "url" | "text"; url: string; text: string }>({ kind: "url", url: "", text: "" });
+  const [agentPrompt, setAgentPrompt] = useState<string>("");
+  const [agentPromptSaving, setAgentPromptSaving] = useState(false);
 
   const [widgets, setWidgets] = useState<any[]>([]);
   const [widgetPreview, setWidgetPreview] = useState<any>(null);
@@ -447,6 +449,13 @@ export default function Dashboard() {
     loadAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [demo, authed, token]);
+
+  useEffect(() => {
+    if (demo || !token) return;
+    apiAuthFetch<{ prompt: string | null }>(token, "/api/dashboard/agent-prompt")
+      .then((r) => setAgentPrompt(r.prompt ?? ""))
+      .catch(() => {});
+  }, [demo, token]);
 
   /* ── Realtime ── */
   useEffect(() => {
@@ -940,6 +949,22 @@ export default function Dashboard() {
       showToast("بدأت الفهرسة");
     } catch (e: any) {
       showToast(e?.message ?? "تعذرت الفهرسة");
+    }
+  };
+
+  const saveAgentPrompt = async () => {
+    if (!token) return;
+    setAgentPromptSaving(true);
+    try {
+      await apiAuthFetch(token, "/api/dashboard/agent-prompt", {
+        method: "POST",
+        body: JSON.stringify({ prompt: agentPrompt }),
+      });
+      showToast("تم حفظ رسالة التوجيه");
+    } catch (e: any) {
+      showToast(e?.message ?? "تعذر الحفظ");
+    } finally {
+      setAgentPromptSaving(false);
     }
   };
 
@@ -1551,6 +1576,50 @@ export default function Dashboard() {
         )}
 
         {tab === "knowledge" && (
+          <>
+          <section className={`${cls.card} p-5 mb-4`}>
+            <div className="flex items-center justify-between mb-3">
+              <p className="text-sm font-bold text-bone inline-flex items-center gap-2">
+                <IconSparkle className="w-4.5 h-4.5 text-oro" />
+                رسالة توجيه الوكيل (System Message)
+              </p>
+              <span className="text-[10.5px] text-sage tabular-nums">
+                {agentPrompt.length} / 8000
+              </span>
+            </div>
+
+            <p className="text-[11.5px] text-sage leading-6 mb-3">
+              هذه الرسالة تحدد شخصية الوكيل وأسلوبه في الرد. اكتبها بالعربية.
+              إذا تركتها فارغة، سيستخدم الوكيل الإعداد الافتراضي.
+            </p>
+
+            <textarea
+              value={agentPrompt}
+              onChange={(e) => setAgentPrompt(e.target.value)}
+              rows={12}
+              maxLength={8000}
+              placeholder="أنت وكيل خدمة عملاء ذكي واحترافي..."
+              className={`${cls.input} resize-y font-mono text-[12px] leading-6 mb-3`}
+              dir="rtl"
+            />
+
+            <div className="flex gap-2 flex-wrap">
+              <button
+                onClick={saveAgentPrompt}
+                disabled={agentPromptSaving}
+                className={`${cls.btn} !py-2 !px-4 text-xs`}
+              >
+                <IconCheck className="w-3.5 h-3.5" />
+                {agentPromptSaving ? "جارٍ الحفظ…" : "حفظ رسالة التوجيه"}
+              </button>
+              <button
+                onClick={() => setAgentPrompt("")}
+                className={`${cls.btnGhost} !py-2 !px-4 text-xs`}
+              >
+                مسح الحقل
+              </button>
+            </div>
+          </section>
           <div className="grid lg:grid-cols-[1fr_360px] gap-4 items-start">
             <section className={`${cls.card} overflow-hidden`}>
               <div className="px-5 py-4 border-b border-verde/10">
@@ -1604,6 +1673,7 @@ export default function Dashboard() {
               </button>
             </aside>
           </div>
+          </>
         )}
 
         {tab === "widgets" && (

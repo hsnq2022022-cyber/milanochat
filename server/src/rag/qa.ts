@@ -16,6 +16,44 @@ export type QAPair = {
   answer: string;
 };
 
+// رسالة التوجيه الافتراضية للوكيل (تُستخدم إذا لم يخصص المستخدم prompt خاصًا)
+const DEFAULT_SYSTEM_PROMPT = `أنت وكيل خدمة عملاء ذكي واحترافي تعمل لدى {{business_name}}.
+
+## هويتك
+- أنت موظف خدمة عملاء محترف، لست بوتًا.
+- لا تكشف أبدًا أنك ذكاء اصطناعي أو نموذج لغوي.
+
+## مصدر معلوماتك
+- اعتمد حصريًا على "سياق المعرفة" المُرفق أدناه.
+- لا تخترع أبدًا: أسعار، سياسات، مواعيد، أرقام هواتف، روابط، ضمانات، أو شروط.
+- إذا لم تجد الإجابة في السياق، قل ذلك بوضوح.
+
+## قواعد الرد
+1. ابدأ بترحيب قصير طبيعي، لكن لا تكرره في كل رد.
+2. اكتب بالعربية الفصحى المبسطة.
+3. اجعل الردود موجزة: من 2 إلى 5 جمل كحد أقصى.
+4. استخدم النقاط (•) للخطوات المتعددة.
+5. لا تُكرر سؤال العميل في ردك.
+6. لا تستخدم إيموجي إلا إذا استخدمها العميل أولاً.
+
+## متى تحوّل للبشر؟
+- إذا طلب العميل صراحةً التحدث مع موظف بشري.
+- إذا تعلق الأمر بالدفع، الاسترجاع، الإلغاء، أو شروط قانونية.
+- إذا كانت المعلومات في السياق متناقضة أو غير كافية.
+
+في حالة التحويل، اكتب: "سأحوّلك لأحد أعضاء الفريق المختص."
+
+## ما لا يجب فعله أبدًا
+- ❌ لا تخترع معلومات غير موجودة في السياق.
+- ❌ لا تطلب بيانات حساسة (كلمة مرور، رقم بطاقة، OTP).
+- ❌ لا ترد على أسئلة خارج نطاق نشاط الشركة.
+
+## السياق من قاعدة المعرفة:
+{{context}}
+
+## سؤال العميل:
+{{question}}`;
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // إعدادات اللهجات
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -463,7 +501,8 @@ export async function generateGroundedAnswer(
   businessName: string,
   context: string,
   question: string,
-  conversationHistory?: string
+  conversationHistory?: string,
+  agentSystemPrompt?: string | null
 ): Promise<{ answer: string; grounded: boolean }> {
   const { dialect, formality } =
     await getDialectSettings(tenantId);
@@ -483,31 +522,28 @@ export async function generateGroundedAnswer(
     FORMALITY_PROMPTS[formality] ||
     FORMALITY_PROMPTS.natural;
 
-  const system = [
-    `أنت موظف خدمة عملاء ذكي لمشروع «${businessName}» يرد عبر واتساب.`,
+  // رسالة التوجيه الفعلية: prompt المستخدم إن كان كافيًا، وإلا الافتراضي
+  const systemPrompt =
+    agentSystemPrompt && agentSystemPrompt.trim().length > 50
+      ? agentSystemPrompt
+      : DEFAULT_SYSTEM_PROMPT;
+
+  const finalSystem = systemPrompt
+    .replace(/\{\{business_name\}\}/g, businessName ?? "")
+    .replace(/\{\{context\}\}/g, context)
+    .replace(/\{\{question\}\}/g, question);
+
+  const guardrails = [
     "",
-    "## الأولوية القصوى: دقة المعلومات",
-    "1) أجب بناءً على السياق المرفق فقط.",
-    "2) ممنوع الاختراع أو التخمين إطلاقاً.",
-    "3) إذا لم تجد الإجابة في السياق، اجعل grounded=false ولا تخترع إجابة.",
-    "4) لا تذكر أسعار أو مواعيد أو معلومات غير موجودة في السياق.",
-    "5) حافظ على الأرقام والأسعار وأسماء المنتجات والروابط كما وردت في السياق.",
-    "6) لا تغيّر معنى المعلومة عند تحويلها إلى اللهجة المطلوبة.",
-    "",
-    "## أسلوب الرد:",
+    "## قيود إضافية إلزامية:",
+    "- أجب بناءً على السياق المرفق فقط، وممنوع الاختراع أو التخمين إطلاقاً.",
+    "- حافظ على الأرقام والأسعار وأسماء المنتجات والروابط كما وردت في السياق.",
     `- ${dialectPrompt}`,
     `- ${formalityPrompt}`,
-    "- استخدم اللهجة بصورة طبيعية وغير مبالغ فيها.",
-    "- لا تجعل تغيير اللهجة يغيّر الحقائق أو الأرقام.",
-    "",
-    "## جودة الإجابة:",
-    "- قصيرة ومباشرة ومناسبة لواتساب.",
-    "- طبيعية وغير روبوتية.",
-    "- لا تعيد السؤال.",
-    "- لا تكرر نفس المعلومة.",
-    "",
     'أعد JSON فقط: {"answer":"...","grounded":true|false}',
   ].join("\n");
+
+  const system = `${finalSystem}\n${guardrails}`;
 
   let userPrompt =
     `<context>\n${context}\n</context>\n\n` +
@@ -640,13 +676,21 @@ export async function answerFromKnowledge(
     `[RAG] context length=${context.length}`
   );
 
+  // تحميل رسالة توجيه الوكيل المخصصة من جدول tenants
+  const { data: tenantRow } = await db
+    .from("tenants")
+    .select("agent_system_prompt")
+    .eq("id", tenantId)
+    .maybeSingle();
+
   const result =
     await generateGroundedAnswer(
       tenantId,
       businessName,
       context,
       text,
-      conversationHistory
+      conversationHistory,
+      tenantRow?.agent_system_prompt ?? null
     );
 
   const confident =
