@@ -24,7 +24,18 @@ import { handleIncomingMessage } from "../rag/reply.js";
 
 export const instagramWebhookRouter = Router();
 
-const VERIFY_TOKEN = process.env.INSTAGRAM_VERIFY_TOKEN || "";
+/**
+ * قبول أي من أسماء المتغيرات الموجودة فعليًا:
+ * - META_WEBHOOK_VERIFY_TOKEN  (المستخدم في channels.ts — المسار الأساسي)
+ * - INSTAGRAM_VERIFY_TOKEN     (اسم بديل متوافق معه)
+ */
+const VERIFY_TOKENS = Array.from(
+  new Set(
+    [process.env.META_WEBHOOK_VERIFY_TOKEN, process.env.INSTAGRAM_VERIFY_TOKEN].filter(
+      (t): t is string => Boolean(t && t.length > 0)
+    )
+  )
+);
 
 // ─── 1. التحقق من Webhook (GET) ───
 instagramWebhookRouter.get("/instagram", (req: Request, res: Response) => {
@@ -37,11 +48,16 @@ instagramWebhookRouter.get("/instagram", (req: Request, res: Response) => {
     token: token ? "present" : "missing",
   });
 
-  if (mode === "subscribe" && VERIFY_TOKEN && token === VERIFY_TOKEN) {
+  if (mode === "subscribe" && VERIFY_TOKENS.length > 0 && token && VERIFY_TOKENS.includes(String(token))) {
     console.log("[Instagram Webhook] ✓ Verified successfully");
     return res.status(200).send(challenge);
   }
 
+  console.warn(
+    "[Instagram Webhook] Verification failed",
+    `| configuredTokens=${VERIFY_TOKENS.length}`,
+    `| incomingToken=${token ? "present" : "missing"}`
+  );
   return res.status(403).send("Verify failed");
 });
 
@@ -154,17 +170,19 @@ function extractMessagesFromEntry(entry: any): Array<{
 
 // ─── 2. استقبال الرسائل (POST) ───
 instagramWebhookRouter.post("/instagram", async (req: Request, res: Response) => {
+  console.log("[Instagram Webhook] POST received");
   // رد 200 فورًا لـ Meta
   res.status(200).send("EVENT_RECEIVED");
 
   try {
     const sigResult = verifySignature(req);
+    console.log(
+      `[Instagram Webhook] Signature verification: ${sigResult.ok ? "passed" : "failed"}`,
+      `| tried=${sigResult.tried}`,
+      `| rawBody=${sigResult.rawLen}b`
+    );
     if (!sigResult.ok) {
-      console.error(
-        "[Instagram Webhook] Invalid signature — ignored",
-        `| tried=${sigResult.tried}`,
-        `| rawBody=${sigResult.rawLen}b`
-      );
+      console.error("[Instagram Webhook] Invalid signature — ignored");
       return;
     }
 
@@ -175,11 +193,21 @@ instagramWebhookRouter.post("/instagram", async (req: Request, res: Response) =>
     );
 
     if (!body || (body.object !== "instagram" && body.object !== "page")) {
+      console.warn(
+        "[Instagram Webhook] Unexpected object type — skipped",
+        `| object=${body?.object ?? "missing"}`
+      );
       return;
     }
 
+    console.log(
+      `[Instagram Webhook] object: ${body.object}`,
+      `| entries: ${(body.entry || []).length}`
+    );
+
     for (const entry of body.entry || []) {
       const entryId = String(entry.id || "");
+      console.log(`[Instagram Webhook] entry received — id=${entryId}`);
 
       // استخرج كل الرسائل من entry — يدعم البنيتين
       const messages = extractMessagesFromEntry(entry);
@@ -190,8 +218,21 @@ instagramWebhookRouter.post("/instagram", async (req: Request, res: Response) =>
       }
 
       for (const msg of messages) {
+        console.log(
+          `[Instagram Webhook] message event received`,
+          `| sender=${msg.senderId}`,
+          `| recipient=${msg.recipientId}`,
+          `| mid=${msg.mid ?? "n/a"}`,
+          `| textLen=${msg.text.length}`
+        );
+
         // ابحث عن الحساب المضيف — نجرب entryId أولًا، ثم recipientId
         const candidates = [entryId, msg.recipientId].filter((x) => x && x !== "0");
+
+        console.log("[Instagram Webhook] Looking for account", {
+          candidateIds: candidates,
+          channel: "instagram",
+        });
 
         let account: any = null;
         for (const candidate of candidates) {
@@ -209,10 +250,16 @@ instagramWebhookRouter.post("/instagram", async (req: Request, res: Response) =>
 
         if (!account) {
           console.warn(
-            `[Instagram Webhook] No tenant bound for entryId=${entryId} recipientId=${msg.recipientId}`
+            `[Instagram Webhook] No matching Instagram channel account`,
+            `| entryId=${entryId} recipientId=${msg.recipientId}`,
+            `| external_id searched: ${candidates.join(", ")}`
           );
           continue;
         }
+        console.log(
+          "[Instagram Webhook] account found: true",
+          `| tenant=${account.tenant_id} channel=${account.channel} status=${account.status}`
+        );
         if (account.status !== "active") continue;
 
         const channel = account.channel === "facebook" ? "facebook" : "instagram";
