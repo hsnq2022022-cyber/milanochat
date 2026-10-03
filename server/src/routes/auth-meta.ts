@@ -13,12 +13,23 @@
  *   (حالة القناة للواجهة). كان الكود السابق يستخدم update فقط على channels،
  *   فيفشل بصمت إذا لم يكن الصف موجودًا → الواجهة تظل تظهر "غير متصل".
  *   الآن نستخدم check + (update أو insert) — يعمل حتى بدون UNIQUE constraint.
+ *
+ * تدفق Instagram Login المباشر (v4):
+ * - إذا كان INSTAGRAM_APP_ID و INSTAGRAM_APP_SECRET مضبوطين، يبدأ زر
+ *   "ربط Instagram" تدفق instagram.com/oauth/authorize مباشرةً بمعاملات:
+ *     client_id / redirect_uri=/api/auth/instagram/callback / response_type=code
+ *     scope=instagram_business_basic,instagram_business_manage_messages / state
+ * - callback مستقل جديد: GET /api/auth/instagram/callback يستدعي
+ *   handleInstagramLoginCallback الذي يستخدم buildInstagramCallbackUrl().
+ * - التمييز بين نوعي الرموز يتم ببادئة التوكن (IG* مقابل EAA*) في metaSend.ts،
+ *   بلا أي تغيير في المخطط (schema).
+ * - إن لم يُضبط INSTAGRAM_APP_ID يبقى المسار القديم عبر Facebook Login كما هو.
  */
 
 import express, { Router } from "express";
 import crypto from "node:crypto";
 import { db, authClient } from "../db.js";
-import { config, buildMetaCallbackUrl } from "../config.js";
+import { config, buildMetaCallbackUrl, buildInstagramCallbackUrl } from "../config.js";
 import { encryptField } from "../crypto.js";
 
 export const metaAuthRouter = Router();
@@ -96,9 +107,11 @@ async function handleInstagramLoginCallback(a: {
 
   let redirectUri: string;
   try {
-    redirectUri = buildMetaCallbackUrl();
+    // Instagram Login المباشر يستخدم المسار المستقل /api/auth/instagram/callback
+    // وليس redirect_uri الخاص بـ Facebook (buildMetaCallbackUrl).
+    redirectUri = buildInstagramCallbackUrl();
   } catch (e: any) {
-    console.error("[Meta Auth] redirect_uri build failed:", e?.message);
+    console.error("[Meta Auth] instagram redirect_uri build failed:", e?.message);
     return fail("config_redirect_uri");
   }
   console.log("[Meta Auth] Instagram Login callback → redirect_uri:", redirectUri);
@@ -353,7 +366,7 @@ async function requireUser(req: any, res: any, next: any) {
   const header = String(req.headers.authorization ?? "");
   const token = header.startsWith("Bearer ")
     ? header.slice(7)
-    : req.requestMethod === "GET"
+    : req.method === "GET"
       ? String(req.query?.t ?? "") || null
       : null;
   if (!token) return res.status(401).json({ error: "غير مصرح" });
@@ -369,6 +382,45 @@ async function requireUser(req: any, res: any, next: any) {
 
 const protectedRoutes = express.Router();
 protectedRoutes.use(requireUser);
+
+/* ═══════════ مسار عام — Instagram Login يعود إليه مباشرة (مستقل عن Facebook) ═══════════ */
+metaAuthRouter.get("/instagram/callback", async (req: any, res) => {
+  const frontBase = frontendDashboardUrl();
+  const fail = (code: string) => {
+    console.warn("[Meta Auth] IG callback FAILED →", code);
+    return res.redirect(`${frontBase}?channel_error=${encodeURIComponent(code)}`);
+  };
+
+  console.log("[Meta Auth] IG callback ENTERED — params:", Object.keys(req.query ?? {}));
+
+  if (!instagramLoginConfigured()) {
+    // لم يُضبط INSTAGRAM_APP_ID/SECRET — لا يمكن إتمام Instagram Login المباشر
+    return fail("instagram_login_not_configured");
+  }
+
+  const { code, state, error: metaError } = req.query as Record<string, string>;
+  if (metaError) return fail(metaError === "access_denied" ? "user_cancelled" : metaError);
+  if (!code || !state) return fail("missing_params");
+
+  const stateResult = await consumeOAuthState(String(state));
+  if (!stateResult.ok) return fail(`oauth_state:${stateResult.reason}`);
+
+  const { platform, tenantId, userId } = stateResult.session;
+  console.log("[Meta Auth] IG callback state OK — platform:", platform, "nonce verified");
+
+  if (platform !== "instagram") {
+    // state خاص بتدفق آخر (facebook) — لا يُقبل على هذا المسار
+    return fail("oauth_state_platform_mismatch");
+  }
+
+  return handleInstagramLoginCallback({
+    res,
+    code: String(code),
+    tenantId,
+    frontBase,
+    fail,
+  });
+});
 
 /* ═══════════ مسار عام — Meta تعود إليه مباشرة ═══════════ */
 metaAuthRouter.get("/facebook/callback", async (req: any, res) => {
@@ -391,6 +443,8 @@ metaAuthRouter.get("/facebook/callback", async (req: any, res) => {
   console.log("[Meta Auth] callback state OK — platform:", platform, "nonce verified");
 
   if (platform === "instagram" && instagramLoginConfigured()) {
+    // التدفق المباشر الجديد يعود إلى /api/auth/instagram/callback — لكن إن وصل
+    // هنا من مسار قديم محفوظ، نكمل عبر Instagram Login مع redirect_uri الصحيح.
     return handleInstagramLoginCallback({ res, code: String(code), tenantId, frontBase, fail });
   }
 
@@ -588,6 +642,40 @@ metaAuthRouter.use(protectedRoutes);
 
 // 1) بدء OAuth
 metaAuthRouter.post("/facebook/start", async (req: any, res) => {
+  const { platform } = req.body ?? {};
+  if (platform !== "facebook" && platform !== "instagram") {
+    return res.status(400).json({ error: "قناة غير مدعومة" });
+  }
+
+  const tenant = await ownedTenant(req.userId, req.body?.tenantId);
+  if (!tenant) return res.status(403).json({ error: "تعذر التحقق من ملكية النشاط التجاري" });
+
+  /* فرع Instagram Login المباشر — رابط وstate وredirect_uri خاصة به بالكامل */
+  if (platform === "instagram" && instagramLoginConfigured()) {
+    let igRedirectUri: string;
+    let igState: string;
+    try {
+      igRedirectUri = buildInstagramCallbackUrl();
+      const st = await createOAuthState({ platform, tenantId: tenant.id, userId: req.userId });
+      if (!st) throw new Error("تعذر إنشاء جلسة OAuth");
+      igState = st.state;
+    } catch (e: any) {
+      console.error("[Meta Auth] إعداد Instagram OAuth غير صالح:", e?.message);
+      return res.status(500).json({
+        error: "oauth_misconfigured",
+        message: "إعداد PUBLIC_URL/INSTAGRAM_REDIRECT_URI/الأسرار غير صحيحة على الخادم.",
+      });
+    }
+
+    const igUrl =
+      `${IG_AUTHORIZE}?force_reauth=true&client_id=${encodeURIComponent(process.env.INSTAGRAM_APP_ID!)}` +
+      `&redirect_uri=${encodeURIComponent(igRedirectUri)}&response_type=code` +
+      `&scope=${encodeURIComponent(IG_LOGIN_SCOPES.join(","))}&state=${encodeURIComponent(igState)}`;
+    console.log("[Meta Auth] using Instagram Login (direct) for platform: instagram →", igRedirectUri);
+    return res.json({ url: igUrl });
+  }
+
+  /* فرع Facebook Login (المسار القديم) — لا يتغير */
   const appId = process.env.META_APP_ID;
   const appSecret = process.env.META_APP_SECRET;
   if (!appId || !appSecret) {
@@ -596,14 +684,6 @@ metaAuthRouter.post("/facebook/start", async (req: any, res) => {
       message: "تطبيق Meta غير مُهيّأ على الخادم بعد.",
     });
   }
-
-  const { platform } = req.body ?? {};
-  if (platform !== "facebook" && platform !== "instagram") {
-    return res.status(400).json({ error: "قناة غير مدعومة" });
-  }
-
-  const tenant = await ownedTenant(req.userId, req.body?.tenantId);
-  if (!tenant) return res.status(403).json({ error: "تعذر التحقق من ملكية النشاط التجاري" });
 
   let redirectUri: string;
   let state: string;
@@ -621,15 +701,6 @@ metaAuthRouter.post("/facebook/start", async (req: any, res) => {
   }
 
   console.log("[Meta Auth] OAuth start → redirect_uri:", redirectUri, "platform:", platform);
-
-  if (platform === "instagram" && instagramLoginConfigured()) {
-    const igUrl =
-      `${IG_AUTHORIZE}?force_reauth=true&client_id=${encodeURIComponent(process.env.INSTAGRAM_APP_ID!)}` +
-      `&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code` +
-      `&scope=${encodeURIComponent(IG_LOGIN_SCOPES.join(","))}&state=${encodeURIComponent(state)}`;
-    console.log("[Meta Auth] using Instagram Login (direct) for platform: instagram");
-    return res.json({ url: igUrl });
-  }
 
   const scopes = SCOPES[platform];
   const url =

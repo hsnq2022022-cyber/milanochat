@@ -199,12 +199,33 @@ async function handleMetaMessagingEvent(ev: any) {
     if (dup && dup.length > 0) return;
   }
 
-  const { data: account } = await db
+  let account: any = null;
+
+  // مطابقة دقيقة عبر recipient.id:
+  // - Instagram Login (المباشر): recipient.id هو IG user_id المطابق لـ external_id
+  //   حيث channel='instagram'.
+  // - Facebook Pages: page id المطابق لـ external_id حيث channel='facebook'.
+  // نفضّل المطابقة على أساس القناة الصحيحة أولًا، ثم أي قناة أخرى احتياطًا.
+  const { data: exact } = await db
     .from("channel_accounts")
     .select("*")
     .eq("external_id", recipientId)
-    .in("channel", ["facebook", "instagram"])
+    .in("channel", ["instagram", "facebook"])
     .maybeSingle();
+
+  if (exact) {
+    account = exact;
+  } else {
+    // احتياط: قد تتطابق نفس المعرّف مع أكثر من صف (قديمان/مفصولون) — نختار النشط
+    const { data: candidates } = await db
+      .from("channel_accounts")
+      .select("*")
+      .eq("external_id", recipientId)
+      .in("channel", ["instagram", "facebook"])
+      .eq("status", "active")
+      .limit(1);
+    account = candidates?.[0] ?? null;
+  }
 
   if (!account) {
     console.warn("[channels] webhook for unknown page id:", recipientId);

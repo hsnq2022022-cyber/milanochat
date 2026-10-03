@@ -102,6 +102,22 @@ export function buildMetaCallbackUrl(): string {
   return `${buildServerBaseUrl()}/api/auth/facebook/callback`;
 }
 
+/**
+ * رابط callback المستقل لتدفق Instagram Login المباشر (instagram.com/oauth/authorize).
+ * - INSTAGRAM_REDIRECT_URI اختياري لتثبيت القيمة حرفياً كما هي مسجلة في
+ *   Meta Developers (Valid OAuth Redirect URIs لمنتج Instagram Login).
+ * - بدونه يُبنى من PUBLIC_URL + المسار الثابت /api/auth/instagram/callback.
+ * ملاحظة: لا يستخدم META_REDIRECT_URI إطلاقًا — هذا مسار منفصل تمامًا عن Facebook.
+ */
+export function buildInstagramCallbackUrl(): string {
+  const override = opt("INSTAGRAM_REDIRECT_URI").trim();
+  if (override && /^https?:\/\//.test(override)) {
+    // قيمة كاملة صالحة (تحتوي المسار بنفسها) — تُستخدم كما هي لضمان التطابق الحرفي مع Meta
+    return override.replace(/\/+$/, "");
+  }
+  return `${buildServerBaseUrl()}/api/auth/instagram/callback`;
+}
+
 export const config = {
   port: Number(opt("PORT", "4000")),
 
