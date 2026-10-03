@@ -1,10 +1,19 @@
 /**
- * مساعدات إرسال/قراءة رسائل Messenger و Instagram عبر Graph API.
+ * Helpers for sending/reading Messenger and Instagram messages via Graph API.
  *
- * يدعم نوعين من رموز Instagram:
- *  - Instagram Login (الجديد): رمز يبدأ بـ "IG" ويُستخدم مع graph.instagram.com
- *  - Facebook Login (القديم): رمز صفحة/مستخدم يبدأ بـ "EAA" ويُستخدم مع graph.facebook.com
- * التمييز بالبادئة يتم هنا فقط حتى لا يحتاج المخطط (schema) لأي عمود جديد.
+ * Instagram supports two authentication flows:
+ *
+ * 1) Instagram Login:
+ *    - token usually starts with "IG"
+ *    - uses graph.instagram.com
+ *
+ * 2) Facebook Login for Instagram API:
+ *    - Page/User access token usually starts with "EAA"
+ *    - uses graph.facebook.com
+ *
+ * IMPORTANT:
+ * For Facebook Login → Instagram API, `externalId` must be the
+ * Instagram Professional Account ID when sending an Instagram message.
  */
 
 export const FB_GRAPH = "https://graph.facebook.com/v21.0";
@@ -14,47 +23,190 @@ export function isInstagramLoginToken(token: string): boolean {
   return token.startsWith("IG");
 }
 
-export async function sendMetaDirectMessage(opts: {
+type SendMetaDirectMessageOptions = {
   channel: "facebook" | "instagram";
   externalId: string;
   token: string;
   recipientId: string;
   text: string;
-}): Promise<void> {
-  const { channel, externalId, token, recipientId, text } = opts;
-  const payload = { recipient: { id: recipientId }, message: { text } };
+};
 
-  let url: string;
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  let body: Record<string, unknown> = payload;
+/**
+ * Send a direct message through Facebook/Instagram Graph API.
+ */
+export async function sendMetaDirectMessage(
+  opts: SendMetaDirectMessageOptions
+): Promise<void> {
+  const {
+    channel,
+    externalId,
+    token,
+    recipientId,
+    text,
+  } = opts;
 
-  if (channel === "instagram" && isInstagramLoginToken(token)) {
-    url = `${IG_GRAPH}/me/messages`;
-    headers.Authorization = `Bearer ${token}`;
-  } else {
-    url =
-      channel === "instagram"
-        ? `${FB_GRAPH}/${externalId}/messages`
-        : `${FB_GRAPH}/me/messages`;
-    body = { ...payload, access_token: token };
+  if (!token) {
+    throw new Error("Missing Meta access token");
   }
 
-  const res = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
-  const json: any = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(json?.error?.message ?? `Graph API HTTP ${res.status}`);
+  if (!recipientId) {
+    throw new Error("Missing recipient ID");
+  }
+
+  if (!text) {
+    throw new Error("Missing message text");
+  }
+
+  const payload = {
+    recipient: {
+      id: recipientId,
+    },
+    message: {
+      text,
+    },
+  };
+
+  let url: string;
+  let headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+
+  let body: Record<string, unknown>;
+
+  /**
+   * ------------------------------------------------------------
+   * Instagram Login
+   * ------------------------------------------------------------
+   *
+   * Instagram Login uses graph.instagram.com and the token
+   * in the Authorization header.
+   */
+  if (channel === "instagram" && isInstagramLoginToken(token)) {
+    url = `${IG_GRAPH}/me/messages`;
+
+    headers = {
+      ...headers,
+      Authorization: `Bearer ${token}`,
+    };
+
+    body = payload;
+  }
+
+  /**
+   * ------------------------------------------------------------
+   * Facebook Login → Instagram API
+   * ------------------------------------------------------------
+   *
+   * In the current project the Instagram account was discovered
+   * through:
+   *
+   * Page → instagram_business_account
+   *
+   * and the stored token is a Page Access Token (EAA...).
+   *
+   * Therefore use the Instagram Professional Account ID here.
+   */
+  else if (channel === "instagram") {
+    if (!externalId) {
+      throw new Error(
+        "Missing Instagram Business Account ID for Instagram message sending"
+      );
+    }
+
+    url = `${FB_GRAPH}/${externalId}/messages`;
+
+    body = {
+      ...payload,
+      access_token: token,
+    };
+  }
+
+  /**
+   * ------------------------------------------------------------
+   * Facebook Messenger
+   * ------------------------------------------------------------
+   */
+  else {
+    url = `${FB_GRAPH}/me/messages`;
+
+    body = {
+      ...payload,
+      access_token: token,
+    };
+  }
+
+  console.log("[MetaSend] Sending message", {
+    channel,
+    externalId,
+    recipientId,
+    endpoint: url,
+    tokenType:
+      channel === "instagram"
+        ? isInstagramLoginToken(token)
+          ? "instagram-login"
+          : "facebook-login-page-token"
+        : "facebook",
+  });
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+  });
+
+  const responseText = await res.text();
+
+  let json: any = {};
+
+  try {
+    json = responseText ? JSON.parse(responseText) : {};
+  } catch {
+    json = {
+      raw: responseText,
+    };
+  }
+
+  if (!res.ok) {
+    console.error("[MetaSend] Graph API error", {
+      status: res.status,
+      statusText: res.statusText,
+      endpoint: url,
+      error: json?.error ?? json,
+    });
+
+    throw new Error(
+      json?.error?.message ??
+        json?.error?.error_user_msg ??
+        `Graph API HTTP ${res.status}`
+    );
+  }
+
+  console.log("[MetaSend] Message sent successfully", {
+    channel,
+    externalId,
+    recipientId,
+    response: json,
+  });
 }
 
-/** رابط جلب اسم/صورة المرسل */
+/**
+ * Build a URL for retrieving the sender profile.
+ */
 export function senderProfileUrl(
   channel: "facebook" | "instagram",
   senderId: string,
   token: string
 ): string {
-  const t = encodeURIComponent(token);
+  const encodedToken = encodeURIComponent(token);
+
   if (channel === "instagram") {
-    return isInstagramLoginToken(token)
-      ? `${IG_GRAPH}/${senderId}?fields=name,username,profile_pic&access_token=${t}`
-      : `${FB_GRAPH}/${senderId}?fields=name,profile_picture&access_token=${t}`;
+    if (isInstagramLoginToken(token)) {
+      return `${IG_GRAPH}/${senderId}?fields=name,username,profile_pic&access_token=${encodedToken}`;
+    }
+
+    return `${FB_GRAPH}/${senderId}?fields=name,profile_picture&access_token=${encodedToken}`;
   }
-  return `${FB_GRAPH}/${senderId}?fields=name,picture&access_token=${t}`;
+
+  return `${FB_GRAPH}/${senderId}?fields=name,picture&access_token=${encodedToken}`;
 }
+
