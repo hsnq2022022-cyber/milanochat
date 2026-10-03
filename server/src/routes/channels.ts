@@ -2,7 +2,7 @@
  * مسارات القنوات والحسابات — Omnichannel
  * v3 — /meta/status عام (بدون auth)، باقي المسارات محمية.
  */
-import { sendMetaDirectMessage, senderProfileUrl } from "../metaSend.js";
+import { sendMetaDirectMessage, senderProfileUrl, parseSenderProfile } from "../metaSend.js";
 import crypto from "node:crypto";
 import { Router, type Request, type Response, type NextFunction } from "express";
 import { db, authClient } from "../db.js";
@@ -80,7 +80,6 @@ function normalizeAccount(row: any) {
 channelsRouter.get("/meta/status", async (req, res) => {
   const configured = Boolean(process.env.META_APP_ID && process.env.META_APP_SECRET);
 
-  // محاولة قراءة حالة القنوات للمستخدم إن أُرسل token
   let perChannel: { whatsapp: boolean; instagram: boolean; facebook: boolean } | null = null;
 
   const header = String(req.headers.authorization ?? "");
@@ -138,6 +137,69 @@ function extractText(m: any): string {
   return parts.join(" ") || "[رسالة غير نصية]";
 }
 
+/**
+ * استخراج موحّد لكل الرسائل من entry — يدعم البنيتين:
+ *  1) entry.messaging[]   (Facebook Page / Messenger / Instagram via FB Login)
+ *  2) entry.changes[]     (Instagram Login API)
+ * يعيد [{ senderId, recipientId, text, mid }]
+ */
+function extractMessagesFromEntry(entry: any): Array<{
+  senderId: string;
+  recipientId: string;
+  text: string;
+  mid: string | null;
+}> {
+  const out: Array<{
+    senderId: string;
+    recipientId: string;
+    text: string;
+    mid: string | null;
+  }> = [];
+
+  // 1) entry.messaging[]
+  if (Array.isArray(entry.messaging)) {
+    for (const ev of entry.messaging) {
+      if (!ev?.message || ev.message.is_echo) continue;
+      const senderId = String(ev.sender?.id ?? "");
+      const recipientId = String(ev.recipient?.id ?? "");
+      const text = extractText(ev.message);
+      const mid = typeof ev.message.mid === "string" ? ev.message.mid : null;
+      if (senderId && text) out.push({ senderId, recipientId, text, mid });
+    }
+  }
+
+  // 2) entry.changes[].value (Instagram Login)
+  if (Array.isArray(entry.changes)) {
+    for (const change of entry.changes) {
+      if (change?.field !== "messages") continue;
+      const value = change.value;
+      if (!value) continue;
+
+      if (Array.isArray(value.messaging)) {
+        for (const ev of value.messaging) {
+          if (!ev?.message || ev.message.is_echo) continue;
+          const senderId = String(ev.sender?.id ?? "");
+          const recipientId = String(ev.recipient?.id ?? "");
+          const text = extractText(ev.message);
+          const mid = typeof ev.message.mid === "string" ? ev.message.mid : null;
+          if (senderId && text) out.push({ senderId, recipientId, text, mid });
+        }
+        continue;
+      }
+
+      if (value.message && !value.message.is_echo) {
+        const senderId = String(value.sender?.id ?? "");
+        const recipientId = String(value.recipient?.id ?? "");
+        const text = extractText(value.message);
+        const mid = typeof value.message.mid === "string" ? value.message.mid : null;
+        if (senderId && text) out.push({ senderId, recipientId, text, mid });
+      }
+    }
+  }
+
+  return out;
+}
+
 channelsRouter.post("/meta/webhook", async (req: Request, res: Response) => {
   try {
     const secret = process.env.META_APP_SECRET;
@@ -157,9 +219,17 @@ channelsRouter.post("/meta/webhook", async (req: Request, res: Response) => {
     res.sendStatus(200);
 
     for (const entry of entries) {
-      for (const ev of Array.isArray(entry.messaging) ? entry.messaging : []) {
+      const entryId = String(entry.id ?? "");
+      const messages = extractMessagesFromEntry(entry);
+      for (const msg of messages) {
         try {
-          await handleMetaMessagingEvent(ev);
+          await handleMetaMessagingEvent({
+            senderId: msg.senderId,
+            recipientId: msg.recipientId,
+            text: msg.text,
+            mid: msg.mid,
+            entryId,
+          });
         } catch (e) {
           console.error("[channels] messaging event failed:", e);
         }
@@ -177,18 +247,21 @@ function timingSafeEqualStr(a: string, b: string): boolean {
   return ba.length === bb.length && crypto.timingSafeEqual(ba, bb);
 }
 
-async function handleMetaMessagingEvent(ev: any) {
-  const item = ev?.message;
-  if (!item || item.is_echo) return;
-  const text = extractText(item);
-  if (!text) return;
+/**
+ * معالجة حدث رسالة وارد.
+ * يقبل القيم المستخرجة مسبقًا بدل الاعتماد على شكل payload واحد.
+ */
+async function handleMetaMessagingEvent(opts: {
+  senderId: string;
+  recipientId: string;
+  text: string;
+  mid: string | null;
+  entryId?: string;
+}) {
+  const { senderId, recipientId, text, mid, entryId } = opts;
+  if (!senderId || !recipientId || !text) return;
 
-  const senderId: string = String(ev.sender?.id ?? "");
-  const recipientId: string = String(ev.recipient?.id ?? "");
-  if (!senderId || !recipientId) return;
-
-  const externalMessageId: string | null =
-    typeof item.mid === "string" ? item.mid : null;
+  const externalMessageId = mid;
 
   if (externalMessageId) {
     const { data: dup } = await db
@@ -199,32 +272,21 @@ async function handleMetaMessagingEvent(ev: any) {
     if (dup && dup.length > 0) return;
   }
 
+  // ابحث عن الحساب بـ entryId أولًا ثم recipientId
+  const candidates = [entryId, recipientId].filter((x) => x && x !== "0");
+
   let account: any = null;
-
-  // مطابقة دقيقة عبر recipient.id:
-  // - Instagram Login (المباشر): recipient.id هو IG user_id المطابق لـ external_id
-  //   حيث channel='instagram'.
-  // - Facebook Pages: page id المطابق لـ external_id حيث channel='facebook'.
-  // نفضّل المطابقة على أساس القناة الصحيحة أولًا، ثم أي قناة أخرى احتياطًا.
-  const { data: exact } = await db
-    .from("channel_accounts")
-    .select("*")
-    .eq("external_id", recipientId)
-    .in("channel", ["instagram", "facebook"])
-    .maybeSingle();
-
-  if (exact) {
-    account = exact;
-  } else {
-    // احتياط: قد تتطابق نفس المعرّف مع أكثر من صف (قديمان/مفصولون) — نختار النشط
-    const { data: candidates } = await db
+  for (const candidate of candidates) {
+    const { data } = await db
       .from("channel_accounts")
       .select("*")
-      .eq("external_id", recipientId)
+      .eq("external_id", candidate)
       .in("channel", ["instagram", "facebook"])
-      .eq("status", "active")
-      .limit(1);
-    account = candidates?.[0] ?? null;
+      .maybeSingle();
+    if (data) {
+      account = data;
+      break;
+    }
   }
 
   if (!account) {
@@ -252,6 +314,7 @@ async function handleMetaMessagingEvent(ev: any) {
       .maybeSingle()
   ).data;
 
+  // جلب بيانات المرسل (اسم + صورة) باستخدام parseSenderProfile
   let senderName: string | null = null;
   let senderAvatar: string | null = null;
   try {
@@ -262,11 +325,21 @@ async function handleMetaMessagingEvent(ev: any) {
       const pres = await fetch(profileEndpoint);
       if (pres.ok) {
         const pj: any = await pres.json();
-        senderName = pj?.name ?? null;
-        senderAvatar = pj?.profile_picture ?? pj?.profile_pic ?? pj?.picture?.data?.url ?? null;
+        const parsed = parseSenderProfile(pj);
+        senderName = parsed.name;
+        senderAvatar = parsed.avatar;
+        console.log("[channels] Sender profile fetched:", {
+          senderId,
+          name: senderName,
+          avatar: senderAvatar ? "present" : "missing",
+        });
+      } else {
+        console.warn("[channels] Profile fetch HTTP:", pres.status, "for", senderId);
       }
     }
-  } catch {}
+  } catch (e: any) {
+    console.warn("[channels] Profile fetch error:", e?.message ?? String(e));
+  }
 
   if (!conv) {
     const { data } = await db
@@ -288,10 +361,14 @@ async function handleMetaMessagingEvent(ev: any) {
     const patch: any = {};
     if ((conv as any).account_id !== (account as any).id) patch.account_id = (account as any).id;
     if ((conv as any).channel !== channel) patch.channel = channel;
+    // حدّث الاسم/الصورة إن توفّرا ولم يكونا محفوظين
     if (senderName && !(conv as any).customer_name) patch.customer_name = senderName;
     if (senderAvatar && !(conv as any).customer_avatar) patch.customer_avatar = senderAvatar;
     if (Object.keys(patch).length > 0) {
       await db.from("conversations").update(patch).eq("id", (conv as any).id);
+      if (senderName || senderAvatar) {
+        console.log("[channels] Sender profile saved to conversation:", chatId);
+      }
     }
   }
   if (!conv) return;
