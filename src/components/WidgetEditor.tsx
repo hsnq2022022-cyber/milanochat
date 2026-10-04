@@ -316,7 +316,7 @@ export default function WidgetEditor({
     if (!widget) return;
 
     const code =
-      `<script src="https://milanochat-production.up.railway.app/widget.js" data-token="${widget.public_token}"></script>`;
+      `<script src="https://nmhefwvhoholcjrbbila.supabase.co/functions/v1/milan-api?action=widget.js" data-token="${widget.public_token}"></script>`;
 
     try {
       await navigator.clipboard.writeText(
@@ -1868,7 +1868,7 @@ function InstallTab({
   copyEmbedCode,
 }: any) {
   const embedCode =
-    `<script src="https://milanochat-production.up.railway.app/widget.js" data-token="${widget.public_token}"></script>`;
+    `<script src="https://nmhefwvhoholcjrbbila.supabase.co/functions/v1/milan-api?action=widget.js" data-token="${widget.public_token}"></script>`;
 
   return (
     <div className="space-y-6">

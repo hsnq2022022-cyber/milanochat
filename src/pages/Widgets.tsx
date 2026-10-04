@@ -131,7 +131,7 @@ export default function Widgets() {
 
   // Copy
   const copyEmbedCode = (widget: Widget) => {
-    const code = `<script src="https://milanochat-production.up.railway.app/widget.js" data-token="${widget.public_token}"></script>`;
+    const code = `<script src="https://nmhefwvhoholcjrbbila.supabase.co/functions/v1/milan-api?action=widget.js" data-token="${widget.public_token}"></script>`;
     navigator.clipboard.writeText(code);
     setCopiedToken(widget.public_token);
     setTimeout(() => setCopiedToken(null), 2000);

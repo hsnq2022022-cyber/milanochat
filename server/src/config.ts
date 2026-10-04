@@ -182,7 +182,7 @@ export const config = {
 
   publicUrl: opt(
     "PUBLIC_URL",
-    "https://milanochat-production.up.railway.app"
+    "https://nmhefwvhoholcjrbbila.supabase.co"
   ),
 
   supabaseUrl: req("SUPABASE_URL"),
