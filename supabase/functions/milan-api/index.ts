@@ -723,7 +723,8 @@ async function widgetSession(
 async function answerFromKnowledge(
   sb: SupabaseClient,
   tenant: any,
-  text: string
+  text: string,
+  history = ""
 ): Promise<{
   answer: string | null;
   kind:
@@ -819,7 +820,7 @@ ${context}
 
 سؤال العميل:
 ${text}
-`
+${history ? `\nسياق المحادثة السابق:\n${history}\n` : ""}`
   );
 
   const answer =
@@ -844,6 +845,621 @@ ${text}
     kind: "answer",
     similarity: best,
   };
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Webhooks helpers (WhatsApp / Instagram)
+═══════════════════════════════════════════════════════════════════════ */
+
+/**
+ * التحقق من توقيع Meta عبر x-hub-signature-256.
+ * إذا لم يكن السر مضبوطًا نتجاهل التحقق (سلوك خادم Node السابق).
+ */
+async function verifyMetaSignature(
+  raw: string,
+  sigHeader: string
+): Promise<boolean> {
+  const secret =
+    env("INSTAGRAM_APP_SECRET") ||
+    env("META_APP_SECRET");
+
+  if (!secret) return true;
+
+  if (!sigHeader) return false;
+
+  const expected =
+    "sha256=" +
+    hex(
+      await crypto.subtle.sign(
+        "HMAC",
+        await crypto.subtle.importKey(
+          "raw",
+          enc.encode(secret),
+          {
+            name: "HMAC",
+            hash: "SHA-256",
+          },
+          false,
+          ["sign"]
+        ),
+        enc.encode(raw)
+      )
+    );
+
+  return sigHeader === expected;
+}
+
+/**
+ * استخراج كل الرسائل من entry — من كلا البنيتين
+ * (Messenger-style و Instagram Login changes[].value).
+ */
+function extractIgMessages(entry: any): Array<{
+  senderId: string;
+  recipientId: string;
+  text: string;
+  mid: string | null;
+}> {
+  const out: Array<{
+    senderId: string;
+    recipientId: string;
+    text: string;
+    mid: string | null;
+  }> = [];
+
+  // ─── 1) البنية القديمة: entry.messaging[] ───
+
+  if (Array.isArray(entry.messaging)) {
+    for (const ev of entry.messaging) {
+      if (!ev?.message || ev.message.is_echo) {
+        continue;
+      }
+
+      const senderId = String(ev.sender?.id ?? "");
+      const recipientId = String(ev.recipient?.id ?? "");
+
+      const text =
+        typeof ev.message.text === "string"
+          ? ev.message.text
+          : "";
+
+      const mid =
+        typeof ev.message.mid === "string"
+          ? ev.message.mid
+          : null;
+
+      if (senderId && text) {
+        out.push({
+          senderId,
+          recipientId,
+          text,
+          mid,
+        });
+      }
+    }
+  }
+
+  // ─── 2) البنية الجديدة: entry.changes[].value ───
+
+  if (Array.isArray(entry.changes)) {
+    for (const change of entry.changes) {
+      if (change?.field !== "messages") {
+        continue;
+      }
+
+      const value = change.value;
+
+      if (!value) {
+        continue;
+      }
+
+      if (Array.isArray(value.messaging)) {
+        for (const ev of value.messaging) {
+          if (!ev?.message || ev.message.is_echo) {
+            continue;
+          }
+
+          const senderId = String(
+            ev.sender?.id ?? ""
+          );
+
+          const recipientId = String(
+            ev.recipient?.id ?? ""
+          );
+
+          const text =
+            typeof ev.message.text === "string"
+              ? ev.message.text
+              : "";
+
+          const mid =
+            typeof ev.message.mid === "string"
+              ? ev.message.mid
+              : null;
+
+          if (senderId && text) {
+            out.push({
+              senderId,
+              recipientId,
+              text,
+              mid,
+            });
+          }
+        }
+
+        continue;
+      }
+
+      if (
+        value.message &&
+        !value.message.is_echo
+      ) {
+        const senderId = String(
+          value.sender?.id ?? ""
+        );
+
+        const recipientId = String(
+          value.recipient?.id ?? ""
+        );
+
+        const text =
+          typeof value.message.text === "string"
+            ? value.message.text
+            : "";
+
+        const mid =
+          typeof value.message.mid === "string"
+            ? value.message.mid
+            : null;
+
+        if (senderId && text) {
+          out.push({
+            senderId,
+            recipientId,
+            text,
+            mid,
+          });
+        }
+      }
+    }
+  }
+
+  return out;
+}
+
+/**
+ * إرسال رسالة مباشرة عبر Facebook/Instagram Graph API.
+ * يدعم نوعي رموز Instagram (IG... و EAA...) كما في metaSend.ts.
+ */
+async function sendMetaDirectMessage(opts: {
+  channel: "instagram" | "facebook";
+  externalId: string;
+  token: string;
+  recipientId: string;
+  text: string;
+}): Promise<void> {
+  const {
+    channel,
+    externalId,
+    token,
+    recipientId,
+    text,
+  } = opts;
+
+  if (!token) throw new Error("Missing Meta access token");
+  if (!recipientId) throw new Error("Missing recipient ID");
+  if (!text) throw new Error("Missing message text");
+
+  const payload: Record<string, unknown> = {
+    recipient: { id: recipientId },
+    message: { text },
+  };
+
+  let url: string;
+  let headers: Record<string, string> = {
+    "content-type": "application/json",
+  };
+  let body: Record<string, unknown>;
+
+  if (
+    channel === "instagram" &&
+    token.startsWith("IG")
+  ) {
+    /* Instagram Login */
+    url =
+      `https://graph.instagram.com/v21.0/me/messages`;
+
+    headers = {
+      ...headers,
+      authorization:
+        `Bearer ${token}`,
+    };
+
+    body = payload;
+  } else if (channel === "instagram") {
+    /* Facebook Login → Instagram API */
+    if (!externalId) {
+      throw new Error(
+        "Missing Instagram Business Account ID"
+      );
+    }
+
+    url =
+      `https://graph.facebook.com/v21.0/${externalId}/messages`;
+
+    body = { ...payload, access_token: token };
+  } else {
+    /* Facebook Messenger */
+    url =
+      "https://graph.facebook.com/v21.0/me/messages";
+
+    body = { ...payload, access_token: token };
+  }
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    throw new Error(
+      `${channel} send ${res.status}: ${await res.text()}`
+    );
+  }
+}
+
+/**
+ * جلب آخر N رسائل من المحادثة كسياق للـ RAG.
+ */
+async function conversationHistory(
+  sb: SupabaseClient,
+  conversationId: string,
+  limit = 8
+): Promise<string> {
+  const { data: msgs } = await sb
+    .from("messages")
+    .select("direction, body_encrypted, created_at")
+    .eq("conversation_id", conversationId)
+    .order("created_at", { ascending: false })
+    .limit(limit);
+
+  if (!msgs || msgs.length === 0) {
+    return "";
+  }
+
+  const reversed = [...msgs].reverse();
+
+  const lines: string[] = [];
+
+  for (const m of reversed) {
+    let bodyText = "";
+
+    try {
+      bodyText = await decryptField(m.body_encrypted);
+    } catch {
+      continue;
+    }
+
+    if (!bodyText?.trim()) continue;
+
+    const role =
+      m.direction === "in"
+        ? "العميل"
+        : "المساعد";
+
+    lines.push(`${role}: ${bodyText.trim()}`);
+  }
+
+  return lines.join("\n");
+}
+
+/**
+ * معالجة رسالة واردة (من WhatsApp أو Instagram)
+ * وتشغيل الرد الآلي عبر RAG.
+ */
+async function handleIncomingWebhookMessage(
+  sb: SupabaseClient,
+  account: any,
+  chatId: string,
+  customerText: string,
+  externalMsgId: string | null,
+  channel: "whatsapp" | "instagram" | "facebook",
+  phoneId?: string
+) {
+  const tenantId: string =
+    channel === "whatsapp"
+      ? account.tenant_id
+      : account.tenant_id;
+
+  const { data: tenant } = await sb
+    .from("tenants")
+    .select("*")
+    .eq("id", tenantId)
+    .maybeSingle();
+
+  if (!tenant) {
+    console.error(
+      `[${channel}_webhook] tenant not found: ${tenantId}`
+    );
+    return;
+  }
+
+  if (tenant.is_active === false) {
+    console.log(
+      `[${channel}_webhook] tenant inactive: ${tenantId}`
+    );
+    return;
+  }
+
+  /**
+   * البحث عن conversation موجود أو إنشاؤه.
+   */
+  const { data: existingConv } = await sb
+    .from("conversations")
+    .select("*")
+    .eq("tenant_id", tenantId)
+    .eq("wa_chat_id", chatId)
+    .maybeSingle();
+
+  let conv: any = existingConv;
+
+  if (!conv) {
+    const { data: newConv } = await sb
+      .from("conversations")
+      .insert({
+        tenant_id: tenantId,
+        wa_chat_id: chatId,
+        customer_phone_encrypted:
+          await encryptField(
+            chatId.replace(/@s\.whatsapp\.net$/, "")
+          ),
+        channel,
+        account_id: account?.id ?? null,
+        last_message_at:
+          new Date().toISOString(),
+      })
+      .select()
+      .single();
+
+    conv = newConv;
+  } else {
+    await sb
+      .from("conversations")
+      .update({
+        last_message_at:
+          new Date().toISOString(),
+      })
+      .eq("id", conv.id);
+  }
+
+  if (!conv) {
+    console.error(
+      `[${channel}_webhook] conversation is null`
+    );
+    return;
+  }
+
+  /**
+   * حفظ رسالة العميل الواردة.
+   */
+  try {
+    await sb
+      .from("messages")
+      .insert({
+        conversation_id: conv.id,
+        tenant_id: tenantId,
+        direction: "in",
+        body_encrypted:
+          await encryptField(customerText),
+        kind: "customer",
+        is_auto: false,
+        wa_message_id: externalMsgId,
+      });
+  } catch (e: any) {
+    if (e?.code === "23505") {
+      console.log(
+        `[${channel}_webhook] duplicate message skipped: ${externalMsgId}`
+      );
+    } else {
+      console.error(
+        `[${channel}_webhook] incoming insert failed`,
+        e
+      );
+    }
+    return;
+  }
+
+  /**
+   * المحادثة محولة لبشري — لا رد آلي.
+   */
+  if (conv.transferred) {
+    console.log(
+      `[${channel}_webhook] conversation transferred: ${conv.id}`
+    );
+    return;
+  }
+
+  /**
+   * متوقفة بسبب الرصيد.
+   */
+  if (conv.auto_paused_reason === "credits") {
+    console.log(
+      `[${channel}_webhook] paused (credits): ${conv.id}`
+    );
+    return;
+  }
+
+  /**
+   * لا رد آلي إلا لو الوكيل مفعّل على الحساب.
+   */
+  if (account.agent_enabled === false ||
+      account.auto_reply === false) {
+    console.log(
+      `[${channel}_webhook] auto reply disabled for account ${account?.id}`
+    );
+    return;
+  }
+
+  const credits = Number(
+    tenant.credits_remaining ?? 0
+  );
+
+  if (credits <= 0) {
+    await sb
+      .from("conversations")
+      .update({
+        auto_paused_reason: "credits",
+      })
+      .eq("id", conv.id);
+
+    console.log(
+      `[${channel}_webhook] no credits: ${tenantId}`
+    );
+    return;
+  }
+
+  /**
+   * RAG + LLM مع ذاكرة المحادثة.
+   */
+  const history =
+    await conversationHistory(sb, conv.id, 8);
+
+  let result;
+
+  try {
+    result =
+      await answerFromKnowledge(
+        sb,
+        tenant,
+        customerText,
+        history
+      );
+  } catch (e) {
+    console.error(
+      `[${channel}_webhook] AI error`,
+      e
+    );
+    return;
+  }
+
+  const replyText =
+    result.answer?.trim() ?? "";
+
+  if (!replyText) {
+    /*
+     * سؤال غير مؤهل — نسجله في unresolved_questions
+     * دون إرسال رد.
+     */
+    try {
+      await sb
+        .from("unresolved_questions")
+        .insert({
+          tenant_id: tenantId,
+          question_encrypted:
+            await encryptField(customerText),
+          status: "open",
+          conversation_id: conv.id,
+          best_similarity: result.similarity,
+        });
+    } catch (e) {
+      console.error(
+        `[${channel}_webhook] unresolved insert failed`,
+        e
+      );
+    }
+    return;
+  }
+
+  /**
+   * إرسال الرد إلى القناة.
+   */
+  try {
+    if (channel === "whatsapp") {
+      if (!phoneId) {
+        console.error(
+          "[whatsapp_webhook] missing phone_number_id for reply"
+        );
+        return;
+      }
+
+      await sendWa(
+        phoneId,
+        chatId.replace(/^whatsapp:/, ""),
+        replyText
+      );
+    } else {
+      let token: string | null = null;
+
+      try {
+        if (account.access_token_encrypted) {
+          token = await decryptField(
+            account.access_token_encrypted
+          );
+        }
+      } catch (e) {
+        console.warn(
+          `[${channel}_webhook] token decrypt failed`,
+          e
+        );
+      }
+
+      if (!token) {
+        console.error(
+          `[${channel}_webhook] no access token for account ${account?.id}`
+        );
+        return;
+      }
+
+      await sendMetaDirectMessage({
+        channel:
+          channel === "facebook"
+            ? "facebook"
+            : "instagram",
+        externalId: String(account.external_id),
+        token,
+        recipientId: chatId.split(":").slice(1).join(":"),
+        text: replyText,
+      });
+    }
+  } catch (e) {
+    console.error(
+      `[${channel}_webhook] send failed`,
+      e
+    );
+    return;
+  }
+
+  /**
+   * تسجيل الرد الصادر.
+   */
+  await sb
+    .from("messages")
+    .insert({
+      conversation_id: conv.id,
+      tenant_id: tenantId,
+      direction: "out",
+      body_encrypted:
+        await encryptField(replyText),
+      kind: "answer",
+      is_auto: true,
+    });
+
+  /**
+   * خصم credit بعد إرسال الرد.
+   */
+  try {
+    await sb.rpc(
+      "consume_reply",
+      {
+        p_tenant_id: tenantId,
+      }
+    );
+  } catch (e) {
+    console.error(
+      `[${channel}_webhook] consume_reply failed`,
+      e
+    );
+  }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
@@ -1091,6 +1707,360 @@ Deno.serve(async (req) => {
         return json({
           received: true,
           activated: true,
+        });
+      }
+
+      /* ────────────────────────────────────────────────────────────────
+         WhatsApp Webhook (Meta Cloud API)
+         GET  ?action=whatsapp_webhook&hub.mode=... → verification
+         POST ?action=whatsapp_webhook             → incoming messages
+      ──────────────────────────────────────────────────────────────── */
+
+      case "whatsapp_webhook": {
+        if (req.method === "GET") {
+          const mode =
+            url.searchParams.get("hub.mode");
+
+          const token =
+            url.searchParams.get(
+              "hub.verify_token"
+            );
+
+          const challenge =
+            url.searchParams.get(
+              "hub.challenge"
+            );
+
+          const expected =
+            env("WHATSAPP_VERIFY_TOKEN");
+
+          if (
+            mode === "subscribe" &&
+            expected &&
+            token === expected
+          ) {
+            return new Response(
+              challenge ?? "",
+              { status: 200 }
+            );
+          }
+
+          return new Response(
+            "Forbidden",
+            { status: 403 }
+          );
+        }
+
+        if (
+          body.object !==
+          "whatsapp_business_account"
+        ) {
+          return json({
+            received: true,
+          });
+        }
+
+        for (const entry of body.entry ?? []) {
+          for (const change of entry?.changes ?? []) {
+            if (change?.field !== "messages") {
+              continue;
+            }
+
+            const value = change.value;
+
+            if (!value) {
+              continue;
+            }
+
+            const phoneId = String(
+              value.metadata?.phone_number_id ?? ""
+            );
+
+            if (!phoneId) {
+              continue;
+            }
+
+            /**
+             * تحديد الحساب/المستأجر عبر wa_bindings.
+             */
+            let account: any = null;
+
+            const { data: binding } = await sb
+              .from("wa_bindings")
+              .select("tenant_id, phone_id")
+              .eq("phone_id", phoneId)
+              .maybeSingle();
+
+            if (binding) {
+              account = {
+                tenant_id: binding.tenant_id,
+                external_id: phoneId,
+                channel: "whatsapp",
+              };
+            } else {
+              const { data: chAcc } = await sb
+                .from("channel_accounts")
+                .select(
+                  "id, tenant_id, channel, external_id, status, agent_enabled, auto_reply, access_token_encrypted"
+                )
+                .eq("external_id", phoneId)
+                .eq("channel", "whatsapp")
+                .maybeSingle();
+
+              if (chAcc) {
+                account = chAcc;
+              }
+            }
+
+            if (!account) {
+              console.warn(
+                `[whatsapp_webhook] no account for phone_number_id=${phoneId}`
+              );
+              continue;
+            }
+
+            const customerNameOf = (waId: string) => {
+              const c = (value.contacts ?? []).find(
+                (x: any) => x.wa_id === waId
+              );
+              return c?.profile?.name
+                ? String(c.profile.name)
+                : null;
+            };
+
+            for (const message of value.messages ?? []) {
+              const from = String(message?.from ?? "");
+
+              if (!from) {
+                continue;
+              }
+
+              const text =
+                typeof message?.text?.body === "string"
+                  ? message.text.body
+                  : "";
+
+              const msgId =
+                typeof message?.id === "string"
+                  ? message.id
+                  : null;
+
+              if (!text) {
+                /*
+                 * أنواع غير نصية — نسجلها الواردة فقط إن وُجد نص،
+                 * وإلا نتجاهلها (كما في extractText القديم).
+                 */
+                continue;
+              }
+
+              const chatId = `whatsapp:${from}`;
+
+              /**
+               * منع التكرار قبل المعالجة.
+               */
+              if (msgId) {
+                const { data: dup } = await sb
+                  .from("messages")
+                  .select("id")
+                  .eq("wa_message_id", msgId)
+                  .maybeSingle();
+
+                if (dup) {
+                  console.log(
+                    `[whatsapp_webhook] duplicate skipped: ${msgId}`
+                  );
+                  continue;
+                }
+              }
+
+              const name = customerNameOf(from);
+
+              await handleIncomingWebhookMessage(
+                sb,
+                account,
+                chatId,
+                text,
+                msgId,
+                "whatsapp",
+                phoneId
+              );
+
+              if (name) {
+                await sb
+                  .from("conversations")
+                  .update({
+                    customer_name: name,
+                  })
+                  .eq("tenant_id", account.tenant_id)
+                  .eq("wa_chat_id", chatId);
+              }
+            }
+          }
+        }
+
+        return json({
+          received: true,
+        });
+      }
+
+      /* ────────────────────────────────────────────────────────────────
+         Instagram Webhook (Meta Messenger/Instagram API)
+         GET  ?action=instagram_webhook&hub.mode=... → verification
+         POST ?action=instagram_webhook             → incoming messages
+      ──────────────────────────────────────────────────────────────── */
+
+      case "instagram_webhook": {
+        if (req.method === "GET") {
+          const mode =
+            url.searchParams.get("hub.mode");
+
+          const token =
+            url.searchParams.get(
+              "hub.verify_token"
+            );
+
+          const challenge =
+            url.searchParams.get(
+              "hub.challenge"
+            );
+
+          const expected =
+            env("INSTAGRAM_VERIFY_TOKEN") ||
+            env("META_WEBHOOK_VERIFY_TOKEN");
+
+          if (
+            mode === "subscribe" &&
+            expected &&
+            token === expected
+          ) {
+            return new Response(
+              challenge ?? "",
+              { status: 200 }
+            );
+          }
+
+          return new Response(
+            "Forbidden",
+            { status: 403 }
+          );
+        }
+
+        if (
+          body.object !== "instagram" &&
+          body.object !== "page"
+        ) {
+          return json({
+            received: true,
+          });
+        }
+
+        const sigOk = await verifyMetaSignature(
+          raw,
+          req.headers.get(
+            "x-hub-signature-256"
+          ) ?? ""
+        );
+
+        if (!sigOk) {
+          console.error(
+            "[instagram_webhook] invalid signature — ignored"
+          );
+
+          return json({
+            received: true,
+          });
+        }
+
+        for (const entry of body.entry ?? []) {
+          const entryId = String(entry.id ?? "");
+
+          const msgs = extractIgMessages(entry);
+
+          for (const msg of msgs) {
+            const candidates = [
+              entryId,
+              msg.recipientId,
+            ].filter((x) => x && x !== "0");
+
+            let account: any = null;
+
+            for (const candidate of candidates) {
+              const { data } = await sb
+                .from("channel_accounts")
+                .select(
+                  "id, tenant_id, channel, external_id, status, agent_enabled, auto_reply, access_token_encrypted"
+                )
+                .eq("external_id", candidate)
+                .in("channel", [
+                  "instagram",
+                  "facebook",
+                ])
+                .maybeSingle();
+
+              if (data) {
+                account = data;
+                break;
+              }
+            }
+
+            if (!account) {
+              console.warn(
+                `[instagram_webhook] no matching account | entryId=${entryId} recipient=${msg.recipientId}`
+              );
+              continue;
+            }
+
+            if (account.status !== "active") {
+              console.warn(
+                `[instagram_webhook] account not active — skipped | status=${account.status}`
+              );
+              continue;
+            }
+
+            const channel =
+              account.channel === "facebook"
+                ? "facebook"
+                : "instagram";
+
+            const chatId =
+              `${channel}:${msg.senderId}`;
+
+            const msgId =
+              msg.mid || `ig_${Date.now()}`;
+
+            /**
+             * منع التكرار.
+             */
+            if (msg.mid) {
+              const { data: dup } = await sb
+                .from("messages")
+                .select("id")
+                .eq("wa_message_id", msgId)
+                .limit(1);
+
+              if (dup && dup.length > 0) {
+                console.log(
+                  `[instagram_webhook] duplicate skipped: ${msgId}`
+                );
+                continue;
+              }
+            }
+
+            await handleIncomingWebhookMessage(
+              sb,
+              account,
+              chatId,
+              msg.text,
+              msgId,
+              channel as
+                | "instagram"
+                | "facebook"
+            );
+          }
+        }
+
+        return json({
+          received: true,
         });
       }
 

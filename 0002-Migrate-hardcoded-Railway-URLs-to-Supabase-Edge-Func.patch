@@ -1,0 +1,62 @@
+From 2521b0a596a1dc36945be024ed853ea824946755 Mon Sep 17 00:00:00 2001
+From: "qwen.ai[bot]" <qwenlm-intl@service.alibaba.com>
+Date: Sun, 4 Oct 2026 20:58:45 +0000
+Subject: [PATCH 2/2] Migrate hardcoded Railway URLs to Supabase Edge Functions
+
+---
+ server/src/config.ts            | 2 +-
+ src/components/WidgetEditor.tsx | 4 ++--
+ src/pages/Widgets.tsx           | 2 +-
+ 3 files changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/server/src/config.ts b/server/src/config.ts
+index 8f1aa756..b5557e6f 100644
+--- a/server/src/config.ts
++++ b/server/src/config.ts
+@@ -182,7 +182,7 @@ export const config = {
+ 
+   publicUrl: opt(
+     "PUBLIC_URL",
+-    "https://milanochat-production.up.railway.app"
++    "https://nmhefwvhoholcjrbbila.supabase.co"
+   ),
+ 
+   supabaseUrl: req("SUPABASE_URL"),
+diff --git a/src/components/WidgetEditor.tsx b/src/components/WidgetEditor.tsx
+index dee7a0d5..7b63cf70 100644
+--- a/src/components/WidgetEditor.tsx
++++ b/src/components/WidgetEditor.tsx
+@@ -316,7 +316,7 @@ export default function WidgetEditor({
+     if (!widget) return;
+ 
+     const code =
+-      `<script src="https://milanochat-production.up.railway.app/widget.js" data-token="${widget.public_token}"></script>`;
++      `<script src="https://nmhefwvhoholcjrbbila.supabase.co/functions/v1/milan-api?action=widget.js" data-token="${widget.public_token}"></script>`;
+ 
+     try {
+       await navigator.clipboard.writeText(
+@@ -1868,7 +1868,7 @@ function InstallTab({
+   copyEmbedCode,
+ }: any) {
+   const embedCode =
+-    `<script src="https://milanochat-production.up.railway.app/widget.js" data-token="${widget.public_token}"></script>`;
++    `<script src="https://nmhefwvhoholcjrbbila.supabase.co/functions/v1/milan-api?action=widget.js" data-token="${widget.public_token}"></script>`;
+ 
+   return (
+     <div className="space-y-6">
+diff --git a/src/pages/Widgets.tsx b/src/pages/Widgets.tsx
+index c619d465..b5dc00de 100644
+--- a/src/pages/Widgets.tsx
++++ b/src/pages/Widgets.tsx
+@@ -131,7 +131,7 @@ export default function Widgets() {
+ 
+   // Copy
+   const copyEmbedCode = (widget: Widget) => {
+-    const code = `<script src="https://milanochat-production.up.railway.app/widget.js" data-token="${widget.public_token}"></script>`;
++    const code = `<script src="https://nmhefwvhoholcjrbbila.supabase.co/functions/v1/milan-api?action=widget.js" data-token="${widget.public_token}"></script>`;
+     navigator.clipboard.writeText(code);
+     setCopiedToken(widget.public_token);
+     setTimeout(() => setCopiedToken(null), 2000);
+-- 
+2.39.5
+

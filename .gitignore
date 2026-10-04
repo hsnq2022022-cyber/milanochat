@@ -1,1 +1,2 @@
-(empty)
+# Git patch files
+*.patch
