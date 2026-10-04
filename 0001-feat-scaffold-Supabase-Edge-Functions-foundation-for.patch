@@ -1,0 +1,207 @@
+From 5be5d0794d073a396b78b7ab3bca3ba2d01d960e Mon Sep 17 00:00:00 2001
+From: "qwen.ai[bot]" <qwenlm-intl@service.alibaba.com>
+Date: Sun, 4 Oct 2026 19:57:50 +0000
+Subject: [PATCH 1/2] feat: scaffold Supabase Edge Functions foundation for
+ backend migration
+
+- Add `supabase/functions/_shared/cors.ts` with CORS headers and OPTIONS handler
+- Add `supabase/functions/_shared/config.ts` for environment variable validation (SUPABASE_URL, SERVICE_ROLE_KEY)
+- Add `supabase/functions/_shared/db.ts` to initialize admin Supabase client using shared config
+- Create new `supabase/functions/api/index.ts` edge function with `/health` and `/db-test` endpoints
+- Preserve existing `milan-api` and `server/` directories without modification
+---
+ supabase/functions/_shared/config.ts |  17 +++++
+ supabase/functions/_shared/cors.ts   |  18 +++++
+ supabase/functions/_shared/db.ts     |  19 +++++
+ supabase/functions/api/index.ts      | 104 +++++++++++++++++++++++++++
+ 4 files changed, 158 insertions(+)
+ create mode 100644 supabase/functions/_shared/config.ts
+ create mode 100644 supabase/functions/_shared/cors.ts
+ create mode 100644 supabase/functions/_shared/db.ts
+ create mode 100644 supabase/functions/api/index.ts
+
+diff --git a/supabase/functions/_shared/config.ts b/supabase/functions/_shared/config.ts
+new file mode 100644
+index 00000000..1d7cb99e
+--- /dev/null
++++ b/supabase/functions/_shared/config.ts
+@@ -0,0 +1,17 @@
++function requiredEnv(name: string): string {
++  const value = Deno.env.get(name);
++
++  if (!value) {
++    throw new Error(`Missing required environment variable: ${name}`);
++  }
++
++  return value;
++}
++
++export function getSupabaseUrl(): string {
++  return requiredEnv("SUPABASE_URL");
++}
++
++export function getSupabaseServiceRoleKey(): string {
++  return requiredEnv("SUPABASE_SERVICE_ROLE_KEY");
++}
+diff --git a/supabase/functions/_shared/cors.ts b/supabase/functions/_shared/cors.ts
+new file mode 100644
+index 00000000..5dbcbc3d
+--- /dev/null
++++ b/supabase/functions/_shared/cors.ts
+@@ -0,0 +1,18 @@
++export const corsHeaders = {
++  "Access-Control-Allow-Origin": "*",
++  "Access-Control-Allow-Headers":
++    "authorization, x-client-info, apikey, content-type",
++  "Access-Control-Allow-Methods":
++    "GET, POST, PATCH, DELETE, OPTIONS",
++};
++
++export function handleCors(req: Request): Response | null {
++  if (req.method !== "OPTIONS") {
++    return null;
++  }
++
++  return new Response("ok", {
++    status: 200,
++    headers: corsHeaders,
++  });
++}
+diff --git a/supabase/functions/_shared/db.ts b/supabase/functions/_shared/db.ts
+new file mode 100644
+index 00000000..790adbf3
+--- /dev/null
++++ b/supabase/functions/_shared/db.ts
+@@ -0,0 +1,19 @@
++import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
++
++import {
++  getSupabaseUrl,
++  getSupabaseServiceRoleKey,
++} from "./config.ts";
++
++export function getAdminClient() {
++  return createClient(
++    getSupabaseUrl(),
++    getSupabaseServiceRoleKey(),
++    {
++      auth: {
++        autoRefreshToken: false,
++        persistSession: false,
++      },
++    },
++  );
++}
+diff --git a/supabase/functions/api/index.ts b/supabase/functions/api/index.ts
+new file mode 100644
+index 00000000..08b7181a
+--- /dev/null
++++ b/supabase/functions/api/index.ts
+@@ -0,0 +1,104 @@
++import { corsHeaders, handleCors } from "../_shared/cors.ts";
++import { getAdminClient } from "../_shared/db.ts";
++
++Deno.serve(async (req: Request) => {
++  const corsResponse = handleCors(req);
++
++  if (corsResponse) {
++    return corsResponse;
++  }
++
++  const url = new URL(req.url);
++
++  if (url.pathname.endsWith("/health")) {
++    return new Response(
++      JSON.stringify({
++        ok: true,
++        service: "edge-api",
++        timestamp: new Date().toISOString(),
++      }),
++      {
++        status: 200,
++        headers: {
++          ...corsHeaders,
++          "Content-Type": "application/json",
++        },
++      },
++    );
++  }
++
++  if (url.pathname.endsWith("/db-test")) {
++    try {
++      const supabase = getAdminClient();
++
++      const { data, error } = await supabase
++        .from("channel_accounts")
++        .select("id")
++        .limit(1);
++
++      if (error) {
++        console.error("[DB Test]", error.message);
++
++        return new Response(
++          JSON.stringify({
++            ok: false,
++            database: false,
++            error: error.message,
++          }),
++          {
++            status: 500,
++            headers: {
++              ...corsHeaders,
++              "Content-Type": "application/json",
++            },
++          },
++        );
++      }
++
++      return new Response(
++        JSON.stringify({
++          ok: true,
++          database: true,
++          rows: data?.length ?? 0,
++        }),
++        {
++          status: 200,
++          headers: {
++            ...corsHeaders,
++            "Content-Type": "application/json",
++          },
++        },
++      );
++    } catch (error) {
++      return new Response(
++        JSON.stringify({
++          ok: false,
++          database: false,
++          error: error instanceof Error
++            ? error.message
++            : "Database test failed",
++        }),
++        {
++          status: 500,
++          headers: {
++            ...corsHeaders,
++            "Content-Type": "application/json",
++          },
++        },
++      );
++    }
++  }
++
++  return new Response(
++    JSON.stringify({
++      error: "Not found",
++    }),
++    {
++      status: 404,
++      headers: {
++        ...corsHeaders,
++        "Content-Type": "application/json",
++      },
++    },
++  );
++});
+-- 
+2.39.5
+
