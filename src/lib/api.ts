@@ -2,11 +2,8 @@
  * عميل API للواجهة — ثلاثة أنماط تعمل تلقائيًا حسب متغيرات البيئة:
  *
  * 1) supabase : VITE_SUPABASE_URL + VITE_SUPABASE_ANON_KEY مضبوطان → Edge Functions
- *               (كل شيء على Supabase: واتساب عبر Cloud API الرسمية، معرفة، لوحة، دفع)
- * 2) server   : VITE_API_URL مضبوط (بدون Supabase) → الخادم التقليدي (Baileys + Express)
- * 3) demo     : لا شيء منهما → وضع العرض التجريبي
- *
- * ملاحظة: Supabase له الأولوية القصوى لضمان عدم الاعتماد على Railway.
+ * 2) server   : VITE_API_URL مضبوط (بدون Supabase) → الخادم التقليدي
+ * 3) demo     : لا شيء منهما → وضع العرض
  */
 const env = (((import.meta as any).env ?? {}) as Record<string, string | undefined>);
 export const API = (env.VITE_API_URL ?? "").replace(/\/+$/, "");
@@ -20,13 +17,6 @@ export const apiEnabled = HAS_SERVER && !HAS_SUPABASE;
 export const apiBase = API;
 
 export type BackendMode = "server" | "supabase" | "demo";
-
-/**
- * الأولوية:
- * 1. إذا وُجدت بيانات Supabase → استخدم Supabase (دائمًا)
- * 2. وإلا إذا وُجد VITE_API_URL → استخدم الخادم التقليدي
- * 3. وإلا → demo
- */
 export const backendMode: BackendMode = HAS_SUPABASE
   ? "supabase"
   : HAS_SERVER
@@ -35,6 +25,7 @@ export const backendMode: BackendMode = HAS_SUPABASE
 
 /** عنوان Edge Function الواحدة التي تحوي الباك-إند كله */
 const FN_URL = `${SUPABASE_URL}/functions/v1/milan-api`;
+const CHANNELS_FN_URL = `${SUPABASE_URL}/functions/v1/channels`;
 const WA_FN_URL = `${SUPABASE_URL}/functions/v1/wa-webhook`;
 
 /* ─── نقل عام ─── */
@@ -82,10 +73,64 @@ async function fn<T>(
   return data as T;
 }
 
+/** نداء دالة channels منفصلة في Supabase */
+async function channelsFn<T>(
+  token: string,
+  channelPath: string,
+  init?: RequestInit
+): Promise<T> {
+  const method = (init?.method ?? "GET").toUpperCase();
+  const body: Record<string, unknown> = init?.body ? JSON.parse(init.body as string) : {};
+  const qs = new URLSearchParams(
+    Object.entries(body).filter(([, v]) => typeof v === "string") as [string, string][]
+  ).toString();
+
+  const url = `${CHANNELS_FN_URL}${channelPath}${qs ? `?${qs}` : ""}`;
+
+  const res = await fetch(url, {
+    method,
+    headers: {
+      "content-type": "application/json",
+      apikey: SUPABASE_ANON,
+      authorization: `Bearer ${token}`,
+    },
+    body: method === "GET" || method === "DELETE" ? undefined : JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((data as any)?.error ?? `HTTP ${res.status}`);
+  return data as T;
+}
+
 /** ترجمة مسارات لوحة التحكم إلى إجراءات Edge Function */
 async function dashSupabase<T>(token: string, path: string, init?: RequestInit): Promise<T> {
   const body: Record<string, unknown> = init?.body ? JSON.parse(init.body as string) : {};
   const method = (init?.method ?? "GET").toUpperCase();
+
+  // ─── مسارات القنوات → دالة channels منفصلة ───
+  if (path.startsWith("/api/channels/")) {
+    const channelPath = path.replace(/^\/api\/channels/, "");
+    return channelsFn<T>(token, channelPath, init);
+  }
+
+  // ─── قنوات Dashboard (social channels) → دالة channels أيضاً ───
+  if (path === "/api/dashboard/channels" || path.startsWith("/api/dashboard/channels?")) {
+    return channelsFn<T>(token, "/accounts", init);
+  }
+
+  // ─── مسارات Widgets → milan-api ───
+  if (path.startsWith("/api/widgets/dashboard")) {
+    const sub = path.replace("/api/widgets/dashboard", "").replace(/^\//, "");
+    let action: string;
+    if (!sub) {
+      action = method === "POST" ? "widget_dashboard_create" : "widget_dashboard_list";
+    } else {
+      body.widgetId = sub;
+      action = method === "DELETE" ? "widget_dashboard_delete" : "widget_dashboard_update";
+    }
+    return fn<T>(action, { body, token });
+  }
+
+  // ─── مسارات dashboard القياسية → milan-api ───
   const m = path.match(/^\/api\/dashboard\/(.*)$/);
   const sub = m?.[1] ?? path;
 
@@ -162,7 +207,7 @@ export type SemanticTestRes = {
   answer: string | null;
 };
 
-/** رمز جلسة المعالج المحفوظ (يُستخدم في نمط Supabase لتفويض إجراءات الإعداد) */
+/** رمز جلسة المعالج المحفوظ */
 const storedClaim = () => localStorage.getItem("milano_claim");
 
 export const api = {
@@ -200,7 +245,6 @@ export const api = {
           body: JSON.stringify({ text }),
         }),
 
-  /* واتساب: Baileys في نمط الخادم — Cloud API الرسمية في نمط Supabase */
   wa: {
     createSession: (tenantId: string, token?: string | null) =>
       backendMode === "supabase"
@@ -241,18 +285,15 @@ export const api = {
             headers: authHeaders(token),
           }),
 
-    /** ربط رقم المنصة (Phone Number ID من Meta) بالعميل — نمط Supabase فقط */
     bindNumber: (tenantId: string, phoneId: string) =>
       fn<{ ok: true }>("bind_number", { body: { tenantId, phoneId }, claim: storedClaim() ?? tenantId }),
 
-    /** رابط بث SSE اللحظي — فارغ في نمط Supabase */
     eventsUrl: (sessionId: string, token?: string | null) =>
       backendMode === "supabase"
         ? ""
         : `${API}/api/whatsapp/session/${sessionId}/events?token=${encodeURIComponent(token ?? "")}`,
   },
 
-  /* ── أسئلة وأجوبة من الرابط ── */
   extractQA: (tenantId: string, url: string) =>
     backendMode === "supabase"
       ? fn<{ pairs: QAPair[]; title: string }>("qa_extract", { body: { tenantId, url }, claim: storedClaim() })
@@ -272,7 +313,6 @@ export const api = {
           body: JSON.stringify({ pairs, sourceUrl: sourceUrl ?? null }),
         }),
 
-  /* ── مختبر الفهم الدلالي ── */
   testQA: (tenantId: string, text: string) =>
     backendMode === "supabase"
       ? fn<SemanticTestRes>("qa_test", { body: { tenantId, text }, claim: storedClaim() })
@@ -281,7 +321,6 @@ export const api = {
           body: JSON.stringify({ text }),
         }),
 
-  /* ── دفع ── */
   createPayment: (tenantId: string, packageId: string, token?: string | null) =>
     backendMode === "supabase"
       ? fn<{ invoiceId: string; paymentUrl: string | null }>("pay_create", { body: { packageId }, token })
