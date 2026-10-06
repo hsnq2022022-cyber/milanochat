@@ -1154,6 +1154,62 @@ async function conversationHistory(
 }
 
 /**
+ * جلب بيانات المرسل (الاسم + الصورة) من Instagram / Facebook Graph API.
+ */
+async function fetchSenderProfile(opts: {
+  channel: "instagram" | "facebook" | "whatsapp";
+  senderId: string;
+  token: string | null;
+}): Promise<{ name: string | null; avatar: string | null }> {
+  const { channel, senderId, token } = opts;
+
+  if (channel === "whatsapp" || !token || !senderId) {
+    return { name: null, avatar: null };
+  }
+
+  try {
+    let url: string;
+    let headers: Record<string, string> = {};
+
+    if (channel === "instagram" && token.startsWith("IG")) {
+      // Instagram Login
+      url = `https://graph.instagram.com/v21.0/${senderId}?fields=name,username,profile_pic&access_token=${encodeURIComponent(token)}`;
+    } else if (channel === "instagram") {
+      // Facebook Login → Instagram
+      url = `https://graph.facebook.com/v21.0/${senderId}?fields=name,profile_picture&access_token=${encodeURIComponent(token)}`;
+    } else {
+      // Facebook Messenger
+      url = `https://graph.facebook.com/v21.0/${senderId}?fields=name,picture&access_token=${encodeURIComponent(token)}`;
+    }
+
+    const res = await fetch(url);
+    if (!res.ok) {
+      console.warn(`[fetchSenderProfile] HTTP ${res.status} for ${senderId}`);
+      return { name: null, avatar: null };
+    }
+
+    const pj: any = await res.json();
+
+    let name: string | null = null;
+    if (typeof pj.name === "string" && pj.name.trim()) {
+      name = pj.name.trim();
+    } else if (typeof pj.username === "string" && pj.username.trim()) {
+      name = `@${pj.username.trim()}`;
+    }
+
+    let avatar: string | null = null;
+    if (typeof pj.profile_pic === "string") avatar = pj.profile_pic;
+    else if (typeof pj.profile_picture === "string") avatar = pj.profile_picture;
+    else if (typeof pj.picture?.data?.url === "string") avatar = pj.picture.data.url;
+
+    return { name, avatar };
+  } catch (e: any) {
+    console.warn(`[fetchSenderProfile] error:`, e?.message ?? e);
+    return { name: null, avatar: null };
+  }
+}
+
+/**
  * معالجة رسالة واردة (من WhatsApp أو Instagram)
  * وتشغيل الرد الآلي عبر RAG.
  */
@@ -1237,6 +1293,36 @@ async function handleIncomingWebhookMessage(
       `[${channel}_webhook] conversation is null`
     );
     return;
+  }
+
+  // جلب بيانات المرسل (Instagram/Facebook فقط)
+  if (channel !== "whatsapp") {
+    let token: string | null = null;
+    try {
+      if (account.access_token_encrypted) {
+        token = await decryptField(account.access_token_encrypted);
+      }
+    } catch (e) {
+      console.warn(`[${channel}_webhook] token decrypt failed`, e);
+    }
+
+    const senderId = chatId.split(":").slice(1).join(":");
+    const profile = await fetchSenderProfile({
+      channel,
+      senderId,
+      token,
+    });
+
+    if (profile.name || profile.avatar) {
+      await sb
+        .from("conversations")
+        .update({
+          customer_name: profile.name,
+          customer_avatar: profile.avatar,
+        })
+        .eq("tenant_id", tenantId)
+        .eq("wa_chat_id", chatId);
+    }
   }
 
   /**
