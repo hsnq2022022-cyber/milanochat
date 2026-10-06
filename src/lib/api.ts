@@ -1,24 +1,36 @@
 /**
  * عميل API للواجهة — ثلاثة أنماط تعمل تلقائيًا حسب متغيرات البيئة:
  *
- * 1) server   : VITE_API_URL مضبوط → الخادم التقليدي (Baileys + Express)
- * 2) supabase : بدون VITE_API_URL ومع VITE_SUPABASE_URL/ANON → Edge Functions
+ * 1) supabase : VITE_SUPABASE_URL + VITE_SUPABASE_ANON_KEY مضبوطان → Edge Functions
  *               (كل شيء على Supabase: واتساب عبر Cloud API الرسمية، معرفة، لوحة، دفع)
+ * 2) server   : VITE_API_URL مضبوط (بدون Supabase) → الخادم التقليدي (Baileys + Express)
  * 3) demo     : لا شيء منهما → وضع العرض التجريبي
+ *
+ * ملاحظة: Supabase له الأولوية القصوى لضمان عدم الاعتماد على Railway.
  */
 const env = (((import.meta as any).env ?? {}) as Record<string, string | undefined>);
 export const API = (env.VITE_API_URL ?? "").replace(/\/+$/, "");
 const SUPABASE_URL = (env.VITE_SUPABASE_URL ?? "").replace(/\/+$/, "");
 const SUPABASE_ANON = env.VITE_SUPABASE_ANON_KEY ?? "";
 
-export const apiEnabled = API.length > 0;
+const HAS_SUPABASE = SUPABASE_URL.length > 0 && SUPABASE_ANON.length > 0;
+const HAS_SERVER = API.length > 0;
+
+export const apiEnabled = HAS_SERVER && !HAS_SUPABASE;
 export const apiBase = API;
 
 export type BackendMode = "server" | "supabase" | "demo";
-export const backendMode: BackendMode = apiEnabled
-  ? "server"
-  : SUPABASE_URL && SUPABASE_ANON
-    ? "supabase"
+
+/**
+ * الأولوية:
+ * 1. إذا وُجدت بيانات Supabase → استخدم Supabase (دائمًا)
+ * 2. وإلا إذا وُجد VITE_API_URL → استخدم الخادم التقليدي
+ * 3. وإلا → demo
+ */
+export const backendMode: BackendMode = HAS_SUPABASE
+  ? "supabase"
+  : HAS_SERVER
+    ? "server"
     : "demo";
 
 /** عنوان Edge Function الواحدة التي تحوي الباك-إند كله */
@@ -50,7 +62,10 @@ export async function apiAuthFetch<T>(token: string, path: string, init?: Reques
 }
 
 /** نداء Edge Function في نمط Supabase */
-async function fn<T>(action: string, opts: { body?: unknown; token?: string | null; claim?: string | null; wa?: boolean } = {}): Promise<T> {
+async function fn<T>(
+  action: string,
+  opts: { body?: unknown; token?: string | null; claim?: string | null; wa?: boolean } = {}
+): Promise<T> {
   const headers: Record<string, string> = {
     "content-type": "application/json",
     apikey: SUPABASE_ANON,
@@ -166,8 +181,7 @@ export const api = {
 
   ingestUrl: (tenantId: string, url: string) =>
     backendMode === "supabase"
-      ? // نمط Supabase: استخراج الأسئلة والأجوبة من الرابط ثم حفظها كقاعدة معرفة
-        fn<{ pairs: QAPair[] }>("qa_extract", { body: { tenantId, url }, claim: storedClaim() }).then((r) =>
+      ? fn<{ pairs: QAPair[] }>("qa_extract", { body: { tenantId, url }, claim: storedClaim() }).then((r) =>
           fn<IngestRes>("qa_save", { body: { tenantId, pairs: r.pairs, sourceUrl: url }, claim: storedClaim() })
         )
       : apiFetch<IngestRes>(`/api/tenants/${tenantId}/knowledge`, {
@@ -186,7 +200,7 @@ export const api = {
           body: JSON.stringify({ text }),
         }),
 
-  /* واتساب: Baileys في نمط الخادم — وCloud API الرسمية في نمط Supabase */
+  /* واتساب: Baileys في نمط الخادم — Cloud API الرسمية في نمط Supabase */
   wa: {
     createSession: (tenantId: string, token?: string | null) =>
       backendMode === "supabase"
@@ -221,7 +235,7 @@ export const api = {
 
     logout: (sessionId: string, token?: string | null) =>
       backendMode === "supabase"
-        ? Promise.resolve({ ok: true as const }) // في Cloud API يُفصل الرقم من لوحة Meta
+        ? Promise.resolve({ ok: true as const })
         : apiFetch<{ ok: true }>(`/api/whatsapp/session/${sessionId}/logout`, {
             method: "POST",
             headers: authHeaders(token),
@@ -231,7 +245,7 @@ export const api = {
     bindNumber: (tenantId: string, phoneId: string) =>
       fn<{ ok: true }>("bind_number", { body: { tenantId, phoneId }, claim: storedClaim() ?? tenantId }),
 
-    /** رابط بث SSE اللحظي — فارغ في نمط Supabase (لا حاجة لبث؛ الحالة لحظية من الـ webhook) */
+    /** رابط بث SSE اللحظي — فارغ في نمط Supabase */
     eventsUrl: (sessionId: string, token?: string | null) =>
       backendMode === "supabase"
         ? ""
