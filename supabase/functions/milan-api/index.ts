@@ -3974,7 +3974,7 @@ ${text}`
             "conversations"
           )
           .select(
-            "id, customer_phone_encrypted, transferred, auto_paused_reason, last_message_at"
+            "id, wa_chat_id, customer_phone_encrypted, customer_name, customer_avatar, channel, account_id, transferred, auto_paused_reason, last_message_at"
           )
           .eq(
             "tenant_id",
@@ -4010,6 +4010,18 @@ ${text}`
               await decryptField(
                 c.customer_phone_encrypted
               ),
+
+            customerName:
+              c.customer_name ?? null,
+
+            customerAvatar:
+              c.customer_avatar ?? null,
+
+            channel:
+              c.channel ?? null,
+
+            accountId:
+              c.account_id ?? null,
 
             transferred:
               c.transferred,
