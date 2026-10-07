@@ -586,9 +586,32 @@ async function boundPhone(
 }
 
 /**
+ * يجلب حساب القناة مع التوكن الكامل (بدون قصّ الحقول) —
+ * يستخدمه كل من المسار القديم والمسار الجديد المرسل عبر sendToConversation.
+ */
+async function fetchAccountWithToken(
+  sb: SupabaseClient,
+  accountId: string
+): Promise<any> {
+  const { data, error } = await sb
+    .from("channel_accounts")
+    .select("*")
+    .eq("id", accountId)
+    .maybeSingle();
+
+  if (error) throw new Error(`fetchAccountWithToken: ${error.message}`);
+  if (!data) throw new Error("لا يوجد حساب مرتبط بهذه المحادثة");
+
+  return data;
+}
+
+/**
  * يرسل نصاً إلى محادثة عبر القناة الصحيحة:
- * - whatsapp  → sendWa (WA_ACCESS_TOKEN)
- * - instagram / facebook → sendMetaDirectMessage (توكن الحساب المشفّر في channel_accounts)
+ * - whatsapp  → sendWa (WA_ACCESS_TOKEN أو phone_number_id الخاص بالحساب)
+ *   أولوية تحديد phone_id: conv.phone_id ← conversation ← wa_bindings ←
+ *   channel_accounts(watsapp).external_id
+ * - instagram / facebook → sendMetaDirectMessage
+ *   (توكن الحساب المشفّر في channel_accounts عبر fetchAccountWithToken + decryptField)
  */
 async function sendToConversation(
   sb: SupabaseClient,
@@ -599,6 +622,40 @@ async function sendToConversation(
   const channel: string =
     conv?.channel ?? "whatsapp";
 
+  /* ── مسارات القنوات القديمة التي كانت تمرر الحساب صراحةً ── */
+  if (
+    channel !== "whatsapp" &&
+    conv?.account &&
+    conv?.recipient
+  ) {
+    const account = conv.account;
+    let token: string | null = null;
+
+    try {
+      if (account.access_token_encrypted) {
+        token = await decryptField(account.access_token_encrypted);
+      }
+    } catch (e) {
+      console.warn("[sendToConversation] token decrypt failed", e);
+    }
+
+    if (!token) {
+      throw new Error(
+        `لا يوجد توكن محفوظ لحساب ${channel} — أعد ربط الحساب`
+      );
+    }
+
+    await sendMetaDirectMessage({
+      channel: channel as "instagram" | "facebook",
+      externalId: String(account.external_id ?? ""),
+      token,
+      recipientId: String(conv.recipient),
+      text,
+    });
+
+    return;
+  }
+
   if (channel === "instagram" || channel === "facebook") {
     if (!conv.account_id) {
       throw new Error(
@@ -606,14 +663,16 @@ async function sendToConversation(
       );
     }
 
-    const { data: account } = await sb
-      .from("channel_accounts")
-      .select("id, external_id, access_token_encrypted")
-      .eq("id", conv.account_id)
-      .eq("tenant_id", tenantId)
-      .maybeSingle();
+    const account = await fetchAccountWithToken(
+      sb,
+      String(conv.account_id)
+    );
 
-    if (!account?.access_token_encrypted) {
+    if (String(account.tenant_id ?? "") !== String(tenantId)) {
+      throw new Error("حساب القناة لا يعود لهذا العميل");
+    }
+
+    if (!account.access_token_encrypted) {
       throw new Error(
         `لا يوجد توكن محفوظ لحساب ${channel} — أعد ربط الحساب`
       );
@@ -627,7 +686,9 @@ async function sendToConversation(
       channel: channel as "instagram" | "facebook",
       externalId: String(account.external_id),
       token,
-      recipientId: String(conv.wa_chat_id)
+      recipientId: String(
+        conv.recipient_id ?? conv.wa_chat_id ?? ""
+      )
         .split(":")
         .slice(1)
         .join(":"),
@@ -637,7 +698,24 @@ async function sendToConversation(
     return;
   }
 
-  const phoneId = await boundPhone(sb, tenantId);
+  /* ── واتساب: تحديد phone_number_id بأولويات واضحة ── */
+  let phoneId: string | null =
+    conv.phone_id ?? conv.wa_phone_id ?? null;
+
+  if (!phoneId && conv.account_id) {
+    const acc = await fetchAccountWithToken(
+      sb,
+      String(conv.account_id)
+    ).catch(() => null);
+
+    if (acc && acc.channel === "whatsapp") {
+      phoneId = String(acc.external_id ?? "") || null;
+    }
+  }
+
+  if (!phoneId) {
+    phoneId = await boundPhone(sb, tenantId);
+  }
 
   if (!phoneId) {
     throw new Error(
@@ -647,7 +725,10 @@ async function sendToConversation(
 
   await sendWa(
     phoneId,
-    String(conv.wa_chat_id).replace(/^whatsapp:/, ""),
+    String(conv.recipient ?? conv.wa_chat_id).replace(
+      /^whatsapp:/,
+      ""
+    ),
     text
   );
 }
@@ -4204,14 +4285,19 @@ ${text}`
             text.trim()
           );
         } catch (e) {
-          if (e instanceof WaAuthError) throw e;
+          /* فشل التوكن/المصادقة → 502 برسالة عربية واضحة */
+          if (e instanceof WaAuthError) {
+            return err(e.message, 502);
+          }
 
-          return err(
-            e instanceof Error
-              ? e.message
-              : "فشل الإرسال",
-            400
-          );
+          const msg =
+            e instanceof Error ? e.message : "فشل الإرسال";
+
+          if (/توكن|token|auth|190/i.test(msg)) {
+            return err(msg, 502);
+          }
+
+          return err(msg, 400);
         }
 
         await sb
@@ -4564,6 +4650,20 @@ ${text}`
                 "[unresolved] send failed",
                 e
               );
+
+              /* فشل الإرسال إلى العميل → خطأ واضح بـ 502/400 */
+              if (e instanceof WaAuthError) {
+                return err(e.message, 502);
+              }
+
+              const msg =
+                e instanceof Error ? e.message : "فشل الإرسال";
+
+              if (/توكن|token|auth|190/i.test(msg)) {
+                return err(msg, 502);
+              }
+
+              return err(msg, 400);
             }
           }
         }
