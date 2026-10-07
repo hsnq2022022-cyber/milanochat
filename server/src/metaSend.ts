@@ -53,6 +53,14 @@ export async function sendMetaDirectMessage(
   if (!recipientId) throw new Error("Missing recipient ID");
   if (!text) throw new Error("Missing message text");
 
+  // ✅ التحقق من أن التوكن ليس مشفراً (تمت إضافته لمنع خطأ 401)
+  // التوكنات الصالحة تبدأ إما بـ "IG" (إنستغرام) أو "EAA" (فيسبوك/واتساب)
+  if (!isInstagramLoginToken(token) && !token.startsWith("EAA")) {
+    throw new Error(
+      "[MetaSend] Invalid or encrypted token. Please decrypt the access_token before passing it to this function."
+    );
+  }
+
   // بناء الـ payload الأساسي
   const payload: Record<string, unknown> = {
     recipient: { id: recipientId },
