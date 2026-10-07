@@ -228,6 +228,18 @@ async function ownedTenant(
    LLM / EMBEDDINGS
 ═══════════════════════════════════════════════════════════════════════ */
 
+/**
+ * مفتاح مزوّد الذكاء الاصطناعي. يقبل GEMINI_API_KEY (الأوضح عند استخدام
+ * Gemini) أو LLM_API_KEY، ويرجع احتياطياً إلى OPENAI_API_KEY.
+ */
+function aiKey(): string {
+  return (
+    env("GEMINI_API_KEY") ||
+    env("LLM_API_KEY") ||
+    env("OPENAI_API_KEY")
+  ).trim();
+}
+
 async function embed(
   texts: string[]
 ): Promise<number[][]> {
@@ -240,7 +252,7 @@ async function embed(
       method: "POST",
       headers: {
         "content-type": "application/json",
-        authorization: `Bearer ${env("OPENAI_API_KEY")}`,
+        authorization: `Bearer ${aiKey()}`,
       },
       body: JSON.stringify({
         model:
@@ -280,7 +292,7 @@ async function chatJSON(
       method: "POST",
       headers: {
         "content-type": "application/json",
-        authorization: `Bearer ${env("OPENAI_API_KEY")}`,
+        authorization: `Bearer ${aiKey()}`,
       },
       body: JSON.stringify({
         model:
