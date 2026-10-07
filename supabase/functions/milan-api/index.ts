@@ -4213,6 +4213,54 @@ ${text}`
          UNRESOLVED
       ═══════════════════════════════════════════════════════════════ */
 
+      /* ═══════════════════════════════════════════════════════════════
+         HUMAN AGENT — takeover / release
+      ═══════════════════════════════════════════════════════════════ */
+
+      case "takeover": {
+        const { convId } = body;
+
+        if (!convId) return err("convId مطلوب");
+
+        const expiresAt = new Date(
+          Date.now() + 15 * 60 * 1000
+        ).toISOString();
+
+        const { error: upErr } = await sb
+          .from("conversations")
+          .update({
+            transferred: true,
+            auto_paused_reason: "manual_takeover",
+            human_agent_expires_at: expiresAt,
+          })
+          .eq("id", convId)
+          .eq("tenant_id", tenant.id);
+
+        if (upErr) return err(upErr.message, 500);
+
+        return json({ ok: true, expiresAt });
+      }
+
+      case "release": {
+        const { convId } = body;
+
+        if (!convId) return err("convId مطلوب");
+
+        const { error: upErr } = await sb
+          .from("conversations")
+          .update({
+            transferred: false,
+            auto_paused_reason: null,
+            human_agent_expires_at: null,
+          })
+          .eq("id", convId)
+          .eq("tenant_id", tenant.id);
+
+        if (upErr) return err(upErr.message, 500);
+
+        return json({ ok: true });
+      }
+
       case "unresolved": {
         const {
           data,

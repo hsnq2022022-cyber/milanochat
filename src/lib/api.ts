@@ -150,6 +150,12 @@ async function dashSupabase<T>(token: string, path: string, init?: RequestInit):
   } else if (/^conversations\/[^/]+\/reply$/.test(sub)) {
     action = "reply";
     body.convId = sub.split("/")[1];
+  } else if (/^conversations\/[^/]+\/takeover$/.test(sub)) {
+    action = "takeover";
+    body.convId = sub.split("/")[1];
+  } else if (/^conversations\/[^/]+\/release$/.test(sub)) {
+    action = "release";
+    body.convId = sub.split("/")[1];
   } else if (/^unresolved\/[^/]+\/resolve$/.test(sub)) {
     action = "resolve";
     body.id = sub.split("/")[1];
