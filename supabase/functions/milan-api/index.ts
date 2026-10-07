@@ -1008,34 +1008,45 @@ async function verifyMetaSignature(
   raw: string,
   sigHeader: string
 ): Promise<boolean> {
-  const secret =
-    env("INSTAGRAM_APP_SECRET") ||
-    env("META_APP_SECRET");
+  /**
+   * قد يوقّع Meta الـ webhook بسر تطبيق إنستغرام أو بسر تطبيق Meta الرئيسي
+   * حسب نوع الربط، لذلك نقبل التوقيع إن طابق أيًّا منهما.
+   */
+  const secrets = [
+    env("INSTAGRAM_APP_SECRET"),
+    env("META_APP_SECRET"),
+  ]
+    .map((v) => v.trim())
+    .filter(Boolean);
 
-  if (!secret) return true;
+  if (secrets.length === 0) return true;
 
   if (!sigHeader) return false;
 
-  const expected =
-    "sha256=" +
-    hex(
-      await crypto.subtle.sign(
-        "HMAC",
-        await crypto.subtle.importKey(
-          "raw",
-          enc.encode(secret),
-          {
-            name: "HMAC",
-            hash: "SHA-256",
-          },
-          false,
-          ["sign"]
-        ),
-        enc.encode(raw)
-      )
-    );
+  for (const secret of secrets) {
+    const expected =
+      "sha256=" +
+      hex(
+        await crypto.subtle.sign(
+          "HMAC",
+          await crypto.subtle.importKey(
+            "raw",
+            enc.encode(secret),
+            {
+              name: "HMAC",
+              hash: "SHA-256",
+            },
+            false,
+            ["sign"]
+          ),
+          enc.encode(raw)
+        )
+      );
 
-  return sigHeader === expected;
+    if (sigHeader === expected) return true;
+  }
+
+  return false;
 }
 
 /**
