@@ -458,19 +458,52 @@ const QA_SYSTEM = `
    واتساب
 ═══════════════════════════════════════════════════════════════════════ */
 
+/**
+ * توكن واتساب: يدعم الاسمين WA_ACCESS_TOKEN و WHATSAPP_ACCESS_TOKEN
+ * (الأخير هو الاسم المستخدم في سيرفر Railway) مع تنظيف المسافات
+ * وكلمة Bearer إن لُصقت بالخطأ.
+ */
+function waToken(): string {
+  const raw =
+    env("WA_ACCESS_TOKEN") ||
+    env("WHATSAPP_ACCESS_TOKEN");
+
+  return raw
+    .trim()
+    .replace(/^Bearer\s+/i, "")
+    .replace(/^["']|["']$/g, "");
+}
+
+/**
+ * خطأ مصادقة واتساب (توكن منتهي/غير صالح).
+ */
+class WaAuthError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "WaAuthError";
+  }
+}
+
 async function sendWa(
   phoneId: string,
   to: string,
   text: string
 ) {
+  const token = waToken();
+
+  if (!token) {
+    throw new WaAuthError(
+      "توكن واتساب غير مضبوط: أضف WA_ACCESS_TOKEN في Supabase Edge Function Secrets"
+    );
+  }
+
   const res = await fetch(
-    `https://graph.facebook.com/v20.0/${phoneId}/messages`,
+    `https://graph.facebook.com/v21.0/${phoneId}/messages`,
     {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        authorization:
-          `Bearer ${env("WA_ACCESS_TOKEN")}`,
+        authorization: `Bearer ${token}`,
       },
       body: JSON.stringify({
         messaging_product: "whatsapp",
@@ -484,9 +517,38 @@ async function sendWa(
   );
 
   if (!res.ok) {
-    throw new Error(
-      `wa send ${res.status}: ${await res.text()}`
-    );
+    const raw = await res.text();
+
+    let code: number | undefined;
+    let fbMessage = "";
+
+    try {
+      const parsed = JSON.parse(raw);
+      code = parsed?.error?.code;
+      fbMessage = parsed?.error?.message ?? "";
+    } catch {
+      /* ليس JSON */
+    }
+
+    // 190 = توكن منتهي أو غير صالح، 102/104 = جلسة غير صالحة
+    if (
+      res.status === 401 ||
+      code === 190 ||
+      code === 102 ||
+      code === 104
+    ) {
+      console.error(
+        `[wa] auth failure (code ${code}): ${fbMessage}`
+      );
+
+      throw new WaAuthError(
+        "توكن واتساب منتهي أو غير صالح (Meta code 190). " +
+          "أنشئ توكن دائم عبر System User في Meta Business Settings " +
+          "ثم حدّث WA_ACCESS_TOKEN في Supabase Secrets."
+      );
+    }
+
+    throw new Error(`wa send ${res.status}: ${raw}`);
   }
 }
 
@@ -4804,6 +4866,10 @@ ${text}`
       `[milan-api:${action}]`,
       e
     );
+
+    if (e instanceof WaAuthError) {
+      return err(e.message, 502);
+    }
 
     return err(
       e instanceof Error
