@@ -229,15 +229,23 @@ async function ownedTenant(
 ═══════════════════════════════════════════════════════════════════════ */
 
 /**
- * مفتاح مزوّد الذكاء الاصطناعي. يقبل GEMINI_API_KEY (الأوضح عند استخدام
- * Gemini) أو LLM_API_KEY، ويرجع احتياطياً إلى OPENAI_API_KEY.
+ * مفتاح مزوّد الذكاء الاصطناعي. يقبل عدة أسماء للسر:
+ * - للـ embeddings: EMBED_API_KEY ثم GEMINI_API_KEY ثم LLM_API_KEY
+ * - للمحادثة:      LLM_API_KEY ثم GEMINI_API_KEY ثم EMBED_API_KEY
+ * ويرجع احتياطياً إلى OPENAI_API_KEY.
  */
-function aiKey(): string {
-  return (
-    env("GEMINI_API_KEY") ||
-    env("LLM_API_KEY") ||
-    env("OPENAI_API_KEY")
-  ).trim();
+function aiKey(kind: "embed" | "llm" = "llm"): string {
+  const order =
+    kind === "embed"
+      ? ["EMBED_API_KEY", "GEMINI_API_KEY", "LLM_API_KEY"]
+      : ["LLM_API_KEY", "GEMINI_API_KEY", "EMBED_API_KEY"];
+
+  for (const k of [...order, "OPENAI_API_KEY"]) {
+    const v = env(k).trim();
+    if (v) return v;
+  }
+
+  return "";
 }
 
 async function embed(
@@ -252,7 +260,7 @@ async function embed(
       method: "POST",
       headers: {
         "content-type": "application/json",
-        authorization: `Bearer ${aiKey()}`,
+        authorization: `Bearer ${aiKey("embed")}`,
       },
       body: JSON.stringify({
         model:
