@@ -565,6 +565,73 @@ async function boundPhone(
   return data?.phone_id ?? null;
 }
 
+/**
+ * يرسل نصاً إلى محادثة عبر القناة الصحيحة:
+ * - whatsapp  → sendWa (WA_ACCESS_TOKEN)
+ * - instagram / facebook → sendMetaDirectMessage (توكن الحساب المشفّر في channel_accounts)
+ */
+async function sendToConversation(
+  sb: SupabaseClient,
+  tenantId: string,
+  conv: any,
+  text: string
+): Promise<void> {
+  const channel: string =
+    conv?.channel ?? "whatsapp";
+
+  if (channel === "instagram" || channel === "facebook") {
+    if (!conv.account_id) {
+      throw new Error(
+        "حساب القناة غير مرتبط بهذه المحادثة"
+      );
+    }
+
+    const { data: account } = await sb
+      .from("channel_accounts")
+      .select("id, external_id, access_token_encrypted")
+      .eq("id", conv.account_id)
+      .eq("tenant_id", tenantId)
+      .maybeSingle();
+
+    if (!account?.access_token_encrypted) {
+      throw new Error(
+        `لا يوجد توكن محفوظ لحساب ${channel} — أعد ربط الحساب`
+      );
+    }
+
+    const token = await decryptField(
+      account.access_token_encrypted
+    );
+
+    await sendMetaDirectMessage({
+      channel: channel as "instagram" | "facebook",
+      externalId: String(account.external_id),
+      token,
+      recipientId: String(conv.wa_chat_id)
+        .split(":")
+        .slice(1)
+        .join(":"),
+      text,
+    });
+
+    return;
+  }
+
+  const phoneId = await boundPhone(sb, tenantId);
+
+  if (!phoneId) {
+    throw new Error(
+      "واتساب غير مربوط — اربط رقم المنصة أولاً"
+    );
+  }
+
+  await sendWa(
+    phoneId,
+    String(conv.wa_chat_id).replace(/^whatsapp:/, ""),
+    text
+  );
+}
+
 /* ═══════════════════════════════════════════════════════════════════════
    Widget Helpers
 ═══════════════════════════════════════════════════════════════════════ */
@@ -4059,24 +4126,23 @@ ${text}`
           );
         }
 
-        const phoneId =
-          await boundPhone(
+        try {
+          await sendToConversation(
             sb,
-            tenant.id
+            tenant.id,
+            conv,
+            text.trim()
           );
+        } catch (e) {
+          if (e instanceof WaAuthError) throw e;
 
-        if (!phoneId) {
           return err(
-            "واتساب غير مربوط — اربط رقم المنصة أولاً",
+            e instanceof Error
+              ? e.message
+              : "فشل الإرسال",
             400
           );
         }
-
-        await sendWa(
-          phoneId,
-          conv.wa_chat_id,
-          text.trim()
-        );
 
         await sb
           .from(
@@ -4333,7 +4399,7 @@ ${text}`
               "conversations"
             )
             .select(
-              "wa_chat_id"
+              "wa_chat_id, channel, account_id"
             )
             .eq(
               "id",
@@ -4341,20 +4407,12 @@ ${text}`
             )
             .maybeSingle();
 
-          const phoneId =
-            await boundPhone(
-              sb,
-              tenant.id
-            );
-
-          if (
-            conv &&
-            phoneId
-          ) {
+          if (conv) {
             try {
-              await sendWa(
-                phoneId,
-                conv.wa_chat_id,
+              await sendToConversation(
+                sb,
+                tenant.id,
+                conv,
                 answer.trim()
               );
 
@@ -4383,8 +4441,11 @@ ${text}`
                   is_auto:
                     false,
                 });
-            } catch {
-              /* الواتساب غير متاح */
+            } catch (e) {
+              console.error(
+                "[unresolved] send failed",
+                e
+              );
             }
           }
         }
