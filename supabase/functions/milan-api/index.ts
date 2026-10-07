@@ -1483,6 +1483,33 @@ async function handleIncomingWebhookMessage(
   /**
    * المحادثة محولة لبشري — لا رد آلي.
    */
+  /**
+   * انتهت مدة Human Agent (15 دقيقة) → أعد الرد الآلي تلقائياً.
+   */
+  if (
+    conv.transferred &&
+    conv.auto_paused_reason === "manual_takeover" &&
+    conv.human_agent_expires_at &&
+    new Date(conv.human_agent_expires_at).getTime() <= Date.now()
+  ) {
+    await sb
+      .from("conversations")
+      .update({
+        transferred: false,
+        auto_paused_reason: null,
+        human_agent_expires_at: null,
+      })
+      .eq("id", conv.id);
+
+    conv.transferred = false;
+    conv.auto_paused_reason = null;
+    conv.human_agent_expires_at = null;
+
+    console.log(
+      `[${channel}_webhook] human agent expired, auto reply resumed: ${conv.id}`
+    );
+  }
+
   if (conv.transferred) {
     console.log(
       `[${channel}_webhook] conversation transferred: ${conv.id}`
