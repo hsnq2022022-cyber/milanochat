@@ -248,10 +248,51 @@ function aiKey(kind: "embed" | "llm" = "llm"): string {
   return "";
 }
 
+/**
+ * fetch مع إعادة محاولة للأخطاء المؤقتة (ازدحام النموذج 503، تحديد المعدل 429، ...).
+ * 3 محاولات بانتظار قصير بينها، بدون تجاوز زمن معقول لرد الـ webhook.
+ */
+async function fetchRetry(
+  url: string,
+  init: RequestInit,
+  attempts = 3
+): Promise<Response> {
+  const delays = [1000, 2500];
+  let last: Response | null = null;
+
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const res = await fetch(url, init);
+
+      if (![429, 500, 502, 503, 504].includes(res.status)) {
+        return res;
+      }
+
+      last = res;
+      console.warn(
+        `[ai] transient ${res.status}, attempt ${i + 1}/${attempts}`
+      );
+    } catch (e) {
+      console.warn(
+        `[ai] network error, attempt ${i + 1}/${attempts}`,
+        e
+      );
+
+      if (i === attempts - 1) throw e;
+    }
+
+    if (i < attempts - 1) {
+      await new Promise((r) => setTimeout(r, delays[i] ?? 2500));
+    }
+  }
+
+  return last as Response;
+}
+
 async function embed(
   texts: string[]
 ): Promise<number[][]> {
-  const res = await fetch(
+  const res = await fetchRetry(
     `${
       env("EMBED_BASE_URL") ||
       "https://api.openai.com/v1"
@@ -291,21 +332,20 @@ async function chatJSON(
   system: string,
   user: string
 ): Promise<Record<string, unknown>> {
-  const res = await fetch(
-    `${
-      env("LLM_BASE_URL") ||
-      "https://api.openai.com/v1"
-    }/chat/completions`,
-    {
+  const url = `${
+    env("LLM_BASE_URL") ||
+    "https://api.openai.com/v1"
+  }/chat/completions`;
+
+  const call = (model: string) =>
+    fetchRetry(url, {
       method: "POST",
       headers: {
         "content-type": "application/json",
         authorization: `Bearer ${aiKey()}`,
       },
       body: JSON.stringify({
-        model:
-          env("LLM_MODEL") ||
-          "gpt-4o-mini",
+        model,
 
         response_format: {
           type: "json_object",
@@ -322,8 +362,30 @@ async function chatJSON(
           },
         ],
       }),
-    }
-  );
+    });
+
+  const primary =
+    env("LLM_MODEL") || "gpt-4o-mini";
+
+  let res = await call(primary);
+
+  /**
+   * نموذج بديل اختياري عند استمرار الفشل المؤقت (مثلاً gemini-2.0-flash).
+   */
+  const fallback = env("LLM_FALLBACK_MODEL").trim();
+
+  if (
+    !res.ok &&
+    fallback &&
+    fallback !== primary &&
+    [429, 500, 502, 503, 504].includes(res.status)
+  ) {
+    console.warn(
+      `[ai] primary model ${primary} failed (${res.status}), trying ${fallback}`
+    );
+
+    res = await call(fallback);
+  }
 
   if (!res.ok) {
     throw new Error(
