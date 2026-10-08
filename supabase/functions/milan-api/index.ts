@@ -1041,6 +1041,12 @@ async function answerFromKnowledge(
       "إذا لم تجد الإجابة في السياق، قل إنك غير متأكد.",
       "استخدم اللغة العربية المناسبة للعميل.",
       "اجعل الرد مختصرًا وواضحًا.",
+      ...(String(tenant.agent_system_prompt ?? "").trim()
+        ? [
+            "تعليمات صاحب المشروع (للأسلوب واللهجة فقط، ولا تلغي قاعدة الإجابة من السياق):",
+            String(tenant.agent_system_prompt).trim().slice(0, 8000),
+          ]
+        : []),
       'أعد JSON فقط: {"answer":"...","grounded":true|false}',
     ].join("\n"),
     `
@@ -4368,6 +4374,41 @@ ${text}`
       /* ═══════════════════════════════════════════════════════════════
          UNRESOLVED
       ═══════════════════════════════════════════════════════════════ */
+
+      /* ═══════════════════════════════════════════════════════════════
+         AGENT PROMPT — رسالة توجيه الوكيل
+      ═══════════════════════════════════════════════════════════════ */
+
+      case "agent_prompt_get": {
+        return json({
+          prompt: tenant.agent_system_prompt ?? null,
+        });
+      }
+
+      case "agent_prompt_set": {
+        const { prompt } = body;
+
+        if (typeof prompt !== "string") {
+          return err("prompt يجب أن يكون نصًا");
+        }
+
+        if (prompt.length > 8000) {
+          return err(
+            "prompt يتجاوز الحد الأقصى (8000 حرف)"
+          );
+        }
+
+        const { error: upErr } = await sb
+          .from("tenants")
+          .update({
+            agent_system_prompt: prompt.trim() || null,
+          })
+          .eq("id", tenant.id);
+
+        if (upErr) return err(upErr.message, 500);
+
+        return json({ ok: true });
+      }
 
       /* ═══════════════════════════════════════════════════════════════
          HUMAN AGENT — takeover / release

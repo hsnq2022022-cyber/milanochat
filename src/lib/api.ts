@@ -137,6 +137,8 @@ async function dashSupabase<T>(token: string, path: string, init?: RequestInit):
   let action = "";
   if (sub === "claim") action = "claim_account";
   else if (sub === "summary") action = "summary";
+  else if (sub === "agent-prompt" || sub.startsWith("agent-prompt?"))
+    action = method === "POST" ? "agent_prompt_set" : "agent_prompt_get";
   else if (sub === "conversations") action = "conversations";
   else if (sub === "unresolved") action = "unresolved";
   else if (sub === "knowledge" && method === "GET") action = "knowledge";
