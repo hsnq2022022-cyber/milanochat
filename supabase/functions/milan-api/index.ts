@@ -4181,7 +4181,7 @@ ${text}`
             "conversations"
           )
           .select(
-            "id, wa_chat_id, customer_phone_encrypted, customer_name, customer_avatar, channel, account_id, transferred, auto_paused_reason, last_message_at"
+            "id, wa_chat_id, customer_phone_encrypted, customer_name, customer_avatar, channel, account_id, transferred, auto_paused_reason, human_agent_expires_at, last_message_at"
           )
           .eq(
             "tenant_id",
@@ -4203,11 +4203,35 @@ ${text}`
           );
         }
 
+        /**
+         * آخر رسالة لكل محادثة (تظهر معاينتها في قائمة الصندوق الموحد).
+         */
+        const lastBodies = await Promise.all(
+          (data ?? []).map(async (c: any) => {
+            try {
+              const { data: lm } = await sb
+                .from("messages")
+                .select("body_encrypted")
+                .eq("conversation_id", c.id)
+                .eq("tenant_id", tenant.id)
+                .order("created_at", { ascending: false })
+                .limit(1)
+                .maybeSingle();
+
+              return lm?.body_encrypted
+                ? await decryptField(lm.body_encrypted)
+                : null;
+            } catch {
+              return null;
+            }
+          })
+        );
+
         const rows = [];
 
         for (
-          const c of
-            data ?? []
+          const [idx, c] of
+            (data ?? []).entries()
         ) {
           rows.push({
             id:
@@ -4236,8 +4260,14 @@ ${text}`
             autoPausedReason:
               c.auto_paused_reason,
 
+            humanAgentExpiresAt:
+              c.human_agent_expires_at ?? null,
+
             lastMessageAt:
               c.last_message_at,
+
+            lastMessageBody:
+              lastBodies[idx] ?? null,
           });
         }
 
