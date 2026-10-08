@@ -130,6 +130,22 @@ async function dashSupabase<T>(token: string, path: string, init?: RequestInit):
     return fn<T>(action, { body, token });
   }
 
+  // ─── رسالة توجيه الوكيل → دالة agent-prompt منفصلة ───
+  if (path === "/api/dashboard/agent-prompt" || path.startsWith("/api/dashboard/agent-prompt?")) {
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/agent-prompt`, {
+      method: method === "POST" ? "POST" : "GET",
+      headers: {
+        "content-type": "application/json",
+        apikey: SUPABASE_ANON,
+        authorization: `Bearer ${token}`,
+      },
+      body: method === "POST" ? JSON.stringify(body) : undefined,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error((data as any)?.error ?? `HTTP ${res.status}`);
+    return data as T;
+  }
+
   // ─── مسارات dashboard القياسية → milan-api ───
   const m = path.match(/^\/api\/dashboard\/(.*)$/);
   const sub = m?.[1] ?? path;
@@ -137,8 +153,6 @@ async function dashSupabase<T>(token: string, path: string, init?: RequestInit):
   let action = "";
   if (sub === "claim") action = "claim_account";
   else if (sub === "summary") action = "summary";
-  else if (sub === "agent-prompt" || sub.startsWith("agent-prompt?"))
-    action = method === "POST" ? "agent_prompt_set" : "agent_prompt_get";
   else if (sub === "conversations") action = "conversations";
   else if (sub === "unresolved") action = "unresolved";
   else if (sub === "knowledge" && method === "GET") action = "knowledge";
