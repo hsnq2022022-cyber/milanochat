@@ -378,7 +378,7 @@ async function chatJSON(
     !res.ok &&
     fallback &&
     fallback !== primary &&
-    [429, 500, 502, 503, 504].includes(res.status)
+    [404, 429, 500, 502, 503, 504].includes(res.status)
   ) {
     console.warn(
       `[ai] primary model ${primary} failed (${res.status}), trying ${fallback}`
