@@ -177,6 +177,31 @@ async function dashSupabase<T>(token: string, path: string, init?: RequestInit):
     body.id = sub.split("/")[1];
   } else if (path === "/api/payments/create") action = "pay_create";
 
+  // معاينة آخر رسالة لكل محادثة (من دالة conversation-previews) تُدمج في القائمة
+  if (action === "conversations") {
+    const rows = await fn<any[]>(action, { body, token });
+    try {
+      const res = await fetch(`${SUPABASE_URL}/functions/v1/conversation-previews`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          apikey: SUPABASE_ANON,
+          authorization: `Bearer ${token}`,
+        },
+        body: "{}",
+      });
+      if (res.ok) {
+        const { previews } = (await res.json()) as { previews?: Record<string, string> };
+        for (const r of rows) {
+          if (!r.lastMessageBody && previews?.[r.id]) r.lastMessageBody = previews[r.id];
+        }
+      }
+    } catch {
+      /* المعاينة اختيارية — تستمر القائمة بدونها */
+    }
+    return rows as unknown as T;
+  }
+
   if (!action) throw new Error(`مسار غير مدعوم في نمط Supabase: ${path}`);
   return fn<T>(action, { body, token });
 }
