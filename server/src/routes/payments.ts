@@ -1,12 +1,12 @@
 /**
- * الدفع عبر Moyasar + الوضع التجريبي
+ * الدفع عبر Wayl + الوضع التجريبي
  *
  * DEMO_MODE=true:
- *   - لا يتم الاتصال بـ Moyasar.
+ *   - لا يتم الاتصال بـ Wayl.
  *   - يتم منح الرصيد التجريبي مباشرة.
  *
  * DEMO_MODE=false:
- *   - يتم استخدام Moyasar للدفع الحقيقي.
+ *   - يتم استخدام Wayl للدفع الحقيقي (يدعم IQD فقط).
  */
 
 import { Router } from "express";
@@ -20,13 +20,13 @@ export const webhooksRouter = Router();
 
 const DEMO_MODE = process.env.DEMO_MODE === "true";
 
-const PRICE_SAR = 99;
+const PRICE_IQD = 25000; // 25,000 دينار عراقي
 
 type Package = {
   id: string;
   name: string;
   credits: number;
-  amountHalalas: number;
+  amountIQD: number; // المبلغ بالدينار العراقي
 };
 
 const PACKAGES: Package[] = [
@@ -34,19 +34,19 @@ const PACKAGES: Package[] = [
     id: "starter",
     name: "باقة البداية",
     credits: 1000,
-    amountHalalas: PRICE_SAR * 100,
+    amountIQD: PRICE_IQD,
   },
   {
     id: "growth",
     name: "باقة النمو",
     credits: 3000,
-    amountHalalas: 249 * 100,
+    amountIQD: 60000, // 60,000 IQD
   },
   {
     id: "scale",
     name: "باقة التوسع",
     credits: 10000,
-    amountHalalas: 649 * 100,
+    amountIQD: 150000, // 150,000 IQD
   },
 ];
 
@@ -130,7 +130,7 @@ paymentsRouter.post(
          * تسجيل العملية التجريبية في payments
          * حتى تظهر في سجل العمليات.
          */
-        const demoInvoiceId =
+        const demoReferenceId =
           `demo_${Date.now()}_${Math.random()
             .toString(36)
             .slice(2, 10)}`;
@@ -138,9 +138,9 @@ paymentsRouter.post(
         await db.from("payments").insert({
           tenant_id: tenantId,
           provider: "demo",
-          invoice_id: demoInvoiceId,
-          amount: pkg.amountHalalas,
-          currency: "SAR",
+          invoice_id: demoReferenceId,
+          amount: pkg.amountIQD,
+          currency: "IQD",
           status: "paid",
           credits_granted: pkg.credits,
           paid_at: new Date().toISOString(),
@@ -163,69 +163,76 @@ paymentsRouter.post(
 
       /**
        * =========================================================
-       * الدفع الحقيقي عبر Moyasar
+       * الدفع الحقيقي عبر Wayl
        * =========================================================
        */
 
-      if (!config.moyasar.secretKey) {
+      if (!config.wayl?.secretKey) {
         return res.status(500).json({
-          error: "MOYASAR_SECRET_KEY غير مضبوط في الخادم",
+          error: "WAYL_TOKEN غير مضبوط في الخادم",
         });
       }
 
-      const invoiceBody = {
-        amount: pkg.amountHalalas,
-        currency: "SAR",
-        description:
-          `إدارة ســوشـــيــــال — ${pkg.name} (${pkg.credits} رد ذكي) — ${tenant.business_name}`,
-        callback_url:
-          `${config.publicUrl}/api/webhooks/moyasar`,
-        metadata: {
+      const referenceId = `pay_${Date.now()}_${Math.random()
+        .toString(36)
+        .slice(2, 10)}`;
+
+      const waylBody = {
+        env: process.env.WAYL_ENV || "test", // test أو live
+        referenceId: referenceId,
+        total: pkg.amountIQD,
+        currency: "IQD",
+        customParameter: JSON.stringify({
           tenant_id: tenantId,
           package_id: pkg.id,
-        },
+        }),
+        lineItem: [
+          {
+            label: `إدارة ســوشـــيــــال — ${pkg.name} (${pkg.credits} رد ذكي)`,
+            amount: pkg.amountIQD,
+            type: "increase" as const,
+          },
+        ],
+        webhookUrl: `${config.publicUrl}/api/webhooks/wayl`,
+        webhookSecret: config.wayl.webhookSecret,
+        redirectionUrl: `${config.publicUrl}/payment-status?ref=${referenceId}`,
       };
 
-      const authorization = Buffer.from(
-        `${config.moyasar.secretKey}:`
-      ).toString("base64");
-
-      const moyasar = await fetch(
-        "https://api.moyasar.com/v1/invoices",
+      const waylResponse = await fetch(
+        "https://api.thewayl.com/api/v1/links",
         {
           method: "POST",
           headers: {
-            "content-type": "application/json",
-            authorization: `Basic ${authorization}`,
+            "Content-Type": "application/json",
+            "X-WAYL-AUTHENTICATION": config.wayl.secretKey,
           },
-          body: JSON.stringify(invoiceBody),
+          body: JSON.stringify(waylBody),
         }
       );
 
-      if (!moyasar.ok) {
-        const errorText = await moyasar.text();
-
+      if (!waylResponse.ok) {
+        const errorText = await waylResponse.text();
         console.error(
-          `[Moyasar] ${moyasar.status}:`,
+          `[Wayl] ${waylResponse.status}:`,
           errorText
         );
 
         return res.status(502).json({
-          error:
-            `Moyasar ${moyasar.status}: ${errorText}`,
+          error: `Wayl ${waylResponse.status}: ${errorText}`,
         });
       }
 
-      const invoice: any = await moyasar.json();
+      const waylData: any = await waylResponse.json();
 
       const { error: paymentError } = await db
         .from("payments")
         .insert({
           tenant_id: tenantId,
-          provider: "moyasar",
-          invoice_id: invoice.id,
-          amount: pkg.amountHalalas,
-          currency: "SAR",
+          provider: "wayl",
+          invoice_id: referenceId, // نستخدم referenceId كـ invoice_id
+          wayl_code: waylData.data?.code,
+          amount: pkg.amountIQD,
+          currency: "IQD",
           status: "created",
           credits_granted: 0,
         });
@@ -237,16 +244,14 @@ paymentsRouter.post(
         );
 
         return res.status(500).json({
-          error: "تم إنشاء الفاتورة لكن تعذر حفظ العملية",
+          error: "تم إنشاء رابط الدفع لكن تعذر حفظ العملية",
         });
       }
 
       return res.json({
-        invoiceId: invoice.id,
-        paymentUrl:
-          invoice.transaction?.url ??
-          invoice.url ??
-          null,
+        invoiceId: referenceId,
+        paymentUrl: waylData.data?.url ?? null,
+        waylCode: waylData.data?.code ?? null,
       });
 
     } catch (error: any) {
@@ -265,14 +270,15 @@ paymentsRouter.post(
 );
 
 /**
- * التحقق من توقيع webhook Moyasar
+ * التحقق من توقيع webhook Wayl
+ * Wayl يستخدم HMAC-SHA256 مع header x-wayl-signature-256
  */
-function verifySignature(
-  rawBody: Buffer,
+function verifyWaylSignature(
+  rawBody: Buffer | string,
   signature: string | undefined
 ): boolean {
   if (
-    !config.moyasar.webhookSecret ||
+    !config.wayl?.webhookSecret ||
     !signature
   ) {
     return false;
@@ -280,20 +286,13 @@ function verifySignature(
 
   const expected = createHmac(
     "sha256",
-    config.moyasar.webhookSecret
+    config.wayl.webhookSecret
   )
     .update(rawBody)
     .digest("hex");
 
-  const a = Buffer.from(
-    expected,
-    "utf8"
-  );
-
-  const b = Buffer.from(
-    signature,
-    "utf8"
-  );
+  const a = Buffer.from(expected, "utf8");
+  const b = Buffer.from(signature, "utf8");
 
   return (
     a.length === b.length &&
@@ -308,7 +307,7 @@ function verifySignature(
  * يُمنح مباشرة من /create.
  */
 webhooksRouter.post(
-  "/moyasar",
+  "/wayl",
   rateLimit({
     windowMs: 60_000,
     max: 30,
@@ -323,6 +322,7 @@ webhooksRouter.post(
     }
 
     try {
+      // Wayl يرسل JSON raw، نحتاج الـ raw body للتحقق من التوقيع
       const raw: Buffer =
         (req as any).rawBody ??
         Buffer.from(
@@ -331,14 +331,11 @@ webhooksRouter.post(
 
       const signature =
         (req.headers[
-          "moyasar-signature"
-        ] as string) ??
-        (req.headers[
-          "x-moyasar-signature"
-        ] as string);
+          "x-wayl-signature-256"
+        ] as string) ?? "";
 
       if (
-        !verifySignature(
+        !verifyWaylSignature(
           raw,
           signature
         )
@@ -350,22 +347,30 @@ webhooksRouter.post(
 
       const event = req.body ?? {};
 
-      const type: string =
-        event.type ?? "";
+      // Wayl يرسل الحقول مباشرة وليس متداخلة مثل Moyasar
+      const referenceId: string | undefined =
+        event.referenceId;
 
-      const data =
-        event.data ?? {};
+      const paymentStatus: string =
+        event.paymentStatus ?? "";
 
-      const invoiceId:
-        | string
-        | undefined =
-        data.invoice_id ??
-        data.id;
-
+      // التحقق من نجاح الدفع
+      // الحالات في Wayl: Created, Pending, Processing, Complete, Delivered, Cancelled, Rejected, Returned
       if (
-        !invoiceId ||
-        !/paid|succeeded/.test(type)
+        !referenceId ||
+        paymentStatus !== "Complete"
       ) {
+        // إذا لم يكن Complete، نحدث الحالة فقط بدون منح رصيد
+        if (referenceId) {
+          await db
+            .from("payments")
+            .update({
+              status: paymentStatus.toLowerCase(),
+              webhook_event: event,
+            })
+            .eq("invoice_id", referenceId);
+        }
+
         return res.status(200).json({
           received: true,
         });
@@ -377,7 +382,7 @@ webhooksRouter.post(
           .select("*")
           .eq(
             "invoice_id",
-            invoiceId
+            referenceId
           )
           .maybeSingle();
 
@@ -393,10 +398,18 @@ webhooksRouter.post(
         });
       }
 
+      // التحقق من المبلغ (أمان إضافي)
+      if (payment.amount !== event.total) {
+        console.error(
+          `[Wayl] Amount mismatch: expected ${payment.amount}, got ${event.total}`
+        );
+        // يمكنك اختيار الرفض هنا أو الاستمرار
+      }
+
       const pkg =
         PACKAGES.find(
           (p) =>
-            p.amountHalalas ===
+            p.amountIQD ===
             payment.amount
         ) ??
         PACKAGES[0];
@@ -447,8 +460,7 @@ webhooksRouter.post(
               .from("tenants")
               .update({
                 credits_remaining:
-                  (t?.credits_remaining ??
-                    0) +
+                  (t?.credits_remaining ?? 0) +
                   pkg.credits,
 
                 is_active: true,
@@ -470,7 +482,7 @@ webhooksRouter.post(
 
     } catch (error: any) {
       console.error(
-        "[Moyasar webhook] error:",
+        "[Wayl webhook] error:",
         error
       );
 
