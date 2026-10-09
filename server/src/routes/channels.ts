@@ -675,6 +675,14 @@ channelsRouter.get("/meta/callback", async (req, res) => {
             `https://graph.facebook.com/v21.0/${p.id}?fields=name,instagram_business_account{id,username,name,profile_picture_url}&access_token=${accessToken}`
           );
           const ig: any = await igRes.json();
+          console.log("[Instagram Avatar Debug]", JSON.stringify({
+httpStatus: igRes.status,
+responseOk: igRes.ok,
+hasInstagramAccount: !!ig?.instagram_business_account,
+hasProfilePicture: typeof ig?.instagram_business_account?.profile_picture_url === "string",
+profilePictureUrl: ig?.instagram_business_account?.profile_picture_url ?? null,
+error: ig?.error ?? null
+}, null, 2));
           const igAcc = ig?.instagram_business_account;
           if (!igAcc?.id) continue;
 
