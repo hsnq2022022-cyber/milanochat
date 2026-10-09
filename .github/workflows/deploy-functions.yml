@@ -55,3 +55,11 @@ jobs:
       - name: Deploy agent-prompt
         if: steps.token.outputs.present == 'true'
         run: supabase functions deploy agent-prompt --project-ref "$PROJECT_REF" --no-verify-jwt
+
+      - name: Deploy create-payment
+        if: steps.token.outputs.present == 'true'
+        run: supabase functions deploy create-payment --project-ref "$PROJECT_REF" --no-verify-jwt
+
+      - name: Deploy wayl-webhook
+        if: steps.token.outputs.present == 'true'
+        run: supabase functions deploy wayl-webhook --project-ref "$PROJECT_REF" --no-verify-jwt
