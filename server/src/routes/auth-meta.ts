@@ -195,12 +195,11 @@ async function handleInstagramLoginCallback(a: {
         channel: "instagram",
         external_id: igId,
         display_name: username,
-      typescript
-avatar_url:
-  typeof prof?.profile_picture_url === "string" &&
-  prof.profile_picture_url.length > 0
-    ? prof.profile_picture_url
-    : null,
+        avatar_url:
+          typeof prof?.profile_picture_url === "string" &&
+          prof.profile_picture_url.length > 0
+            ? prof.profile_picture_url
+            : null,
         status: "active",
         access_token_encrypted: encryptField(token),
         token_expires_at: new Date(Date.now() + expiresIn * 1000).toISOString(),
@@ -528,10 +527,8 @@ metaAuthRouter.get("/facebook/callback", async (req: any, res) => {
           lastAccountId = String(p.id);
         }
       } else if (platform === "instagram") {
-      typescript
-const igRes = await fetch(
-  `${GRAPH_API}/${p.id}?fields=name,instagram_business_account{id,username,profile_picture_url}&access_token=${encodeURIComponent(pageToken)}`
-);
+        const igRes = await fetch(
+          `${GRAPH_API}/${p.id}?fields=name,instagram_business_account{id,username,profile_picture_url}&access_token=${encodeURIComponent(pageToken)}`
         );
         const ig: any = await igRes.json();
         const igAcc = ig?.instagram_business_account;
@@ -542,16 +539,15 @@ const igRes = await fetch(
         if (!igAcc?.id) continue;
 
         const username = igAcc.username ? `@${igAcc.username}` : ig?.name ?? null;
-        typescript
-const igPicture =
-  typeof igAcc?.profile_picture_url === "string" &&
-  igAcc.profile_picture_url.length > 0
-    ? igAcc.profile_picture_url
-    : typeof igAcc?.picture?.data?.url === "string"
-      ? igAcc.picture.data.url
-      : typeof igAcc?.picture_url === "string"
-        ? igAcc.picture_url
-        : null;
+        const igPicture =
+          typeof igAcc?.profile_picture_url === "string" &&
+          igAcc.profile_picture_url.length > 0
+            ? igAcc.profile_picture_url
+            : typeof igAcc?.picture?.data?.url === "string"
+              ? igAcc.picture.data.url
+              : typeof igAcc?.picture_url === "string"
+                ? igAcc.picture_url
+                : null;
 
         const { data: taken } = await db
           .from("channel_accounts")
@@ -758,46 +754,4 @@ metaAuthRouter.post("/facebook/start", async (req: any, res) => {
     });
   }
 
-  console.log("[Meta Auth] OAuth start → redirect_uri:", redirectUri, "platform:", platform);
-
-  const scopes = SCOPES[platform];
-  const url =
-    `https://www.facebook.com/v21.0/dialog/oauth?client_id=${encodeURIComponent(appId)}` +
-    `&redirect_uri=${encodeURIComponent(redirectUri)}` +
-    `&state=${encodeURIComponent(state)}&scope=${encodeURIComponent(scopes.join(","))}&response_type=code`;
-
-  res.json({ url });
-});
-
-// 2) فصل قناة
-metaAuthRouter.post("/disconnect", async (req: any, res) => {
-  const { platform } = req.body ?? {};
-  if (platform !== "facebook" && platform !== "instagram") {
-    return res.status(400).json({ error: "قناة غير مدعومة" });
-  }
-  const tenant = await ownedTenant(req.userId, req.body?.tenantId);
-  if (!tenant) return res.status(403).json({ error: "تعذر التحقق من ملكية النشاط" });
-
-  await db
-    .from("channel_accounts")
-    .update({
-      status: "disconnected",
-      access_token_encrypted: null,
-      updated_at: new Date().toISOString(),
-    })
-    .eq("tenant_id", tenant.id)
-    .eq("channel", platform);
-
-  await db
-    .from("channels")
-    .update({
-      is_connected: false,
-      account_name: null,
-      account_avatar: null,
-      platform_account_id: null,
-    })
-    .eq("tenant_id", tenant.id)
-    .eq("platform", platform);
-
-  res.json({ ok: true });
-});
+  console
