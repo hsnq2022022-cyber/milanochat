@@ -754,4 +754,46 @@ metaAuthRouter.post("/facebook/start", async (req: any, res) => {
     });
   }
 
-  console
+  console.log("[Meta Auth] OAuth start → redirect_uri:", redirectUri, "platform:", platform);
+
+  const scopes = SCOPES[platform];
+  const url =
+    `https://www.facebook.com/v21.0/dialog/oauth?client_id=${encodeURIComponent(appId)}` +
+    `&redirect_uri=${encodeURIComponent(redirectUri)}` +
+    `&state=${encodeURIComponent(state)}&scope=${encodeURIComponent(scopes.join(","))}&response_type=code`;
+
+  res.json({ url });
+});
+
+// 2) فصل قناة
+metaAuthRouter.post("/disconnect", async (req: any, res) => {
+  const { platform } = req.body ?? {};
+  if (platform !== "facebook" && platform !== "instagram") {
+    return res.status(400).json({ error: "قناة غير مدعومة" });
+  }
+  const tenant = await ownedTenant(req.userId, req.body?.tenantId);
+  if (!tenant) return res.status(403).json({ error: "تعذر التحقق من ملكية النشاط" });
+
+  await db
+    .from("channel_accounts")
+    .update({
+      status: "disconnected",
+      access_token_encrypted: null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("tenant_id", tenant.id)
+    .eq("channel", platform);
+
+  await db
+    .from("channels")
+    .update({
+      is_connected: false,
+      account_name: null,
+      account_avatar: null,
+      platform_account_id: null,
+    })
+    .eq("tenant_id", tenant.id)
+    .eq("platform", platform);
+
+  res.json({ ok: true });
+});
