@@ -27,6 +27,27 @@ async function requireAuth(req: Request, res: Response, next: NextFunction) {
 type ChannelId = "whatsapp" | "instagram" | "facebook";
 const VALID_CHANNELS = ["whatsapp", "instagram", "facebook"];
 
+/* ═══════════════════════════════════════════════════
+   Instagram Login المباشر — ثوابت
+   ═══════════════════════════════════════════════════ */
+const IG_AUTHORIZE = "https://www.instagram.com/oauth/authorize";
+const IG_TOKEN_URL = "https://api.instagram.com/oauth/access_token";
+const IG_GRAPH_HOST = "https://graph.instagram.com";
+const IG_GRAPH_V = `${IG_GRAPH_HOST}/v21.0`;
+
+const IG_LOGIN_SCOPES = [
+  "instagram_business_basic",
+  "instagram_business_manage_messages",
+];
+
+function instagramDirectLoginEnabled(): boolean {
+  return (
+    process.env.USE_INSTAGRAM_DIRECT_LOGIN === "true" &&
+    Boolean(process.env.INSTAGRAM_APP_ID) &&
+    Boolean(process.env.INSTAGRAM_APP_SECRET)
+  );
+}
+
 async function ownedTenant(userId: string, tenantId?: string) {
   if (tenantId) {
     const { data } = await db
@@ -567,13 +588,45 @@ channelsRouter.get("/meta/oauth-url", requireAuth, async (req, res) => {
   const tenant = await ownedTenant(userId, req.query.tenantId as string);
   if (!tenant) return res.status(404).json({ error: "لا يوجد حساب مرتبط" });
 
+  const channel = String(req.query.channel ?? "facebook") as ChannelId;
+  if (!VALID_CHANNELS.includes(channel)) return res.status(400).json({ error: "قناة غير صالحة" });
+
+  /* ═══════════════════════════════════════════
+     Instagram Login المباشر (جديد)
+     ═══════════════════════════════════════════ */
+  if (channel === "instagram" && instagramDirectLoginEnabled()) {
+    const igAppId = process.env.INSTAGRAM_APP_ID!;
+    const igRedirectUri = process.env.INSTAGRAM_REDIRECT_URI;
+
+    if (!igRedirectUri) {
+      return res.status(503).json({
+        error: "instagram_oauth_not_configured",
+        message: "INSTAGRAM_REDIRECT_URI غير مُعرّف على الخادم.",
+      });
+    }
+
+    const state = Buffer.from(
+      JSON.stringify({ tenantId: tenant.id, userId, channel, ts: Date.now() })
+    ).toString("base64url");
+
+    const url =
+      `${IG_AUTHORIZE}?force_reauth=true` +
+      `&client_id=${encodeURIComponent(igAppId)}` +
+      `&redirect_uri=${encodeURIComponent(igRedirectUri)}` +
+      `&response_type=code` +
+      `&scope=${encodeURIComponent(IG_LOGIN_SCOPES.join(","))}` +
+      `&state=${encodeURIComponent(state)}`;
+
+    return res.json({ url, scopes: IG_LOGIN_SCOPES, provider: "instagram" });
+  }
+
+  /* ═══════════════════════════════════════════
+     Facebook Login (كما كان — بدون تغيير)
+     ═══════════════════════════════════════════ */
   const appId = process.env.META_APP_ID;
   if (!appId) {
     return res.status(503).json({ error: "تطبيق Meta غير مُهيّأ على الخادم بعد." });
   }
-
-  const channel = String(req.query.channel ?? "facebook") as ChannelId;
-  if (!VALID_CHANNELS.includes(channel)) return res.status(400).json({ error: "قناة غير صالحة" });
 
   const scopes =
     channel === "instagram"
@@ -594,7 +647,137 @@ channelsRouter.get("/meta/oauth-url", requireAuth, async (req, res) => {
     `&state=${encodeURIComponent(state)}` +
     `&response_type=code`;
 
-  res.json({ url, scopes });
+  res.json({ url, scopes, provider: "facebook" });
+});
+
+/* ═══════════════════════════════════════════════════
+   GET /api/channels/instagram/callback — عام (Instagram Login)
+   ═══════════════════════════════════════════════════ */
+channelsRouter.get("/instagram/callback", async (req, res) => {
+  try {
+    const { code, state, error: igError } = req.query as Record<string, string>;
+
+    const frontBase = (process.env.FRONTEND_ORIGIN ?? "").replace(/\/+$/, "");
+    const fail = (code: string) =>
+      res.redirect(`${frontBase}/#/dashboard?error=${encodeURIComponent(code)}`);
+
+    if (igError) return fail(igError === "access_denied" ? "user_cancelled" : igError);
+    if (!code || !state) return fail("oauth_missing");
+
+    let parsed: { tenantId: string; userId: string; channel: string };
+    try {
+      parsed = JSON.parse(Buffer.from(state, "base64url").toString());
+    } catch {
+      return fail("oauth_state");
+    }
+    if (parsed.channel !== "instagram") return fail("oauth_channel");
+
+    const igAppId = process.env.INSTAGRAM_APP_ID;
+    const igSecret = process.env.INSTAGRAM_APP_SECRET;
+    const igRedirectUri = process.env.INSTAGRAM_REDIRECT_URI;
+
+    if (!igAppId || !igSecret || !igRedirectUri) return fail("oauth_not_configured");
+
+    /* 1) استبدال الكود بـ short-lived token */
+    const tRes = await fetch(IG_TOKEN_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: igAppId,
+        client_secret: igSecret,
+        grant_type: "authorization_code",
+        redirect_uri: igRedirectUri,
+        code,
+      }),
+    });
+    const tJson: any = await tRes.json().catch(() => ({}));
+    const first = Array.isArray(tJson?.data) ? tJson.data[0] : tJson;
+    const shortToken: string | undefined = first?.access_token;
+
+    if (!tRes.ok || !shortToken) return fail("oauth_token_exchange");
+
+    /* 2) استبداله بـ long-lived token */
+    let token = shortToken;
+    let expiresIn = 3600;
+    try {
+      const lRes = await fetch(
+        `${IG_GRAPH_HOST}/access_token?grant_type=ig_exchange_token` +
+          `&client_secret=${encodeURIComponent(igSecret)}` +
+          `&access_token=${encodeURIComponent(shortToken)}`
+      );
+      const lJson: any = await lRes.json().catch(() => ({}));
+      if (lRes.ok && lJson?.access_token) {
+        token = lJson.access_token;
+        expiresIn = Number(lJson.expires_in ?? 5184000);
+      }
+    } catch {
+      /* نكمل بالتوكن القصير */
+    }
+
+    /* 3) جلب بيانات الملف الشخصي */
+    const pRes = await fetch(
+      `${IG_GRAPH_V}/me?fields=user_id,username,name,profile_picture_url,account_type` +
+        `&access_token=${encodeURIComponent(token)}`
+    );
+    const prof: any = await pRes.json().catch(() => ({}));
+    const igId = String(prof?.user_id ?? prof?.id ?? first?.user_id ?? "");
+    if (!pRes.ok || !igId) return fail("no_eligible_instagram");
+
+    if (
+      prof?.account_type &&
+      !["BUSINESS", "MEDIA_CREATOR"].includes(prof.account_type)
+    ) {
+      return fail("no_eligible_instagram");
+    }
+
+    const username = prof?.username ? `@${prof.username}` : prof?.name ?? null;
+    const avatarUrl =
+      typeof prof?.profile_picture_url === "string" && prof.profile_picture_url.length > 0
+        ? prof.profile_picture_url
+        : null;
+
+    /* 4) حفظ الحساب */
+    const { error: upErr } = await db.from("channel_accounts").upsert(
+      {
+        tenant_id: parsed.tenantId,
+        channel: "instagram",
+        external_id: igId,
+        display_name: username,
+        avatar_url: avatarUrl,
+        status: "active",
+        access_token_encrypted: encryptField(token),
+        token_expires_at: new Date(Date.now() + expiresIn * 1000).toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "tenant_id,channel,external_id" }
+    );
+
+    if (upErr) return fail("db_save_failed");
+
+    /* 5) الاشتراك في Webhooks */
+    try {
+      await fetch(
+        `${IG_GRAPH_V}/me/subscribed_apps` +
+          `?subscribed_fields=messages,messaging_postbacks,messaging_seen` +
+          `&access_token=${encodeURIComponent(token)}`,
+        { method: "POST" }
+      );
+    } catch {
+      /* تجاهل — لا نُفشل العملية بسبب Webhook */
+    }
+
+    const q = new URLSearchParams({
+      tab: "channels",
+      connected: "1",
+      ig: "1",
+      name: username ?? "",
+    });
+    return res.redirect(`${frontBase}/#/dashboard?${q.toString()}`);
+  } catch (err) {
+    console.error("[channels] instagram callback error:", err);
+    const frontBase = (process.env.FRONTEND_ORIGIN ?? "").replace(/\/+$/, "");
+    return res.redirect(`${frontBase}/#/dashboard?error=oauth_failed`);
+  }
 });
 
 /* GET /api/channels/meta/callback — عام لأن Meta تعود إليه */
@@ -625,126 +808,4 @@ channelsRouter.get("/meta/callback", async (req, res) => {
     const tokenJson: any = await tokenRes.json();
     if (!tokenJson.access_token) return res.redirect("/#/dashboard?error=oauth_token");
 
-    let accessToken = tokenJson.access_token;
-    try {
-      const longRes = await fetch(
-        `https://graph.facebook.com/v21.0/oauth/access_token?grant_type=fb_exchange_token` +
-          `&client_id=${appId}&client_secret=${appSecret}&fb_exchange_token=${accessToken}`
-      );
-      const longJson: any = await longRes.json();
-      if (longJson.access_token) accessToken = longJson.access_token;
-    } catch {}
-
-    const pagesRes = await fetch(
-      `https://graph.facebook.com/v21.0/me/accounts?fields=id,name,picture,access_token&access_token=${accessToken}`
-    );
-    const pagesJson: any = await pagesRes.json();
-    const pages: any[] = pagesJson.data ?? [];
-
-    let facebookSaved = 0;
-    for (const p of pages) {
-      if (!p?.id) continue;
-      const picture = typeof p.picture?.data?.url === "string" ? p.picture.data.url : null;
-      const { error } = await db.from("channel_accounts").upsert(
-        {
-          tenant_id: parsed.tenantId,
-          channel: "facebook",
-          external_id: String(p.id),
-          display_name: p.name ?? null,
-          avatar_url: picture,
-          status: "active",
-          access_token_encrypted: encryptField(p.access_token ?? accessToken),
-          token_expires_at: tokenJson.expires_in
-            ? new Date(Date.now() + Number(tokenJson.expires_in) * 1000).toISOString()
-            : null,
-          updated_at: new Date().toISOString(),
-        },
-        { onConflict: "tenant_id,channel,external_id" }
-      );
-      if (!error) facebookSaved += 1;
-    }
-
-    let instagramSaved = 0;
-    if (parsed.channel === "instagram") {
-      for (const p of pages) {
-        if (!p?.id) continue;
-        try {
-          /* نطلب name + username + profile_picture_url من الحساب المهني
-             لعرض صورة الحساب في بطاقة القناة (متطلب instagram_business_basic). */
-          const igRes = await fetch(
-            `https://graph.facebook.com/v21.0/${p.id}?fields=name,instagram_business_account{id,username,name,profile_picture_url}&access_token=${accessToken}`
-          );
-          const ig: any = await igRes.json();
-          
-          console.log("[Instagram Avatar Debug]", JSON.stringify({
-httpStatus: igRes.status,
-responseOk: igRes.ok,
-hasInstagramAccount: !!ig?.instagram_business_account,
-hasProfilePicture: typeof ig?.instagram_business_account?.profile_picture_url === "string",
-profilePictureUrl: ig?.instagram_business_account?.profile_picture_url ?? null,
-error: ig?.error ?? null
-}, null, 2));
-          const igAcc = ig?.instagram_business_account;
-          if (!igAcc?.id) continue;
-
-          // تحديد أفضل اسم عرض: username ← name
-          const igUsername =
-            typeof igAcc?.username === "string" && igAcc.username.trim().length > 0
-              ? `@${igAcc.username.trim()}`
-              : null;
-          const igName =
-            typeof igAcc?.name === "string" && igAcc.name.trim().length > 0
-              ? igAcc.name.trim()
-              : null;
-          const displayName = igUsername ?? igName ?? (ig?.name ?? null);
-
-          // رابط الصورة: profile_picture_url (متاح لـ Instagram Business)
-          const avatarUrl =
-            typeof igAcc?.profile_picture_url === "string" &&
-            igAcc.profile_picture_url.length > 0
-              ? igAcc.profile_picture_url
-              : null;
-
-          console.log("[channels] IG account discovered:", {
-            id: igAcc.id,
-            username: igAcc.username ?? null,
-            name: igAcc.name ?? null,
-            avatar: avatarUrl ? "present" : "missing",
-          });
-
-          const { error } = await db.from("channel_accounts").upsert(
-            {
-              tenant_id: parsed.tenantId,
-              channel: "instagram",
-              external_id: String(igAcc.id),
-              display_name: displayName,
-              avatar_url: avatarUrl,
-              status: "active",
-              access_token_encrypted: encryptField(p.access_token ?? accessToken),
-              token_expires_at: tokenJson.expires_in
-                ? new Date(Date.now() + Number(tokenJson.expires_in) * 1000).toISOString()
-                : null,
-              updated_at: new Date().toISOString(),
-            },
-            { onConflict: "tenant_id,channel,external_id" }
-          );
-          if (!error) instagramSaved += 1;
-          else console.error("[channels] IG upsert failed:", error.message);
-        } catch (e) {
-          console.error("[channels] ig lookup failed for page", p.id, e);
-        }
-      }
-    }
-
-    const q = new URLSearchParams({
-      tab: "channels",
-      connected: "1",
-      fb: String(facebookSaved),
-      ig: String(instagramSaved),
-    });
-    res.redirect(`/#/dashboard?${q.toString()}`);
-  } catch (err) {
-    console.error("[channels] oauth callback error:", err);
-    res.redirect("/#/dashboard?error=oauth_failed");
-  }
-});
+    let accessToken
