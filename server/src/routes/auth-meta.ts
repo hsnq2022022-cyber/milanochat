@@ -195,7 +195,12 @@ async function handleInstagramLoginCallback(a: {
         channel: "instagram",
         external_id: igId,
         display_name: username,
-        avatar_url: typeof prof?.profile_picture_url === "string" ? prof.profile_picture_url : null,
+      typescript
+avatar_url:
+  typeof prof?.profile_picture_url === "string" &&
+  prof.profile_picture_url.length > 0
+    ? prof.profile_picture_url
+    : null,
         status: "active",
         access_token_encrypted: encryptField(token),
         token_expires_at: new Date(Date.now() + expiresIn * 1000).toISOString(),
@@ -523,8 +528,10 @@ metaAuthRouter.get("/facebook/callback", async (req: any, res) => {
           lastAccountId = String(p.id);
         }
       } else if (platform === "instagram") {
-        const igRes = await fetch(
-          `${GRAPH_API}/${p.id}?fields=name,instagram_business_account{id,username}&access_token=${pageToken}`
+      typescript
+const igRes = await fetch(
+  `${GRAPH_API}/${p.id}?fields=name,instagram_business_account{id,username,profile_picture_url}&access_token=${encodeURIComponent(pageToken)}`
+);
         );
         const ig: any = await igRes.json();
         const igAcc = ig?.instagram_business_account;
@@ -535,12 +542,16 @@ metaAuthRouter.get("/facebook/callback", async (req: any, res) => {
         if (!igAcc?.id) continue;
 
         const username = igAcc.username ? `@${igAcc.username}` : ig?.name ?? null;
-        const igPicture =
-          typeof igAcc?.picture?.data?.url === "string"
-            ? igAcc.picture.data.url
-            : typeof igAcc?.picture_url === "string"
-              ? igAcc.picture_url
-              : picture;
+        typescript
+const igPicture =
+  typeof igAcc?.profile_picture_url === "string" &&
+  igAcc.profile_picture_url.length > 0
+    ? igAcc.profile_picture_url
+    : typeof igAcc?.picture?.data?.url === "string"
+      ? igAcc.picture.data.url
+      : typeof igAcc?.picture_url === "string"
+        ? igAcc.picture_url
+        : null;
 
         const { data: taken } = await db
           .from("channel_accounts")
