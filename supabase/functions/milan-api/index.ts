@@ -1498,7 +1498,21 @@ async function fetchSenderProfile(opts: {
     const res = await fetch(url);
 
     if (!res.ok) {
-      console.warn(`[fetchSenderProfile] HTTP ${res.status} for ${senderId}`);
+      // سجل آمن: HTTP status + error code + error message فقط.
+      // لا نطبع التوكن (موجود في URL الطلب وليس في الاستجابة).
+      let errCode: unknown;
+      let errMsg: string | undefined;
+      try {
+        const ej: any = await res.json();
+        errCode = ej?.error?.code ?? ej?.code ?? ej?.error_type;
+        errMsg = ej?.error?.message ?? ej?.error_message ?? ej?.message;
+      } catch {
+        /* استجابة غير JSON — نتجاهل الجسم بأمان */
+      }
+      console.warn(
+        `[fetchSenderProfile] HTTP ${res.status} for ${senderId}`,
+        { code: errCode, message: errMsg }
+      );
       return { name: null, avatar: null };
     }
 
@@ -2454,6 +2468,74 @@ Deno.serve(async (req) => {
                 | "instagram"
                 | "facebook"
             );
+
+            /* ── جلب بيانات المرسل (اسم + صورة) وحفظها ──
+               بعد اكتمال معالجة الرسالة حتى لا يمنع الفشل
+               الاستقبالَ أو الردَّ الآلي. أي خطأ هنا يُبتلع
+               بأمان وتُكمل الحلقة بقية الرسائل. */
+            try {
+              let senderToken: string | null = null;
+
+              if (account.access_token_encrypted) {
+                try {
+                  senderToken = await decryptField(
+                    account.access_token_encrypted
+                  );
+                } catch (e: any) {
+                  console.warn(
+                    `[instagram_webhook] token decrypt failed | account=${account.id}`
+                  );
+                }
+              }
+
+              const profile = await fetchSenderProfile({
+                channel: channel as "instagram" | "facebook",
+                senderId: msg.senderId,
+                token: senderToken,
+              });
+
+              // لا نكتب شيئًا إذا لم تأتِ بيانات فعلية —
+              // ولا نستبدل قيمة موجودة بـ NULL أو سلسلة فارغة.
+              if (profile.name || profile.avatar) {
+                const patch: Record<string, string> = {};
+
+                if (profile.name) patch.customer_name = profile.name;
+
+                if (
+                  profile.avatar &&
+                  /^https?:\/\//i.test(profile.avatar)
+                ) {
+                  patch.customer_avatar = profile.avatar;
+                }
+
+                if (Object.keys(patch).length > 0) {
+                  const { error: profUpdErr } = await sb
+                    .from("conversations")
+                    .update(patch)
+                    .eq("tenant_id", account.tenant_id)
+                    .eq("wa_chat_id", chatId);
+
+                  if (profUpdErr) {
+                    console.error(
+                      `[instagram_webhook] sender profile update failed | chatId=${chatId}`,
+                      profUpdErr.message
+                    );
+                  } else {
+                    console.log(
+                      `[instagram_webhook] sender profile saved | chatId=${chatId}`,
+                      {
+                        name: profile.name ? "present" : "unchanged",
+                        avatar: profile.avatar ? "present" : "unchanged",
+                      }
+                    );
+                  }
+                }
+              }
+            } catch (e: any) {
+              console.warn(
+                `[instagram_webhook] sender profile step skipped: ${e?.message ?? e}`
+              );
+            }
           }
         }
 
