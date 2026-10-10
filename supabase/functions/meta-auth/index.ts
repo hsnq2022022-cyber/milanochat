@@ -95,6 +95,19 @@ const fail = (code: string) => {
 Deno.serve(async (req: Request) => {
   const url = new URL(req.url);
 
+  // تشخيص: يعرض قيم الإعداد غير السرية فقط (للتحقق من مطابقة redirect_uri)
+  if (req.method === "GET" && url.pathname.endsWith("/debug")) {
+    const ru = Deno.env.get("INSTAGRAM_REDIRECT_URI") ?? null;
+    return new Response(JSON.stringify({
+      INSTAGRAM_REDIRECT_URI: ru,
+      length: ru?.length ?? 0,
+      hasWhitespaceOrQuotes: ru ? /[\s"']/.test(ru) : null,
+      expected: `${Deno.env.get("SUPABASE_URL")}/functions/v1/meta-auth/instagram/callback`,
+      INSTAGRAM_APP_ID: Deno.env.get("INSTAGRAM_APP_ID") ?? null,
+      USE_INSTAGRAM_DIRECT_LOGIN: Deno.env.get("USE_INSTAGRAM_DIRECT_LOGIN") ?? null,
+    }, null, 2), { headers: { "Content-Type": "application/json" } });
+  }
+
   if (req.method !== "GET" || !url.pathname.endsWith("/instagram/callback")) {
     return new Response(JSON.stringify({ error: "Not found" }), {
       status: 404,
