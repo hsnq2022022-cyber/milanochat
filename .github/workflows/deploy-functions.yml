@@ -71,3 +71,7 @@ jobs:
       - name: Deploy conversation-previews
         if: steps.token.outputs.present == 'true'
         run: supabase functions deploy conversation-previews --project-ref "$PROJECT_REF" --no-verify-jwt
+
+      - name: Deploy meta-auth
+        if: steps.token.outputs.present == 'true'
+        run: supabase functions deploy meta-auth --project-ref "$PROJECT_REF" --no-verify-jwt
