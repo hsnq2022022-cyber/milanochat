@@ -9,7 +9,7 @@ import {
   APPEARANCE_PRESETS,
 } from "../types/widget";
 import WidgetPreview from "./WidgetPreview";
-import { API } from "../lib/api";
+import { FUNCTIONS_BASE } from "../lib/api";
 import {
   IconX,
   IconSave,
@@ -758,14 +758,12 @@ function AppearanceTab({
         type
       );
 
-      const baseUrl = String(API).replace(
-        /\/$/,
-        ""
-      );
+      // خادم Railway أُغلق — الرفع صار عبر Supabase Edge Function (milan-api)
+      const baseUrl = String(FUNCTIONS_BASE).replace(/\/$/, "");
 
       const response =
         await fetch(
-          `${baseUrl}/api/widgets/dashboard/upload`,
+          `${baseUrl}/milan-api?action=widget_dashboard_upload`,
           {
             method: "POST",
             headers: {
