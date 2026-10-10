@@ -1974,9 +1974,9 @@ export default function Dashboard() {
             <h3 className="font-display font-bold text-xl text-bone mb-1">اشحن رصيد الردود</h3>
             <div className="space-y-3">
               {[
-                { id: "starter", name: "البداية", credits: 1000, price: 99 },
-                { id: "growth", name: "النمو", credits: 3000, price: 249, hot: true },
-                { id: "scale", name: "التوسع", credits: 10000, price: 649 },
+                { id: "starter", name: "البداية", credits: 1000, price: 35000 },
+                { id: "growth", name: "النمو", credits: 3000, price: 85000, hot: true },
+                { id: "scale", name: "التوسع", credits: 10000, price: 225000 },
               ].map((p) => (
                 <button
                   key={p.id}
@@ -1993,7 +1993,7 @@ export default function Dashboard() {
                     <span className="block text-[11px] text-sage mt-0.5">{p.credits.toLocaleString("en")} رد</span>
                   </span>
                   <span className="font-display font-bold text-xl text-bone tabular-nums">
-                    {p.price} <span className="text-[11px] text-sage">ريال</span>
+                    {p.price.toLocaleString("en")} <span className="text-[11px] text-sage">د.ع</span>
                   </span>
                 </button>
               ))}

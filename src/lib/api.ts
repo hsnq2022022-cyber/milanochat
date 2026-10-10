@@ -52,6 +52,25 @@ export async function apiAuthFetch<T>(token: string, path: string, init?: Reques
   return data as T;
 }
 
+/** شحن الرصيد بالدينار العراقي عبر Wayl (دالة topup-create). */
+async function topupSupabase(
+  packageId: string,
+  token?: string | null,
+): Promise<{ invoiceId: string; paymentUrl: string | null }> {
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/topup-create`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      apikey: SUPABASE_ANON,
+      authorization: `Bearer ${token ?? ""}`,
+    },
+    body: JSON.stringify({ packageId, returnUrl: window.location.href.split("#")[0] }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((data as any)?.error ?? `HTTP ${res.status}`);
+  return data as { invoiceId: string; paymentUrl: string | null };
+}
+
 /** نداء Edge Function في نمط Supabase */
 async function fn<T>(
   action: string,
@@ -370,7 +389,7 @@ export const api = {
 
   createPayment: (tenantId: string, packageId: string, token?: string | null) =>
     backendMode === "supabase"
-      ? fn<{ invoiceId: string; paymentUrl: string | null }>("pay_create", { body: { packageId }, token })
+      ? topupSupabase(packageId, token)
       : apiFetch<{ invoiceId: string; paymentUrl: string | null }>("/api/payments/create", {
           method: "POST",
           body: JSON.stringify({ tenantId, packageId }),

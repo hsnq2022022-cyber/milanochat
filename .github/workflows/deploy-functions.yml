@@ -63,3 +63,11 @@ jobs:
       - name: Deploy wayl-webhook
         if: steps.token.outputs.present == 'true'
         run: supabase functions deploy wayl-webhook --project-ref "$PROJECT_REF" --no-verify-jwt
+
+      - name: Deploy topup-create
+        if: steps.token.outputs.present == 'true'
+        run: supabase functions deploy topup-create --project-ref "$PROJECT_REF" --no-verify-jwt
+
+      - name: Deploy conversation-previews
+        if: steps.token.outputs.present == 'true'
+        run: supabase functions deploy conversation-previews --project-ref "$PROJECT_REF" --no-verify-jwt

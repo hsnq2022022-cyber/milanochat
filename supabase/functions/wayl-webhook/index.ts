@@ -62,6 +62,94 @@ function mapStatus(paymentStatus: unknown): string | null {
   }
 }
 
+/** رصيد احتياطي حسب المبلغ (IQD) إن لم يُحفظ مع الدفعة. */
+const CREDITS_BY_AMOUNT: Record<number, number> = {
+  35000: 1000,
+  85000: 3000,
+  225000: 10000,
+};
+
+/**
+ * معالجة دفعة شحن رصيد: تمنح الرصيد مرة واحدة فقط (claim ذري ثم منح).
+ */
+async function handleTopup(sb: any, pay: any, payload: any): Promise<Response> {
+  const mapped = mapStatus(payload?.paymentStatus);
+  const prev = (pay.webhook_event && typeof pay.webhook_event === "object") ? pay.webhook_event : {};
+  const event = { ...prev, wayl: payload };
+
+  if (mapped === "paid") {
+    const paidTotal = Number(payload?.total);
+
+    if (Number.isFinite(paidTotal) && paidTotal !== Number(pay.amount)) {
+      console.error(
+        `[wayl-webhook] topup amount mismatch ${pay.id}: paid=${paidTotal} expected=${pay.amount}`,
+      );
+      await sb.from("payments").update({ status: "amount_mismatch", webhook_event: event }).eq("id", pay.id);
+      return text("ok");
+    }
+
+    const credits = Number(prev.credits) > 0
+      ? Number(prev.credits)
+      : (CREDITS_BY_AMOUNT[Number(pay.amount)] ?? 0);
+
+    if (credits <= 0) {
+      console.error(`[wayl-webhook] cannot determine credits for payment ${pay.id}`);
+      await sb.from("payments").update({ webhook_event: event }).eq("id", pay.id);
+      return text("ok");
+    }
+
+    // claim ذري: ينجح مرة واحدة فقط حتى لو أعاد Wayl الإرسال
+    const { data: claimed, error: claimErr } = await sb
+      .from("payments")
+      .update({
+        status: "paid",
+        credits_granted: credits,
+        webhook_event: event,
+        paid_at: new Date().toISOString(),
+      })
+      .eq("id", pay.id)
+      .neq("status", "paid")
+      .select("id");
+
+    if (claimErr) {
+      console.error("[wayl-webhook] topup claim failed", claimErr);
+      return text("db error", 500);
+    }
+
+    if (!claimed || claimed.length === 0) return text("ok"); // مُعالجة سابقاً
+
+    const { error: grantErr } = await sb.rpc("grant_credits", {
+      p_tenant_id: pay.tenant_id,
+      p_credits: credits,
+    });
+
+    if (grantErr) {
+      // تراجع عن الـ claim ليعيد Wayl المحاولة ولا يضيع الرصيد
+      console.error("[wayl-webhook] grant_credits failed, reverting", grantErr);
+      await sb.from("payments").update({ status: pay.status, credits_granted: 0, paid_at: null }).eq("id", pay.id);
+      return text("db error", 500);
+    }
+
+    console.log(`[wayl-webhook] topup ${pay.id}: granted ${credits} credits`);
+    return text("ok");
+  }
+
+  // حالات أخرى: نحفظ الحدث، ونُحدّث الحالة فقط إن لم تكن الدفعة مدفوعة
+  const patch: Record<string, unknown> = { webhook_event: event };
+  let q = sb.from("payments");
+
+  if (mapped === "cancelled" || mapped === "failed") {
+    await q.update({ ...patch, status: mapped }).eq("id", pay.id).neq("status", "paid");
+  } else {
+    await q.update(patch).eq("id", pay.id);
+    if (mapped === "refunded") {
+      console.warn(`[wayl-webhook] topup ${pay.id} refunded — credits are NOT clawed back automatically`);
+    }
+  }
+
+  return text("ok");
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method !== "POST") return text("Method not allowed", 405);
 
@@ -113,6 +201,20 @@ Deno.serve(async (req: Request) => {
     const sb = createClient(supaUrl, srvKey, {
       auth: { autoRefreshToken: false, persistSession: false },
     });
+
+    // ─── شحن رصيد الردود (جدول payments)؟ referenceId = payments.id ───
+    const { data: pay, error: payErr } = await sb
+      .from("payments")
+      .select("id, tenant_id, amount, status, webhook_event")
+      .eq("id", orderId)
+      .maybeSingle();
+
+    if (payErr) {
+      console.error("[wayl-webhook] payment lookup failed", payErr);
+      return text("db error", 500);
+    }
+
+    if (pay) return await handleTopup(sb, pay, payload);
 
     const { data: order, error: orderErr } = await sb
       .from("orders")
