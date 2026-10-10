@@ -30,6 +30,50 @@ function getAdmin(): SupabaseClient {
 type ChannelId = "whatsapp" | "instagram" | "facebook";
 const VALID_CHANNELS: ChannelId[] = ["whatsapp", "instagram", "facebook"];
 
+// ─── OAuth state (توقيع HMAC متوافق مع دالة meta-auth: base64url(body).base64url(sig)) ───
+const enc = new TextEncoder();
+
+function b64url(s: string): string {
+  return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+async function hmacSign(secret: string, body: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    "raw", enc.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"],
+  );
+  const sig = await crypto.subtle.sign("HMAC", key, enc.encode(body));
+  return b64url(String.fromCharCode(...new Uint8Array(sig)));
+}
+
+/** يبني state موقّعًا ويسجّله في meta_oauth_states (أفضل جهد — مثل خادم Node السابق) */
+async function createSignedState(opts: {
+  platform: "instagram" | "facebook";
+  userId: string;
+  tenantId?: string | null;
+}): Promise<string> {
+  const secret =
+    Deno.env.get("INSTAGRAM_APP_SECRET") ?? Deno.env.get("META_APP_SECRET") ?? "";
+  if (!secret) throw new Error("INSTAGRAM_APP_SECRET/META_APP_SECRET مفقود — لا يمكن توقيع OAuth state");
+
+  const nonce = crypto.randomUUID();
+  const bodyB64 = b64url(JSON.stringify({ i: nonce, p: opts.platform, exp: Math.floor(Date.now() / 1000) + 600 }));
+  const state = `${bodyB64}.${await hmacSign(secret, bodyB64)}`;
+
+  try {
+    const { error } = await getAdmin().from("meta_oauth_states").insert({
+      id: nonce,
+      user_id: opts.userId,
+      tenant_id: opts.tenantId ?? null,
+      platform: opts.platform,
+      expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+    });
+    if (error) console.warn("[channels] meta_oauth_states insert failed:", error.message);
+  } catch (e: any) {
+    console.warn("[channels] meta_oauth_states insert error:", e?.message ?? e);
+  }
+  return state;
+}
+
 // ─── Helpers ───
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -156,6 +200,82 @@ Deno.serve(async (req: Request) => {
     const auth = await requireAuth(req);
     if (auth instanceof Response) return auth;
     const { userId } = auth;
+
+    // ─── GET /channels/meta/oauth-url?channel=instagram[&debug=1] ───
+    // يبني رابط تفويض Instagram Login (أو Facebook OAuth) من الأسرار المنشورة.
+    if (parts[0] === "meta" && parts[1] === "oauth-url" && req.method === "GET") {
+      const channel = query.get("channel") ?? "instagram";
+      const debug = query.get("debug") === "1";
+
+      if (channel === "instagram") {
+        const appId = Deno.env.get("INSTAGRAM_APP_ID") ?? "";
+        const redirectUri = (Deno.env.get("INSTAGRAM_REDIRECT_URI") ?? "").replace(/\/+$/, "");
+        if (!appId || !redirectUri) {
+          return jsonResponse(
+            { error: "إعدادات Instagram OAuth غير مكتملة — تحقق من الأسرار INSTAGRAM_APP_ID و INSTAGRAM_REDIRECT_URI" },
+            500,
+          );
+        }
+        let state: string;
+        try {
+          state = await createSignedState({
+            platform: "instagram",
+            userId,
+            tenantId: query.get("tenantId"),
+          });
+        } catch (e: any) {
+          return jsonResponse({ error: e?.message ?? "تعذر تجهيز جلسة OAuth" }, 500);
+        }
+        const oauthUrl =
+          "https://www.instagram.com/oauth/authorize" +
+          "?force_reauth=true" +
+          `&client_id=${encodeURIComponent(appId)}` +
+          `&redirect_uri=${encodeURIComponent(redirectUri)}` +
+          "&response_type=code" +
+          "&scope=" +
+          encodeURIComponent("instagram_business_basic,instagram_business_manage_messages") +
+          `&state=${encodeURIComponent(state)}`;
+
+        if (debug) {
+          return jsonResponse({
+            clientId: appId,
+            redirectUri,
+            provider: "instagram",
+            url: oauthUrl,
+          });
+        }
+        return jsonResponse({ url: oauthUrl, state });
+      }
+
+      if (channel === "facebook") {
+        const appId = Deno.env.get("META_APP_ID") ?? "";
+        const redirectUri = (Deno.env.get("META_REDIRECT_URI") ?? "").replace(/\/+$/, "");
+        if (!appId || !redirectUri) {
+          return jsonResponse({ error: "إعدادات Facebook OAuth غير مكتملة" }, 500);
+        }
+        let state: string;
+        try {
+          state = await createSignedState({
+            platform: "facebook",
+            userId,
+            tenantId: query.get("tenantId"),
+          });
+        } catch (e: any) {
+          return jsonResponse({ error: e?.message ?? "تعذر تجهيز جلسة OAuth" }, 500);
+        }
+        const oauthUrl =
+          "https://www.facebook.com/v21.0/dialog/oauth" +
+          `?client_id=${encodeURIComponent(appId)}` +
+          `&redirect_uri=${encodeURIComponent(redirectUri)}` +
+          "&state=" + encodeURIComponent(state);
+        if (debug) {
+          return jsonResponse({ clientId: appId, redirectUri, provider: "facebook", url: oauthUrl });
+        }
+        return jsonResponse({ url: oauthUrl, state });
+      }
+
+      return jsonResponse({ error: `قناة غير مدعومة في OAuth: ${channel}` }, 400);
+    }
 
     // ─── GET /channels/accounts ───
     if (parts[0] === "accounts" && parts.length === 1 && req.method === "GET") {

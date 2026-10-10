@@ -3,7 +3,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import confetti from "canvas-confetti";
-import { apiAuthFetch, apiEnabled, api, backendMode, API, type WaSnapshot } from "../lib/api";
+import { apiAuthFetch, apiBase, backendMode, type WaSnapshot } from "../lib/api";
 import { getSupabase, getStoredClaim, clearStoredClaim } from "../lib/supabase";
 import { CHANNELS, ChannelBadge, detectChannel, type ChannelId } from "../lib/channels";
 import {
@@ -628,7 +628,7 @@ export default function Dashboard() {
   }, [demo, authed, token, needClaim]);
 
   useEffect(() => {
-    if (demo || !apiEnabled) return;
+    if (demo || backendMode !== "supabase") return;
     apiAuthFetch<MetaStatus>(token!, "/api/channels/meta/status").then(setMetaStatus).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [demo, token]);
@@ -728,18 +728,11 @@ export default function Dashboard() {
     if (!token) return;
     setChBusyPlatform(channel);
     try {
-      let r: { url: string };
-      try {
-        r = await apiAuthFetch<{ url: string }>(token, "/api/auth/facebook/start", {
-          method: "POST",
-          body: JSON.stringify({ platform: channel, tenantId: st?.tenantId }),
-        });
-      } catch {
-        r = await apiAuthFetch<{ url: string }>(
-          token,
-          `/api/channels/meta/oauth-url?channel=${channel}`
-        );
-      }
+      // مصدر واحد وحيد: دالة channels على Supabase Edge Functions (خادم Railway أُغلق)
+      const r = await apiAuthFetch<{ url: string }>(
+        token,
+        `/api/channels/meta/oauth-url?channel=${channel}&tenantId=${encodeURIComponent(st?.tenantId ?? "")}`
+      );
       if (r?.url) window.location.href = r.url;
       else showToast("لم يُرجع الخادم رابط OAuth");
     } catch (e: any) {
@@ -1187,7 +1180,7 @@ export default function Dashboard() {
         <div className="min-h-[70vh] flex items-center justify-center">
           <span className="inline-flex items-center gap-3 text-sage text-sm">
             <span className="w-8 h-8 rounded-full border-2 border-verde/30 border-t-verde animate-spin" />
-            {apiEnabled ? "جارٍ تحميل لوحتك…" : "تجهيز بيانات العرض…"}
+            {backendMode === "supabase" ? "جارٍ تحميل لوحتك…" : "تجهيز بيانات العرض…"}
           </span>
         </div>
       </Shell>

@@ -1,55 +1,44 @@
 /**
- * عميل API للواجهة — ثلاثة أنماط تعمل تلقائيًا حسب متغيرات البيئة:
+ * عميل API للواجهة — نمطان يعملان تلقائيًا حسب متغيرات البيئة:
  *
  * 1) supabase : VITE_SUPABASE_URL + VITE_SUPABASE_ANON_KEY مضبوطان → Edge Functions
- * 2) server   : VITE_API_URL مضبوط (بدون Supabase) → الخادم التقليدي
- * 3) demo     : لا شيء منهما → وضع العرض
+ *               (الوضع الوحيد المعتمد حاليًا — خادم Railway أُغلق وحُذف نهائيًا)
+ * 2) demo     : لا شيء منهما → وضع العرض
+ *
+ * ملاحظة: VITE_API_URL لم يعد يُقرأ من أي مكان؛ المسارات القديمة ذات النمط
+ * "/api/..." تُخدم الآن بالكامل عبر دوال Supabase Edge Functions.
  */
 const env = (((import.meta as any).env ?? {}) as Record<string, string | undefined>);
-export const API = (env.VITE_API_URL ?? "").replace(/\/+$/, "");
 const SUPABASE_URL = (env.VITE_SUPABASE_URL ?? "").replace(/\/+$/, "");
 const SUPABASE_ANON = env.VITE_SUPABASE_ANON_KEY ?? "";
 
-const HAS_SUPABASE = SUPABASE_URL.length > 0 && SUPABASE_ANON.length > 0;
-const HAS_SERVER = API.length > 0;
+/** رابط دوال Supabase Edge Functions — يمكن تجاوزه بمتغير البيئة النظيف:
+ *  VITE_SUPABASE_FUNCTIONS_URL (افتراضيًا مشتق من VITE_SUPABASE_URL) */
+export const FUNCTIONS_BASE =
+  (env.VITE_SUPABASE_FUNCTIONS_URL ?? (SUPABASE_URL ? `${SUPABASE_URL}/functions/v1` : "")).replace(/\/+$/, "");
 
-export const apiEnabled = HAS_SERVER && !HAS_SUPABASE;
-export const apiBase = API;
+const HAS_SUPABASE = FUNCTIONS_BASE.length > 0 && SUPABASE_ANON.length > 0;
 
-export type BackendMode = "server" | "supabase" | "demo";
-export const backendMode: BackendMode = HAS_SUPABASE
-  ? "supabase"
-  : HAS_SERVER
-    ? "server"
-    : "demo";
+export const apiEnabled = false; // لا خادم خارجي بعد اليوم
+export const apiBase = FUNCTIONS_BASE;
+
+export type BackendMode = "supabase" | "demo";
+export const backendMode: BackendMode = HAS_SUPABASE ? "supabase" : "demo";
 
 /** عنوان Edge Function الواحدة التي تحوي الباك-إند كله */
-const FN_URL = `${SUPABASE_URL}/functions/v1/milan-api`;
-const CHANNELS_FN_URL = `${SUPABASE_URL}/functions/v1/channels`;
-const WA_FN_URL = `${SUPABASE_URL}/functions/v1/wa-webhook`;
+const FN_URL = `${FUNCTIONS_BASE}/milan-api`;
+const CHANNELS_FN_URL = `${FUNCTIONS_BASE}/channels`;
+const WA_FN_URL = `${FUNCTIONS_BASE}/wa-webhook`;
 
-/* ─── نقل عام ─── */
+/* ─── نقل عام (عام فقط — لم يعد يوجد خادم خارجي) ─── */
 
-export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API}${path}`, {
-    ...init,
-    headers: { "content-type": "application/json", ...(init?.headers ?? {}) },
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error((data as any)?.error ?? `HTTP ${res.status}`);
-  return data as T;
+export async function apiFetch<T>(_path: string, _init?: RequestInit): Promise<T> {
+  throw new Error("الخادم الخارجي أُغلق نهائيًا — جميع الطلبات تُخدم عبر Supabase Edge Functions.");
 }
 
-/** طلبات موثقة: توكن Supabase Auth أو رمز جلسة المعالج */
+/** طلبات موثقة: توكن Supabase Auth أو رمز جلسة المعالج — تُخدم دائمًا من Edge Functions */
 export async function apiAuthFetch<T>(token: string, path: string, init?: RequestInit): Promise<T> {
-  if (backendMode === "supabase") return dashSupabase<T>(token, path, init);
-  const res = await fetch(`${API}${path}`, {
-    headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-    ...init,
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error((data as any)?.error ?? `HTTP ${res.status}`);
-  return data as T;
+  return dashSupabase<T>(token, path, init);
 }
 
 /** شحن الرصيد بالدينار العراقي عبر Wayl (دالة topup-create). */
@@ -100,11 +89,15 @@ async function channelsFn<T>(
 ): Promise<T> {
   const method = (init?.method ?? "GET").toUpperCase();
   const body: Record<string, unknown> = init?.body ? JSON.parse(init.body as string) : {};
-  const qs = new URLSearchParams(
-    Object.entries(body).filter(([, v]) => typeof v === "string") as [string, string][]
-  ).toString();
+  // دعم تمرير query string داخل المسار نفسه (مثل /meta/oauth-url?channel=instagram&debug=1)
+  const [rawPath, rawQuery = ""] = channelPath.split("?");
+  const qsParams = new URLSearchParams(rawQuery);
+  for (const [k, v] of Object.entries(body)) {
+    if (typeof v === "string") qsParams.set(k, v);
+  }
+  const qs = qsParams.toString();
 
-  const url = `${CHANNELS_FN_URL}${channelPath}${qs ? `?${qs}` : ""}`;
+  const url = `${CHANNELS_FN_URL}${rawPath}${qs ? `?${qs}` : ""}`;
 
   const res = await fetch(url, {
     method,
@@ -124,6 +117,12 @@ async function channelsFn<T>(
 async function dashSupabase<T>(token: string, path: string, init?: RequestInit): Promise<T> {
   const body: Record<string, unknown> = init?.body ? JSON.parse(init.body as string) : {};
   const method = (init?.method ?? "GET").toUpperCase();
+
+  // ─── بدء OAuth القديم (خادم Railway أُغلق) → توجيه مباشر إلى دالة channels ───
+  if (path === "/api/auth/facebook/start" && method === "POST") {
+    const platform = String(body.platform ?? "instagram");
+    return channelsFn<T>(token, `/meta/oauth-url?channel=${encodeURIComponent(platform)}`, init);
+  }
 
   // ─── مسارات القنوات → دالة channels منفصلة ───
   if (path.startsWith("/api/channels/")) {
