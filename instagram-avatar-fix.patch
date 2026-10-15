@@ -1,0 +1,294 @@
+diff --git a/src/lib/api.ts b/src/lib/api.ts
+index 1d749c0e..ee138441 100644
+--- a/src/lib/api.ts
++++ b/src/lib/api.ts
+@@ -190,6 +190,12 @@ async function dashSupabase<T>(token: string, path: string, init?: RequestInit):
+   } else if (/^conversations\/[^/]+\/release$/.test(sub)) {
+     action = "release";
+     body.convId = sub.split("/")[1];
++  } else if (/^conversations\/[^/]+\/refresh-avatar$/.test(sub)) {
++    action = "refresh_customer_avatar";
++    body.convId = sub.split("/")[1];
++  } else if (/^accounts\/[^/]+\/refresh-avatar$/.test(sub)) {
++    action = "refresh_account_avatar";
++    body.accountId = sub.split("/")[1];
+   } else if (/^unresolved\/[^/]+\/resolve$/.test(sub)) {
+     action = "resolve";
+     body.id = sub.split("/")[1];
+diff --git a/src/pages/Dashboard.tsx b/src/pages/Dashboard.tsx
+index b21011ab..dc3739ce 100644
+--- a/src/pages/Dashboard.tsx
++++ b/src/pages/Dashboard.tsx
+@@ -243,6 +243,64 @@ export default function Dashboard() {
+     activeConvRef.current = activeConv;
+   }, [activeConv]);
+ 
++  /* ─── فشل تحميل الصور (روابط Instagram CDN مؤقتة وتنتهي خلال أيام) ───
++     نعرض الأيقونة البديلة الموجودة أصلاً، ونطلب رابطاً جديداً مرة واحدة فقط
++     لكل محادثة/حساب في الجلسة، فلا تتكرر المحاولات بلا نهاية. */
++  const [brokenImgs, setBrokenImgs] = useState<Set<string>>(() => new Set());
++  const avatarRefreshTried = useRef<Set<string>>(new Set());
++
++  const handleAvatarError = (kind: "conv" | "acc", id: string, url: string) => {
++    setBrokenImgs((prev) => (prev.has(url) ? prev : new Set(prev).add(url)));
++    if (demo || !token) return;
++    const key = `${kind}:${id}`;
++    if (avatarRefreshTried.current.has(key)) return;
++    avatarRefreshTried.current.add(key);
++
++    // إن أعاد Meta الرابط نفسه (فشل الأول عابر) نسمح بمحاولة تحميل واحدة إضافية؛
++    // وإن فشلت فالمفتاح أعلاه يمنع أي طلب تجديد آخر فلا تتكرر المحاولات.
++    const unbreak = (u: string) =>
++      setBrokenImgs((prev) => {
++        if (!prev.has(u)) return prev;
++        const next = new Set(prev);
++        next.delete(u);
++        return next;
++      });
++
++    if (kind === "conv") {
++      apiAuthFetch<{ ok: boolean; avatar?: string | null }>(
++        token,
++        `/api/dashboard/conversations/${id}/refresh-avatar`,
++        { method: "POST" }
++      )
++        .then((r) => {
++          const fresh = r?.ok ? r.avatar : null;
++          if (!fresh) return;
++          unbreak(fresh);
++          setSt((prev) =>
++            prev
++              ? { ...prev, convs: prev.convs.map((c) => (c.id === id ? { ...c, customerAvatar: fresh } : c)) }
++              : prev
++          );
++        })
++        .catch(() => {});
++    } else {
++      apiAuthFetch<{ ok: boolean; avatarUrl?: string | null }>(
++        token,
++        `/api/dashboard/accounts/${id}/refresh-avatar`,
++        { method: "POST" }
++      )
++        .then((r) => {
++          const fresh = r?.ok ? r.avatarUrl : null;
++          if (!fresh) return;
++          unbreak(fresh);
++          const patch = { avatar_url: fresh, avatarUrl: fresh };
++          setChAccounts((prev) => prev.map((a) => (a.id === id ? { ...a, ...patch } : a)));
++          setManageAcc((prev) => (prev && prev.id === id ? { ...prev, ...patch } : prev));
++        })
++        .catch(() => {});
++    }
++  };
++
+   const showToast = (msg: string) => {
+     setToast(msg);
+     if (toastTimer.current) window.clearTimeout(toastTimer.current);
+@@ -1388,8 +1446,8 @@ export default function Dashboard() {
+                         }`}
+                       >
+                         <div className="flex items-start gap-3">
+-                          {c.customerAvatar ? (
+-                            <img src={c.customerAvatar} alt="" className="w-11 h-11 rounded-full object-cover border border-verde/25 shrink-0 bg-moss" referrerPolicy="no-referrer" loading="lazy" />
++                          {c.customerAvatar && !brokenImgs.has(c.customerAvatar) ? (
++                            <img src={c.customerAvatar} alt="" className="w-11 h-11 rounded-full object-cover border border-verde/25 shrink-0 bg-moss" referrerPolicy="no-referrer" loading="lazy" onError={() => handleAvatarError("conv", c.id, c.customerAvatar as string)} />
+                           ) : (
+                             <span className="w-11 h-11 rounded-full bg-moss border border-verde/25 text-verde flex items-center justify-center shrink-0">
+                               <ChannelIcon channel={ch} className="w-5 h-5" />
+@@ -1437,8 +1495,8 @@ export default function Dashboard() {
+                     <button onClick={() => setMobileThread(false)} className="lg:hidden text-sage hover:text-bone" aria-label="عودة">
+                       <IconChevronDown className="w-4 h-4 rotate-90" />
+                     </button>
+-                    {active.customerAvatar ? (
+-                      <img src={active.customerAvatar} alt="" className="w-9 h-9 rounded-full object-cover border border-verde/30 shrink-0 bg-moss" referrerPolicy="no-referrer" />
++                    {active.customerAvatar && !brokenImgs.has(active.customerAvatar) ? (
++                      <img src={active.customerAvatar} alt="" className="w-9 h-9 rounded-full object-cover border border-verde/30 shrink-0 bg-moss" referrerPolicy="no-referrer" onError={() => handleAvatarError("conv", active.id, active.customerAvatar as string)} />
+                     ) : (
+                       <span className="w-9 h-9 rounded-full bg-moss border border-verde/30 text-verde flex items-center justify-center shrink-0">
+                         <ChannelIcon channel={(active.channel ?? "whatsapp") as ChannelId} className="w-4.5 h-4.5" />
+@@ -1762,8 +1820,8 @@ export default function Dashboard() {
+                   <ul className="space-y-1.5 mb-3">
+                     {fbAccounts.map((a) => (
+                       <li key={a.id} className="flex items-center gap-2 bg-night/50 border border-verde/10 rounded-xl px-3 py-2">
+-                        {a.avatar_url ? (
+-                          <img src={a.avatar_url} alt="" className="w-6 h-6 rounded-full object-cover" referrerPolicy="no-referrer" />
++                        {a.avatar_url && !brokenImgs.has(a.avatar_url) ? (
++                          <img src={a.avatar_url} alt="" className="w-6 h-6 rounded-full object-cover" referrerPolicy="no-referrer" onError={() => handleAvatarError("acc", a.id, a.avatar_url as string)} />
+                         ) : (
+                           <span className="w-6 h-6 rounded-full bg-[#1877F2]/15 text-[#6ea3f5] flex items-center justify-center"><IconFacebook className="w-3.5 h-3.5" /></span>
+                         )}
+@@ -1799,12 +1857,13 @@ export default function Dashboard() {
+                   <div className="space-y-2 mb-3">
+                     {igAccounts.map((a) => (
+                       <div key={a.id} className="flex items-center gap-3 bg-night/50 border border-verde/15 rounded-xl px-3 py-2.5">
+-                        {a.avatar_url ? (
++                        {a.avatar_url && !brokenImgs.has(a.avatar_url) ? (
+                           <img
+                             src={a.avatar_url}
+                             alt=""
+                             className="w-10 h-10 rounded-full object-cover border border-verde/25"
+                             referrerPolicy="no-referrer"
++                            onError={() => handleAvatarError("acc", a.id, a.avatar_url as string)}
+                           />
+                         ) : (
+                           <span className="w-10 h-10 rounded-full bg-gradient-to-tr from-[#F58529] via-[#DD2A7B] to-[#8134AF] flex items-center justify-center">
+@@ -1861,8 +1920,8 @@ export default function Dashboard() {
+ 
+               <div className={`${cls.card} p-4 space-y-2`}>
+                 <div className="flex items-center gap-3">
+-                  {manageAcc.avatar_url ? (
+-                    <img src={manageAcc.avatar_url} alt="" className="w-12 h-12 rounded-full object-cover border border-verde/25" referrerPolicy="no-referrer" />
++                  {manageAcc.avatar_url && !brokenImgs.has(manageAcc.avatar_url) ? (
++                    <img src={manageAcc.avatar_url} alt="" className="w-12 h-12 rounded-full object-cover border border-verde/25" referrerPolicy="no-referrer" onError={() => handleAvatarError("acc", manageAcc.id, manageAcc.avatar_url as string)} />
+                   ) : (
+                     <span className="w-12 h-12 rounded-full bg-moss flex items-center justify-center text-verde">
+                       {manageAcc.channel === "instagram" ? <IconInstagram className="w-6 h-6" /> : <IconFacebook className="w-6 h-6" />}
+diff --git a/supabase/functions/milan-api/index.ts b/supabase/functions/milan-api/index.ts
+index 7a8c5da8..37088f5a 100644
+--- a/supabase/functions/milan-api/index.ts
++++ b/supabase/functions/milan-api/index.ts
+@@ -4155,6 +4155,144 @@ ${text}`
+         });
+       }
+ 
++      /* ═══════════════════════════════════════════════════════════════
++         تجديد الصور — تُستدعى من الواجهة فقط بعد فشل تحميل صورة فعلياً.
++         روابط CDN المُعادة من Meta مؤقتة (تنتهي خلال أيام)، فنعيد جلب
++         رابط جديد من Graph API بنفس رمز الحساب المخزّن. لا نستبدل قيمة
++         موجودة بـ NULL، ولا نسجّل الرموز.
++      ═══════════════════════════════════════════════════════════════ */
++
++      case "refresh_customer_avatar": {
++        const convId = String(body.convId ?? "").trim();
++        if (!convId) return err("convId مطلوب");
++
++        const { data: conv } = await sb
++          .from("conversations")
++          .select("id, wa_chat_id, channel, account_id")
++          .eq("id", convId)
++          .eq("tenant_id", tenant.id)
++          .maybeSingle();
++
++        if (!conv) return err("المحادثة غير موجودة", 404);
++
++        const convChannel =
++          conv.channel === "instagram" || conv.channel === "facebook"
++            ? (conv.channel as "instagram" | "facebook")
++            : null;
++        const senderId = String(conv.wa_chat_id ?? "").replace(
++          /^(instagram|facebook):/,
++          ""
++        );
++
++        if (!convChannel || !conv.account_id || !senderId) {
++          return json({ ok: false, avatar: null, reason: "unsupported" });
++        }
++
++        const { data: acc } = await sb
++          .from("channel_accounts")
++          .select("access_token_encrypted")
++          .eq("id", conv.account_id)
++          .eq("tenant_id", tenant.id)
++          .maybeSingle();
++
++        let tok: string | null = null;
++        try {
++          tok = acc?.access_token_encrypted
++            ? await decryptField(acc.access_token_encrypted)
++            : null;
++        } catch {
++          tok = null;
++        }
++
++        const prof = await fetchSenderProfile({
++          channel: convChannel,
++          senderId,
++          token: tok,
++        });
++
++        if (prof.avatar && /^https?:\/\//i.test(prof.avatar)) {
++          const { error: upErr } = await sb
++            .from("conversations")
++            .update({ customer_avatar: prof.avatar })
++            .eq("id", conv.id)
++            .eq("tenant_id", tenant.id);
++
++          if (upErr) {
++            console.error("[refresh_customer_avatar] update failed:", upErr.message);
++            return json({ ok: false, avatar: null, reason: "db_error" });
++          }
++          return json({ ok: true, avatar: prof.avatar });
++        }
++
++        return json({ ok: false, avatar: null, reason: "unavailable" });
++      }
++
++      case "refresh_account_avatar": {
++        const accountId = String(body.accountId ?? "").trim();
++        if (!accountId) return err("accountId مطلوب");
++
++        const { data: acc } = await sb
++          .from("channel_accounts")
++          .select("id, channel, access_token_encrypted")
++          .eq("id", accountId)
++          .eq("tenant_id", tenant.id)
++          .maybeSingle();
++
++        if (!acc) return err("الحساب غير موجود", 404);
++
++        // نفس نداء /me المستخدم أصلاً عند ربط الحساب في meta-auth (Instagram Login)
++        if (acc.channel !== "instagram" || !acc.access_token_encrypted) {
++          return json({ ok: false, avatarUrl: null, reason: "unsupported" });
++        }
++
++        let tok = "";
++        try {
++          tok = await decryptField(acc.access_token_encrypted);
++        } catch {
++          tok = "";
++        }
++        if (!tok) {
++          return json({ ok: false, avatarUrl: null, reason: "token_unavailable" });
++        }
++
++        try {
++          const r = await fetch(
++            `https://graph.instagram.com/v21.0/me?fields=profile_picture_url&access_token=${encodeURIComponent(tok)}`
++          );
++          if (!r.ok) {
++            // نسجّل رمز الحالة فقط — الرابط يحوي التوكن فلا نطبعه
++            console.warn(`[refresh_account_avatar] HTTP ${r.status}`);
++            return json({ ok: false, avatarUrl: null, reason: "graph_error" });
++          }
++          const pj: any = await r.json().catch(() => ({}));
++          const url: string | null =
++            typeof pj?.profile_picture_url === "string" &&
++            /^https?:\/\//i.test(pj.profile_picture_url)
++              ? pj.profile_picture_url
++              : null;
++
++          if (!url) {
++            return json({ ok: false, avatarUrl: null, reason: "unavailable" });
++          }
++
++          const now = new Date().toISOString();
++          const { error: upErr } = await sb
++            .from("channel_accounts")
++            .update({ avatar_url: url, last_sync_at: now, updated_at: now })
++            .eq("id", acc.id)
++            .eq("tenant_id", tenant.id);
++
++          if (upErr) {
++            console.error("[refresh_account_avatar] update failed:", upErr.message);
++            return json({ ok: false, avatarUrl: null, reason: "db_error" });
++          }
++          return json({ ok: true, avatarUrl: url });
++        } catch (e: any) {
++          console.warn("[refresh_account_avatar] error:", e?.message ?? e);
++          return json({ ok: false, avatarUrl: null, reason: "network" });
++        }
++      }
++
+       /* ═══════════════════════════════════════════════════════════════
+          SUMMARY
+       ═══════════════════════════════════════════════════════════════ */
