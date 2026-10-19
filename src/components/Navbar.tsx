@@ -1,7 +1,5 @@
 import { useEffect, useState } from "react";
 import { Logo, IconWhatsapp, IconMenu, IconX } from "./Icons";
-import LangToggle from "./LangToggle";
-import { useI18n } from "../i18n/LanguageContext";
 
 const LINKS = [
   { label: "الضمانات", href: "#guarantees" },
@@ -35,7 +33,7 @@ export default function Navbar() {
             <img src={`${import.meta.env.BASE_URL}logo.png`} alt="شعار إدارة ســوشـــيــــال" className="w-9 h-9" />
           </span>
           <span className="font-display font-bold text-2xl leading-none text-bone">
-            {t("إدارة ســوشـــيــــال")}
+            إدارة ســوشـــيــــال
             <span className="text-oro">.</span>
           </span>
         </a>
@@ -54,7 +52,6 @@ export default function Navbar() {
         </ul>
 
         <div className="flex items-center gap-3">
-          <LangToggle compact />
           <a
             href="#/widgets"
             className="hidden sm:inline-flex items-center gap-2 border border-verde/30 text-mist font-semibold text-sm px-4 py-2.5 rounded-full hover:border-oro/60 hover:text-oro transition-all duration-300 active:scale-95"
@@ -65,14 +62,14 @@ export default function Navbar() {
             href="#/dashboard"
             className="hidden sm:inline-flex items-center gap-2 border border-verde/30 text-mist font-semibold text-sm px-4 py-2.5 rounded-full hover:border-oro/60 hover:text-oro transition-all duration-300 active:scale-95"
           >
-            {t("لوحة التحكم")}
+            لوحة التحكم
           </a>
           <a
             href="#start"
             className="hidden sm:inline-flex items-center gap-2 bg-verde text-ink font-semibold text-sm px-5 py-2.5 rounded-full hover:bg-oro transition-colors duration-300 hover:shadow-[0_8px_30px_-8px_rgba(46,194,126,0.4)] active:scale-95"
           >
             <IconWhatsapp className="w-4 h-4" />
-            {t("ابدأ الآن")}
+            ابدأ الآن
           </a>
           <button
             onClick={() => setOpen((v) => !v)}
@@ -108,7 +105,7 @@ export default function Navbar() {
               onClick={() => setOpen(false)}
               className="block text-center border border-verde/30 text-mist font-semibold px-4 py-3 rounded-xl mt-2 hover:border-oro/60 hover:text-oro transition-colors"
             >
-              {t("لوحة التحكم")}
+              لوحة التحكم
             </a>
           </li>
           <li>
@@ -117,7 +114,7 @@ export default function Navbar() {
               onClick={() => setOpen(false)}
               className="block text-center bg-verde text-ink font-semibold px-4 py-3 rounded-xl mt-2"
             >
-              {t("ابدأ الآن — 40,000 دينار")}
+              ابدأ الآن — 40,000 دينار
             </a>
           </li>
         </ul>

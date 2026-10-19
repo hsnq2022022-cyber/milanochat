@@ -385,8 +385,9 @@ def process_file(path, pairs, missing_new):
         if any(ch in stripped for ch in "{}<>|&\\/"): continue
         start_abs = m.start(1) + off
         if not all((start_abs + x) in S.code for x in range(len(stripped))): continue
-        gt = m.start(); lt = m.end() - 1
-        if src[gt] != ">" or src[lt] != "<": continue
+        before = src[:m.start()].rstrip()
+        after = src[m.end():].lstrip()
+        if not (before.endswith(">") and after.startswith("<")): continue
         if not in_comp(start_abs): continue
         kk = key_for(stripped)
         if kk is None: continue

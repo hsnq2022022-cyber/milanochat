@@ -1,5 +1,4 @@
 import { IconWhatsapp, Logo } from "./Icons";
-import { useI18n } from "../i18n/LanguageContext";
 
 /* ============================ شريط الأنشطة المتحرك ============================ */
 
@@ -90,9 +89,9 @@ export function Footer() {
       <div className="max-w-6xl mx-auto px-5 lg:px-8 pt-16 pb-10 grid lg:grid-cols-[1.2fr_1fr] gap-10 items-center">
         <div>
           <h2 className="font-display font-extrabold text-4xl sm:text-5xl leading-[1.15] text-bone">
-            {t("عملاؤك ما ينامون")}
+            عملاؤك ما ينامون
             <br />
-            <span className="text-oro">{t("…وموظفك بعد اليوم ما ينام")}</span>
+            <span className="text-oro">…وموظفك بعد اليوم ما ينام</span>
           </h2>
 
           <p className="mt-4 text-sage leading-7 max-w-md">
@@ -107,14 +106,14 @@ export function Footer() {
             className="group inline-flex items-center justify-center gap-2.5 bg-verde text-ink font-display font-bold text-lg px-8 py-4 rounded-2xl hover:bg-oro transition-all duration-300 active:scale-95 hover:shadow-[0_12px_40px_-12px_rgba(46,194,126,0.4)]"
           >
             <IconWhatsapp className="w-5 h-5" />
-            {t("أنشئ موظفك الآن")}
+            أنشئ موظفك الآن
           </a>
 
           <a
             href="#demo"
             className="inline-flex items-center justify-center gap-2 border border-verde/30 text-mist font-semibold px-8 py-4 rounded-2xl hover:border-oro/60 hover:text-oro transition-all duration-300 active:scale-95"
           >
-            {t("شوفه يشتغل أولاً")}
+            شوفه يشتغل أولاً
           </a>
         </div>
       </div>
@@ -129,7 +128,7 @@ export function Footer() {
               </span>
 
               <span className="font-display font-bold text-2xl text-bone">
-                {t("إدارة ســوشـــيــــال")}<span className="text-oro">.</span>
+                إدارة ســوشـــيــــال<span className="text-oro">.</span>
               </span>
             </a>
 
@@ -165,11 +164,11 @@ export function Footer() {
       {/* الشريط الأخير */}
       <div className="border-t border-verde/10">
         <div className="max-w-6xl mx-auto px-5 lg:px-8 py-5 flex flex-col sm:flex-row items-center justify-between gap-3 text-[11.5px] text-sage/70">
-          <p>{t("© 2026 إدارة ســوشـــيــــال — جميع الحقوق محفوظة.")}</p>
+          <p>© 2026 إدارة ســوشـــيــــال — جميع الحقوق محفوظة.</p>
           <p className="text-center sm:text-left leading-5 max-w-xl">
             الربط عبر «الأجهزة المرتبطة» في واتساب وليس قناة رسمية من Meta، وقد
             تقيّد واتساب أي رقم وفق تقديرها.{" "}
-            <span className="text-oro-soft">{t("اقرأ التفاصيل قبل الربط.")}</span>
+            <span className="text-oro-soft">اقرأ التفاصيل قبل الربط.</span>
           </p>
         </div>
       </div>

@@ -10,7 +10,6 @@ import type {
   WidgetState,
 } from "../types/widget";
 import { IconMinimize } from "../components/Icons";
-import { useI18n } from "../i18n/LanguageContext";
 
 interface WidgetPreviewProps {
   settings: WidgetSettings;
@@ -275,7 +274,7 @@ export default function WidgetPreview({
                 : "bg-night/50 text-sage hover:text-bone"
             }`}
           >
-            {t("سطح المكتب")}
+            سطح المكتب
           </button>
 
           <button
@@ -287,7 +286,7 @@ export default function WidgetPreview({
                 : "bg-night/50 text-sage hover:text-bone"
             }`}
           >
-            {t("جوال")}
+            جوال
           </button>
         </div>
 

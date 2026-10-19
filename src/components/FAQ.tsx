@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { useReveal } from "../hooks/useReveal";
 import { IconPlus, IconWhatsapp } from "./Icons";
-import { useI18n } from "../i18n/LanguageContext";
 
 const ITEMS = [
   {
@@ -66,7 +65,7 @@ export default function FAQ() {
             data-reveal
             className="font-display font-bold text-oro text-lg mb-2"
           >
-            {t("— قبل ما تسألنا")}
+            — قبل ما تسألنا
           </p>
 
           <h2
@@ -74,7 +73,7 @@ export default function FAQ() {
             style={{ transitionDelay: "80ms" }}
             className="font-display font-extrabold text-4xl sm:text-5xl text-bone"
           >
-            {t("الأسئلة اللي توصلنا كل يوم")}
+            الأسئلة اللي توصلنا كل يوم
           </h2>
         </div>
 
@@ -138,7 +137,7 @@ export default function FAQ() {
           className="mt-10 flex flex-col sm:flex-row items-center justify-center gap-3 text-center"
         >
           <p className="text-sm text-sage">
-            {t("سؤالك مو موجود؟ موظف إدارة ســوشـــيــــال نفسه يرد عليك الآن:")}
+            سؤالك مو موجود؟ موظف إدارة ســوشـــيــــال نفسه يرد عليك الآن:
           </p>
 
           <a
@@ -146,7 +145,7 @@ export default function FAQ() {
             className="inline-flex items-center gap-2 bg-verde text-ink font-semibold text-sm px-5 py-2.5 rounded-full hover:bg-oro transition-colors duration-300 active:scale-95"
           >
             <IconWhatsapp className="w-4 h-4" />
-            {t("جرّب تسأله")}
+            جرّب تسأله
           </a>
         </div>
       </div>

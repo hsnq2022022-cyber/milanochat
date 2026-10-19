@@ -24,7 +24,6 @@ import {
   IconCode,
   IconSparkle,
 } from "./Icons";
-import { useI18n } from "../i18n/LanguageContext";
 
 type EditorTab =
   | "general"
@@ -520,7 +519,7 @@ export default function WidgetEditor({
 
           <div className="flex items-center gap-2 text-xs text-sage">
             <span className="w-2 h-2 rounded-full bg-verde animate-pulse" />
-            {t("حفظ تلقائي مفعّل")}
+            حفظ تلقائي مفعّل
           </div>
         </div>
 
@@ -617,7 +616,7 @@ function GeneralTab({
     <div className="space-y-6">
       <div>
         <label className="text-xs text-sage mb-2 block">
-          {t("اسم الـ Widget *")}
+          اسم الـ Widget *
         </label>
 
         <input
@@ -639,7 +638,7 @@ function GeneralTab({
 
       <div>
         <label className="text-xs text-sage mb-2 block">
-          {t("اللغة")}
+          اللغة
         </label>
 
         <select
@@ -655,7 +654,7 @@ function GeneralTab({
           className="input-field"
         >
           <option value="ar">
-            {t("العربية")}
+            العربية
           </option>
 
           <option value="en">
@@ -681,7 +680,7 @@ function GeneralTab({
           />
 
           <span className="text-sm text-bone">
-            {t("اتجاه من اليمين لليسار (RTL)")}
+            اتجاه من اليمين لليسار (RTL)
           </span>
         </label>
       </div>
@@ -862,13 +861,13 @@ function AppearanceTab({
 
       <div>
         <label className="text-xs text-sage mb-2 block">
-          {t("Logo المشروع")}
+          Logo المشروع
         </label>
 
         {!widget && (
           <div className="mb-3 p-3 rounded-lg bg-oro/10 border border-oro/20">
             <p className="text-xs text-oro">
-              {t("احفظ الـ Widget أولاً حتى يصبح له معرف خاص ويمكن رفع الصورة.")}
+              احفظ الـ Widget أولاً حتى يصبح له معرف خاص ويمكن رفع الصورة.
             </p>
           </div>
         )}
@@ -919,7 +918,7 @@ function AppearanceTab({
 
       <div>
         <label className="text-xs text-sage mb-2 block">
-          {t("صورة المساعد (Avatar)")}
+          صورة المساعد (Avatar)
         </label>
 
         <div className="flex items-center gap-3">
@@ -968,7 +967,7 @@ function AppearanceTab({
 
       <div>
         <label className="text-xs text-sage mb-2 block">
-          {t("قوالب جاهزة")}
+          قوالب جاهزة
         </label>
 
         <div className="grid grid-cols-2 gap-2">
@@ -997,7 +996,7 @@ function AppearanceTab({
 
       <div>
         <label className="text-xs text-sage mb-2 block">
-          {t("اللون الأساسي")}
+          اللون الأساسي
         </label>
 
         <div className="flex gap-2">
@@ -1045,7 +1044,7 @@ function AppearanceTab({
 
       <div className="border-t border-verde/10 pt-6">
         <label className="text-sm font-bold text-bone mb-4 block">
-          {t("إعدادات زر المحادثة")}
+          إعدادات زر المحادثة
         </label>
 
         {/* Launcher Size */}
@@ -1085,7 +1084,7 @@ function AppearanceTab({
 
         <div className="mb-4">
           <label className="text-xs text-sage mb-2 block">
-            {t("شكل الزر")}
+            شكل الزر
           </label>
 
           <div className="grid grid-cols-3 gap-2">
@@ -1105,7 +1104,7 @@ function AppearanceTab({
                   : "bg-night/50 text-sage hover:text-bone"
               }`}
             >
-              {t("دائري")}
+              دائري
             </button>
 
             <button
@@ -1124,7 +1123,7 @@ function AppearanceTab({
                   : "bg-night/50 text-sage hover:text-bone"
               }`}
             >
-              {t("مربع")}
+              مربع
             </button>
 
             <button
@@ -1143,7 +1142,7 @@ function AppearanceTab({
                   : "bg-night/50 text-sage hover:text-bone"
               }`}
             >
-              {t("مستدير")}
+              مستدير
             </button>
           </div>
         </div>
@@ -1152,7 +1151,7 @@ function AppearanceTab({
 
         <div className="mb-4">
           <label className="text-xs text-sage mb-2 block">
-            {t("أيقونة الزر")}
+            أيقونة الزر
           </label>
 
           <div className="grid grid-cols-2 gap-2">
@@ -1179,7 +1178,7 @@ function AppearanceTab({
               >
                 <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
               </svg>
-              {t("محادثة")}
+              محادثة
             </button>
 
             <button
@@ -1205,7 +1204,7 @@ function AppearanceTab({
               >
                 <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
               </svg>
-              {t("رسالة")}
+              رسالة
             </button>
 
             <button
@@ -1231,7 +1230,7 @@ function AppearanceTab({
               >
                 <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v6h-2zm0 8h2v2h-2z" />
               </svg>
-              {t("دعم")}
+              دعم
             </button>
 
             <button
@@ -1257,7 +1256,7 @@ function AppearanceTab({
               >
                 <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 17h-2v-2h2v2zm2.07-7.75l-.9.92C13.45 12.9 13 13.5 13 15h-2v-.5c0-1.1.45-2.1 1.17-2.83l1.24-1.26c.37-.36.59-.86.59-1.41 0-1.1-.9-2-2-2s-2 .9-2 2H8c0-2.21 1.79-4 4-4s4 1.79 4 4c0 .88-.36 1.68-.93 2.25z" />
               </svg>
-              {t("مساعدة")}
+              مساعدة
             </button>
 
             <button
@@ -1283,7 +1282,7 @@ function AppearanceTab({
               >
                 <path d="M19 7v2.99s-1.99.01-2 0V7h-3s.01-1.99 0-2h3V2h2v3h3v2h-3zm-3 4V8h-3V2H5c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2v-8h-3zM5 10h6v4H5v-4zm8 8H5v-4h6v4zm3-8h3v4h-3v-4zm0 6h3v2h-3v-2z" />
               </svg>
-              {t("شعار مخصص")}
+              شعار مخصص
             </button>
           </div>
 
@@ -1294,7 +1293,7 @@ function AppearanceTab({
             "custom" && (
             <div className="mt-3 p-3 bg-night/30 rounded-lg border border-verde/10">
               <label className="text-xs text-sage mb-2 block">
-                {t("رفع الشعار (PNG, SVG, JPG - حد أقصى 1MB)")}
+                رفع الشعار (PNG, SVG, JPG - حد أقصى 1MB)
               </label>
 
               <div className="flex items-center gap-3">
@@ -1313,7 +1312,7 @@ function AppearanceTab({
                   />
                 ) : (
                   <div className="w-12 h-12 rounded-lg bg-night/50 border border-verde/20 flex items-center justify-center text-sage text-xs">
-                    {t("لا يوجد")}
+                    لا يوجد
                   </div>
                 )}
 
@@ -1344,7 +1343,7 @@ function AppearanceTab({
 
               {!widget && (
                 <p className="text-xs text-oro mt-2">
-                  {t("احفظ الـ Widget أولاً لرفع الأيقونة.")}
+                  احفظ الـ Widget أولاً لرفع الأيقونة.
                 </p>
               )}
 
@@ -1366,7 +1365,7 @@ function AppearanceTab({
                   }}
                   className="mt-2 text-xs text-oro hover:text-oro-soft transition-colors"
                 >
-                  {t("إزالة الشعار المخصص")}
+                  إزالة الشعار المخصص
                 </button>
               )}
             </div>
@@ -1380,7 +1379,7 @@ function AppearanceTab({
 
       <div>
         <label className="text-xs text-sage mb-2 block">
-          {t("الخط")}
+          الخط
         </label>
 
         <select
@@ -1451,7 +1450,7 @@ function AppearanceTab({
 
       <div>
         <label className="text-xs text-sage mb-2 block">
-          {t("الظل")}
+          الظل
         </label>
 
         <select
@@ -1467,19 +1466,19 @@ function AppearanceTab({
           className="input-field"
         >
           <option value="none">
-            {t("بدون")}
+            بدون
           </option>
 
           <option value="light">
-            {t("خفيف")}
+            خفيف
           </option>
 
           <option value="medium">
-            {t("متوسط")}
+            متوسط
           </option>
 
           <option value="strong">
-            {t("قوي")}
+            قوي
           </option>
         </select>
       </div>
@@ -1490,7 +1489,7 @@ function AppearanceTab({
 
       <div>
         <label className="text-xs text-sage mb-2 block">
-          {t("الموقع")}
+          الموقع
         </label>
 
         <div className="flex gap-2">
@@ -1510,7 +1509,7 @@ function AppearanceTab({
                 : "bg-night/50 text-sage"
             }`}
           >
-            {t("يسار")}
+            يسار
           </button>
 
           <button
@@ -1529,7 +1528,7 @@ function AppearanceTab({
                 : "bg-night/50 text-sage"
             }`}
           >
-            {t("يمين")}
+            يمين
           </button>
         </div>
       </div>
@@ -1576,7 +1575,7 @@ function ChatTab({
     <div className="space-y-6">
       <div>
         <label className="text-xs text-sage mb-2 block">
-          {t("رسالة الترحيب")}
+          رسالة الترحيب
         </label>
 
         <textarea
@@ -1633,7 +1632,7 @@ function ChatTab({
           />
 
           <span className="text-sm text-bone">
-            {t("إظهار مؤشر الكتابة")}
+            إظهار مؤشر الكتابة
           </span>
         </label>
       </div>
@@ -1656,7 +1655,7 @@ function ChatTab({
           />
 
           <span className="text-sm text-bone">
-            {t("إظهار إيصالات القراءة")}
+            إظهار إيصالات القراءة
           </span>
         </label>
       </div>
@@ -1676,7 +1675,7 @@ function BehaviorTab({
     <div className="space-y-6">
       <div>
         <label className="text-xs text-sage mb-2 block">
-          {t("الفتح التلقائي")}
+          الفتح التلقائي
         </label>
 
         <select
@@ -1693,19 +1692,19 @@ function BehaviorTab({
           className="input-field"
         >
           <option value="disabled">
-            {t("معطّل")}
+            معطّل
           </option>
 
           <option value="delay">
-            {t("بعد تأخير")}
+            بعد تأخير
           </option>
 
           <option value="exit_intent">
-            {t("عند نية الخروج")}
+            عند نية الخروج
           </option>
 
           <option value="scroll">
-            {t("عند التمرير")}
+            عند التمرير
           </option>
         </select>
       </div>
@@ -1715,7 +1714,7 @@ function BehaviorTab({
         "delay" && (
         <div>
           <label className="text-xs text-sage mb-2 block">
-            {t("التأخير (ثواني)")}
+            التأخير (ثواني)
           </label>
 
           <input
@@ -1756,7 +1755,7 @@ function BehaviorTab({
           />
 
           <span className="text-sm text-bone">
-            {t("تفعيل صوت التنبيه")}
+            تفعيل صوت التنبيه
           </span>
         </label>
       </div>
@@ -1780,7 +1779,7 @@ function BehaviorTab({
           />
 
           <span className="text-sm text-bone">
-            {t("إخفاء على الجوال")}
+            إخفاء على الجوال
           </span>
         </label>
       </div>
@@ -1816,12 +1815,13 @@ function FormsTab({
           />
 
           <span className="text-sm text-bone">
-            {t("تفعيل نموذج ما قبل المحادثة")}
+            تفعيل نموذج ما قبل المحادثة
           </span>
         </label>
 
         <p className="text-xs text-sage mt-2">
-          {t("اطلب معلومات من الزائر قبل بدء المحادثة (الاسم، البريد، إلخ)")}
+          اطلب معلومات من الزائر قبل بدء
+          المحادثة (الاسم، البريد، إلخ)
         </p>
       </div>
 
@@ -1843,12 +1843,13 @@ function FormsTab({
           />
 
           <span className="text-sm text-bone">
-            {t("تفعيل نموذج ترك رسالة")}
+            تفعيل نموذج ترك رسالة
           </span>
         </label>
 
         <p className="text-xs text-sage mt-2">
-          {t("اسمح للزوار بترك رسالة عند عدم توفر الوكلاء")}
+          اسمح للزوار بترك رسالة عند عدم
+          توفر الوكلاء
         </p>
       </div>
     </div>
@@ -1871,7 +1872,7 @@ function InstallTab({
     <div className="space-y-6">
       <div>
         <label className="text-xs text-sage mb-2 block">
-          {t("كود التضمين")}
+          كود التضمين
         </label>
 
         <div className="bg-night/50 border border-verde/15 rounded-lg p-3">
@@ -1891,12 +1892,12 @@ function InstallTab({
           {copiedCode ? (
             <>
               <IconCheck className="w-4 h-4" />
-              {t("تم النسخ")}
+              تم النسخ
             </>
           ) : (
             <>
               <IconCopy className="w-4 h-4" />
-              {t("نسخ الكود")}
+              نسخ الكود
             </>
           )}
         </button>
@@ -1904,7 +1905,7 @@ function InstallTab({
 
       <div>
         <label className="text-xs text-sage mb-2 block">
-          {t("تعليمات التثبيت")}
+          تعليمات التثبيت
         </label>
 
         <div className="space-y-3 text-xs text-sage">
