@@ -5,6 +5,7 @@
  */
 import { useReveal } from "../hooks/useReveal";
 import { CHANNEL_LIST, CHANNELS } from "../lib/channels";
+import { useI18n } from "../i18n/LanguageContext";
 
 const CARD_CONTENT = [
   {
@@ -50,9 +51,9 @@ export default function ChannelsSection() {
       <div className="max-w-6xl mx-auto px-5 lg:px-8">
         {/* العنوان */}
         <div className="text-center mb-14">
-          <p data-reveal className="font-display font-bold text-oro text-lg mb-2">— ثلاث قنوات، منصة واحدة</p>
+          <p data-reveal className="font-display font-bold text-oro text-lg mb-2">{t("— ثلاث قنوات، منصة واحدة")}</p>
           <h2 data-reveal style={{ transitionDelay: "80ms" }} className="font-display font-extrabold text-4xl sm:text-5xl text-bone">
-            كل رسائلك في مكان واحد
+            {t("كل رسائلك في مكان واحد")}
           </h2>
           <p data-reveal style={{ transitionDelay: "160ms" }} className="mt-5 text-sage text-base sm:text-lg leading-8 max-w-3xl mx-auto">
             أدر محادثات عملائك من واتساب وإنستغرام وفيسبوك عبر لوحة واحدة، واجعل وكلاء الذكاء
@@ -100,15 +101,15 @@ export default function ChannelsSection() {
 
         {/* جدول مقارنة القنوات */}
         <div data-reveal className="mb-16">
-          <h3 className="font-display font-bold text-2xl text-bone mb-5 text-center">مقارنة القنوات</h3>
+          <h3 className="font-display font-bold text-2xl text-bone mb-5 text-center">{t("مقارنة القنوات")}</h3>
           <div className="overflow-x-auto rounded-2xl border border-verde/15 bg-pine/60">
             <table className="w-full text-sm min-w-[560px]" dir="rtl">
               <thead>
                 <tr className="border-b border-verde/15 text-right">
-                  <th className="px-5 py-3.5 font-display font-bold text-mist">القناة</th>
-                  <th className="px-5 py-3.5 font-display font-bold text-mist">استقبال الرسائل</th>
-                  <th className="px-5 py-3.5 font-display font-bold text-mist">الرد من المنصة</th>
-                  <th className="px-5 py-3.5 font-display font-bold text-mist">وكيل ذكاء اصطناعي</th>
+                  <th className="px-5 py-3.5 font-display font-bold text-mist">{t("القناة")}</th>
+                  <th className="px-5 py-3.5 font-display font-bold text-mist">{t("استقبال الرسائل")}</th>
+                  <th className="px-5 py-3.5 font-display font-bold text-mist">{t("الرد من المنصة")}</th>
+                  <th className="px-5 py-3.5 font-display font-bold text-mist">{t("وكيل ذكاء اصطناعي")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -135,7 +136,7 @@ export default function ChannelsSection() {
 
         {/* طريقة العمل */}
         <div>
-          <h3 data-reveal className="font-display font-bold text-2xl text-bone mb-8 text-center">كيف تعمل المنصة؟</h3>
+          <h3 data-reveal className="font-display font-bold text-2xl text-bone mb-8 text-center">{t("كيف تعمل المنصة؟")}</h3>
           <div data-reveal className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-10">
             {STEPS.map((s, i) => (
               <div key={s.n} className="relative bg-pine/60 border border-verde/15 rounded-2xl p-4 text-center">
@@ -169,7 +170,7 @@ export default function ChannelsSection() {
               <div className="text-verde/50 text-2xl hidden lg:block" aria-hidden="true">⟶</div>
               <div className="text-verde/50 text-2xl lg:hidden rotate-90" aria-hidden="true">⟶</div>
               <div className="flex-1 w-full bg-gradient-to-l from-verde/20 to-verde/5 border border-verde/30 rounded-2xl px-6 py-5 text-center">
-                <p className="font-display font-bold text-lg text-bone mb-1">صندوق المحادثات الموحد</p>
+                <p className="font-display font-bold text-lg text-bone mb-1">{t("صندوق المحادثات الموحد")}</p>
                 <p className="text-[12.5px] text-sage leading-6">
                   كل الرسائل من كل القنوات تصل إلى نفس المكان — مع تمييز بصري للمصدر، ووكيل لكل قناة،
                   وفريق بشري جاهز للتدخل متى لزم.

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useInView, usePrefersReducedMotion, useReveal } from "../hooks/useReveal";
 import { IconMic, IconQuestion, IconShieldCheck, IconTicks, IconHandoff, Logo } from "./Icons";
+import { useI18n } from "../i18n/LanguageContext";
 
 type Msg = {
   from: "customer" | "idara" | "system";
@@ -101,7 +102,7 @@ function Phone({ step, typing }: { step: number; typing: boolean }) {
               <img src={`${import.meta.env.BASE_URL}logo.png`} alt="شعار إدارة ســوشـــيــــال" className="w-5.5 h-5.5" />
             </span>
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-bold text-bone truncate">متجر إدارة سوشيال — موظف إدارة</p>
+              <p className="text-sm font-bold text-bone truncate">{t("متجر إدارة سوشيال — موظف إدارة")}</p>
               <p className="text-[11px] text-verde flex items-center gap-1.5">
                 <span className="w-1.5 h-1.5 rounded-full bg-verde live-dot" />
                 {typing ? "يكتب الآن…" : "متصل الآن"}
@@ -113,7 +114,7 @@ function Phone({ step, typing }: { step: number; typing: boolean }) {
           {/* المحادثة */}
           <div ref={bodyRef} className="chat-bg flex-1 overflow-y-auto px-3 py-4 space-y-2.5 scroll-smooth">
             <div className="flex justify-center mb-2">
-              <span className="bg-night/70 text-sage text-[10.5px] px-3 py-1 rounded-full border border-verde/10">اليوم</span>
+              <span className="bg-night/70 text-sage text-[10.5px] px-3 py-1 rounded-full border border-verde/10">{t("اليوم")}</span>
             </div>
             {SCRIPT.slice(0, step).map((m, i) => (
               <Bubble key={i} m={m} />
@@ -131,7 +132,7 @@ function Phone({ step, typing }: { step: number; typing: boolean }) {
 
           {/* شريط الإدخال */}
           <div className="bg-wa-dark px-3 py-2.5 flex items-center gap-2 border-t border-white/5">
-            <div className="flex-1 bg-wa-in rounded-full px-4 py-2.5 text-[12.5px] text-sage/60">اكتب رسالة…</div>
+            <div className="flex-1 bg-wa-in rounded-full px-4 py-2.5 text-[12.5px] text-sage/60">{t("اكتب رسالة…")}</div>
             <span className="w-9 h-9 rounded-full bg-verde text-ink flex items-center justify-center shrink-0">
               <IconMic className="w-4.5 h-4.5" />
             </span>
@@ -213,10 +214,10 @@ export default function ChatDemo() {
               <svg viewBox="0 0 24 24" className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1M3.5 3.5v5h5" />
               </svg>
-              أعد تشغيل المحادثة
+              {t("أعد تشغيل المحادثة")}
             </button>
             {done && !reduced && (
-              <span className="text-[11px] text-sage msg-in">محادثة حقيقية من لوحة عميل</span>
+              <span className="text-[11px] text-sage msg-in">{t("محادثة حقيقية من لوحة عميل")}</span>
             )}
           </div>
         </div>
@@ -224,12 +225,12 @@ export default function ChatDemo() {
         {/* الشرح */}
         <div>
           <p data-reveal className="font-display font-bold text-oro text-lg mb-2">
-            — إدارة سوشيال وهي تشتغل
+            {t("— إدارة سوشيال وهي تشتغل")}
           </p>
           <h2 data-reveal style={{ transitionDelay: "80ms" }} className="font-display font-extrabold text-4xl sm:text-5xl leading-[1.15] text-bone mb-4">
-            شوفها ترد…
+            {t("شوفها ترد…")}
             <br />
-            <span className="text-verde">وشوفها توقف بوقتها</span>
+            <span className="text-verde">{t("وشوفها توقف بوقتها")}</span>
           </h2>
           <p data-reveal style={{ transitionDelay: "160ms" }} className="text-sage leading-8 mb-9 max-w-lg">
             المحادثة اللي تشوفها توضح الفرق بين موظف يرد «أي كلام» وموظف مربوط ببياناتك: يجاوب بدقّة،
@@ -259,7 +260,7 @@ export default function ChatDemo() {
                   <div className="flex items-center gap-2.5 flex-wrap">
                     <h3 className={`font-display font-bold text-lg ${n.gold ? "text-oro" : "text-bone"}`}>{n.title}</h3>
                     {n.gold && (
-                      <span className="text-[10px] font-bold bg-oro text-ink rounded-full px-2.5 py-0.5">الأهم</span>
+                      <span className="text-[10px] font-bold bg-oro text-ink rounded-full px-2.5 py-0.5">{t("الأهم")}</span>
                     )}
                   </div>
                   <p className="text-sm text-sage leading-7 mt-1">{n.body}</p>

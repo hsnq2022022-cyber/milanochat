@@ -12,6 +12,7 @@ import {
   IconPen, IconQuestion, IconHandoff, IconLog, IconCoin, IconSparkle, IconChevronDown,
   IconFacebook, IconInstagram,
 } from "../components/Icons";
+import { useI18n } from "../i18n/LanguageContext";
 
 /* ═══════════ الأنواع ═══════════ */
 
@@ -1074,11 +1075,11 @@ export default function Dashboard() {
                 <span className="inline-flex items-center gap-2 text-verde mb-6">
                   <img src={LOGO_URL} alt="" className="w-11 h-11 rounded-full object-cover" />
                   <span className="font-display font-bold text-3xl text-bone">
-                    إدارة ســوشـــيــــال<span className="text-oro">.</span>
+                    {t("إدارة ســوشـــيــــال")}<span className="text-oro">.</span>
                   </span>
                 </span>
                 <h1 className="font-display font-bold text-3xl lg:text-4xl leading-snug text-bone mb-5">
-                  غرفة عمليات<span className="text-oro"> موظفك الآلي</span>
+                  {t("غرفة عمليات")}<span className="text-oro"> {t("موظفك الآلي")}</span>
                 </h1>
                 <ul className="space-y-3.5">
                   {[
@@ -1116,14 +1117,14 @@ export default function Dashboard() {
                 <h2 className="font-display font-bold text-2xl text-bone mb-1">
                   {authMode === "login" ? "أهلاً بعودتك" : "أنشئ حسابك"}
                 </h2>
-                <p className="text-xs text-sage mb-6">عبر Supabase Auth</p>
+                <p className="text-xs text-sage mb-6">{t("عبر Supabase Auth")}</p>
                 <div className="space-y-4">
                   <div>
-                    <label className="block text-xs font-semibold text-sage mb-1.5">البريد الإلكتروني</label>
+                    <label className="block text-xs font-semibold text-sage mb-1.5">{t("البريد الإلكتروني")}</label>
                     <input dir="ltr" type="email" value={email} onChange={(e) => setEmail(e.target.value)} className={`${cls.input} text-left`} placeholder="you@example.com" />
                   </div>
                   <div>
-                    <label className="block text-xs font-semibold text-sage mb-1.5">كلمة المرور</label>
+                    <label className="block text-xs font-semibold text-sage mb-1.5">{t("كلمة المرور")}</label>
                     <input dir="ltr" type="password" value={password} onChange={(e) => setPassword(e.target.value)} className={`${cls.input} text-left`} placeholder="••••••••" onKeyDown={(e) => e.key === "Enter" && doAuth()} />
                   </div>
                   {authErr && <p className="text-[11.5px] text-oro-soft bg-night/60 border border-oro/25 rounded-xl px-3.5 py-2.5">{authErr}</p>}
@@ -1145,8 +1146,8 @@ export default function Dashboard() {
       <Shell>
         <div className="max-w-xl mx-auto px-5 pt-24 pb-20">
           <div className={`${cls.card} p-8`}>
-            <h2 className="font-display font-bold text-2xl text-bone mb-2">اربط حسابك بمشروعك</h2>
-            <p className="text-sm text-sage leading-6 mb-6">الصق رمز الضم الذي ظهر لك.</p>
+            <h2 className="font-display font-bold text-2xl text-bone mb-2">{t("اربط حسابك بمشروعك")}</h2>
+            <p className="text-sm text-sage leading-6 mb-6">{t("الصق رمز الضم الذي ظهر لك.")}</p>
             <input dir="ltr" value={claimVal} onChange={(e) => setClaimVal(e.target.value)} className={`${cls.input} text-left mb-3`} placeholder="claim token" />
             {claimErr && <p className="text-[11.5px] text-oro-soft mb-3">{claimErr}</p>}
             <button
@@ -1163,10 +1164,10 @@ export default function Dashboard() {
               }}
               className={`${cls.btn} w-full py-3`}
             >
-              ضم الحساب
+              {t("ضم الحساب")}
             </button>
             <button onClick={logout} className="mt-4 w-full text-xs text-sage hover:text-oro underline underline-offset-4">
-              تسجيل خروج
+              {t("تسجيل خروج")}
             </button>
           </div>
         </div>
@@ -1210,7 +1211,7 @@ export default function Dashboard() {
           <a href="#top" className="flex items-center gap-2 group shrink-0">
             <img src={LOGO_URL} alt="" className="w-8 h-8 rounded-full object-cover" />
             <span className="font-display font-bold text-xl text-bone hidden sm:block">
-              إدارة ســوشـــيــــال<span className="text-oro">.</span>
+              {t("إدارة ســوشـــيــــال")}<span className="text-oro">.</span>
             </span>
           </a>
           <div className="flex items-center gap-2.5">
@@ -1219,7 +1220,7 @@ export default function Dashboard() {
             </span>
             <button onClick={() => setPayOpen(true)} className={`${cls.btnGhost} !py-2 !px-3.5 text-xs`}>
               <IconCard className="w-4 h-4" />
-              <span className="hidden sm:inline">اشحن الرصيد</span>
+              <span className="hidden sm:inline">{t("اشحن الرصيد")}</span>
             </button>
             <button onClick={logout} title="خروج" className="p-2.5 rounded-xl text-sage hover:text-oro hover:bg-moss transition-all duration-300">
               <IconLogout className="w-5 h-5" />
@@ -1232,14 +1233,14 @@ export default function Dashboard() {
         {st.credits <= 0 ? (
           <div className="mb-5 flex flex-wrap items-center gap-3 bg-oro/10 border border-oro/40 rounded-2xl px-5 py-3.5 msg-in">
             <span className="text-oro"><IconCoin className="w-5 h-5" /></span>
-            <p className="text-sm text-oro-soft font-semibold flex-1">نفد رصيد الردود — الرد الآلي موقوف حتى الشحن.</p>
-            <button onClick={() => setPayOpen(true)} className={`${cls.btn} !py-2 !px-4 text-xs`}>اشحن الآن</button>
+            <p className="text-sm text-oro-soft font-semibold flex-1">{t("نفد رصيد الردود — الرد الآلي موقوف حتى الشحن.")}</p>
+            <button onClick={() => setPayOpen(true)} className={`${cls.btn} !py-2 !px-4 text-xs`}>{t("اشحن الآن")}</button>
           </div>
         ) : st.credits < 100 ? (
           <div className="mb-5 flex flex-wrap items-center gap-3 bg-night/70 border border-oro/30 rounded-2xl px-5 py-3.5 msg-in">
             <span className="text-oro"><IconCoin className="w-5 h-5" /></span>
             <p className="text-sm text-mist flex-1">الرصيد منخفض ({st.credits} رد متبقٍ) — اشحن قبل توقف الموظف.</p>
-            <button onClick={() => setPayOpen(true)} className={`${cls.btnGhost} !py-2 !px-4 text-xs`}>شحن</button>
+            <button onClick={() => setPayOpen(true)} className={`${cls.btnGhost} !py-2 !px-4 text-xs`}>{t("شحن")}</button>
           </div>
         ) : null}
 
@@ -1248,7 +1249,7 @@ export default function Dashboard() {
             <div className="absolute -bottom-14 -start-14 w-44 h-44 rounded-full bg-verde/10 blur-2xl group-hover:bg-verde/15 transition-colors duration-500" aria-hidden="true" />
             <div className="flex items-start justify-between gap-3 relative">
               <div>
-                <p className="text-[11px] text-sage mb-1.5">حالة واتساب</p>
+                <p className="text-[11px] text-sage mb-1.5">{t("حالة واتساب")}</p>
                 <p className="flex items-center gap-2 font-display font-bold text-lg text-bone">
                   <span className={`w-2.5 h-2.5 rounded-full ${st.waStatus === "connected" ? "bg-verde live-dot" : "bg-oro"}`} />
                   {st.waStatus === "connected" ? "متصل" : st.waStatus === "qr" ? "بانتظار المسح" : "غير متصل"}
@@ -1259,28 +1260,28 @@ export default function Dashboard() {
               </div>
               {st.waStatus === "connected" ? (
                 <span className="text-xs text-verde font-semibold flex items-center gap-1">
-                  <IconWhatsapp className="w-4 h-4" /> متصل عبر Cloud API
+                  <IconWhatsapp className="w-4 h-4" /> {t("متصل عبر Cloud API")}
                 </span>
               ) : (
                 <span className="text-xs text-oro font-semibold flex items-center gap-1">
-                  <IconWhatsapp className="w-4 h-4" /> تحقق من إعدادات Cloud API
+                  <IconWhatsapp className="w-4 h-4" /> {t("تحقق من إعدادات Cloud API")}
                 </span>
               )}
             </div>
             <div className="mt-4 flex items-center gap-2 text-[11px] text-sage relative">
               <IconRefresh className="w-3.5 h-3.5 text-verde" />
-              تتحدث الحالة تلقائيًا كل بضع ثوانٍ
+              {t("تتحدث الحالة تلقائيًا كل بضع ثوانٍ")}
             </div>
           </section>
 
           <section className={`${cls.card} md:col-span-4 p-5 group hover:border-verde/35 transition-colors duration-300`}>
             <div className="flex items-center justify-between mb-2">
-              <p className="text-[11px] text-sage">رصيد الردود</p>
+              <p className="text-[11px] text-sage">{t("رصيد الردود")}</p>
               <span className="text-verde"><IconCoin className="w-4.5 h-4.5" /></span>
             </div>
             <p className="font-display font-bold text-3xl text-bone tabular-nums leading-none">
               {st.credits.toLocaleString("en")}
-              <span className="text-xs text-sage font-body font-normal ms-1.5">من 1,000</span>
+              <span className="text-xs text-sage font-body font-normal ms-1.5">{t("من 1,000")}</span>
             </p>
             <div className="mt-3.5 flex gap-[3px]" aria-hidden="true">
               {Array.from({ length: 25 }).map((_, i) => (
@@ -1303,7 +1304,7 @@ export default function Dashboard() {
                 <span className="text-sage group-hover:text-verde transition-colors"><IconLog className="w-4.5 h-4.5" /></span>
                 <span className="font-display font-bold text-2xl text-bone tabular-nums">{st.convs.length}</span>
               </div>
-              <p className="text-[11px] text-sage mt-1">محادثة نشطة</p>
+              <p className="text-[11px] text-sage mt-1">{t("محادثة نشطة")}</p>
             </button>
             <button onClick={() => setTab("unresolved")} className={`${cls.card} p-4 text-start group hover:border-oro/50 hover:-translate-y-0.5 transition-all duration-300`}>
               <div className="flex items-center justify-between">
@@ -1312,7 +1313,7 @@ export default function Dashboard() {
                   {st.openUnresolved}
                 </span>
               </div>
-              <p className="text-[11px] text-sage mt-1">سؤال ينتظر تدخلّك</p>
+              <p className="text-[11px] text-sage mt-1">{t("سؤال ينتظر تدخلّك")}</p>
             </button>
           </section>
         </div>
@@ -1340,7 +1341,7 @@ export default function Dashboard() {
           <div className="grid lg:grid-cols-[320px_1fr] gap-4 items-start">
             <aside className={`${cls.card} overflow-hidden ${mobileThread ? "hidden lg:block" : ""}`}>
               <div className="px-4 py-3.5 border-b border-verde/10 flex items-center justify-between">
-                <p className="text-xs font-bold text-sage">صندوق المحادثات الموحد</p>
+                <p className="text-xs font-bold text-sage">{t("صندوق المحادثات الموحد")}</p>
                 <span className="w-2 h-2 rounded-full bg-verde live-dot" />
               </div>
               <div className="px-3 py-2.5 border-b border-verde/8 flex gap-1.5 flex-wrap">
@@ -1371,7 +1372,7 @@ export default function Dashboard() {
                   ))
                 ) : st.convs.filter((c) => convFilter === "all" || (c.channel ?? "whatsapp") === convFilter).length === 0 ? (
                   <li className="px-5 py-10 text-center text-xs text-sage/70 leading-6">
-                    لا محادثات بعد — اربط قناة من تبويب «القنوات».
+                    {t("لا محادثات بعد — اربط قناة من تبويب «القنوات».")}
                   </li>
                 ) : st.convs.filter((c) => convFilter === "all" || (c.channel ?? "whatsapp") === convFilter).map((c) => {
                   const sel = c.id === activeConv;
@@ -1407,7 +1408,7 @@ export default function Dashboard() {
                               <ChannelBadge channel={ch} />
                               {c.transferred && (
                                 <span className="text-[9.5px] font-bold text-oro-soft bg-oro/10 border border-oro/30 rounded-full px-2 py-0.5 inline-flex items-center gap-1">
-                                  <IconHandoff className="w-3 h-3" /> محوّلة لبشري
+                                  <IconHandoff className="w-3 h-3" /> {t("محوّلة لبشري")}
                                 </span>
                               )}
                               {typeof c.unreadCount === "number" && c.unreadCount > 0 && !sel && (
@@ -1429,7 +1430,7 @@ export default function Dashboard() {
               {!active ? (
                 <div className="flex-1 flex flex-col items-center justify-center text-center p-10 gap-3">
                   <span className="text-verde/50"><IconLog className="w-10 h-10" /></span>
-                  <p className="text-sm text-sage">اختر محادثة لعرض رسائلها والرد منها</p>
+                  <p className="text-sm text-sage">{t("اختر محادثة لعرض رسائلها والرد منها")}</p>
                 </div>
               ) : (
                 <>
@@ -1461,7 +1462,7 @@ export default function Dashboard() {
                         }}
                         className="text-[10px] font-bold text-red-600 bg-red-100 border border-red-300 rounded-full px-2.5 py-1 inline-flex items-center gap-1"
                       >
-                        <IconX className="w-3 h-3" /> إلغاء
+                        <IconX className="w-3 h-3" /> {t("إلغاء")}
                       </button>
                     ) : !active.transferred ? (
                       <button
@@ -1482,7 +1483,7 @@ export default function Dashboard() {
                         }}
                         className="text-[10px] font-bold text-emerald-600 bg-emerald-100 border border-emerald-300 rounded-full px-2.5 py-1 inline-flex items-center gap-1"
                       >
-                        <IconCheck className="w-3 h-3" /> العودة للآلي
+                        <IconCheck className="w-3 h-3" /> {t("العودة للآلي")}
                       </button>
                     )}
                   </div>
@@ -1547,7 +1548,7 @@ export default function Dashboard() {
             {st.unresolved.length === 0 && (
               <div className={`${cls.card} p-12 text-center`}>
                 <span className="text-verde inline-block mb-3"><IconCheck className="w-8 h-8" /></span>
-                <p className="font-display font-bold text-lg text-bone">لا أسئلة عالقة</p>
+                <p className="font-display font-bold text-lg text-bone">{t("لا أسئلة عالقة")}</p>
               </div>
             )}
             {st.unresolved.map((u) => {
@@ -1577,7 +1578,7 @@ export default function Dashboard() {
             <div className="flex items-center justify-between mb-3">
               <p className="text-sm font-bold text-bone inline-flex items-center gap-2">
                 <IconSparkle className="w-4.5 h-4.5 text-oro" />
-                رسالة توجيه الوكيل (System Message)
+                {t("رسالة توجيه الوكيل (System Message)")}
               </p>
               <span className="text-[10.5px] text-sage tabular-nums">
                 {agentPrompt.length} / 8000
@@ -1612,7 +1613,7 @@ export default function Dashboard() {
                 onClick={() => setAgentPrompt("")}
                 className={`${cls.btnGhost} !py-2 !px-4 text-xs`}
               >
-                مسح الحقل
+                {t("مسح الحقل")}
               </button>
             </div>
           </section>
@@ -1620,12 +1621,12 @@ export default function Dashboard() {
             <section className={`${cls.card} overflow-hidden`}>
               <div className="px-5 py-4 border-b border-verde/10">
                 <p className="text-sm font-bold text-bone inline-flex items-center gap-2">
-                  <IconDatabase className="w-4.5 h-4.5 text-verde" /> مصادر معلومات الموظف
+                  <IconDatabase className="w-4.5 h-4.5 text-verde" /> {t("مصادر معلومات الموظف")}
                 </p>
               </div>
               <ul className="divide-y divide-verde/8">
                 {st.sources.length === 0 && (
-                  <li className="px-5 py-12 text-center text-xs text-sage/70">لا مصادر بعد.</li>
+                  <li className="px-5 py-12 text-center text-xs text-sage/70">{t("لا مصادر بعد.")}</li>
                 )}
                 {st.sources.map((s) => (
                   <li key={s.id} className="px-5 py-4 flex items-center gap-3.5">
@@ -1647,7 +1648,7 @@ export default function Dashboard() {
             </section>
 
             <aside className={`${cls.card} p-5`}>
-              <p className="text-sm font-bold text-bone mb-4">أضف مصدرًا جديدًا</p>
+              <p className="text-sm font-bold text-bone mb-4">{t("أضف مصدرًا جديدًا")}</p>
               <div className="flex bg-night/60 border border-verde/15 rounded-xl p-1 mb-4">
                 {(["url", "text"] as const).map((k) => (
                   <button
@@ -1665,7 +1666,7 @@ export default function Dashboard() {
                 <textarea value={newSource.text} onChange={(e) => setNewSource((p) => ({ ...p, text: e.target.value }))} rows={5} className={`${cls.input} resize-none mb-4`} placeholder="الصق معلومات مشروعك…" />
               )}
               <button onClick={addSource} className={`${cls.btn} w-full py-3`}>
-                <IconPlus className="w-4 h-4" /> استخراج وفهرسة
+                <IconPlus className="w-4 h-4" /> {t("استخراج وفهرسة")}
               </button>
             </aside>
           </div>
@@ -1676,25 +1677,25 @@ export default function Dashboard() {
           <div className="grid lg:grid-cols-[1fr_400px] gap-4 items-start">
             <section className={`${cls.card} overflow-hidden`}>
               <div className="px-5 py-4 border-b border-verde/10 flex items-center justify-between">
-                <p className="text-sm font-bold text-bone">💬 Widgets الخاصة بك</p>
+                <p className="text-sm font-bold text-bone">{t("💬 Widgets الخاصة بك")}</p>
                 <span className="text-[11px] text-sage">{widgets.length} widget</span>
               </div>
               <ul className="divide-y divide-verde/8">
                 {widgets.length === 0 && (
-                  <li className="px-5 py-12 text-center text-xs text-sage/70">لا widgets بعد.</li>
+                  <li className="px-5 py-12 text-center text-xs text-sage/70">{t("لا widgets بعد.")}</li>
                 )}
                 {widgets.map((w) => (
                   <li key={w.id} className="px-5 py-4">
                     <p className="text-[14px] font-semibold text-bone truncate">{w.name}</p>
                     <div className="flex gap-2 mt-2 flex-wrap">
-                      <button onClick={() => setWidgetPreview(w)} className="text-[11px] text-verde hover:text-oro">معاينة</button>
+                      <button onClick={() => setWidgetPreview(w)} className="text-[11px] text-verde hover:text-oro">{t("معاينة")}</button>
                       <button onClick={() => copyEmbedCode(w.public_token)} className="text-[11px] text-verde hover:text-oro">
                         {copiedCode === w.public_token ? "✓ تم النسخ" : "نسخ الكود"}
                       </button>
                       <button onClick={() => toggleWidget(w.id, !w.enabled)} className="text-[11px] text-oro hover:text-bone">
                         {w.enabled ? "تعطيل" : "تفعيل"}
                       </button>
-                      <button onClick={() => deleteWidget(w.id)} className="text-[11px] text-red-400 hover:text-red-300">حذف</button>
+                      <button onClick={() => deleteWidget(w.id)} className="text-[11px] text-red-400 hover:text-red-300">{t("حذف")}</button>
                     </div>
                   </li>
                 ))}
@@ -1702,11 +1703,11 @@ export default function Dashboard() {
             </section>
 
             <aside className={`${cls.card} p-5`}>
-              <p className="text-sm font-bold text-bone mb-4">إنشاء Widget جديد</p>
+              <p className="text-sm font-bold text-bone mb-4">{t("إنشاء Widget جديد")}</p>
               <div className="space-y-3">
                 <input value={widgetForm.name} onChange={(e) => setWidgetForm({ ...widgetForm, name: e.target.value })} className={cls.input} placeholder="اسم الـ widget" />
                 <textarea value={widgetForm.welcomeMessage} onChange={(e) => setWidgetForm({ ...widgetForm, welcomeMessage: e.target.value })} rows={2} className={`${cls.input} resize-none`} placeholder="رسالة الترحيب" />
-                <button onClick={createWidget} className={`${cls.btn} w-full py-3`}>إنشاء Widget</button>
+                <button onClick={createWidget} className={`${cls.btn} w-full py-3`}>{t("إنشاء Widget")}</button>
               </div>
             </aside>
           </div>
@@ -1715,8 +1716,8 @@ export default function Dashboard() {
         {tab === "channels" && (
           <div className="space-y-6">
             <div>
-              <h2 className="font-display font-bold text-2xl text-bone">القنوات والحسابات</h2>
-              <p className="text-sm text-sage mt-1">اربط قنوات التواصل الخاصة بنشاطك التجاري.</p>
+              <h2 className="font-display font-bold text-2xl text-bone">{t("القنوات والحسابات")}</h2>
+              <p className="text-sm text-sage mt-1">{t("اربط قنوات التواصل الخاصة بنشاطك التجاري.")}</p>
             </div>
 
             <div className="grid md:grid-cols-3 gap-4">
@@ -1733,13 +1734,13 @@ export default function Dashboard() {
                   </span>
                 </div>
                 <h3 className="font-display font-bold text-lg text-bone mb-1">WhatsApp Business</h3>
-                <p className="text-xs text-sage mb-2 leading-5">الرسائل عبر WhatsApp Cloud API.</p>
+                <p className="text-xs text-sage mb-2 leading-5">{t("الرسائل عبر WhatsApp Cloud API.")}</p>
                 {st.phone && (
                   <p className="text-[11px] text-mist mb-3 tabular-nums" dir="ltr">+{st.phone.replace(/\D/g, "")}</p>
                 )}
                 <div className="mt-auto">
                   <button onClick={() => handleConnectChannel("whatsapp")} className={`${cls.btn} w-full py-2.5 text-xs`}>
-                    إعداد الربط
+                    {t("إعداد الربط")}
                   </button>
                 </div>
               </div>
@@ -1757,7 +1758,7 @@ export default function Dashboard() {
                   </span>
                 </div>
                 <h3 className="font-display font-bold text-lg text-bone mb-1">Facebook Messenger</h3>
-                <p className="text-xs text-sage mb-3 leading-5">اربط صفحات Facebook لإدارة رسائل Messenger.</p>
+                <p className="text-xs text-sage mb-3 leading-5">{t("اربط صفحات Facebook لإدارة رسائل Messenger.")}</p>
                 {fbAccounts.length > 0 ? (
                   <ul className="space-y-1.5 mb-3">
                     {fbAccounts.map((a) => (
@@ -1768,7 +1769,7 @@ export default function Dashboard() {
                           <span className="w-6 h-6 rounded-full bg-[#1877F2]/15 text-[#6ea3f5] flex items-center justify-center"><IconFacebook className="w-3.5 h-3.5" /></span>
                         )}
                         <span className="text-[11.5px] text-bone font-semibold truncate flex-1">{a.display_name ?? a.external_id}</span>
-                        <button onClick={() => openManageAccount(a)} className="text-[10px] font-bold text-oro hover:text-bone shrink-0">إدارة</button>
+                        <button onClick={() => openManageAccount(a)} className="text-[10px] font-bold text-oro hover:text-bone shrink-0">{t("إدارة")}</button>
                       </li>
                     ))}
                   </ul>
@@ -1793,7 +1794,7 @@ export default function Dashboard() {
                   </span>
                 </div>
                 <h3 className="font-display font-bold text-lg text-bone mb-1">Instagram DM</h3>
-                <p className="text-xs text-sage mb-3 leading-5">اربط حساب Instagram الاحترافي لإدارة الرسائل.</p>
+                <p className="text-xs text-sage mb-3 leading-5">{t("اربط حساب Instagram الاحترافي لإدارة الرسائل.")}</p>
 
                 {igAccounts.length > 0 ? (
                   <div className="space-y-2 mb-3">
@@ -1826,7 +1827,7 @@ export default function Dashboard() {
                           onClick={() => openManageAccount(a)}
                           className="text-[10px] font-bold text-oro hover:text-bone shrink-0"
                         >
-                          إدارة
+                          {t("إدارة")}
                         </button>
                       </div>
                     ))}
@@ -1839,7 +1840,7 @@ export default function Dashboard() {
                   </button>
                   {igAccounts.length > 0 && (
                     <button onClick={() => disconnectSocialChannel("instagram")} className="w-full py-2 text-[11px] font-bold text-red-300/80 hover:text-red-300 border border-red-400/20 rounded-xl">
-                      فصل القناة
+                      {t("فصل القناة")}
                     </button>
                   )}
                 </div>
@@ -1853,7 +1854,7 @@ export default function Dashboard() {
             <button className="absolute inset-0 bg-night/80 backdrop-blur-sm" onClick={() => setManageAcc(null)} aria-label="إغلاق" />
             <div className="relative ms-auto h-full w-full max-w-md bg-pine border-s border-verde/25 overflow-y-auto p-6 space-y-5 msg-in">
               <div className="flex items-center justify-between">
-                <h3 className="font-display font-bold text-lg text-bone">إدارة الحساب</h3>
+                <h3 className="font-display font-bold text-lg text-bone">{t("إدارة الحساب")}</h3>
                 <button onClick={() => setManageAcc(null)} className="p-2 text-sage hover:text-bone">
                   <IconX className="w-5 h-5" />
                 </button>
@@ -1880,9 +1881,9 @@ export default function Dashboard() {
               </div>
 
               <div className={`${cls.card} p-4 space-y-3`}>
-                <p className="text-xs font-bold text-sage">وكيل الذكاء الاصطناعي</p>
+                <p className="text-xs font-bold text-sage">{t("وكيل الذكاء الاصطناعي")}</p>
                 <label className="flex items-center justify-between gap-2 cursor-pointer">
-                  <span className="text-[12.5px] text-bone">تفعيل الوكيل</span>
+                  <span className="text-[12.5px] text-bone">{t("تفعيل الوكيل")}</span>
                   <input
                     type="checkbox"
                     checked={manageAcc.agent_enabled}
@@ -1895,7 +1896,7 @@ export default function Dashboard() {
                   />
                 </label>
                 <label className="flex items-center justify-between gap-2 cursor-pointer">
-                  <span className="text-[12.5px] text-bone">الرد التلقائي</span>
+                  <span className="text-[12.5px] text-bone">{t("الرد التلقائي")}</span>
                   <input
                     type="checkbox"
                     checked={manageAcc.auto_reply}
@@ -1910,20 +1911,20 @@ export default function Dashboard() {
               </div>
 
               <div className={`${cls.card} p-4 space-y-3`}>
-                <p className="text-xs font-bold text-sage">التحويل إلى موظف</p>
+                <p className="text-xs font-bold text-sage">{t("التحويل إلى موظف")}</p>
                 <label className="flex items-center justify-between gap-2 cursor-pointer">
-                  <span className="text-[12.5px] text-bone">عند طلب العميل</span>
+                  <span className="text-[12.5px] text-bone">{t("عند طلب العميل")}</span>
                   <input type="checkbox" checked={handoffCfg.onRequest} onChange={(e) => setHandoffCfg({ ...handoffCfg, onRequest: e.target.checked })} className="accent-verde w-4 h-4" />
                 </label>
                 <label className="flex items-center justify-between gap-2 cursor-pointer">
-                  <span className="text-[12.5px] text-bone">عند عدم معرفة الإجابة</span>
+                  <span className="text-[12.5px] text-bone">{t("عند عدم معرفة الإجابة")}</span>
                   <input type="checkbox" checked={handoffCfg.onNoAnswer} onChange={(e) => setHandoffCfg({ ...handoffCfg, onNoAnswer: e.target.checked })} className="accent-verde w-4 h-4" />
                 </label>
                 <div>
-                  <label className="block text-[11px] text-sage mb-1">كلمات مفتاحية (مفصولة بفواصل)</label>
+                  <label className="block text-[11px] text-sage mb-1">{t("كلمات مفتاحية (مفصولة بفواصل)")}</label>
                   <input value={handoffCfg.keywords} onChange={(e) => setHandoffCfg({ ...handoffCfg, keywords: e.target.value })} className={cls.input} placeholder="شكوى، استرجاع" />
                 </div>
-                <button onClick={saveHandoffRules} className={`${cls.btn} w-full py-2.5 text-xs`}>حفظ القواعد</button>
+                <button onClick={saveHandoffRules} className={`${cls.btn} w-full py-2.5 text-xs`}>{t("حفظ القواعد")}</button>
               </div>
 
               <div className="flex gap-2">
@@ -1931,13 +1932,13 @@ export default function Dashboard() {
                   onClick={() => startMetaOAuth(manageAcc.channel as "facebook" | "instagram")}
                   className={`${cls.btnGhost} flex-1 py-2.5 text-xs`}
                 >
-                  إعادة الاتصال
+                  {t("إعادة الاتصال")}
                 </button>
                 <button
                   onClick={() => disconnectAccount(manageAcc)}
                   className="inline-flex items-center justify-center gap-2 border border-red-500/40 text-red-400 font-semibold text-sm px-4 py-2.5 rounded-xl hover:bg-red-500/10 text-xs flex-1"
                 >
-                  فصل الحساب
+                  {t("فصل الحساب")}
                 </button>
               </div>
             </div>
@@ -1951,7 +1952,7 @@ export default function Dashboard() {
             <button onClick={() => setWidgetPreview(null)} className="absolute top-4 left-4 text-sage hover:text-bone">
               <IconX className="w-5 h-5" />
             </button>
-            <h3 className="font-display font-bold text-xl text-bone mb-4 text-center">معاينة Widget</h3>
+            <h3 className="font-display font-bold text-xl text-bone mb-4 text-center">{t("معاينة Widget")}</h3>
             <p className="text-center text-sm text-sage">{widgetPreview.name}</p>
           </div>
         </div>
@@ -1964,7 +1965,7 @@ export default function Dashboard() {
             <button onClick={() => setPayOpen(false)} className="absolute top-4 left-4 text-sage hover:text-bone">
               <IconX className="w-5 h-5" />
             </button>
-            <h3 className="font-display font-bold text-xl text-bone mb-1">اشحن رصيد الردود</h3>
+            <h3 className="font-display font-bold text-xl text-bone mb-1">{t("اشحن رصيد الردود")}</h3>
             <div className="space-y-3">
               {[
                 { id: "starter", name: "البداية", credits: 1000, price: 35000 },
@@ -1986,7 +1987,7 @@ export default function Dashboard() {
                     <span className="block text-[11px] text-sage mt-0.5">{p.credits.toLocaleString("en")} رد</span>
                   </span>
                   <span className="font-display font-bold text-xl text-bone tabular-nums">
-                    {p.price.toLocaleString("en")} <span className="text-[11px] text-sage">د.ع</span>
+                    {p.price.toLocaleString("en")} <span className="text-[11px] text-sage">{t("د.ع")}</span>
                   </span>
                 </button>
               ))}

@@ -10,6 +10,7 @@ import {
   IconQuestion,
   IconShieldCheck,
 } from "./Icons";
+import { useI18n } from "../i18n/LanguageContext";
 
 type G = {
   n: string;
@@ -46,7 +47,7 @@ function SourcesDiagram() {
         <span className="w-14 h-14 rounded-2xl bg-moss border border-verde/40 flex items-center justify-center text-verde shadow-[0_10px_30px_-10px_rgba(46,194,126,0.4)]">
           <img src={`${import.meta.env.BASE_URL}logo.png`} alt="شعار إدارة ســوشـــيــــال" className="w-8 h-8" />
         </span>
-        <span className="text-[11px] text-sage font-semibold">إدارة ســوشـــيــــال</span>
+        <span className="text-[11px] text-sage font-semibold">{t("إدارة ســوشـــيــــال")}</span>
       </div>
     </div>
   );
@@ -101,15 +102,15 @@ export default function Guarantees() {
       <div className="max-w-6xl mx-auto px-5 lg:px-8">
         <div className="max-w-2xl mb-12">
           <p data-reveal className="font-display font-bold text-oro text-lg mb-2">
-            — ليش تأمنه على عملائك؟
+            {t("— ليش تأمنه على عملائك؟")}
           </p>
           <h2 data-reveal style={{ transitionDelay: "80ms" }} className="font-display font-extrabold text-4xl sm:text-5xl leading-[1.15] text-bone">
-            الضمانات مبنية في النظام،
+            {t("الضمانات مبنية في النظام،")}
             <br />
-            <span className="text-sage">مو مجرد وعود</span>
+            <span className="text-sage">{t("مو مجرد وعود")}</span>
           </h2>
           <p data-reveal style={{ transitionDelay: "160ms" }} className="mt-4 text-sage leading-7">
-            ما نطلب منك تثق فينا — هذي ست حراسات تشتغل على كل رسالة، قبل ما توصل لعميلك.
+            {t("ما نطلب منك تثق فينا — هذي ست حراسات تشتغل على كل رسالة، قبل ما توصل لعميلك.")}
           </p>
         </div>
 

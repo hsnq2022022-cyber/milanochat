@@ -17,6 +17,7 @@ import {
   IconX,
   IconChat,
 } from "../components/Icons";
+import { useI18n } from "../i18n/LanguageContext";
 
 export default function Widgets() {
   const sb = getSupabase();
@@ -161,18 +162,18 @@ export default function Widgets() {
           <div className="flex items-center justify-between mb-6">
             <div>
               <h1 className="font-display font-bold text-3xl text-bone mb-2">Widgets</h1>
-              <p className="text-sage text-sm">أنشئ مساعدًا ذكيًا وادمجه في موقعك بسهولة</p>
+              <p className="text-sage text-sm">{t("أنشئ مساعدًا ذكيًا وادمجه في موقعك بسهولة")}</p>
             </div>
             <button onClick={() => openEditor()} className="btn-primary flex items-center gap-2">
               <IconPlus className="w-5 h-5" />
-              إنشاء Widget
+              {t("إنشاء Widget")}
             </button>
           </div>
 
           {/* Stats */}
           <div className="grid grid-cols-3 gap-4">
             <div className="bg-pine/70 border border-verde/15 rounded-2xl p-5">
-              <p className="text-sage text-xs mb-1">إجمالي Widgets</p>
+              <p className="text-sage text-xs mb-1">{t("إجمالي Widgets")}</p>
               <p className="font-display font-bold text-3xl text-bone">{stats.total}</p>
             </div>
             <div className="bg-pine/70 border border-verde/15 rounded-2xl p-5">
@@ -194,10 +195,10 @@ export default function Widgets() {
             <div className="w-20 h-20 mx-auto mb-6 rounded-full bg-moss flex items-center justify-center">
               <IconChat className="w-10 h-10 text-verde" />
             </div>
-            <h3 className="font-display font-bold text-xl text-bone mb-2">لا توجد Widgets بعد</h3>
-            <p className="text-sage text-sm mb-6">أنشئ أول widget وادمجه في موقعك</p>
+            <h3 className="font-display font-bold text-xl text-bone mb-2">{t("لا توجد Widgets بعد")}</h3>
+            <p className="text-sage text-sm mb-6">{t("أنشئ أول widget وادمجه في موقعك")}</p>
             <button onClick={() => openEditor()} className="btn-primary">
-              إنشاء Widget
+              {t("إنشاء Widget")}
             </button>
           </div>
         ) : (
@@ -251,7 +252,7 @@ export default function Widgets() {
                     className="flex-1 btn-secondary flex items-center justify-center gap-1"
                   >
                     <IconEdit className="w-4 h-4" />
-                    تعديل
+                    {t("تعديل")}
                   </button>
                   <button
                     onClick={() => copyEmbedCode(widget)}
@@ -260,12 +261,12 @@ export default function Widgets() {
                     {copiedToken === widget.public_token ? (
                       <>
                         <IconCheck className="w-4 h-4" />
-                        تم النسخ
+                        {t("تم النسخ")}
                       </>
                     ) : (
                       <>
                         <IconCopy className="w-4 h-4" />
-                        نسخ الكود
+                        {t("نسخ الكود")}
                       </>
                     )}
                   </button>
@@ -297,16 +298,16 @@ export default function Widgets() {
       {showDeleteConfirm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-night/80 backdrop-blur-sm">
           <div className="bg-pine border border-verde/20 rounded-2xl p-6 max-w-md">
-            <h3 className="font-display font-bold text-xl text-bone mb-3">حذف Widget</h3>
+            <h3 className="font-display font-bold text-xl text-bone mb-3">{t("حذف Widget")}</h3>
             <p className="text-sage text-sm mb-6">
-              هل أنت متأكد من حذف هذا الـ widget؟ لا يمكن التراجع عن هذا الإجراء.
+              {t("هل أنت متأكد من حذف هذا الـ widget؟ لا يمكن التراجع عن هذا الإجراء.")}
             </p>
             <div className="flex gap-2">
               <button onClick={() => setShowDeleteConfirm(null)} className="btn-secondary flex-1">
-                إلغاء
+                {t("إلغاء")}
               </button>
               <button onClick={() => deleteWidget(showDeleteConfirm)} className="btn-danger flex-1">
-                حذف
+                {t("حذف")}
               </button>
             </div>
           </div>

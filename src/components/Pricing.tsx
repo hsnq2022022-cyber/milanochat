@@ -1,5 +1,6 @@
 import { useReveal } from "../hooks/useReveal";
 import { IconArrowStart, IconBolt, IconCheck, IconCoin, IconInfinity, IconSparkle, IconWhatsapp, Logo } from "./Icons";
+import { useI18n } from "../i18n/LanguageContext";
 
 const STEPS = [
   {
@@ -46,12 +47,12 @@ export default function Pricing() {
           {/* بطاقة السعر */}
           <div>
             <p data-reveal className="font-display font-bold text-verde-deep text-lg mb-2">
-              — كم يكلفك الموظف؟
+              {t("— كم يكلفك الموظف؟")}
             </p>
             <h2 data-reveal style={{ transitionDelay: "80ms" }} className="font-display font-extrabold text-4xl sm:text-5xl leading-[1.15] text-ink mb-10">
-              دفعة واحدة.
+              {t("دفعة واحدة.")}
               <br />
-              <span className="text-verde-deep">وبعدها ما تدفع إلا اللي تستخدمه</span>
+              <span className="text-verde-deep">{t("وبعدها ما تدفع إلا اللي تستخدمه")}</span>
             </h2>
 
             <article
@@ -67,15 +68,15 @@ export default function Pricing() {
               <div className="relative flex flex-wrap items-end justify-between gap-6">
                 <div>
                   <p className="font-display font-extrabold text-7xl leading-none text-bone">
-                    40,000 <span className="text-2xl text-oro">دينار</span>
+                    40,000 <span className="text-2xl text-oro">{t("دينار")}</span>
                   </p>
-                  <p className="mt-2 text-sm text-sage">دفعة واحدة — يشمل إنشاء الموظف + 1,000 رد ذكي</p>
+                  <p className="mt-2 text-sm text-sage">{t("دفعة واحدة — يشمل إنشاء الموظف + 1,000 رد ذكي")}</p>
                 </div>
                 <a
                   href="#start"
                   className="group inline-flex items-center gap-2.5 bg-verde text-ink font-display font-bold text-lg px-7 py-3.5 rounded-2xl hover:bg-oro transition-all duration-300 active:scale-95 hover:shadow-[0_16px_40px_-12px_rgba(232,178,75,0.5)]"
                 >
-                  ابدأ الآن
+                  {t("ابدأ الآن")}
                   <span className="transition-transform duration-300 group-hover:-translate-x-1">
                     <IconArrowStart className="w-5 h-5" />
                   </span>
@@ -107,10 +108,10 @@ export default function Pricing() {
                 <span className="text-verde-deep">
                   <IconCoin className="w-6 h-6" />
                 </span>
-                خلص الرصيد؟ اشحن بس
+                {t("خلص الرصيد؟ اشحن بس")}
               </h3>
               <p data-reveal style={{ transitionDelay: "60ms" }} className="text-sm text-ink/60 mb-5">
-                ما فيه اشتراك ولا رسوم خفية — تدفع على الردود اللي توصل فعلاً.
+                {t("ما فيه اشتراك ولا رسوم خفية — تدفع على الردود اللي توصل فعلاً.")}
               </p>
 
               <div className="space-y-3">
@@ -133,7 +134,7 @@ export default function Pricing() {
                       <p className="text-[11.5px] text-ink/50 mt-0.5 tabular-nums">{p.per}</p>
                     </div>
                     <p className="font-display font-extrabold text-2xl text-ink group-hover:text-verde-deep transition-colors">
-                      {p.price} <span className="text-sm text-ink/50">دينار</span>
+                      {p.price} <span className="text-sm text-ink/50">{t("دينار")}</span>
                     </p>
                   </div>
                 ))}
@@ -145,7 +146,7 @@ export default function Pricing() {
                 <span className="text-oro">
                   <IconInfinity className="w-6 h-6" />
                 </span>
-                ثلاث خطوات ويشتغل
+                {t("ثلاث خطوات ويشتغل")}
               </h3>
               <ol className="relative space-y-5 before:absolute before:top-3 before:bottom-3 before:start-[1.35rem] before:w-px before:bg-ink/15">
                 {STEPS.map((s, i) => (
