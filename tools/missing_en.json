@@ -1,0 +1,21 @@
+{
+ "src/components/Hero.tsx": [
+  "رابط مشروعك في Google Maps *"
+ ],
+ "src/components/Extras.tsx": [
+  "اقرأ التفاصيل قبل الربط."
+ ],
+ "src/components/WidgetEditor.tsx": [
+  "اسمح للزوار بترك رسالة عند عدم\n          توفر الوكلاء",
+  "اطلب معلومات من الزائر قبل بدء\n          المحادثة (الاسم، البريد، إلخ)"
+ ],
+ "src/components/WidgetPreview.tsx": [
+  "جوال",
+  "سطح المكتب"
+ ],
+ "src/pages/Dashboard.tsx": [
+  "عبر Supabase Auth",
+  "موظفك الآلي",
+  "💬 Widgets الخاصة بك"
+ ]
+}

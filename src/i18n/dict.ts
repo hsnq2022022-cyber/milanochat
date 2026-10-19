@@ -1,7 +1,5 @@
-// ═══════════════════════════════════════════════════════════════════════════════
 // قاموس الترجمة — عربي / إنجليزي (يُولَّد من src/i18n/pairs.json)
 // المفتاح = النص العربي الأصلي الظاهر في الكود؛ ar يعيده حرفيًا و en ترجمته.
-// ═══════════════════════════════════════════════════════════════════════════════
 
 export type Lang = "ar" | "en";
 
@@ -149,6 +147,7 @@ export const DICT: Record<string, Entry> = {
   "اشحن رصيد الردود": e("اشحن رصيد الردود", "Top up reply credits"),
   "اضغط Human Agent للرد يدويًا": e("اضغط Human Agent للرد يدويًا", "Press Human Agent to reply manually"),
   "اطلب معلومات من الزائر قبل بدء المحادثة (الاسم، البريد، إلخ)": e("اطلب معلومات من الزائر قبل بدء المحادثة (الاسم، البريد، إلخ)", "Ask visitors for info before the chat starts (name, email, etc.)"),
+  "اقرأ التفاصيل قبل الربط.": e("اقرأ التفاصيل قبل الربط.", "Read the details before connecting."),
   "اكتب اسم المشروع": e("اكتب اسم المشروع", "Enter the project name"),
   "اكتب الإجابة أولاً": e("اكتب الإجابة أولاً", "Write the answer first"),
   "اكتب الإجابة…": e("اكتب الإجابة…", "Write the answer…"),
@@ -355,6 +354,7 @@ export const DICT: Record<string, Entry> = {
   "جرّب إنشاء موظف ثاني": e("جرّب إنشاء موظف ثاني", "Try creating another agent"),
   "جرّب الفهم الدلالي": e("جرّب الفهم الدلالي", "Try semantic understanding"),
   "جرّب تسأله": e("جرّب تسأله", "Ask it yourself"),
+  "جوال": e("جوال", "Mobile"),
   "حالة اتصال واتساب لحظية + رمز ربط مباشر": e("حالة اتصال واتساب لحظية + رمز ربط مباشر", "Live WhatsApp connection status + direct link code"),
   "حالة واتساب": e("حالة واتساب", "WhatsApp status"),
   "حجم الزر:": e("حجم الزر:", "Button size:"),
@@ -400,6 +400,7 @@ export const DICT: Record<string, Entry> = {
   "دينار": e("دينار", "IQD"),
   "ذكي مشمول في دفعة التفعيل": e("ذكي مشمول في دفعة التفعيل", "smart replies included in activation fee"),
   "رابط": e("رابط", "Link"),
+  "رابط مشروعك في Google Maps *": e("رابط مشروعك في Google Maps *", "Your project's Google Maps link *"),
   "رابط موقعك أو متجرك *": e("رابط موقعك أو متجرك *", "Your website or store link *"),
   "رابط موقعك أو متجرك — اختياري": e("رابط موقعك أو متجرك — اختياري", "Your website or store link — optional"),
   "راجع قاعدة المعرفة": e("راجع قاعدة المعرفة", "Review the knowledge base"),
@@ -435,6 +436,7 @@ export const DICT: Record<string, Entry> = {
   "سؤالك مو موجود؟ موظف إدارة ســوشـــيــــال نفسه يرد عليك الآن:": e("سؤالك مو موجود؟ موظف إدارة ســوشـــيــــال نفسه يرد عليك الآن:", "Can't find your question? Our own Idara Social agent can answer you right now:"),
   "سجل المحادثات": e("سجل المحادثات", "Conversation history"),
   "سجّل الدخول عبر Meta الرسمية وربط الأصول.": e("سجّل الدخول عبر Meta الرسمية وربط الأصول.", "Log in through official Meta flows and link your assets."),
+  "سطح المكتب": e("سطح المكتب", "Desktop"),
   "سلام عليكم": e("سلام عليكم", "Hi there"),
   "سوريا": e("سوريا", "Syria"),
   "شاهد إدارة ســوشـــيــــال": e("شاهد إدارة ســوشـــيــــال", "See Idara Social"),
@@ -455,6 +457,7 @@ export const DICT: Record<string, Entry> = {
   "صورة المساعد (Avatar)": e("صورة المساعد (Avatar)", "Assistant avatar"),
   "ضم الحساب": e("ضم الحساب", "Claim account"),
   "عام": e("عام", "General"),
+  "عبر Supabase Auth": e("عبر Supabase Auth", "via Supabase Auth"),
   "عبر «الأجهزة المرتبطة» — بدون كلمة مرور، وتفصله متى تبغى.": e("عبر «الأجهزة المرتبطة» — بدون كلمة مرور، وتفصله متى تبغى.", "Via “Linked devices” — no password needed, and you can disconnect anytime."),
   "عبر منصة واتساب الرسمية — بلا مسح رمز وبلا خطر حظر. جرّب إرسال رسالة من رقمك المضاف كمتلقٍ تجريبي.": e("عبر منصة واتساب الرسمية — بلا مسح رمز وبلا خطر حظر. جرّب إرسال رسالة من رقمك المضاف كمتلقٍ تجريبي.", "Via the official WhatsApp platform — no QR scanning and no ban risk. Try sending a message from a number you added as a test recipient."),
   "عدد الإشعارات": e("عدد الإشعارات", "Notification count"),
@@ -598,6 +601,7 @@ export const DICT: Record<string, Entry> = {
   "موظف إدارة ســوشـــيــــال جاهز": e("موظف إدارة ســوشـــيــــال جاهز", "Your Idara Social agent is ready"),
   "موظف خدمة عملاء بالذكاء الاصطناعي يشتغل على واتساب مشروعك — يرد من معلوماتك الحقيقية فقط، ويحوّل لك الحالات اللي تحتاج قرارك.": e("موظف خدمة عملاء بالذكاء الاصطناعي يشتغل على واتساب مشروعك — يرد من معلوماتك الحقيقية فقط، ويحوّل لك الحالات اللي تحتاج قرارك.", "An AI customer-service agent working on your project's WhatsApp — it replies only from your real information and hands over the cases that need your decision."),
   "موظف ذكي على واتساب — يرد 24/7": e("موظف ذكي على واتساب — يرد 24/7", "Smart WhatsApp agent — replies 24/7"),
+  "موظفك الآلي": e("موظفك الآلي", "your automated agent"),
   "موقع أو متجر": e("موقع أو متجر", "Website or store"),
   "موقعك / متجرك": e("موقعك / متجرك", "Your site / store"),
   "موقوف": e("موقوف", "Paused"),
@@ -684,9 +688,10 @@ export const DICT: Record<string, Entry> = {
   "— ليش تأمنه على عملائك؟": e("— ليش تأمنه على عملائك؟", "— Why trust it with your customers?"),
   "…وموظفك بعد اليوم ما ينام": e("…وموظفك بعد اليوم ما ينام", "…and from today, neither does your agent"),
   "☀️ فاتح": e("☀️ فاتح", "☀️ Light"),
-  "✅ تم الربط": e("✅ تم الربط", ""),
+  "✅ تم الربط": e("✅ تم الربط", "✅ Connected"),
   "✓ تم النسخ": e("✓ تم النسخ", "✓ Copied"),
   "🌙 داكن": e("🌙 داكن", "🌙 Dark"),
+  "💬 Widgets الخاصة بك": e("💬 Widgets الخاصة بك", "💬 Your Widgets"),
 };
 
 export const DICT_SIZE = Object.keys(DICT).length;

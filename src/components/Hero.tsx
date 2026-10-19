@@ -27,6 +27,7 @@ import {
   IconSparkle,
   IconWhatsapp,
 } from "./Icons";
+import { useI18n } from "../i18n/LanguageContext";
 
 /* ============================ أداة الربط ============================ */
 
@@ -123,7 +124,7 @@ function PhoneField({
 
   return (
     <div>
-      <label className={labelCls}>رقم واتساب الموظف *</label>
+      <label className={labelCls}>{t("رقم واتساب الموظف *")}</label>
       <div className="flex gap-2" ref={ref}>
         {/* قائمة الدول: علم + اسم عربي + رمز دولي */}
         <div className="relative shrink-0 self-stretch">
@@ -157,7 +158,7 @@ function PhoneField({
                 />
               </div>
               <ul role="listbox" className="qa-scroll max-h-56 overflow-y-auto py-1.5">
-                {filtered.length === 0 && <li className="px-4 py-3 text-xs text-sage/60">لا نتائج</li>}
+                {filtered.length === 0 && <li className="px-4 py-3 text-xs text-sage/60">{t("لا نتائج")}</li>}
                 {filtered.map((c) => {
                   const sel = c.code === country;
                   return (
@@ -204,7 +205,7 @@ function PhoneField({
         <p className={errCls}>{error}</p>
       ) : (
         <p className="text-[11px] text-sage/70 mt-1.5" dir="auto">
-          يُحفظ بالصيغة الدولية الكاملة E.164 — مثال: <span dir="ltr">+{getCountryCallingCode(country)} {exampleFor(country)}</span>
+          {t("يُحفظ بالصيغة الدولية الكاملة E.164 — مثال:")} <span dir="ltr">+{getCountryCallingCode(country)} {exampleFor(country)}</span>
         </p>
       )}
     </div>
@@ -577,7 +578,7 @@ function Wizard() {
           <>
             <div className="flex items-center justify-between gap-3 mb-5">
               <h2 className="font-display font-bold text-xl text-bone">
-                من وين نسحب معلومات المشروع؟
+                {t("من وين نسحب معلومات المشروع؟")}
               </h2>
               <span className="text-oro">
                 <IconSparkle className="w-5 h-5" />
@@ -619,7 +620,7 @@ function Wizard() {
                 <>
                   {source === "map" && (
                     <div>
-                      <label className={labelCls}>رابط مشروعك في Google Maps *</label>
+                      <label className={labelCls}>{t("رابط مشروعك في Google Maps *")}</label>
                       <input
                         dir="ltr"
                         value={mapUrl}
@@ -642,7 +643,7 @@ function Wizard() {
                       className={`${inputCls} text-left ${errors.siteUrl ? "border-oro/70" : ""}`}
                     />
                     <p className="text-[11px] text-sage/70 mt-1.5">
-                      لو عندك موقع أو متجر، منه يعرف الموظف الأسعار والتفاصيل.
+                      {t("لو عندك موقع أو متجر، منه يعرف الموظف الأسعار والتفاصيل.")}
                     </p>
                     {errors.siteUrl && <p className={errCls}>{errors.siteUrl}</p>}
                   </div>
@@ -653,7 +654,7 @@ function Wizard() {
                 <>
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className={labelCls}>اسم المشروع *</label>
+                      <label className={labelCls}>{t("اسم المشروع *")}</label>
                       <input
                         value={bizName}
                         onChange={(e) => setBizName(e.target.value)}
@@ -663,7 +664,7 @@ function Wizard() {
                       {errors.bizName && <p className={errCls}>{errors.bizName}</p>}
                     </div>
                     <div>
-                      <label className={labelCls}>نوع النشاط *</label>
+                      <label className={labelCls}>{t("نوع النشاط *")}</label>
                       <input
                         value={bizActivity}
                         onChange={(e) => setBizActivity(e.target.value)}
@@ -675,7 +676,7 @@ function Wizard() {
                   </div>
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className={labelCls}>العنوان</label>
+                      <label className={labelCls}>{t("العنوان")}</label>
                       <input
                         value={bizAddress}
                         onChange={(e) => setBizAddress(e.target.value)}
@@ -684,7 +685,7 @@ function Wizard() {
                       />
                     </div>
                     <div>
-                      <label className={labelCls}>أوقات العمل</label>
+                      <label className={labelCls}>{t("أوقات العمل")}</label>
                       <input
                         value={bizHours}
                         onChange={(e) => setBizHours(e.target.value)}
@@ -716,7 +717,7 @@ function Wizard() {
                       }}
                       className="mt-2 text-[11.5px] font-bold text-verde hover:text-oro underline underline-offset-4 transition-colors duration-200"
                     >
-                      أو أدخل معلومات مشروعك يدوياً
+                      {t("أو أدخل معلومات مشروعك يدوياً")}
                     </button>
                   )}
                 </div>
@@ -726,14 +727,14 @@ function Wizard() {
                 onClick={submit}
                 className="w-full group flex items-center justify-center gap-2.5 bg-verde text-ink font-display font-bold text-lg py-3.5 rounded-2xl hover:bg-oro transition-all duration-300 active:scale-[0.98] hover:shadow-[0_16px_40px_-12px_rgba(232,178,75,0.45)]"
               >
-                ابدأ الآن
+                {t("ابدأ الآن")}
                 <span className="transition-transform duration-300 group-hover:-translate-x-1">
                   <IconArrowStart className="w-5 h-5" />
                 </span>
               </button>
 
               <p className="text-[11px] leading-5 text-sage/75 border-t border-verde/10 pt-3.5">
-                الربط عبر واتساب الرسمي — Cloud API من Meta مباشرة.
+                {t("الربط عبر واتساب الرسمي — Cloud API من Meta مباشرة.")}
               </p>
             </div>
           </>
@@ -747,7 +748,7 @@ function Wizard() {
                     <img src={`${import.meta.env.BASE_URL}logo.png`} alt="شعار إدارة ســوشـــيــــال" className="w-10 h-10 animate-pulse" />
               </span>
               <div>
-                <h2 className="font-display font-bold text-xl text-bone">جارٍ إنشاء موظف إدارة ســوشـــيــــال…</h2>
+                <h2 className="font-display font-bold text-xl text-bone">{t("جارٍ إنشاء موظف إدارة ســوشـــيــــال…")}</h2>
                 <p className="text-xs text-sage">المصدر: {sourceLabel}</p>
               </div>
             </div>
@@ -788,7 +789,7 @@ function Wizard() {
         {phase === "qa" && (
           <div className="msg-in">
             <div className="flex items-center justify-between gap-3 mb-1.5">
-              <h2 className="font-display font-bold text-xl text-bone">راجع قاعدة المعرفة</h2>
+              <h2 className="font-display font-bold text-xl text-bone">{t("راجع قاعدة المعرفة")}</h2>
               <span className="text-[11px] font-bold text-verde bg-verde/10 border border-verde/30 rounded-full px-2.5 py-1 whitespace-nowrap tabular-nums">
                 {qaPairs.length} {qaPairs.length === 1 ? "زوج" : "أزواج"} سؤال وجواب
               </span>
@@ -816,14 +817,14 @@ function Wizard() {
                       <IconTrash className="w-4 h-4" />
                     </button>
                   </div>
-                  <label className={labelCls}>السؤال</label>
+                  <label className={labelCls}>{t("السؤال")}</label>
                   <textarea
                     value={p.question}
                     onChange={(e) => updatePair(i, "question", e.target.value)}
                     rows={1}
                     className={`${inputCls} resize-none mb-2.5 leading-6`}
                   />
-                  <label className={labelCls}>الإجابة</label>
+                  <label className={labelCls}>{t("الإجابة")}</label>
                   <textarea
                     value={p.answer}
                     onChange={(e) => updatePair(i, "answer", e.target.value)}
@@ -839,7 +840,7 @@ function Wizard() {
               className="w-full flex items-center justify-center gap-2 border border-dashed border-verde/30 text-verde text-sm font-semibold rounded-2xl py-3 hover:border-oro/60 hover:text-oro hover:bg-night/40 transition-all duration-300 active:scale-[0.98] mb-4"
             >
               <IconPlus className="w-4 h-4" />
-              إضافة سؤال يدوي
+              {t("إضافة سؤال يدوي")}
             </button>
 
             {errors.qa && (
@@ -860,7 +861,7 @@ function Wizard() {
               onClick={reset}
               className="mt-3 w-full text-xs text-sage hover:text-bone underline underline-offset-4 transition-colors duration-200"
             >
-              البدء من جديد
+              {t("البدء من جديد")}
             </button>
           </div>
         )}
@@ -871,7 +872,7 @@ function Wizard() {
             <span className="inline-flex w-16 h-16 rounded-full bg-verde/15 border border-verde/40 items-center justify-center text-verde mb-4">
               <IconCheck className="w-8 h-8" />
             </span>
-            <h2 className="font-display font-bold text-2xl text-bone mb-1">موظف إدارة ســوشـــيــــال جاهز</h2>
+            <h2 className="font-display font-bold text-2xl text-bone mb-1">{t("موظف إدارة ســوشـــيــــال جاهز")}</h2>
             <p className="text-sm text-sage mb-6">
               {bizName.trim() ? `«${bizName.trim()}»` : "مشروعك"} صار عنده موظف يرد من معلوماته الحقيقية فقط.
             </p>
@@ -901,10 +902,10 @@ function Wizard() {
               <div className="bg-night/60 border border-verde/15 rounded-2xl p-4 mb-5 text-right">
                 <div className="flex items-center gap-2 mb-1.5">
                   <span className="text-oro"><IconSparkle className="w-4 h-4" /></span>
-                  <h3 className="text-[13px] font-display font-bold text-bone">جرّب الفهم الدلالي</h3>
+                  <h3 className="text-[13px] font-display font-bold text-bone">{t("جرّب الفهم الدلالي")}</h3>
                 </div>
                 <p className="text-[11px] text-sage leading-5 mb-3">
-                  اسأل بصياغة مختلفة تماماً عمّا حفظته — مرادفات أو عامية — وشاهد كيف يربطها بنفس المعلومة.
+                  {t("اسأل بصياغة مختلفة تماماً عمّا حفظته — مرادفات أو عامية — وشاهد كيف يربطها بنفس المعلومة.")}
                 </p>
                 <div className="flex gap-2">
                   <input
@@ -955,20 +956,20 @@ function Wizard() {
                         </div>
                       ))
                     ) : (
-                      <p className="text-[11px] text-oro-soft">لا نتائج — قاعدة المعرفة فارغة أو بعيدة عن السؤال.</p>
+                      <p className="text-[11px] text-oro-soft">{t("لا نتائج — قاعدة المعرفة فارغة أو بعيدة عن السؤال.")}</p>
                     )}
                     {testerResult.answer ? (
                       <div className="bg-moss/80 border border-verde/25 rounded-xl rounded-ts-sm p-3">
                         <p className="text-[13px] text-bone leading-6">{testerResult.answer}</p>
                         <p className="text-[10px] text-verde mt-1.5 flex items-center gap-1.5">
                           <span className="w-1.5 h-1.5 rounded-full bg-verde live-dot" />
-                          هذا ما سيرسله الموظف للعميل على واتساب
+                          {t("هذا ما سيرسله الموظف للعميل على واتساب")}
                         </p>
                       </div>
                     ) : (
                       <div className="bg-oro/5 border border-oro/25 rounded-xl p-3">
                         <p className="text-[12px] text-oro-soft leading-5">
-                          ما عندي معلومات مؤكدة — سيُحال السؤال إلى «سجل الأسئلة العالقة» بدل اختلاق إجابة.
+                          {t("ما عندي معلومات مؤكدة — سيُحال السؤال إلى «سجل الأسئلة العالقة» بدل اختلاق إجابة.")}
                         </p>
                       </div>
                     )}
@@ -997,7 +998,7 @@ function Wizard() {
                 </button>
                 {payUrl && (
                   <p className="mt-2.5 text-[11px] text-verde leading-5">
-                    فُتحت صفحة الدفع — التفعيل يتم تلقائياً فور تأكيد البوابة.
+                    {t("فُتحت صفحة الدفع — التفعيل يتم تلقائياً فور تأكيد البوابة.")}
                     <a href={payUrl} target="_blank" rel="noreferrer" className="underline underline-offset-2 text-oro-soft">
                       {" "}إعادة فتح الرابط
                     </a>
@@ -1010,12 +1011,12 @@ function Wizard() {
                 onClick={() => setPhase("pay")}
                 className="w-full bg-verde text-ink font-display font-bold text-lg py-3.5 rounded-2xl hover:bg-oro transition-all duration-300 active:scale-[0.98]"
               >
-                أكمل الدفع — 40,000 دينار
+                {t("أكمل الدفع — 40,000 دينار")}
               </button>
             )}
 
             <button onClick={reset} className="mt-3 text-xs text-sage hover:text-bone underline underline-offset-4 transition-colors">
-              تعديل المعلومات
+              {t("تعديل المعلومات")}
             </button>
           </div>
         )}
@@ -1125,14 +1126,14 @@ function Wizard() {
           <div className="py-4 msg-in">
             {phase === "pay" ? (
               <>
-                <h2 className="font-display font-bold text-xl text-bone mb-4">فاتورة التفعيل</h2>
+                <h2 className="font-display font-bold text-xl text-bone mb-4">{t("فاتورة التفعيل")}</h2>
                 <div className="bg-night/60 border border-verde/15 rounded-2xl p-4 mb-5">
                   <div className="flex items-end justify-between pb-3 border-b border-dashed border-verde/20">
                     <div>
                       <p className="font-display font-bold text-3xl text-oro">
-                        40,000 <span className="text-base text-oro-soft">دينار</span>
+                        40,000 <span className="text-base text-oro-soft">{t("دينار")}</span>
                       </p>
-                      <p className="text-[11px] text-sage">دفعة واحدة — بدون اشتراك شهري</p>
+                      <p className="text-[11px] text-sage">{t("دفعة واحدة — بدون اشتراك شهري")}</p>
                     </div>
                     <span className="text-verde">
                     <img src={`${import.meta.env.BASE_URL}logo.png`} alt="شعار إدارة ســوشـــيــــال" className="w-9 h-9" />
@@ -1154,10 +1155,10 @@ function Wizard() {
                   }}
                   className="w-full bg-oro text-ink font-display font-bold text-lg py-3.5 rounded-2xl hover:bg-verde transition-all duration-300 active:scale-[0.98]"
                 >
-                  ادفع الآن (عرض تجريبي)
+                  {t("ادفع الآن (عرض تجريبي)")}
                 </button>
                 <button onClick={reset} className="mt-3 w-full text-xs text-sage hover:text-bone underline underline-offset-4 transition-colors">
-                  العودة
+                  {t("العودة")}
                 </button>
               </>
             ) : (
@@ -1165,20 +1166,20 @@ function Wizard() {
                 <span className="inline-flex w-16 h-16 rounded-full bg-oro/15 border border-oro/50 items-center justify-center text-oro mb-4">
                   <IconBolt className="w-8 h-8" />
                 </span>
-                <h2 className="font-display font-bold text-2xl text-bone mb-2">تم التفعيل!</h2>
+                <h2 className="font-display font-bold text-2xl text-bone mb-2">{t("تم التفعيل!")}</h2>
                 <p className="text-sm text-sage leading-6 mb-6">
-                  وصلك رابط ربط «الأجهزة المرتبطة» على جوالك.
+                  {t("وصلك رابط ربط «الأجهزة المرتبطة» على جوالك.")}
                   <br />
-                  امسحه من واتساب — وإدارة ســوشـــيــــال تبدأ ترد عنك خلال ثواني.
+                  {t("امسحه من واتساب — وإدارة ســوشـــيــــال تبدأ ترد عنك خلال ثواني.")}
                 </p>
                 <div className="bg-night/60 border border-verde/15 rounded-2xl p-4 mb-6">
                   <div className="flex items-center justify-center gap-2 text-verde text-sm font-semibold">
                     <span className="w-2 h-2 rounded-full bg-verde live-dot" />
-                    الموظف متصل الآن — رصيدك 1,000 رد
+                    {t("الموظف متصل الآن — رصيدك 1,000 رد")}
                   </div>
                 </div>
                 <button onClick={reset} className="text-xs text-sage hover:text-oro underline underline-offset-4 transition-colors">
-                  جرّب إنشاء موظف ثاني
+                  {t("جرّب إنشاء موظف ثاني")}
                 </button>
               </div>
             )}
@@ -1242,14 +1243,14 @@ export default function Hero() {
 
           <h1 className="font-display font-extrabold text-[2.6rem] leading-[1.12] sm:text-6xl sm:leading-[1.08] text-bone">
             <span className="mask-line">
-              <span>حوّل واتساب مشروعك</span>
+              <span>{t("حوّل واتساب مشروعك")}</span>
             </span>
             <span className="mask-line">
-              <span style={{ transitionDelay: "0.12s" }}>إلى موظف خدمة عملاء</span>
+              <span style={{ transitionDelay: "0.12s" }}>{t("إلى موظف خدمة عملاء")}</span>
             </span>
             <span className="mask-line">
               <span style={{ transitionDelay: "0.24s" }} className="text-verde draw-line">
-                لا ينام أبداً
+                {t("لا ينام أبداً")}
               </span>
             </span>
           </h1>
@@ -1275,11 +1276,11 @@ export default function Hero() {
           {/* فقاعات عائمة تزينية */}
           <div className="hidden xl:flex flex-col gap-3 mt-10 max-w-xs" aria-hidden="true">
             <div className="floaty self-start bg-wa-in text-mist text-[13px] px-4 py-2.5 rounded-2xl rounded-bl-md shadow-lg">
-              كم سعر السبانش لاتيه؟
+              {t("كم سعر السبانش لاتيه؟")}
             </div>
             <div className="floaty-slow self-end bg-wa-out text-bone text-[13px] px-4 py-2.5 rounded-2xl rounded-br-md shadow-lg flex items-center gap-2">
               <img src={`${import.meta.env.BASE_URL}logo.png`} alt="شعار إدارة ســوشـــيــــال" className="w-4 h-4" />
-              18 دينار — حار أو مثلج
+              {t("18 دينار — حار أو مثلج")}
             </div>
           </div>
         </div>
