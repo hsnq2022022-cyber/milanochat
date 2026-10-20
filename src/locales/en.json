@@ -152,7 +152,7 @@
   "faq_q9": "Does Instagram need Facebook?",
   "faq_a9": "Yes. A professional Instagram account is usually linked to a Facebook page through Meta's structure, and both channels can be activated together so messages arrive in the unified conversations inbox.",
   "faq_q10": "Can I customize an agent per channel?",
-  "faq_q10": "Yes — you can customize the agent and knowledge source for each channel or account: for example, a sales agent for a Facebook page, a support agent for an Instagram account, and a booking agent for a WhatsApp number.",
+  "faq_a10": "Yes — you can customize the agent and knowledge source for each channel or account: for example, a sales agent for a Facebook page, a support agent for an Instagram account, and a booking agent for a WhatsApp number.",
   "faq_q11": "What happens if the connection expires?",
   "faq_a11": "Access tokens issued by Meta may expire. When that happens, auto-reply for that channel stops and an alert appears in the dashboard with official re-authorization steps to resume work.",
   "faq_cta": "Your question isn't here? Social Admin employee itself replies to you now:",
