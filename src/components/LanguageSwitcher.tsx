@@ -1,25 +1,30 @@
-import { useTranslation } from 'react-i18next';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 
 export default function LanguageSwitcher() {
-  const { i18n } = useTranslation();
+  const [currentLang, setCurrentLang] = useState('ar');
 
-  const toggleLanguage = () => {
-    const newLang = i18n.language === 'ar' ? 'en' : 'ar';
-    i18n.changeLanguage(newLang);
+  useEffect(() => {
+    // التحقق من الكوكيز لمعرفة اللغة الحالية
+    const match = document.cookie.match(/googtrans=\/ar\/([a-z]+)/);
+    if (match && match[1]) {
+      setCurrentLang(match[1]);
+    }
+  }, []);
+
+  const changeLanguage = (lang: string) => {
+    // تعيين كوكيز جوجل للترجمة
+    document.cookie = `googtrans=/ar/${lang}; path=/`;
+    document.cookie = `googtrans=/ar/${lang}; domain=.${window.location.hostname}; path=/`;
+    // إعادة تحميل الصفحة لتطبيق الترجمة
+    window.location.reload();
   };
 
-  // تحديث اتجاه الصفحة (RTL للعربية، LTR للإنجليزية) عند تغيير اللغة
-  useEffect(() => {
-    document.documentElement.dir = i18n.language === 'ar' ? 'rtl' : 'ltr';
-    document.documentElement.lang = i18n.language;
-  }, [i18n.language]);
-
   return (
-    <button 
-      onClick={toggleLanguage}
+    <select 
+      value={currentLang}
+      onChange={(e) => changeLanguage(e.target.value)}
       style={{
-        padding: '8px 16px',
+        padding: '6px 12px',
         borderRadius: '8px',
         border: '1px solid #25D366',
         background: 'transparent',
@@ -28,7 +33,8 @@ export default function LanguageSwitcher() {
         fontWeight: 'bold'
       }}
     >
-      {i18n.language === 'ar' ? 'English' : 'عربي'}
-    </button>
+      <option value="ar">عربي</option>
+      <option value="en">English</option>
+    </select>
   );
 }
