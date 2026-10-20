@@ -28,7 +28,7 @@ const SCRIPT: Msg[] = [
 
 const NOTES = [
   {
-    icon: <IconShieldCheck className="w-5 h-5" />,
+    icon: <IconShieldCheck className="w-5 h-5 notranslate" />,
     title: "يرد من بياناتك فعلياً",
     body: "السعر والمواعيد في المحادثة مسجّلة في بطاقة المشروع — مو تأليف. لاحظ الدقة: 18 دينار، 7ص – 1م.",
   },
