@@ -1,4 +1,3 @@
-import { useTranslation } from "react-i18next";
 import { useEffect, useRef, useState } from "react";
 import confetti from "canvas-confetti";
 import {
@@ -727,7 +726,7 @@ function Wizard() {
                 onClick={submit}
                 className="w-full group flex items-center justify-center gap-2.5 bg-verde text-ink font-display font-bold text-lg py-3.5 rounded-2xl hover:bg-oro transition-all duration-300 active:scale-[0.98] hover:shadow-[0_16px_40px_-12px_rgba(232,178,75,0.45)]"
               >
-                {t('hero_cta')}
+                ابدأ الآن
                 <span className="transition-transform duration-300 group-hover:-translate-x-1">
                   <IconArrowStart className="w-5 h-5" />
                 </span>
@@ -1133,7 +1132,7 @@ function Wizard() {
                       <p className="font-display font-bold text-3xl text-oro">
                         40,000 <span className="text-base text-oro-soft">دينار</span>
                       </p>
-                      <p className="text-[11px] text-sage">دفعة واحدة — {t('hero_no_sub')}</p>
+                      <p className="text-[11px] text-sage">دفعة واحدة — بدون اشتراك شهري</p>
                     </div>
                     <span className="text-verde">
                     <img src={`${import.meta.env.BASE_URL}logo.png`} alt="شعار إدارة ســوشـــيــــال" className="w-9 h-9" />
@@ -1209,8 +1208,7 @@ function Stat({ value, suffix, prefix, label, active, delay }: { value: number; 
 /* ============================ القسم كامل ============================ */
 
 export default function Hero() {
-  const { t } = useTranslation();
-  const [loaded, setLoaded] = useState(false);
+    const [loaded, setLoaded] = useState(false);
   const stats = useInView<HTMLDivElement>();
   const wrap = useReveal<HTMLElement>();
 
@@ -1239,7 +1237,7 @@ export default function Hero() {
         <div className="pt-2">
           <div data-reveal className="inline-flex items-center gap-2.5 bg-moss/70 border border-verde/25 rounded-full px-4 py-1.5 mb-6">
             <span className="w-2 h-2 rounded-full bg-verde live-dot" />
-            <span className="text-xs font-semibold text-mist">{t('hero_badge')}</span>
+            <span className="text-xs font-semibold text-mist">موظف ذكي على واتساب — يرد 24/7</span>
           </div>
 
           <h1 className="font-display font-extrabold text-[2.6rem] leading-[1.12] sm:text-6xl sm:leading-[1.08] text-bone">
@@ -1263,9 +1261,9 @@ export default function Hero() {
 
           <ul data-reveal style={{ transitionDelay: "0.3s" }} className="mt-7 flex flex-wrap gap-x-6 gap-y-3">
             {[
-              { icon: <IconBolt className="w-4 h-4" />, t: "{t('hero_price')}" },
-              { icon: <IconInfinity className="w-4 h-4" />, t: "{t('hero_no_sub')}" },
-              { icon: <IconShieldCheck className="w-4 h-4" />, t: "{t('hero_includes')}" },
+              { icon: <IconBolt className="w-4 h-4" />, t: "40,000 دينار دفعة واحدة" },
+              { icon: <IconInfinity className="w-4 h-4" />, t: "بدون اشتراك شهري" },
+              { icon: <IconShieldCheck className="w-4 h-4" />, t: "يشمل 1,000 رد ذكي" },
             ].map((b) => (
               <li key={b.t} className="flex items-center gap-2 text-sm text-mist">
                 <span className="text-oro">{b.icon}</span>
