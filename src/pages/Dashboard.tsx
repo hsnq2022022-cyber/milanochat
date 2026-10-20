@@ -1397,11 +1397,11 @@ export default function Dashboard() {
                           )}
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center justify-between gap-2 mb-0.5">
-                              <span className="text-[13px] font-bold text-bone truncate">{displayName}</span>
+                              <span className="text-[13px] font-bold text-bone truncate"><span className="notranslate">{displayName}</span></span>
                               <span className="text-[10px] text-sage tabular-nums shrink-0">{fmtTime(c.lastAt)}</span>
                             </div>
                             <p className="text-[11.5px] text-sage truncate">
-                              {c.lastMessagePreview ?? c.msgs[c.msgs.length - 1]?.body ?? "—"}
+                              <span className="notranslate">{c.lastMessagePreview ?? c.msgs[c.msgs.length - 1]?.body ?? "—"}</span>
                             </p>
                             <div className="flex gap-1.5 mt-1.5 flex-wrap items-center">
                               <ChannelBadge channel={ch} />
@@ -1445,7 +1445,7 @@ export default function Dashboard() {
                       </span>
                     )}
                     <div className="flex-1 min-w-0">
-                      <p className="text-[13px] font-bold text-bone truncate">{active.customerName || active.phone || "—"}</p>
+                      <p className="text-[13px] font-bold text-bone truncate"><span className="notranslate">{active.customerName || active.phone || "—"}</span></p>
                       <p className="text-[10.5px] text-sage mt-0.5">
                         {active.humanAgentActive
                           ? `Human Agent — ${Math.floor((active.remainingSeconds ?? 0) / 60)}:${String((active.remainingSeconds ?? 0) % 60).padStart(2, '0')}`
