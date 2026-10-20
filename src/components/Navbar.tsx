@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Logo, IconWhatsapp, IconMenu, IconX } from "./Icons";
+import LanguageSwitcher from './LanguageSwitcher';
 
 const LINKS = [
   { label: "الضمانات", href: "#guarantees" },
@@ -79,6 +80,7 @@ export default function Navbar() {
             {open ? <IconX /> : <IconMenu />}
           </button>
         </div>
+        <LanguageSwitcher />
       </nav>
 
       {/* قائمة الجوال */}
