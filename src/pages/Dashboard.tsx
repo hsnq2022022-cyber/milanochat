@@ -1491,7 +1491,7 @@ export default function Dashboard() {
                     {active.msgs.map((m) => (
                       <div key={m.id} className={`flex ${m.direction === "out" ? "justify-start" : "justify-end"} msg-in`}>
                         <div className={`max-w-[78%] rounded-2xl px-3.5 py-2.5 shadow-sm ${m.direction === "out" ? "bg-wa-out rounded-bl-md" : "bg-wa-in rounded-br-md"}`}>
-                          <p className="text-[13px] leading-6 text-bone">{m.body}</p>
+                          <p className="text-[13px] leading-6 text-bone"><span className="notranslate">{m.body}</span></p>
                           <p className="flex items-center justify-end gap-1.5 mt-1 text-[9.5px] text-sage/80">
                             {m.direction === "out" && (
                               <span className={`rounded-full px-1.5 py-px border text-[8.5px] font-bold ${m.is_auto ? "border-verde/50 text-verde" : "border-oro/50 text-oro-soft"}`}>
