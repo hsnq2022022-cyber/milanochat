@@ -213,3 +213,14 @@ body {
   .draw-line::after { transform: scaleX(1); }
   .marquee-track { animation: none; }
 }
+
+/* إخفاء شريط ترجمة جوجل العلوي */
+.goog-te-banner-frame.skiptranslate, .goog-te-gadget-icon {
+  display: none !important;
+}
+body {
+  top: 0px !important;
+}
+.skiptranslate iframe {
+  display: none !important;
+}
