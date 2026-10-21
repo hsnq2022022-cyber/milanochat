@@ -214,13 +214,20 @@ body {
   .marquee-track { animation: none; }
 }
 
-/* إخفاء شريط ترجمة جوجل العلوي */
-.goog-te-banner-frame.skiptranslate, .goog-te-gadget-icon {
+
+/* إخفاء شريط ترجمة جوجل نهائياً */
+.goog-te-banner-frame.skiptranslate,
+.goog-te-gadget-icon,
+#goog-gt-tt,
+.goog-te-balloon-frame,
+.skiptranslate iframe {
   display: none !important;
+  visibility: hidden !important;
 }
 body {
   top: 0px !important;
 }
-.skiptranslate iframe {
+body > .skiptranslate {
   display: none !important;
 }
+
