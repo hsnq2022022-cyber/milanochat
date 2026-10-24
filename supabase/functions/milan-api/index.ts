@@ -4996,8 +4996,8 @@ ${text}`
         }
 
         // تحويل المنتجات إلى نص
-        let fullText = "قائمة منتجات المتجر الحالية:
-";
+        let fullText = `قائمة منتجات المتجر الحالية:
+`;
         for (const p of products) {
           const price = p.price ? `${p.price.amount} ${p.price.currency}` : "غير محدد";
           const stock = p.quantity > 0 ? "متوفر" : "غير متوفر";
