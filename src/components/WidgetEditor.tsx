@@ -716,12 +716,12 @@ function AppearanceTab({
             />
           )}
 
-          <span className="text-verde font-bold text-lg">✓</span>
-
-          <span className="text-sm text-bone">
-            مدعوم من إدارة سوشيال (إجباري)
-          </span>
-        </label>
+          <div className="flex items-center gap-2">
+            <span className="text-verde font-bold text-lg">✓</span>
+            <span className="text-sm text-bone">
+              مدعوم من إدارة سوشيال (إجباري)
+            </span>
+          </div>
       </div>
     </div>
   );
@@ -763,12 +763,12 @@ function ChatTab({
           Placeholder
         </label>
 
-        <span className="text-verde font-bold text-lg">✓</span>
-
+        <div className="flex items-center gap-2 mt-4">
+          <span className="text-verde font-bold text-lg">✓</span>
           <span className="text-sm text-bone">
             إظهار مؤشر الكتابة
           </span>
-        </label>
+        </div>
       </div>
 
       <div>
