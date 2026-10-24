@@ -1,13 +1,4 @@
-// ═══════════════════════════════════════════════════════════════════
-// Edge Function: salla-webhook
 // POST من سلة (Salla) عند تثبيت/إلغاء تثبيت التطبيق.
-// - يتحقق من x-salla-signature (HMAC-SHA256 hex على الجسم الخام)
-// - app.store.authorize: يحفظ التوكنات في salla_stores
-// - app.uninstalled: يحذف صف التاجر
-//
-// Secrets: SALLA_WEBHOOK_SECRET
-// ═══════════════════════════════════════════════════════════════════
-
 import { createClient } from "npm:@supabase/supabase-js@2";
 
 const enc = new TextEncoder();
@@ -32,12 +23,21 @@ async function hmacHex(secret: string, raw: string): Promise<string> {
   return toHex(await crypto.subtle.sign("HMAC", key, enc.encode(raw)));
 }
 
-/** مقارنة بزمن ثابت لتفادي تسريب التوقيع بالتوقيت. */
 function safeEqual(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
   let diff = 0;
   for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
   return diff === 0;
+}
+
+// دالة التشفير (نفس الموجودة في milan-api)
+async function encryptField(plain: string): Promise<string> {
+  if (!plain) return "";
+  const keyMat = await crypto.subtle.digest("SHA-256", enc.encode(Deno.env.get("FIELD_ENCRYPTION_KEY") || ""));
+  const key = await crypto.subtle.importKey("raw", keyMat, "AES-GCM", false, ["encrypt"]);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, enc.encode(plain)));
+  return `enc:v1:${toHex(iv)}:${toHex(ct.slice(-16))}:${toHex(ct.slice(0, -16))}`;
 }
 
 Deno.serve(async (req: Request) => {
@@ -47,89 +47,71 @@ Deno.serve(async (req: Request) => {
   const supaUrl = Deno.env.get("SUPABASE_URL");
   const srvKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
 
-  if (!secret || !supaUrl || !srvKey) {
-    console.error("[salla-webhook] missing environment variables");
-    return reply("server misconfigured", 500);
-  }
+  if (!secret || !supaUrl || !srvKey) return reply("server misconfigured", 500);
 
-  // الجسم الخام ضروري لحساب التوقيع — لا نحوّله إلى JSON قبل التحقق
   const raw = await req.text();
-
-  const sigHeader = (req.headers.get("x-salla-signature") ?? "")
-    .trim()
-    .toLowerCase();
-
-  if (!sigHeader) {
-    console.warn("[salla-webhook] missing signature");
-    return reply("missing signature", 401);
-  }
+  const sigHeader = (req.headers.get("x-salla-signature") ?? "").trim().toLowerCase();
+  if (!sigHeader) return reply("missing signature", 401);
 
   const expected = await hmacHex(secret, raw);
-  if (!safeEqual(sigHeader, expected)) {
-    console.warn("[salla-webhook] invalid signature");
-    return reply("invalid signature", 401);
-  }
+  if (!safeEqual(sigHeader, expected)) return reply("invalid signature", 401);
 
-  // من هنا فصاعدًا الطلب موثوق من سلة: نرجع 200 دائمًا
   let payload: any;
   try {
     payload = JSON.parse(raw);
   } catch {
-    console.warn("[salla-webhook] invalid json");
     return reply("ok");
   }
 
   const event = String(payload?.event ?? "");
   const merchantId = payload?.merchant != null ? String(payload.merchant) : "";
-
-  if (!merchantId) {
-    console.warn("[salla-webhook] no merchant id, event:", event);
-    return reply("ok");
-  }
+  
+  if (!merchantId) return reply("ok");
 
   try {
-    const sb = createClient(supaUrl, srvKey, {
-      auth: { autoRefreshToken: false, persistSession: false },
-    });
+    const sb = createClient(supaUrl, srvKey, { auth: { autoRefreshToken: false, persistSession: false } });
 
     if (event === "app.store.authorize") {
       const d = payload?.data ?? {};
       const accessToken = typeof d.access_token === "string" ? d.access_token : "";
+      const merchantEmail = d.merchant?.email || d.email; // محاولة جلب الإيميل
 
-      if (!accessToken) {
-        console.warn("[salla-webhook] authorize without access_token, merchant:", merchantId);
-        return reply("ok");
+      if (!accessToken) return reply("ok");
+
+      const encryptedToken = await encryptField(accessToken);
+
+      // محاولة إيجاد tenant_id بواسطة الإيميل
+      let tenantId = null;
+      if (merchantEmail) {
+        const { data: tenant } = await sb.from("tenants").select("id").eq("email", merchantEmail).maybeSingle();
+        if (tenant) tenantId = tenant.id;
       }
 
-      const expiresSec = Number(d.expires);
-      const expiresAt = Number.isFinite(expiresSec) && expiresSec > 0
-        ? new Date(expiresSec * 1000).toISOString()
-        : null;
+      // إذا لم نجد إيميل، سنضع معرف افتراضي (أو نتركه فارغاً لحين ربطه يدوياً)
+      // كحل مبدئي للتجربة، سنضع الإيميل كـ tenant_id إذا لم نجده، أو نستخدم merchantId
+      const finalTenantId = tenantId || merchantEmail || merchantId; 
 
-      const { error } = await sb.from("salla_stores").upsert(
+      // حفظ في جدول channel_accounts
+      const { error } = await sb.from("channel_accounts").upsert(
         {
-          merchant_id: merchantId,
-          access_token: accessToken,
-          refresh_token: typeof d.refresh_token === "string" ? d.refresh_token : null,
-          expires_at: expiresAt,
-          scope: typeof d.scope === "string" ? d.scope : null,
+          tenant_id: finalTenantId,
+          channel: "salla",
+          platform: "whatsapp", // لاجتياز القيد الأمني
+          access_token_encrypted: encryptedToken,
+          external_id: merchantId,
+          status: "active",
+          is_active: true,
           updated_at: new Date().toISOString(),
         },
-        { onConflict: "merchant_id" },
+        { onConflict: "tenant_id, channel" }
       );
 
       if (error) console.error("[salla-webhook] upsert failed:", error.message);
-      else console.log("[salla-webhook] store authorized:", merchantId);
-    } else if (event === "app.uninstalled") {
-      const { error } = await sb
-        .from("salla_stores")
-        .delete()
-        .eq("merchant_id", merchantId);
+      else console.log("[salla-webhook] store authorized and encrypted for tenant:", finalTenantId);
 
-      if (error) console.error("[salla-webhook] delete failed:", error.message);
-      else console.log("[salla-webhook] store uninstalled:", merchantId);
-    } else {
-      console.log("[salla-webhook] ignored event:", event);
+    } else if (event === "app.uninstalled") {
+      await sb.from("channel_accounts").delete().eq("external_id", merchantId).eq("channel", "salla");
+      console.log("[salla-webhook] store uninstalled:", merchantId);
     }
   } catch (e) {
     console.error("[salla-webhook] unexpected error:", (e as Error)?.message);
