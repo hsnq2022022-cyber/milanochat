@@ -513,6 +513,16 @@ export default function WidgetEditor({
             </label>
           </div>
         </div>
+        {/* محتوى التبويبات */}
+        <div className="flex-1 overflow-y-auto p-6">
+          {activeTab === "general" && <GeneralTab settings={settings} updateSettings={updateSettings} />}
+          {activeTab === "appearance" && <AppearanceTab widget={widget} settings={settings} updateSettings={updateSettings} applyPreset={applyPreset} errors={errors} authToken={authToken} />}
+          {activeTab === "chat" && <ChatTab settings={settings} updateSettings={updateSettings} />}
+          {activeTab === "behavior" && <BehaviorTab settings={settings} updateSettings={updateSettings} />}
+          {activeTab === "forms" && <FormsTab settings={settings} updateSettings={updateSettings} />}
+          {activeTab === "embed" && <EmbedTab widget={widget} copyEmbedCode={copyEmbedCode} />}
+        </div>
+
       </div>
     </div>
   );
