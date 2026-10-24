@@ -267,6 +267,15 @@
     const position = config.position === 'right' ? 'right: 20px;' : 'left: 20px;';
     const primaryColor = config.primaryColor || '#2ec27e';
     const radius = config.borderRadius || 16;
+    
+    // تحديد الوضع (ليلي أو نهاري)
+    const isDark = config.theme === 'dark';
+    const bgColor = isDark ? '#1e1e1e' : '#f8f9fa';
+    const headerColor = isDark ? '#2a2a2a' : (config.headerBackgroundColor || primaryColor);
+    const textColor = isDark ? '#e5e5e5' : '#333';
+    const inputBg = isDark ? '#2a2a2a' : '#ffffff';
+    const inputBorder = isDark ? '#444' : '#e5e7eb';
+    const msgInBg = isDark ? '#333' : '#ffffff';
 
     return `
       #milano-widget-container * {
@@ -283,23 +292,15 @@
         background: ${primaryColor};
         border: none;
         cursor: pointer;
-        box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+        box-shadow: 0 4px 20px rgba(0,0,0,0.15);
         display: flex;
         align-items: center;
         justify-content: center;
         z-index: 999999;
         transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
       }
-      .milano-widget-btn:hover {
-        transform: scale(1.08);
-        box-shadow: 0 6px 24px rgba(0,0,0,0.25);
-      }
-      .milano-widget-btn svg {
-        width: ${(config.launcherSize || 60) * 0.45}px;
-        height: ${(config.launcherSize || 60) * 0.45}px;
-        fill: white;
-      }
-      .milano-widget-btn img { width: 70%; height: 70%; object-fit: cover; border-radius: inherit; }
+      .milano-widget-btn:hover { transform: scale(1.08); box-shadow: 0 6px 24px rgba(0,0,0,0.2); }
+      .milano-widget-btn svg { width: ${(config.launcherSize || 60) * 0.45}px; height: ${(config.launcherSize || 60) * 0.45}px; fill: white; }
 
       .milano-widget-window {
         position: fixed;
@@ -309,39 +310,43 @@
         max-width: calc(100vw - 40px);
         height: ${config.windowHeight || 560}px;
         max-height: calc(100vh - 120px);
-        background: white;
+        background: ${bgColor};
         border-radius: ${radius}px;
-        box-shadow: ${config.shadow === 'none' ? 'none' : config.shadow === 'light' ? '0 4px 16px rgba(0,0,0,0.1)' : config.shadow === 'strong' ? '0 12px 48px rgba(0,0,0,0.25)' : '0 8px 32px rgba(0,0,0,0.2)'};
+        box-shadow: 0 12px 48px rgba(0,0,0,0.15);
         display: ${isOpen ? 'flex' : 'none'};
         flex-direction: column;
         z-index: 999999;
         overflow: hidden;
-        border: 1px solid rgba(0,0,0,0.08);
+        border: 1px solid ${isDark ? '#333' : 'rgba(0,0,0,0.05)'};
+        animation: milano-fade-in 0.3s ease;
       }
+      @keyframes milano-fade-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
 
       .milano-widget-header {
-        background: ${config.headerBackgroundColor || primaryColor};
-        color: ${config.headerTextColor || 'white'};
+        background: ${headerColor};
+        color: ${isDark ? '#fff' : 'white'};
         padding: 16px;
         display: flex;
         align-items: center;
         gap: 12px;
-        border-radius: ${radius}px ${radius}px 0 0;
         flex-shrink: 0;
       }
-      .milano-widget-avatar {
-        width: 40px; height: 40px; border-radius: 50%;
+      .milano-widget-close {
+        margin-${config.rtl ? 'right' : 'left'}: auto;
         background: rgba(255,255,255,0.2);
-        display: flex; align-items: center; justify-content: center;
-        font-size: 20px; overflow: hidden;
+        border: none;
+        color: ${isDark ? '#fff' : 'white'};
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 18px;
       }
+      .milano-widget-avatar { width: 40px; height: 40px; border-radius: 50%; background: rgba(255,255,255,0.2); display: flex; align-items: center; justify-content: center; overflow: hidden; }
       .milano-widget-avatar img { width: 100%; height: 100%; object-fit: cover; }
-      .milano-widget-logo {
-        width: 32px; height: 32px; border-radius: 8px; overflow: hidden;
-        background: rgba(255,255,255,0.2);
-        display: flex; align-items: center; justify-content: center;
-      }
-      .milano-widget-logo img { width: 100%; height: 100%; object-fit: cover; }
       .milano-widget-title { flex: 1; }
       .milano-widget-title h3 { margin: 0; font-size: 16px; font-weight: 600; }
       .milano-widget-title p { margin: 2px 0 0; font-size: 12px; opacity: 0.9; }
@@ -349,112 +354,32 @@
       .milano-widget-status-dot { width: 8px; height: 8px; border-radius: 50%; background: #4ade80; animation: milano-pulse 2s infinite; }
       @keyframes milano-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
 
-      .milano-widget-messages {
-        flex: 1; overflow-y: auto; padding: 16px;
-        background: #f8f9fa; min-height: 0;
-      }
-      .milano-widget-message {
-        margin-bottom: 12px; display: flex; gap: 8px;
-        ${config.rtl ? 'flex-direction: row-reverse;' : ''}
-      }
-      .milano-widget-message.in { ${config.rtl ? 'flex-direction: row;' : ''} }
-      .milano-widget-message-avatar {
-        width: 32px; height: 32px; border-radius: 50%; flex-shrink: 0;
-        overflow: hidden; background: ${primaryColor};
-        display: flex; align-items: center; justify-content: center;
-        color: white; font-size: 14px; font-weight: bold;
-      }
+      .milano-widget-messages { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 12px; }
+      .milano-widget-message { display: flex; gap: 8px; max-width: 85%; }
+      .milano-widget-message.out { align-self: ${config.rtl ? 'flex-start' : 'flex-end'}; flex-direction: ${config.rtl ? 'row' : 'row-reverse'}; }
+      .milano-widget-message.in { align-self: ${config.rtl ? 'flex-end' : 'flex-start'}; flex-direction: ${config.rtl ? 'row-reverse' : 'row'}; }
+      
+      .milano-widget-message-avatar { width: 28px; height: 28px; border-radius: 50%; background: ${primaryColor}; color: white; display: flex; align-items: center; justify-content: center; font-size: 12px; flex-shrink: 0; overflow: hidden; }
       .milano-widget-message-avatar img { width: 100%; height: 100%; object-fit: cover; }
-      .milano-widget-message-content { flex: 1; max-width: calc(100% - 40px); }
-      .milano-widget-message-bubble {
-        padding: 10px 14px; border-radius: ${radius}px;
-        font-size: 14px; line-height: 1.5;
-        word-wrap: break-word; white-space: pre-wrap;
-      }
-      .milano-widget-message.out .milano-widget-message-bubble {
-        background: ${primaryColor}; color: white;
-        border-bottom-${config.rtl ? 'left' : 'right'}-radius: 4px;
-      }
-      .milano-widget-message.in .milano-widget-message-bubble {
-        background: white; color: #333;
-        border-bottom-${config.rtl ? 'right' : 'left'}-radius: 4px;
-        box-shadow: 0 1px 2px rgba(0,0,0,0.05);
-      }
-      .milano-widget-message.sending .milano-widget-message-bubble { opacity: 0.6; }
-      .milano-widget-message.failed .milano-widget-message-bubble {
-        background: #fee2e2 !important; color: #991b1b !important;
-        border: 1px solid #fca5a5;
-      }
-      .milano-widget-message-time {
-        font-size: 10px; color: #999; margin-top: 4px;
-        ${config.rtl ? 'text-align: left;' : 'text-align: right;'}
-      }
-      .milano-widget-retry {
-        margin-top: 6px; font-size: 11px; color: #dc2626;
-        background: none; border: none; cursor: pointer;
-        padding: 2px 0; text-decoration: underline;
-        font-family: inherit;
-      }
-      .milano-widget-retry:hover { color: #991b1b; }
-      .milano-widget-error-msg { margin-top: 6px; font-size: 11px; color: #991b1b; }
+      
+      .milano-widget-message-bubble { padding: 12px 16px; border-radius: 18px; font-size: 14px; line-height: 1.5; word-wrap: break-word; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
+      .milano-widget-message.out .milano-widget-message-bubble { background: ${primaryColor}; color: white; border-bottom-${config.rtl ? 'left' : 'right'}-radius: 4px; }
+      .milano-widget-message.in .milano-widget-message-bubble { background: ${msgInBg}; color: ${textColor}; border: 1px solid ${isDark ? '#444' : '#e5e7eb'}; border-bottom-${config.rtl ? 'right' : 'left'}-radius: 4px; }
+      
+      .milano-widget-message-time { font-size: 10px; color: #9ca3af; margin-top: 4px; ${config.rtl ? 'text-align: left;' : 'text-align: right;'} }
 
-      .milano-widget-input-area {
-        padding: 12px; background: white;
-        border-top: 1px solid #e0e0e0;
-        display: flex; gap: 8px;
-        flex-shrink: 0; align-items: flex-end;
-      }
-      .milano-widget-input {
-        flex: 1; padding: 10px 14px;
-        border: 1px solid #e0e0e0; border-radius: 20px;
-        font-size: 14px; outline: none; resize: none;
-        max-height: 100px; min-height: 40px;
-        font-family: inherit; line-height: 1.4;
-      }
+      .milano-widget-input-area { padding: 12px 16px; background: ${inputBg}; border-top: 1px solid ${inputBorder}; display: flex; gap: 8px; align-items: center; }
+      .milano-widget-input { flex: 1; padding: 10px 16px; border: 1px solid ${inputBorder}; border-radius: 24px; font-size: 14px; outline: none; resize: none; max-height: 100px; min-height: 40px; font-family: inherit; background: ${isDark ? '#333' : '#f9fafb'}; color: ${textColor}; transition: border 0.2s; }
       .milano-widget-input:focus { border-color: ${primaryColor}; }
-      .milano-widget-send {
-        width: 40px; height: 40px; border-radius: 50%;
-        background: ${primaryColor}; border: none;
-        cursor: pointer; display: flex;
-        align-items: center; justify-content: center;
-        flex-shrink: 0; transition: opacity 0.2s;
-      }
-      .milano-widget-send:disabled { opacity: 0.5; cursor: not-allowed; }
-      .milano-widget-send svg { width: 18px; height: 18px; fill: white; }
+      .milano-widget-send { width: 40px; height: 40px; border-radius: 50%; background: ${primaryColor}; border: none; cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+      .milano-widget-send svg { width: 18px; height: 18px; fill: white; transform: ${config.rtl ? 'rotate(180deg)' : 'none'}; }
 
-      .milano-widget-loading { display: flex; gap: 4px; padding: 4px 0; }
-      .milano-widget-loading span {
-        width: 8px; height: 8px; border-radius: 50%;
-        background: ${primaryColor};
-        animation: milano-bounce 1.4s infinite ease-in-out both;
-      }
-      .milano-widget-loading span:nth-child(1) { animation-delay: -0.32s; }
-      .milano-widget-loading span:nth-child(2) { animation-delay: -0.16s; }
-      @keyframes milano-bounce {
-        0%, 80%, 100% { transform: scale(0); }
-        40% { transform: scale(1); }
-      }
-
-      .milano-widget-suggestions {
-        padding: 8px 12px; display: flex; gap: 8px;
-        overflow-x: auto; background: white;
-        border-top: 1px solid #e0e0e0; flex-shrink: 0;
-      }
-      .milano-widget-suggestion {
-        padding: 6px 12px; background: #f0f0f0;
-        border-radius: 16px; font-size: 12px;
-        white-space: nowrap; cursor: pointer;
-        border: none; font-family: inherit;
-      }
-      .milano-widget-suggestion:hover { background: #e0e0e0; }
+      /* العبارة الثابتة */
+      .milano-widget-branding { text-align: center; padding: 8px; font-size: 11px; color: #888; background: ${inputBg}; border-top: 1px solid ${inputBorder}; direction: rtl; }
+      .milano-widget-branding a { color: ${primaryColor}; text-decoration: none; font-weight: bold; }
 
       @media (max-width: 480px) {
-        .milano-widget-window {
-          width: calc(100vw - 20px);
-          height: calc(100vh - 100px);
-          bottom: 80px;
-          ${config.position === 'right' ? 'right: 10px;' : 'left: 10px;'}
-        }
+        .milano-widget-window { width: calc(100vw - 20px); height: calc(100vh - 100px); bottom: 80px; ${config.position === 'right' ? 'right: 10px;' : 'left: 10px;'} border-radius: 12px; }
       }
     `;
   }
@@ -544,14 +469,14 @@
       <button class="milano-widget-btn" id="milano-toggle-btn" aria-label="فتح المحادثة">
         ${config.launcherIconUrl
           ? `<img src="${config.launcherIconUrl}" alt="">`
-          : `<svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12c0 1.54.36 3 1 4.29L2 22l5.71-1C9 21.64 10.46 22 12 22c5.52 0 10-4.48 10-10S17.52 2 12 2zm0 18c-1.38 0-2.67-.33-3.82-.91l-.27-.15-3.18.56.56-3.18-.15-.27C4.33 14.67 4 13.38 4 12c0-4.41 3.59-8 8-8s8 3.59 8 8-3.59 8-8 8z"/></svg>`}
+          : `<svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12v3c0 1.66 1.34 3 3 3h3c1.66 0 3-1.34 3-3v-4c0-1.66-1.34-3-3-3H5.05C6.25 4.85 8.93 3 12 3s5.75 1.85 6.95 5H16c-1.66 0-3 1.34-3 3v4c0 1.66 1.34 3 3 3h3c1.66 0 3-1.34 3-3v-3c0-5.52-4.48-10-10-10zm-3 14H5c-.55 0-1-.45-1-1v-3h4c.55 0 1 .45 1 1v3zm10 0h-4v-3c0-.55.45-1 1-1h4v3c0 .55-.45 1-1 1z"/></svg>`}
       </button>
 
       <div class="milano-widget-window">
         <div class="milano-widget-header">
           ${config.logoUrl ? `<div class="milano-widget-logo"><img src="${config.logoUrl}" alt=""></div>` : ''}
           <div class="milano-widget-avatar">
-            ${config.avatarUrl ? `<img src="${config.avatarUrl}" alt="">` : '💬'}
+            <img src="https://nmhefwvhoholcjrbbila.supabase.co/storage/v1/object/sign/widget-avatars/photo_2026-10-24_22-19-00.jpg?token=eyJraWQiOiIzMDcyNTQ5Ny04NDk0LTQ5NzMtYTNjZS1jMzViMWIzNzM2Y2MiLCJhbGciOiJIUzUxMiJ9.eyJ1cmwiOiJ3aWRnZXQtYXZhdGFycy9waG90b18yMDI2LTEwLTI0XzIyLTE5LTAwLmpwZyIsInNjb3BlIjoiZG93bmxvYWQiLCJpYXQiOjE3OTI4Njk1ODIsImV4cCI6MjEwODIyOTU4Mn0.nCZRh2ZOOLgdqAQnHHN1G4PilFYRyqU00xsMOt7n8ndbs3oCE00GBMdGl6q2d49Hici6tAM8HVzmzbfsAzg2fg" alt="Logo">
           </div>
           <div class="milano-widget-title">
             <h3>${escapeHtml(config.agentName || config.name || '')}</h3>
@@ -588,6 +513,14 @@
     renderMessages();
 
     /* ═══════ ربط الأحداث ═══════ */
+
+    const closeBtn = document.getElementById('milano-close-btn');
+    if (closeBtn) {
+      closeBtn.addEventListener('click', () => {
+        isOpen = false;
+        container.querySelector('.milano-widget-window').style.display = 'none';
+      });
+    }
 
     const toggleBtn = document.getElementById('milano-toggle-btn');
     if (toggleBtn) {
