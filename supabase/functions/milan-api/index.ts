@@ -1913,6 +1913,33 @@ Deno.serve(async (req) => {
     ═══════════════════════════════════════════════════════════════════ */
 
     switch (action) {
+
+      /* ────────────────────────────────────────────────────────────────
+         تقديم ملف الـ Widget كـ JavaScript
+      ──────────────────────────────────────────────────────────────── */
+      case "widget.js": {
+        try {
+          const ghUrl = "https://raw.githubusercontent.com/hsnq2022022-cyber/milanochat/main/server/public/widget.js";
+          const ghResponse = await fetch(ghUrl);
+          if (!ghResponse.ok) {
+            return err("Failed to load widget script from GitHub", 500);
+          }
+          const jsContent = await ghResponse.text();
+          return new Response(jsContent, {
+            status: 200,
+            headers: {
+              ...CORS,
+              "content-type": "application/javascript; charset=utf-8",
+              "Cache-Control": "public, max-age=3600",
+            },
+          });
+        } catch (error) {
+          console.error("[widget.js] Error fetching script:", error);
+          return err("Internal server error", 500);
+        }
+      }
+
+
       /* ────────────────────────────────────────────────────────────────
          إنشاء Tenant
       ──────────────────────────────────────────────────────────────── */

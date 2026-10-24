@@ -94,7 +94,7 @@
 
   async function fetchConfig() {
     try {
-      const res = await fetch(`${baseUrl}/api/widgets/public/${token}`);
+      const res = await fetch(`${baseUrl}/functions/v1/milan-api?action=widget_public&token=${token}`);
       if (!res.ok) throw new Error('Widget not found');
       config = await res.json();
       return config;
@@ -106,10 +106,10 @@
 
   async function createSession() {
     try {
-      const res = await fetch(`${baseUrl}/api/widgets/public/${token}/session`, {
+      const res = await fetch(`${baseUrl}/functions/v1/milan-api?action=widget_session`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ visitorId, origin: window.location.origin }),
+        body: JSON.stringify({ token, visitorId, origin: window.location.origin }),
       });
 
       if (!res.ok) {
@@ -183,10 +183,10 @@
 
     // ── 5) الإرسال للـ API ──
     try {
-      const res = await fetch(`${baseUrl}/api/widgets/public/${token}/message`, {
+      const res = await fetch(`${baseUrl}/functions/v1/milan-api?action=widget_message`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId, message: text, origin: window.location.origin }),
+        body: JSON.stringify({ token, sessionId, message: text, origin: window.location.origin }),
       });
 
       if (!res.ok) {
