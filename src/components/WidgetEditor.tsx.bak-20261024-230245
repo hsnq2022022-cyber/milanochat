@@ -1,0 +1,1026 @@
+// ═══════════════════════════════════════════════════════════════════════════════
+// WidgetEditor - محرر Widget المتقدم
+// ═══════════════════════════════════════════════════════════════════════════════
+
+import { useState, useEffect } from "react";
+import type { Widget, WidgetSettings } from "../types/widget";
+import {
+  DEFAULT_SETTINGS,
+  APPEARANCE_PRESETS,
+} from "../types/widget";
+import WidgetPreview from "./WidgetPreview";
+import { FUNCTIONS_BASE } from "../lib/api";
+import {
+  IconX,
+  IconSave,
+  IconUndo,
+  IconRedo,
+  IconCopy,
+  IconCheck,
+  IconSettings,
+  IconPalette,
+  IconMessage,
+  IconToggle,
+  IconCode,
+  IconSparkle,
+} from "./Icons";
+
+type EditorTab =
+  | "general"
+  | "appearance"
+  | "chat"
+  | "behavior"
+  | "forms"
+  | "install";
+
+interface WidgetEditorProps {
+  widget: Widget | null;
+  onSave: (
+    name: string,
+    settings: WidgetSettings
+  ) => Promise<void>;
+  onClose: () => void;
+  saving: boolean;
+  authToken?: string | null;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// دمج الإعدادات مع القيم الافتراضية
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function mergeWithDefaults(
+  settings: any
+): WidgetSettings {
+  return {
+    appearance: {
+      ...DEFAULT_SETTINGS.appearance,
+      ...(settings?.appearance || {}),
+
+      headerGradient: {
+        ...DEFAULT_SETTINGS.appearance.headerGradient,
+        ...(settings?.appearance?.headerGradient || {}),
+      },
+
+      launcher: {
+        ...DEFAULT_SETTINGS.appearance.launcher,
+        ...(settings?.appearance?.launcher || {}),
+        badge: {
+          ...DEFAULT_SETTINGS.appearance.launcher.badge,
+          ...(settings?.appearance?.launcher?.badge || {}),
+        },
+      },
+
+      avatar: {
+        ...DEFAULT_SETTINGS.appearance.avatar,
+        ...(settings?.appearance?.avatar || {}),
+      },
+
+      offset: {
+        ...DEFAULT_SETTINGS.appearance.offset,
+        ...(settings?.appearance?.offset || {}),
+      },
+    },
+
+    chat: {
+      ...DEFAULT_SETTINGS.chat,
+      ...(settings?.chat || {}),
+      quickReplies: Array.isArray(
+        settings?.chat?.quickReplies
+      )
+        ? settings.chat.quickReplies
+        : DEFAULT_SETTINGS.chat.quickReplies,
+    },
+
+    behavior: {
+      ...DEFAULT_SETTINGS.behavior,
+      ...(settings?.behavior || {}),
+
+      autoOpen: {
+        ...DEFAULT_SETTINGS.behavior.autoOpen,
+        ...(settings?.behavior?.autoOpen || {}),
+      },
+
+      sound: {
+        ...DEFAULT_SETTINGS.behavior.sound,
+        ...(settings?.behavior?.sound || {}),
+      },
+
+      visibility: {
+        ...DEFAULT_SETTINGS.behavior.visibility,
+        ...(settings?.behavior?.visibility || {}),
+      },
+    },
+
+    forms: {
+      ...DEFAULT_SETTINGS.forms,
+      ...(settings?.forms || {}),
+
+      preChat: {
+        ...DEFAULT_SETTINGS.forms.preChat,
+        ...(settings?.forms?.preChat || {}),
+      },
+
+      offlineForm: {
+        ...DEFAULT_SETTINGS.forms.offlineForm,
+        ...(settings?.forms?.offlineForm || {}),
+      },
+    },
+
+    localization: {
+      ...DEFAULT_SETTINGS.localization,
+      ...(settings?.localization || {}),
+    },
+
+    branding: {
+      ...DEFAULT_SETTINGS.branding,
+      ...(settings?.branding || {}),
+    },
+
+    chatWindow: {
+      ...DEFAULT_SETTINGS.chatWindow,
+      ...(settings?.chatWindow || {}),
+    },
+
+    avatar: {
+      ...DEFAULT_SETTINGS.avatar,
+      ...(settings?.avatar || {}),
+
+      headerLogo: {
+        ...DEFAULT_SETTINGS.avatar?.headerLogo,
+        ...(settings?.avatar?.headerLogo || {}),
+      },
+
+      botAvatar: {
+        ...DEFAULT_SETTINGS.avatar?.botAvatar,
+        ...(settings?.avatar?.botAvatar || {}),
+      },
+
+      typingIndicator: {
+        ...DEFAULT_SETTINGS.avatar?.typingIndicator,
+        ...(settings?.avatar?.typingIndicator || {}),
+      },
+    },
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Widget Editor
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export default function WidgetEditor({
+  widget,
+  onSave,
+  onClose,
+  saving,
+  authToken,
+}: WidgetEditorProps) {
+  const [activeTab, setActiveTab] =
+    useState<EditorTab>("general");
+
+  const [name, setName] = useState(
+    widget?.name ?? ""
+  );
+
+  const [settings, setSettings] =
+    useState<WidgetSettings>(
+      mergeWithDefaults(widget?.settings)
+    );
+
+  const [history, setHistory] =
+    useState<WidgetSettings[]>([]);
+
+  const [historyIndex, setHistoryIndex] =
+    useState(-1);
+
+  const [copiedCode, setCopiedCode] =
+    useState(false);
+
+  const [errors, setErrors] =
+    useState<Record<string, string>>({});
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // حفظ التغييرات في التاريخ
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  useEffect(() => {
+    const timeout = setTimeout(() => {
+      setHistory((prev) => [
+        ...prev.slice(0, historyIndex + 1),
+        settings,
+      ]);
+
+      setHistoryIndex((prev) => prev + 1);
+    }, 500);
+
+    return () => clearTimeout(timeout);
+  }, [settings]);
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Undo
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  const undo = () => {
+    if (historyIndex > 0) {
+      setHistoryIndex(historyIndex - 1);
+      setSettings(
+        history[historyIndex - 1]
+      );
+    }
+  };
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Redo
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  const redo = () => {
+    if (
+      historyIndex <
+      history.length - 1
+    ) {
+      setHistoryIndex(historyIndex + 1);
+      setSettings(
+        history[historyIndex + 1]
+      );
+    }
+  };
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Validation
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  const validate = () => {
+    const newErrors: Record<
+      string,
+      string
+    > = {};
+
+    if (!name.trim()) {
+      newErrors.name =
+        "اسم الـ Widget مطلوب";
+    }
+
+    if (
+      !/^#[0-9A-F]{6}$/i.test(
+        settings.appearance.primaryColor
+      )
+    ) {
+      newErrors.primaryColor =
+        "اللون غير صالح (HEX)";
+    }
+
+    setErrors(newErrors);
+
+    return (
+      Object.keys(newErrors).length === 0
+    );
+  };
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Save
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  const handleSave = async () => {
+    if (!validate()) return;
+
+    await onSave(name.trim(), settings);
+  };
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Apply preset
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  const applyPreset = (
+    presetName: keyof typeof APPEARANCE_PRESETS
+  ) => {
+    const preset =
+      APPEARANCE_PRESETS[presetName];
+
+    setSettings({
+      ...settings,
+      appearance: {
+        ...settings.appearance,
+        ...preset,
+        launcher: {
+          ...settings.appearance.launcher,
+          ...(preset as any).launcher,
+        },
+      },
+    });
+  };
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Copy embed code
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  const copyEmbedCode = async () => {
+    if (!widget) return;
+
+    const code =
+      `<script src="https://nmhefwvhoholcjrbbila.supabase.co/functions/v1/milan-api?action=widget.js" data-token="${widget.public_token}"></script>`;
+
+    try {
+      await navigator.clipboard.writeText(
+        code
+      );
+
+      setCopiedCode(true);
+
+      setTimeout(() => {
+        setCopiedCode(false);
+      }, 2000);
+    } catch (error) {
+      console.error(
+        "Failed to copy embed code:",
+        error
+      );
+    }
+  };
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Update settings
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  const updateSettings = (
+    path: string,
+    value: any
+  ) => {
+    const keys = path.split(".");
+
+    const newSettings: any = {
+      ...settings,
+    };
+
+    let current: any =
+      newSettings;
+
+    for (
+      let i = 0;
+      i < keys.length - 1;
+      i++
+    ) {
+      current[keys[i]] = {
+        ...(current[keys[i]] || {}),
+      };
+
+      current =
+        current[keys[i]];
+    }
+
+    current[
+      keys[keys.length - 1]
+    ] = value;
+
+    setSettings(newSettings);
+  };
+
+  const tabs: {
+    id: EditorTab;
+    label: string;
+    icon: any;
+  }[] = [
+    {
+      id: "general",
+      label: "عام",
+      icon: IconSettings,
+    },
+    {
+      id: "appearance",
+      label: "المظهر",
+      icon: IconPalette,
+    },
+    {
+      id: "chat",
+      label: "المحادثة",
+      icon: IconMessage,
+    },
+    {
+      id: "behavior",
+      label: "السلوك",
+      icon: IconToggle,
+    },
+    {
+      id: "forms",
+      label: "النماذج",
+      icon: IconSparkle,
+    },
+    {
+      id: "install",
+      label: "التثبيت",
+      icon: IconCode,
+    },
+  ];
+
+  return (
+    <div className="fixed inset-0 z-50 flex bg-night">
+      {/* ══════════════════════════════════════════════════════════════════════
+          Sidebar
+      ══════════════════════════════════════════════════════════════════════ */}
+
+      <div className="w-80 bg-pine border-l border-verde/15 flex flex-col">
+        <div className="p-4 border-b border-verde/15 flex items-center justify-between">
+          <h2 className="font-display font-bold text-lg text-bone">
+            {widget
+              ? "تعديل Widget"
+              : "إنشاء Widget"}
+          </h2>
+
+          <button
+            type="button"
+            onClick={onClose}
+            className="text-sage hover:text-bone transition-colors"
+          >
+            <IconX className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto">
+          {tabs.map((tab) => (
+            <button
+              type="button"
+              key={tab.id}
+              onClick={() =>
+                setActiveTab(tab.id)
+              }
+              className={`w-full flex items-center gap-3 px-4 py-3 text-right transition-all ${
+                activeTab === tab.id
+                  ? "bg-moss text-oro border-r-2 border-oro"
+                  : "text-sage hover:bg-night/50 hover:text-bone"
+              }`}
+            >
+              <tab.icon className="w-5 h-5" />
+
+              <span className="font-semibold">
+                {tab.label}
+              </span>
+            </button>
+          ))}
+        </div>
+
+        <div className="p-4 border-t border-verde/15 flex gap-2">
+          <button
+            type="button"
+            onClick={undo}
+            disabled={historyIndex <= 0}
+            className="btn-secondary flex-1"
+          >
+            <IconUndo className="w-4 h-4" />
+          </button>
+
+          <button
+            type="button"
+            onClick={redo}
+            disabled={
+              historyIndex >=
+              history.length - 1
+            }
+            className="btn-secondary flex-1"
+          >
+            <IconRedo className="w-4 h-4" />
+          </button>
+
+          <button
+            type="button"
+            onClick={handleSave}
+            disabled={saving}
+            className="btn-primary flex-[2]"
+          >
+            <IconSave className="w-4 h-4" />
+
+            {saving
+              ? "جارٍ الحفظ..."
+              : "حفظ"}
+          </button>
+        </div>
+      </div>
+
+      {/* ══════════════════════════════════════════════════════════════════════
+          Main Content
+      ══════════════════════════════════════════════════════════════════════ */}
+
+      <div className="flex-1 flex flex-col">
+        <div className="h-14 bg-pine/50 border-b border-verde/15 flex items-center justify-between px-6">
+          <div className="flex items-center gap-4">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={settings?.rtl || false}
+                onChange={(e) => updateSettings("rtl", e.target.checked)}
+                className="w-4 h-4 accent-verde"
+              />
+              <span className="text-sm text-bone">
+                اتجاه من اليمين لليسار (RTL)
+              </span>
+            </label>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Appearance Tab
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function AppearanceTab({
+  widget,
+  settings,
+  updateSettings,
+  applyPreset,
+  errors,
+  authToken,
+}: any) {
+  // ═══════════════════════════════════════════════════════════════════════════
+  // رفع الصور
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  const handleImageUpload = async (
+    type:
+      | "logo"
+      | "avatar"
+      | "launcher_icon",
+    file: File
+  ) => {
+    if (!widget?.id) {
+      alert(
+        "احفظ الـ Widget أولاً حتى يمكن رفع الصورة."
+      );
+      return;
+    }
+
+    if (!authToken) {
+      alert(
+        "يجب تسجيل الدخول أولاً"
+      );
+      return;
+    }
+
+    if (!file.type.startsWith("image/")) {
+      alert(
+        "الملف المحدد ليس صورة صالحة"
+      );
+      return;
+    }
+
+    if (file.size > 1024 * 1024) {
+      alert(
+        "حجم الملف يتجاوز 1MB"
+      );
+      return;
+    }
+
+    try {
+      const formData = new FormData();
+
+      formData.append(
+        "file",
+        file
+      );
+
+      // Backend expects "widget_id".
+      formData.append(
+        "widget_id",
+        String(widget.id)
+      );
+
+      formData.append(
+        "type",
+        type
+      );
+
+      // خادم Railway أُغلق — الرفع صار عبر Supabase Edge Function (milan-api)
+      const baseUrl = String(FUNCTIONS_BASE).replace(/\/$/, "");
+
+      const response =
+        await fetch(
+          `${baseUrl}/milan-api?action=widget_dashboard_upload`,
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${authToken}`,
+            },
+            body: formData,
+          }
+        );
+
+      let data: any = null;
+
+      try {
+        data = await response.json();
+      } catch {
+        data = null;
+      }
+
+      if (!response.ok) {
+        throw new Error(
+          data?.error ||
+            data?.message ||
+            "فشل رفع الصورة"
+        );
+      }
+
+      if (!data?.url) {
+        throw new Error(
+          "تم رفع الصورة ولكن لم يُرجع الخادم رابط الصورة"
+        );
+      }
+
+      // ═════════════════════════════════════════════════════════════════════
+      // تحديث الإعداد المناسب
+      // ═════════════════════════════════════════════════════════════════════
+
+      if (type === "logo") {
+        updateSettings(
+          "avatar.headerLogo.url",
+          data.url
+        );
+
+        alert(
+          "تم رفع شعار المشروع بنجاح"
+        );
+
+        return;
+      }
+
+      if (type === "avatar") {
+        updateSettings(
+          "avatar.botAvatar.url",
+          data.url
+        );
+
+        alert(
+          "تم رفع صورة المساعد بنجاح"
+        );
+
+        return;
+      }
+
+      if (type === "launcher_icon") {
+        updateSettings(
+          "appearance.launcher.customIcon",
+          data.url
+        );
+
+        updateSettings(
+          "appearance.launcher.icon",
+          "custom"
+        );
+
+        alert(
+          "تم رفع أيقونة الزر العائم بنجاح"
+        );
+      }
+    } catch (error: any) {
+      console.error(
+        "Widget image upload error:",
+        error
+      );
+
+      alert(
+        error?.message ||
+          "تعذر رفع الصورة"
+      );
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* ══════════════════════════════════════════════════════════════════════
+          Logo Upload
+      ══════════════════════════════════════════════════════════════════════ */}
+
+      <div>
+        <label className="text-xs text-sage mb-2 block">
+          Logo المشروع
+        </label>
+
+        {!widget && (
+          <div className="mb-3 p-3 rounded-lg bg-oro/10 border border-oro/20">
+            <p className="text-xs text-oro">
+              احفظ الـ Widget أولاً حتى يصبح له معرف خاص ويمكن رفع الصورة.
+            </p>
+          </div>
+        )}
+
+        <div className="flex items-center gap-3">
+          {settings.avatar
+            ?.headerLogo
+            ?.url && (
+            <img
+              src={
+                settings.avatar
+                  .headerLogo.url
+              }
+              alt="Logo"
+              className="w-16 h-16 rounded-lg object-cover border border-verde/20"
+            />
+          )}
+
+          <div className="flex items-center gap-2">
+            <span className="text-verde font-bold text-lg">✓</span>
+            <span className="text-sm text-bone">
+              مدعوم من إدارة سوشيال (إجباري)
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Chat Tab
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function ChatTab({
+  settings,
+  updateSettings,
+}: any) {
+  return (
+    <div className="space-y-6">
+      <div>
+        <label className="text-xs text-sage mb-2 block">
+          رسالة الترحيب
+        </label>
+
+        <textarea
+          value={
+            settings.chat
+              .welcomeMessage
+          }
+          onChange={(e) =>
+            updateSettings(
+              "chat.welcomeMessage",
+              e.target.value
+            )
+          }
+          className="input-field resize-none"
+          rows={3}
+        />
+      </div>
+
+      <div>
+        <label className="text-xs text-sage mb-2 block">
+          Placeholder
+        </label>
+
+        <div className="flex items-center gap-2 mt-4">
+          <span className="text-verde font-bold text-lg">✓</span>
+          <span className="text-sm text-bone">
+            إظهار مؤشر الكتابة
+          </span>
+        </div>
+      </div>
+
+      <div>
+        <label className="flex items-center gap-2 cursor-pointer">
+          <span className="text-verde font-bold text-lg">✓</span>
+
+          <span className="text-sm text-bone">
+            إظهار إيصالات القراءة
+          </span>
+          </label>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Behavior Tab
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function BehaviorTab({
+  settings,
+  updateSettings,
+}: any) {
+  return (
+    <div className="space-y-6">
+      <div>
+        <label
+          htmlFor="widget-auto-open-trigger"
+          className="text-xs text-sage mb-2 block"
+        >
+          الفتح التلقائي
+        </label>
+
+        <select
+          id="widget-auto-open-trigger"
+          value={settings.behavior.autoOpen.trigger}
+          onChange={(e) =>
+            updateSettings(
+              "behavior.autoOpen.trigger",
+              e.target.value
+            )
+          }
+          className="input-field"
+        >
+          <option value="disabled">معطّل</option>
+          <option value="delay">بعد تأخير</option>
+          <option value="exit_intent">عند نية الخروج</option>
+          <option value="scroll">عند التمرير</option>
+        </select>
+      </div>
+
+      {settings.behavior.autoOpen.trigger === "delay" && (
+        <div>
+          <label
+            htmlFor="widget-auto-open-delay"
+            className="text-xs text-sage mb-2 block"
+          >
+            التأخير (ثواني)
+          </label>
+
+          <input
+            id="widget-auto-open-delay"
+            type="number"
+            min={1}
+            step={1}
+            value={settings.behavior.autoOpen.delay ?? 3}
+            onChange={(e) => {
+              const value = e.target.value;
+              updateSettings(
+                "behavior.autoOpen.delay",
+                value === "" ? 1 : Math.max(1, Number(value) || 1)
+              );
+            }}
+            className="input-field"
+          />
+        </div>
+      )}
+
+      <div>
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={Boolean(settings.behavior.sound.enabled)}
+            onChange={(e) =>
+              updateSettings(
+                "behavior.sound.enabled",
+                e.target.checked
+              )
+            }
+            className="w-4 h-4 accent-verde"
+          />
+
+          <span className="text-sm text-bone">
+            تفعيل صوت التنبيه
+          </span>
+        </label>
+      </div>
+
+      <div>
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={Boolean(settings.behavior.visibility.hideOnMobile)}
+            onChange={(e) =>
+              updateSettings(
+                "behavior.visibility.hideOnMobile",
+                e.target.checked
+              )
+            }
+            className="w-4 h-4 accent-verde"
+          />
+
+          <span className="text-sm text-bone">
+            إخفاء على الجوال
+          </span>
+        </label>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Forms Tab
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function FormsTab({
+  settings,
+  updateSettings,
+}: any) {
+  return (
+    <div className="space-y-6">
+      <div>
+        <label className="flex items-center gap-2 cursor-pointer">
+          <span className="text-verde font-bold text-lg">✓</span>
+
+          <span className="text-sm text-bone">
+            تفعيل نموذج ما قبل المحادثة
+          </span>
+          </div>
+
+        <p className="text-xs text-sage mt-2">
+          اطلب معلومات من الزائر قبل بدء
+          المحادثة (الاسم، البريد، إلخ)
+        </p>
+      </div>
+
+      <div>
+        <label className="flex items-center gap-2 cursor-pointer">
+          <span className="text-verde font-bold text-lg">✓</span>
+
+          <span className="text-sm text-bone">
+            تفعيل نموذج ترك رسالة
+          </span>
+          </div>
+
+        <p className="text-xs text-sage mt-2">
+          اسمح للزوار بترك رسالة عند عدم
+          توفر الوكلاء
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Install Tab
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function InstallTab({
+  widget,
+  copiedCode,
+  copyEmbedCode,
+}: any) {
+  const embedCode =
+    `<script src="https://nmhefwvhoholcjrbbila.supabase.co/functions/v1/milan-api?action=widget.js" data-token="${widget.public_token}"></script>`;
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <label className="text-xs text-sage mb-2 block">
+          كود التضمين
+        </label>
+
+        <div className="bg-night/50 border border-verde/15 rounded-lg p-3">
+          <code
+            className="text-xs text-verde break-all"
+            dir="ltr"
+          >
+            {embedCode}
+          </code>
+        </div>
+
+        <button
+          type="button"
+          onClick={copyEmbedCode}
+          className="btn-secondary w-full mt-2 flex items-center justify-center gap-2"
+        >
+          {copiedCode ? (
+            <>
+              <IconCheck className="w-4 h-4" />
+              تم النسخ
+            </>
+          ) : (
+            <>
+              <IconCopy className="w-4 h-4" />
+              نسخ الكود
+            </>
+          )}
+        </button>
+      </div>
+
+      <div>
+        <label className="text-xs text-sage mb-2 block">
+          تعليمات التثبيت
+        </label>
+
+        <div className="space-y-3 text-xs text-sage">
+          <div>
+            <p className="font-bold text-bone mb-1">
+              WordPress:
+            </p>
+
+            <p>
+              أضف الكود إلى ملف footer.php أو
+              استخدم إضافة "Insert Headers and Footers"
+            </p>
+          </div>
+
+          <div>
+            <p className="font-bold text-bone mb-1">
+              Shopify:
+            </p>
+
+            <p>
+              أضف الكود إلى theme.liquid قبل
+              إغلاق &lt;/body&gt;
+            </p>
+          </div>
+
+          <div>
+            <p className="font-bold text-bone mb-1">
+              React:
+            </p>
+
+            <p>
+              أضف الكود إلى public/index.html
+              أو استخدم useEffect
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
