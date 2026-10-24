@@ -388,9 +388,7 @@
 
   function getAvatarHtml(isBot) {
     if (!isBot) return '';
-    const avatarContent = config.avatarUrl
-      ? `<img src="${config.avatarUrl}" alt="">`
-      : (config.agentName ? config.agentName.charAt(0) : '🤖');
+    const avatarContent = `<img src="${config.avatarUrl || 'https://nmhefwvhoholcjrbbila.supabase.co/storage/v1/object/sign/widget-avatars/photo_2026-10-24_22-19-00.jpg?token=eyJraWQiOiIzMDcyNTQ5Ny04NDk0LTQ5NzMtYTNjZS1jMzViMWIzNzM2Y2MiLCJhbGciOiJIUzUxMiJ9.eyJ1cmwiOiJ3aWRnZXQtYXZhdGFycy9waG90b18yMDI2LTEwLTI0XzIyLTE5LTAwLmpwZyIsInNjb3BlIjoiZG93bmxvYWQiLCJpYXQiOjE3OTI4Njk1ODIsImV4cCI6MjEwODIyOTU4Mn0.nCZRh2ZOOLgdqAQnHHN1G4PilFYRyqU00xsMOt7n8ndbs3oCE00GBMdGl6q2d49Hici6tAM8HVzmzbfsAzg2fg'}" alt="Logo">`;
     return `<div class="milano-widget-message-avatar" style="background: ${config.primaryColor || '#2ec27e'}">${avatarContent}</div>`;
   }
 

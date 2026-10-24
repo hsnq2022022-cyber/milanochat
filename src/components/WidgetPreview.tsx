@@ -590,7 +590,7 @@ export default function WidgetPreview({
                     }`,
                 }}
               >
-                مدعوم بواسطة{" "}
+                مدعوم من إدارة سوشيال{" "}
 
                 <span
                   className="font-bold"

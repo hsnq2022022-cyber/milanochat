@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>اختبار Milano Widget</title>
+    <style>
+        body { font-family: sans-serif; padding: 20px; text-align: center; background: #f4f4f9; color: #333; }
+        .container { background: white; padding: 40px 20px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); margin-top: 50px; }
+        h1 { color: #2ec27e; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>صفحة اختبار الـ Widget</h1>
+        <p>إذا ظهرت أيقونة المحادثة في زاوية الشاشة، فهذا يعني أن الـ Widget يعمل بنجاح!</p>
+        <p>اضغط عليها واكتب رسالة لتجربة رد الذكاء الاصطناعي.</p>
+    </div>
+
+    <!-- كود التضمين الجديد الذي يعمل عبر Supabase -->
+    <script src="https://nmhefwvhoholcjrbbila.supabase.co/functions/v1/milan-api?action=widget.js" data-token="c6771776ada0a01fb8385a45334568f2"></script>
+</body>
+</html>

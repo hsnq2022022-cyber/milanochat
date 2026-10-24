@@ -1555,7 +1555,7 @@ function AppearanceTab({
           />
 
           <span className="text-sm text-bone">
-            إظهار "مدعوم بواسطة إدارة ســوشـــيــــال"
+            مدعوم من إدارة سوشيال (إجباري)
           </span>
         </label>
       </div>

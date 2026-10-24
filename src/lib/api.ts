@@ -173,6 +173,8 @@ async function dashSupabase<T>(token: string, path: string, init?: RequestInit):
   else if (sub === "summary") action = "summary";
   else if (sub === "conversations") action = "conversations";
   else if (sub === "unresolved") action = "unresolved";
+  else if (sub === "products" && method === "GET") action = "salla_products_list";
+  else if (sub === "products/sync" && method === "POST") action = "salla_products_sync";
   else if (sub === "knowledge" && method === "GET") action = "knowledge";
   else if (sub === "knowledge" && method === "POST") action = "knowledge_add";
   else if (sub.startsWith("knowledge/")) {
