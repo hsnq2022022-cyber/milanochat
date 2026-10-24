@@ -292,37 +292,47 @@ async function fetchRetry(
 async function embed(
   texts: string[]
 ): Promise<number[][]> {
+  const key = aiKey("embed");
+  if (!key) throw new Error("No API key found for embeddings");
+
+  // إذا كان المفتاح يخص Google (يبدأ بـ AIza)
+  if (key.startsWith("AIza")) {
+    const res = await fetchRetry(
+      `https://generativelanguage.googleapis.com/v1/models/text-embedding-004:batchEmbedContents?key=${key}`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          requests: texts.map(text => ({
+            model: "models/text-embedding-004",
+            content: { parts: [{ text }] }
+          }))
+        }),
+      }
+    );
+    if (!res.ok) throw new Error(`Gemini embedding ${res.status}: ${await res.text()}`);
+    const j = await res.json();
+    return j.embeddings.map((e: any) => e.values);
+  }
+
+  // الإعداد الافتراضي لـ OpenAI
   const res = await fetchRetry(
-    `${
-      env("EMBED_BASE_URL") ||
-      "https://api.openai.com/v1"
-    }/embeddings`,
+    `${env("EMBED_BASE_URL") || "https://api.openai.com/v1"}/embeddings`,
     {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        authorization: `Bearer ${aiKey("embed")}`,
+        authorization: `Bearer ${key}`,
       },
       body: JSON.stringify({
-        model:
-          env("EMBED_MODEL") ||
-          "text-embedding-3-small",
+        model: env("EMBED_MODEL") || "text-embedding-3-small",
         input: texts,
       }),
     }
   );
-
-  if (!res.ok) {
-    throw new Error(
-      `embedding ${res.status}: ${await res.text()}`
-    );
-  }
-
+  if (!res.ok) throw new Error(`OpenAI embedding ${res.status}: ${await res.text()}`);
   const j = await res.json();
-
-  return j.data.map(
-    (d: { embedding: number[] }) => d.embedding
-  );
+  return j.data.map((d: { embedding: number[] }) => d.embedding);
 }
 
 const pg = (v: number[]) =>
