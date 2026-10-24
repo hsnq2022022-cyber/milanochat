@@ -500,15 +500,21 @@ export default function WidgetEditor({
       <div className="flex-1 flex flex-col">
         <div className="h-14 bg-pine/50 border-b border-verde/15 flex items-center justify-between px-6">
           <div className="flex items-center gap-4">
-            <span className="text-verde font-bold text-lg">✓</span>
-
-          <span className="text-sm text-bone">
-            اتجاه من اليمين لليسار (RTL)
-          </span>
-        </label>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={settings?.rtl || false}
+                onChange={(e) => updateSettings("rtl", e.target.checked)}
+                className="w-4 h-4 accent-verde"
+              />
+              <span className="text-sm text-bone">
+                اتجاه من اليمين لليسار (RTL)
+              </span>
+            </label>
+          </div>
+        </div>
       </div>
-    </div>
-  );
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
