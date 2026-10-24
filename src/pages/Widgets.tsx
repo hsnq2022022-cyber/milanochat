@@ -40,24 +40,7 @@ export default function Widgets() {
       setToken(session?.access_token ?? null);
     });
     
-  useEffect(() => {
-    const btn = document.createElement('button');
-    btn.innerText = '← العودة للرئيسية';
-    btn.style.cssText = 'position:fixed; top:20px; right:20px; z-index:99999; padding:10px 20px; background:#2ec27e; color:white; border:none; border-radius:8px; cursor:pointer; font-weight:bold; box-shadow: 0 4px 6px rgba(0,0,0,0.1); font-family: inherit;';
-    btn.onclick = () => window.location.hash = '#/';
-    document.body.appendChild(btn);
-    return () => { document.body.removeChild(btn); };
-  }, []);
-
-return (<>
-
-        {/* زر العودة المضافة تلقائياً */}
-        <button 
-          onClick={() => window.history.back()} 
-          style={{ position: 'fixed', top: '20px', left: '20px', zIndex: 9999, padding: '8px 16px', background: '#2ec27e', color: 'white', borderRadius: '8px', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 'bold', boxShadow: '0 4px 10px rgba(46,194,126,0.3)' }}
-        >
-          <span>→</span> العودة للرئيسية
-        </button>
+return (
 ) => sub.subscription.unsubscribe();
   }, [sb]);
 
@@ -339,6 +322,5 @@ return (<>
         </div>
       )}
     </div>
-  </>
-);
+  );
 }
