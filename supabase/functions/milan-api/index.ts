@@ -4974,7 +4974,7 @@ ${text}`
       ──────────────────────────────────────────────────────────────── */
       case "sync_salla_products": {
         const { data: sallaAcc } = await sb
-          .from("accounts")
+          .from("channel_accounts")
           .select("access_token_encrypted")
           .eq("tenant_id", tenant.id)
           .eq("channel", "salla")
