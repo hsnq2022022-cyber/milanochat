@@ -89,7 +89,7 @@ Deno.serve(async (req: Request) => {
 
       // إذا لم نجد إيميل، سنضع معرف افتراضي (أو نتركه فارغاً لحين ربطه يدوياً)
       // كحل مبدئي للتجربة، سنضع الإيميل كـ tenant_id إذا لم نجده، أو نستخدم merchantId
-      const finalTenantId = tenantId || merchantEmail || merchantId; 
+      const finalTenantId = tenantId || "e4318f83-ce13-4996-98e0-de53d8e5a04f"; // استخدام حساب المطور كاحتياطي للتجربة 
 
       // حفظ في جدول channel_accounts
       const { error } = await sb.from("channel_accounts").upsert(
