@@ -4108,6 +4108,37 @@ ${text}`
               settings.avatarUrl ??
               null;
           }
+
+          if (
+            settings.theme !==
+            undefined
+          ) {
+            patch.theme =
+              String(
+                settings.theme
+              ).slice(
+                0,
+                20
+              );
+          }
+
+          if (
+            settings.backgroundColor !==
+            undefined
+          ) {
+            patch.background_color =
+              settings.backgroundColor ??
+              null;
+          }
+
+          if (
+            settings.headerBackgroundColor !==
+            undefined
+          ) {
+            patch.header_background_color =
+              settings.headerBackgroundColor ??
+              null;
+          }
         }
 
         if (!Object.keys(patch).length) {

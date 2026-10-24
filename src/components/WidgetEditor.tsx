@@ -722,7 +722,51 @@ function AppearanceTab({
               مدعوم من إدارة سوشيال (إجباري)
             </span>
           </div>
+        </div>
       </div>
+        {/* قسم المظهر والألوان */}
+        <div className="border-t border-verde/15 pt-6 mt-6">
+          <h3 className="text-sm font-bold text-bone mb-4">المظهر والألوان</h3>
+          
+          <div className="mb-4">
+            <label className="text-xs text-sage mb-2 block">الوضع (Theme)</label>
+            <select
+              value={settings.theme || "auto"}
+              onChange={(e) => updateSettings("theme", e.target.value)}
+              className="input-field"
+            >
+              <option value="auto">تلقائي (يتماشى مع المتجر)</option>
+              <option value="light">فاتح دائماً</option>
+              <option value="dark">داكن دائماً</option>
+            </select>
+          </div>
+
+          <div className="mb-4">
+            <label className="text-xs text-sage mb-2 block">لون رأس المحادثة</label>
+            <div className="flex gap-3 items-center">
+              <input
+                type="color"
+                value={settings.headerBackgroundColor || "#2ec27e"}
+                onChange={(e) => updateSettings("headerBackgroundColor", e.target.value)}
+                className="w-10 h-10 rounded cursor-pointer bg-transparent border-none"
+              />
+              <span className="text-xs text-bone font-mono">{settings.headerBackgroundColor || "#2ec27e"}</span>
+            </div>
+          </div>
+
+          <div className="mb-4">
+            <label className="text-xs text-sage mb-2 block">لون الخلفية الداخلي</label>
+            <div className="flex gap-3 items-center">
+              <input
+                type="color"
+                value={settings.backgroundColor || "#f8f9fa"}
+                onChange={(e) => updateSettings("backgroundColor", e.target.value)}
+                className="w-10 h-10 rounded cursor-pointer bg-transparent border-none"
+              />
+              <span className="text-xs text-bone font-mono">{settings.backgroundColor || "#f8f9fa"}</span>
+            </div>
+          </div>
+        </div>
     </div>
   );
 }
@@ -778,7 +822,7 @@ function ChatTab({
           <span className="text-sm text-bone">
             إظهار إيصالات القراءة
           </span>
-        </label>
+          </label>
       </div>
     </div>
   );
@@ -795,15 +839,16 @@ function BehaviorTab({
   return (
     <div className="space-y-6">
       <div>
-        <label className="text-xs text-sage mb-2 block">
+        <label
+          htmlFor="widget-auto-open-trigger"
+          className="text-xs text-sage mb-2 block"
+        >
           الفتح التلقائي
         </label>
 
         <select
-          value={
-            settings.behavior
-              .autoOpen.trigger
-          }
+          id="widget-auto-open-trigger"
+          value={settings.behavior.autoOpen.trigger}
           onChange={(e) =>
             updateSettings(
               "behavior.autoOpen.trigger",
@@ -812,33 +857,53 @@ function BehaviorTab({
           }
           className="input-field"
         >
-          <option value="disabled">
-            معطّل
-          </option>
-
-          <option value="delay">
-            بعد تأخير
-          </option>
-
-          <option value="exit_intent">
-            عند نية الخروج
-          </option>
-
-          <option value="scroll">
-            عند التمرير
-          </option>
+          <option value="disabled">معطّل</option>
+          <option value="delay">بعد تأخير</option>
+          <option value="exit_intent">عند نية الخروج</option>
+          <option value="scroll">عند التمرير</option>
         </select>
       </div>
 
-      {settings.behavior
-        .autoOpen.trigger ===
-        "delay" && (
+      {settings.behavior.autoOpen.trigger === "delay" && (
         <div>
-          <label className="text-xs text-sage mb-2 block">
+          <label
+            htmlFor="widget-auto-open-delay"
+            className="text-xs text-sage mb-2 block"
+          >
             التأخير (ثواني)
           </label>
 
-          <span className="text-verde font-bold text-lg">✓</span>
+          <input
+            id="widget-auto-open-delay"
+            type="number"
+            min={1}
+            step={1}
+            value={settings.behavior.autoOpen.delay ?? 3}
+            onChange={(e) => {
+              const value = e.target.value;
+              updateSettings(
+                "behavior.autoOpen.delay",
+                value === "" ? 1 : Math.max(1, Number(value) || 1)
+              );
+            }}
+            className="input-field"
+          />
+        </div>
+      )}
+
+      <div>
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={Boolean(settings.behavior.sound.enabled)}
+            onChange={(e) =>
+              updateSettings(
+                "behavior.sound.enabled",
+                e.target.checked
+              )
+            }
+            className="w-4 h-4 accent-verde"
+          />
 
           <span className="text-sm text-bone">
             تفعيل صوت التنبيه
@@ -848,7 +913,17 @@ function BehaviorTab({
 
       <div>
         <label className="flex items-center gap-2 cursor-pointer">
-          <span className="text-verde font-bold text-lg">✓</span>
+          <input
+            type="checkbox"
+            checked={Boolean(settings.behavior.visibility.hideOnMobile)}
+            onChange={(e) =>
+              updateSettings(
+                "behavior.visibility.hideOnMobile",
+                e.target.checked
+              )
+            }
+            className="w-4 h-4 accent-verde"
+          />
 
           <span className="text-sm text-bone">
             إخفاء على الجوال
