@@ -142,24 +142,29 @@ async function decryptField(
       h.match(/../g)!.map((x) => parseInt(x, 16))
     );
 
-  const data = fromHex(dataH);
-  const tag = fromHex(tagH);
+  try {
+    const data = fromHex(dataH);
+    const tag = fromHex(tagH);
 
-  const buf = new Uint8Array(data.length + 16);
+    const buf = new Uint8Array(data.length + 16);
 
-  buf.set(data, 0);
-  buf.set(tag, data.length);
+    buf.set(data, 0);
+    buf.set(tag, data.length);
 
-  const pt = await crypto.subtle.decrypt(
-    {
-      name: "AES-GCM",
-      iv: fromHex(ivH) as BufferSource,
-    },
-    await aesKey("decrypt"),
-    buf as BufferSource
-  );
+    const pt = await crypto.subtle.decrypt(
+      {
+        name: "AES-GCM",
+        iv: fromHex(ivH) as BufferSource,
+      },
+      await aesKey("decrypt"),
+      buf as BufferSource
+    );
 
-  return dec.decode(pt);
+    return dec.decode(pt);
+  } catch (e) {
+    console.error("[decryptField] Decryption failed for value:", stored.substring(0, 30), (e as Error)?.message);
+    return "[رسالة غير قابلة للقراءة]";
+  }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
@@ -3855,6 +3860,27 @@ ${text}`
           body.settings ??
           {};
 
+        const appearance = settings.appearance ?? {};
+        const chat = settings.chat ?? {};
+        const branding = settings.branding ?? {};
+        const avatar = settings.avatar ?? {};
+
+        const welcomeMessage =
+          chat.welcomeMessage ?? settings.welcomeMessage;
+        const primaryColor =
+          appearance.primaryColor ?? settings.primaryColor;
+        const position =
+          appearance.position ?? settings.position;
+        const avatarUrl =
+          avatar.botAvatar?.url ??
+          appearance.avatar?.url ??
+          settings.avatarUrl ??
+          null;
+        const showBranding =
+          branding.showBranding ?? settings.showBranding;
+        const placeholder =
+          chat.placeholder ?? settings.placeholder;
+
         const suggested =
           Array.isArray(
             settings.suggestedQuestions
@@ -3884,12 +3910,14 @@ ${text}`
 
             name,
 
+            settings,
+
             enabled:
               true,
 
             welcome_message:
               String(
-                settings.welcomeMessage ??
+                welcomeMessage ??
                   "مرحباً! كيف يمكنني مساعدتك؟"
               ).slice(
                 0,
@@ -3898,7 +3926,7 @@ ${text}`
 
             primary_color:
               String(
-                settings.primaryColor ??
+                primaryColor ??
                   "#2ec27e"
               ).slice(
                 0,
@@ -3906,7 +3934,7 @@ ${text}`
               ),
 
             position:
-              settings.position ===
+              position ===
               "right"
                 ? "right"
                 : "left",
@@ -3918,16 +3946,15 @@ ${text}`
               true,
 
             avatar_url:
-              settings.avatarUrl ??
-              null,
+              avatarUrl,
 
             show_branding:
-              settings.showBranding !==
+              showBranding !==
               false,
 
             placeholder:
               String(
-                settings.placeholder ??
+                placeholder ??
                   "اكتب رسالتك..."
               ).slice(
                 0,
@@ -4001,6 +4028,14 @@ ${text}`
           unknown
         > = {};
 
+        if (body.name !== undefined) {
+          const name = String(body.name).trim().slice(0, 100);
+          if (!name) {
+            return err("اسم الـ Widget مطلوب");
+          }
+          patch.name = name;
+        }
+
         if (
           typeof body.enabled ===
           "boolean"
@@ -4017,13 +4052,44 @@ ${text}`
           const settings =
             body.settings;
 
+          // حفظ الإعدادات المتداخلة كاملة.
+          patch.settings = settings;
+
+          const appearance = settings.appearance ?? {};
+          const chat = settings.chat ?? {};
+          const branding = settings.branding ?? {};
+          const avatar = settings.avatar ?? {};
+
+          const welcomeMessage =
+            chat.welcomeMessage ?? settings.welcomeMessage;
+          const primaryColor =
+            appearance.primaryColor ?? settings.primaryColor;
+          const position =
+            appearance.position ?? settings.position;
+          const placeholder =
+            chat.placeholder ?? settings.placeholder;
+          const showBranding =
+            branding.showBranding ?? settings.showBranding;
+          const avatarUrl =
+            avatar.botAvatar?.url ??
+            appearance.avatar?.url ??
+            settings.avatarUrl;
+
+          const chatWindow = settings.chatWindow ?? {};
+          const chatWindowHeader = chatWindow.header ?? {};
+          const backgroundColor =
+            appearance.backgroundColor ?? settings.backgroundColor;
+          const headerBackgroundColor =
+            chatWindowHeader.backgroundColor ??
+            settings.headerBackgroundColor;
+
           if (
-            settings.welcomeMessage !==
+            welcomeMessage !==
             undefined
           ) {
             patch.welcome_message =
               String(
-                settings.welcomeMessage
+                welcomeMessage
               ).slice(
                 0,
                 500
@@ -4031,12 +4097,12 @@ ${text}`
           }
 
           if (
-            settings.primaryColor !==
+            primaryColor !==
             undefined
           ) {
             patch.primary_color =
               String(
-                settings.primaryColor
+                primaryColor
               ).slice(
                 0,
                 30
@@ -4044,23 +4110,23 @@ ${text}`
           }
 
           if (
-            settings.position !==
+            position !==
             undefined
           ) {
             patch.position =
-              settings.position ===
+              position ===
               "right"
                 ? "right"
                 : "left";
           }
 
           if (
-            settings.placeholder !==
+            placeholder !==
             undefined
           ) {
             patch.placeholder =
               String(
-                settings.placeholder
+                placeholder
               ).slice(
                 0,
                 200
@@ -4068,11 +4134,11 @@ ${text}`
           }
 
           if (
-            settings.showBranding !==
+            showBranding !==
             undefined
           ) {
             patch.show_branding =
-              settings.showBranding !==
+              showBranding !==
               false;
           }
 
@@ -4101,11 +4167,11 @@ ${text}`
           }
 
           if (
-            settings.avatarUrl !==
+            avatarUrl !==
             undefined
           ) {
             patch.avatar_url =
-              settings.avatarUrl ??
+              avatarUrl ??
               null;
           }
 
@@ -4123,20 +4189,20 @@ ${text}`
           }
 
           if (
-            settings.backgroundColor !==
+            backgroundColor !==
             undefined
           ) {
             patch.background_color =
-              settings.backgroundColor ??
+              backgroundColor ??
               null;
           }
 
           if (
-            settings.headerBackgroundColor !==
+            headerBackgroundColor !==
             undefined
           ) {
             patch.header_background_color =
-              settings.headerBackgroundColor ??
+              headerBackgroundColor ??
               null;
           }
         }
