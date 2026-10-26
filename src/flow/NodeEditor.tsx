@@ -1,0 +1,141 @@
+import { useRef, useState } from "react";
+import { Image as ImageIcon, Plus, Trash2, Check, Copy, AlertTriangle } from "lucide-react";
+import { ACCENT, LABELS, makeNode, outputs } from "./model";
+import type { FlowData, FlowNode, Choice } from "./model";
+import { useFlowStore } from "./store";
+
+const input="w-full rounded-xl border border-[#275443] bg-[#0F2E24] px-3 py-2.5 text-sm text-white outline-none focus:border-[#3DD189]";
+const btn="inline-flex items-center gap-1.5 rounded-xl border border-[#275443] px-3 py-2 text-xs hover:bg-[#173D30]";
+const section="mb-2 mt-4 block text-xs font-semibold text-[#B8D0C3]";
+const units={seconds:"ثانية",minutes:"دقيقة",hours:"ساعة",days:"يوم"};
+const events={keyword:"كلمة مفتاحية",message:"رسالة واردة",comment:"تعليق على منشور",story:"رد على قصة"};
+const operators={contains:"يحتوي",equals:"يساوي",not_equals:"لا يساوي",exists:"موجود"};
+const actions={tag:"إضافة وسم",untag:"حذف وسم",set_field:"تعيين متغير",handoff:"تحويل إلى موظف",notify:"إشعار المسؤول"};
+const modes={buttons:"أزرار سريعة",text:"نص",email:"بريد إلكتروني",phone:"هاتف",number:"رقم"};
+
+export default function NodeEditor({node,onClose}:{node:FlowNode|null;onClose:()=>void}){
+  const store=useFlowStore();
+  const [status,setStatus]=useState("");
+  const fileInput=useRef<HTMLInputElement>(null);
+  if(!node)return <aside dir="rtl" className="flex w-[min(40vw,370px)] min-w-[210px] shrink-0 flex-col border-r border-[#173D30] bg-[#0B241C] p-5 text-[#8B9E96]"><h2 className="font-semibold text-white">إعدادات الخطوة</h2><p className="mt-3 text-sm">اختر عقدة من مساحة العمل لتعديل محتواها.</p></aside>;
+  const d=node.data;
+  const edit=(part:Partial<FlowData>)=>store.changeNode(node.id,part);
+  const saveOptions=(options:Choice[])=>{
+    const validIds=new Set(options.map(c=>c.id));
+    store.replace({...store.doc,nodes:store.doc.nodes.map(n=>n.id===node.id?{...n,data:{...n.data,options}}:n),
+      edges:store.doc.edges.filter(e=>e.source!==node.id||e.sourceHandle==="next"||validIds.has(e.sourceHandle||""))});
+  };
+  const addOption=()=>{
+    if(d.options.length>=10)return;
+    saveOptions([...d.options,{id:crypto.randomUUID(),label:d.kind==="randomizer"?"فرع "+(d.options.length+1):"زر جديد",weight:d.kind==="randomizer"?0:undefined}]);
+  };
+  const duplicate=()=>{if(store.doc.nodes.length>=100)return;const n=makeNode(d.kind,{x:node.position.x+65,y:node.position.y+80},{...d,options:d.options.map(o=>({...o,id:crypto.randomUUID()})),title:d.title+" (نسخة)"});store.addNode(n);};
+  const remove=()=>{if(d.kind==="trigger"&&!window.confirm("حذف البداية سيجعل التدفق دون نقطة تشغيل. هل تريد المتابعة؟"))return;store.deleteNode(node.id);onClose();};
+  const uploadImage=async(file?:File)=>{
+    if(!file)return;if(!["image/jpeg","image/png","image/webp"].includes(file.type)||file.size>5*1024*1024){setStatus("يُسمح بصور JPG وPNG وWebP حتى 5MB.");return;}
+    const url=URL.createObjectURL(file);
+    try{
+      const image=new Image();
+      await new Promise<void>((resolve,reject)=>{image.onload=()=>resolve();image.onerror=()=>reject(Error("image"));image.src=url;});
+      const scale=Math.min(1,1100/Math.max(image.naturalWidth,image.naturalHeight));
+      const canvas=document.createElement("canvas");canvas.width=Math.max(1,Math.floor(image.naturalWidth*scale));canvas.height=Math.max(1,Math.floor(image.naturalHeight*scale));
+      const context=canvas.getContext("2d");if(!context)throw Error("canvas");
+      context.drawImage(image,0,0,canvas.width,canvas.height);
+      const data=canvas.toDataURL("image/webp",.75);
+      if(data.length>1000000){setStatus("حجم الصورة بعد الضغط كبير؛ اختر صورة أصغر.");return;}
+      edit({image:data});setStatus("تمت إضافة الصورة محليًا، وتظهر في معاينة التدفق.");
+    }catch{setStatus("تعذرت قراءة الصورة.");}finally{URL.revokeObjectURL(url);}
+  };
+  return <aside dir="rtl" className="z-20 flex w-[min(40vw,385px)] min-w-[210px] shrink-0 flex-col border-r border-[#173D30] bg-[#0B241C] text-white">
+    <div className="sticky top-0 flex items-center justify-between gap-2 border-b border-[#173D30] bg-[#0B241C] px-4 py-3">
+      <div><p className="text-[11px] text-[#8B9E96]">خصائص العقدة</p><h2 className="text-base font-bold" style={{color:ACCENT[d.kind]}}>{LABELS[d.kind]}</h2></div>
+      <button type="button" aria-label="إغلاق المحرر" className={btn} onClick={onClose}>إغلاق</button>
+    </div>
+    <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-6">
+      <label className={section}>عنوان الخطوة</label><input className={input} value={d.title} maxLength={90} onChange={e=>edit({title:e.target.value})}/>
+      {d.kind==="trigger"&&<>
+        <label className={section}>نوع الحدث</label>
+        <select className={input} value={d.triggerMode} onChange={e=>edit({triggerMode:e.target.value as FlowData["triggerMode"]})}>
+          {Object.entries(events).map(([value,label])=><option key={value} value={value}>{label}</option>)}
+        </select>
+        <label className={section}>الكلمات المفتاحية (افصل بفاصلة)</label>
+        <textarea className={input} rows={3} value={d.keywords} onChange={e=>edit({keywords:e.target.value})} placeholder="اشتراكات، الأسعار، TOD"/>
+        <p className="mt-2 text-[11px] text-[#8B9E96]">الأحداث تُضبط هنا كمسودة. لا يجري تسجيلها لدى Meta حاليًا.</p>
+      </>}
+      {["message","question"].includes(d.kind)&&<>
+        <label className={section}>نص الرسالة</label>
+        <textarea className={input} rows={5} maxLength={2000} value={d.text} onChange={e=>edit({text:e.target.value})} placeholder="اكتب الرسالة التي ستظهر للعميل"/>
+        <div className="mt-1 text-left text-[11px] text-[#8B9E96]" dir="ltr">{d.text.length}/2000</div>
+        <button className={btn+" mt-2"} onClick={()=>edit({text:d.text+" {{first_name}}"})}>+ اسم العميل</button>
+        {d.kind==="message"&&<>
+          <label className={section}>صورة الرسالة</label>
+          <input ref={fileInput} className="hidden" type="file" accept="image/jpeg,image/png,image/webp" onChange={e=>{void uploadImage(e.target.files?.[0]);e.target.value="";}}/>
+          <button className={btn+" w-full justify-center border-dashed py-4"} onClick={()=>fileInput.current?.click()}><ImageIcon size={20}/> رفع صورة من الجهاز</button>
+          <label className={section}>أو رابط صورة HTTPS</label>
+          <input dir="ltr" className={input} placeholder="https://example.com/photo.jpg" value={d.image.startsWith("data:")?"":d.image} onChange={e=>edit({image:e.target.value})}/>
+          {!!d.image&&<div className="mt-2 rounded-xl bg-[#061A14] p-2"><img className="max-h-40 w-full rounded-lg object-contain" src={d.image} alt="معاينة الصورة"/><button className={btn+" mt-2 text-red-300"} onClick={()=>edit({image:""})}><Trash2 size={14}/> إزالة الصورة</button></div>}
+          <p className="mt-2 text-[11px] text-[#8B9E96]">الصور المرفوعة تُخزن ضمن المسودة على هذا المتصفح فقط.</p>
+        </>}
+        {d.kind==="question"&&<>
+          <label className={section}>نوع الإجابة</label>
+          <select className={input} value={d.inputMode} onChange={e=>edit({inputMode:e.target.value as FlowData["inputMode"]})}>
+            {Object.entries(modes).map(([v,label])=><option key={v} value={v}>{label}</option>)}
+          </select>
+          <label className={section}>اسم الحقل الذي يستقبل الإجابة</label>
+          <input className={input} value={d.inputField} maxLength={100} onChange={e=>edit({inputField:e.target.value})}/>
+        </>}
+        {(d.kind==="message"||d.inputMode==="buttons")&&<div>
+          <label className={section}>{d.kind==="message"?"أزرار الرسالة":"خيارات الإجابة"}</label>
+          <div className="space-y-2">{d.options.map((o,index)=><div className="flex items-center gap-1.5" key={o.id}>
+            <input className={input} aria-label={"زر "+(index+1)} value={o.label} maxLength={60} onChange={e=>saveOptions(d.options.map(x=>x.id===o.id?{...x,label:e.target.value}:x))}/>
+            <button aria-label="حذف الخيار" className={btn+" text-red-300"} onClick={()=>saveOptions(d.options.filter(x=>x.id!==o.id))}><Trash2 size={16}/></button>
+          </div>)}</div>
+          <button className={btn+" mt-2"} onClick={addOption} disabled={d.options.length>=10}><Plus size={15}/> إضافة زر</button>
+        </div>}
+      </>}
+      {d.kind==="condition"&&<>
+        <label className={section}>الحقل</label><input className={input} value={d.conditionField} onChange={e=>edit({conditionField:e.target.value})} placeholder="message"/>
+        <label className={section}>المقارنة</label><select className={input} value={d.operator} onChange={e=>edit({operator:e.target.value as FlowData["operator"]})}>{Object.entries(operators).map(([v,t])=><option value={v} key={v}>{t}</option>)}</select>
+        <label className={section}>القيمة</label><input className={input} value={d.conditionValue} onChange={e=>edit({conditionValue:e.target.value})}/>
+      </>}
+      {d.kind==="delay"&&<>
+        <label className={section}>مدة الانتظار</label>
+        <div className="flex gap-2"><input type="number" min={1} className={input} value={d.delayValue} onChange={e=>edit({delayValue:Math.min(365,Math.max(1,Number(e.target.value)||1))})}/>
+          <select className={input} value={d.delayUnit} onChange={e=>edit({delayUnit:e.target.value as FlowData["delayUnit"]})}>{Object.entries(units).map(([v,t])=><option key={v} value={v}>{t}</option>)}</select></div>
+        <p className="mt-3 flex gap-2 rounded-xl border border-[#E5B54B]/40 bg-[#E5B54B]/10 p-3 text-xs text-[#E5B54B]"><AlertTriangle size={18} className="shrink-0"/>الانتظار لا يتجاوز نافذة مراسلة Meta المسموح بها. المحاكاة تتجاوز الوقت، ولا تُرسل أي رسائل فعلية.</p>
+      </>}
+      {d.kind==="action"&&<>
+        <label className={section}>نوع الإجراء</label><select className={input} value={d.actionType} onChange={e=>edit({actionType:e.target.value as FlowData["actionType"]})}>{Object.entries(actions).map(([v,t])=><option key={v} value={v}>{t}</option>)}</select>
+        <label className={section}>القيمة / اسم الوسم</label><input className={input} value={d.actionValue} onChange={e=>edit({actionValue:e.target.value})}/>
+        <p className="mt-2 text-[11px] text-[#8B9E96]">هذه إعدادات تصميمية، وليست أوامر مفعّلة في النظام الحقيقي.</p>
+      </>}
+      {d.kind==="randomizer"&&<>
+        <label className={section}>نسب التوزيع (المجموع 100%)</label>
+        {d.options.map((o,i)=><div key={o.id} className="mb-2 flex gap-2">
+          <input aria-label={"اسم المسار "+(i+1)} className={input} value={o.label} onChange={e=>saveOptions(d.options.map(x=>x.id===o.id?{...x,label:e.target.value}:x))}/>
+          <input aria-label={"النسبة "+(i+1)} type="number" min={0} max={100} className={input+" !w-20"} value={o.weight??0} onChange={e=>saveOptions(d.options.map(x=>x.id===o.id?{...x,weight:Math.max(0,Math.min(100,Number(e.target.value)||0))}:x))}/>
+          <button className={btn} onClick={()=>saveOptions(d.options.filter(x=>x.id!==o.id))} aria-label="حذف المسار"><Trash2 size={14}/></button>
+        </div>)}
+        <div className="flex gap-2"><button className={btn} onClick={addOption} disabled={d.options.length>=10}><Plus size={15}/> مسار</button>
+          <button className={btn} onClick={()=>{const base=Math.floor(100/d.options.length);saveOptions(d.options.map((o,i)=>({...o,weight:i===d.options.length-1?100-base*(d.options.length-1):base})));}}>توزيع متساوٍ</button></div>
+      </>}
+      {d.kind==="goto"&&<>
+        <label className={section}>الانتقال إلى خطوة في هذا التدفق</label><select className={input} value={d.gotoNode} onChange={e=>edit({gotoNode:e.target.value})}><option value="">اختر خطوة</option>{store.doc.nodes.filter(n=>n.id!==node.id&&n.data.kind!=="trigger").map(n=><option key={n.id} value={n.id}>{n.data.title}</option>)}</select>
+      </>}
+      {d.kind==="request"&&<>
+        <label className={section}>طريقة طلب HTTP</label><select className={input} value={d.requestMethod} onChange={e=>edit({requestMethod:e.target.value as FlowData["requestMethod"]})}><option>GET</option><option>POST</option></select>
+        <label className={section}>عنوان HTTPS</label><input dir="ltr" className={input} value={d.requestUrl} onChange={e=>edit({requestUrl:e.target.value})} placeholder="https://api.example.com/..."/>
+        <p className="mt-3 text-xs text-[#E5B54B]">لأسباب أمنية، لا ينفّذ المحرر طلبات خارجية من المتصفح. تحتاج هذه الميزة خادمًا آمنًا.</p>
+      </>}
+      {d.kind==="end"&&<p className="mt-4 text-sm text-[#8B9E96]">هذه الخطوة تنهي المسار ولا تحتاج إلى اتصال خارج منها.</p>}
+      {!!status&&<p role="status" className="mt-3 text-xs text-[#3DD189]">{status}</p>}
+      <div className="mt-5 border-t border-[#173D30] pt-4">
+        <h3 className="mb-2 text-xs font-semibold">التوصيلات الخارجة</h3>
+        {store.doc.edges.filter(e=>e.source===node.id).map(e=><div className="mb-2 flex items-center justify-between gap-2 text-xs" key={e.id}><span className="min-w-0 truncate">{outputs(node).find(x=>x.id===e.sourceHandle)?.label||"التالي"} ← {store.doc.nodes.find(n=>n.id===e.target)?.data.title}</span><button className={btn} onClick={()=>store.deleteEdge(e.id)} aria-label="حذف الخط"><Trash2 size={14}/></button></div>)}
+      </div>
+      <div className="mt-5 flex flex-wrap gap-2"><button className={btn} onClick={duplicate}><Copy size={14}/> نسخ</button><button className={btn+" text-red-300"} onClick={remove}><Trash2 size={14}/> حذف الخطوة</button>
+      <button className={btn} onClick={()=>{const ok=store.deleteNode(node.id,true);if(ok)onClose();}} disabled={store.doc.edges.filter(e=>e.source===node.id).length!==1||store.doc.edges.filter(e=>e.target===node.id).length!==1}>حذف مع إعادة التوصيل</button></div>
+    </div>
+    <div className="sticky bottom-0 border-t border-[#173D30] bg-[#0B241C] p-3"><button className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#3DD189] py-2.5 text-sm font-bold text-[#061A14]" onClick={onClose}><Check size={16}/> تم</button></div>
+  </aside>;
+}
