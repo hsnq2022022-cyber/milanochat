@@ -6,7 +6,7 @@
     "dev": "vite",
     "build": "vite build",
     "typecheck": "tsc --noEmit",
-    "test:flows": "node --experimental-strip-types --test src/flow/model.test.ts",
+    "test:flows": "node --experimental-strip-types --test src/flow/model.test.ts src/flow/layout.test.ts",
     "test:browser": "playwright test -c playwright.config.ts"
   },
   "dependencies": {
