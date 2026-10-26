@@ -1,4 +1,4 @@
-import { edgeFor, exampleFlow, importFlow, loadFlow, makeNode } from "./model";
+import { edgeFor, exampleFlow, importFlow, loadFlow, makeNode } from "./model.ts";
 import type { FlowDocument } from "./model";
 
 export const FLOW_LIBRARY_KEY="social_flow_library_v1";
