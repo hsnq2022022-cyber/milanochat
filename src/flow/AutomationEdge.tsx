@@ -7,7 +7,7 @@ import { useFlowStore } from "./store";
 
 export default function AutomationEdge(props:EdgeProps<FlowEdge>){
   const {id,sourceX,sourceY,targetX,targetY,sourcePosition,targetPosition,selected,markerEnd}=props;
-  const [path,mx,my]=getBezierPath({sourceX,sourceY,targetX,targetY,sourcePosition,targetPosition});
+  const [path,mx,my]=getSmoothStepPath({sourceX,sourceY,targetX,targetY,sourcePosition,targetPosition,borderRadius:22,offset:34});
   const remove=useFlowStore(s=>s.deleteEdge);
   const insert=()=>{
     const store=useFlowStore.getState(),doc=store.doc,old=doc.edges.find(e=>e.id===id);
