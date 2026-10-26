@@ -1214,6 +1214,10 @@ export default function Dashboard() {
             </span>
           </a>
           <div className="flex items-center gap-2.5">
+            <a href="#/flows" className="inline-flex items-center gap-1.5 rounded-xl border border-verde/40 bg-moss px-3 py-2 text-xs font-bold text-verde hover:bg-verde/10" title="فتح مصمم التدفقات التجريبي">
+              <IconSparkle className="w-4 h-4" />
+              <span>التدفقات</span>
+            </a>
             <span className="hidden md:block text-xs text-mist bg-moss/70 border border-verde/20 rounded-full px-3.5 py-1.5">
               {st.businessName}
             </span>
