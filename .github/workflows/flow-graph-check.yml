@@ -24,6 +24,6 @@ jobs:
       - name: Install locked dependencies
         run: npm ci --ignore-scripts
       - name: Typecheck flow graph module
-        run: npx tsc --noEmit --target ES2022 --module ESNext --moduleResolution bundler --lib ES2022,DOM supabase/functions/milan-api/flow-graph.ts supabase/functions/milan-api/flow-interpreter.ts
+        run: npx tsc --noEmit --target ES2022 --module ESNext --moduleResolution bundler --allowImportingTsExtensions --lib ES2022,DOM supabase/functions/milan-api/flow-graph.ts supabase/functions/milan-api/flow-interpreter.ts
       - name: Run graph tests
         run: node --experimental-strip-types --test supabase/functions/milan-api/flow-graph.test.ts supabase/functions/milan-api/flow-interpreter.test.ts
