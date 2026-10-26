@@ -3,7 +3,14 @@ test("editor loads, deletes an edge and undoes without touching other screens",a
   await page.goto("/milanochat/#/flows");
   await expect(page.locator(".react-flow__node")).toHaveCount(6);
   await expect(page.locator(".react-flow__edge")).toHaveCount(5);
-  await page.locator(".react-flow__edge").first().click({button:"right",force:true});
+  const point=await page.locator(".react-flow__edge-interaction").first().evaluate(element=>{
+    const line=element as SVGPathElement;
+    const midpoint=line.getPointAtLength(line.getTotalLength()/2);
+    const screen=midpoint.matrixTransform(line.getScreenCTM()!);
+    return {x:screen.x,y:screen.y};
+  });
+  await page.mouse.click(point.x,point.y,{button:"right"});
+  await expect(page.getByRole("button",{name:"حذف الاتصال"}).last()).toBeVisible();
   await page.getByRole("button",{name:"حذف الاتصال"}).last().click();
   await expect(page.locator(".react-flow__edge")).toHaveCount(4);
   await page.getByTitle("تراجع Ctrl+Z").click();
