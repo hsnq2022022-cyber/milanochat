@@ -1,0 +1,23 @@
+name: Flow Graph Checks
+on:
+  push:
+    branches: [flow-stage-3-1-instagram-events]
+    paths:
+      - 'supabase/functions/milan-api/flow-graph.ts'
+      - 'supabase/functions/milan-api/flow-graph.test.ts'
+      - '.github/workflows/flow-graph-check.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  graph-validation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Run graph tests
+        run: node --experimental-strip-types --test supabase/functions/milan-api/flow-graph.test.ts
