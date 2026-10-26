@@ -1593,6 +1593,13 @@ async function handleIncomingWebhookMessage(
   phoneId?: string,
   postbackPayload?: string | null
 ) {
+  // Until a flow engine consumes these events, do not pass payload-only
+  // interactions to the existing knowledge-answering pipeline.
+  if (!customerText.trim() && postbackPayload) {
+    console.log(`[${channel}_webhook] payload-only interaction deferred`);
+    return;
+  }
+
   const tenantId: string =
     channel === "whatsapp"
       ? account.tenant_id
