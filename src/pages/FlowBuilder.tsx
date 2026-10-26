@@ -50,10 +50,21 @@ function Editor(){
       const c:Connection={source:source.id,sourceHandle:connectFrom.port,target:node.id,targetHandle:"in"};
       const candidate={...current,nodes:[...current.nodes,node]};
       if(canConnect(c,candidate)){
-        const label=outputs(source).find(p=>p.id===connectFrom.port)?.label||"";
-        const edges=[...candidate.edges.filter(e=>e.source!==source.id||e.sourceHandle!==connectFrom.port),edgeFor(c,label)];
-        store().replace(arrangeFlow({...candidate,edges}));
-        window.setTimeout(()=>instance.fitView({padding:.20,maxZoom:1,duration:300}),80);
+        const previous=candidate.edges.find(e=>e.source===source.id&&e.sourceHandle===connectFrom.port);
+        const nextPort=outputs(node).find(p=>p.id==="next");
+        if(previous&&!nextPort){
+          // Never silently orphan a previously connected step.
+          store().addNode(node);
+          setNotice("المخرج مرتبط بخطوة أخرى؛ أُضيفت العقدة منفصلة حفاظًا على الاتصال القديم. يمكنك إعادة توصيلها.");
+        }else{
+          const label=outputs(source).find(p=>p.id===connectFrom.port)?.label||"";
+          const edges=[...candidate.edges.filter(e=>e.source!==source.id||e.sourceHandle!==connectFrom.port),edgeFor(c,label)];
+          if(previous&&nextPort){
+            edges.push(edgeFor({source:node.id,sourceHandle:nextPort.id,target:previous.target,targetHandle:previous.targetHandle||"in"},nextPort.label));
+          }
+          store().replace(arrangeFlow({...candidate,edges}));
+          window.setTimeout(()=>instance.fitView({padding:.20,maxZoom:1,duration:300}),80);
+        }
       }else{store().addNode(node);setNotice("أُضيفت الخطوة، لكن هذا الاتصال غير مسموح.");}
     }else{store().addNode(node);}
     store().setSelected(node.id);
