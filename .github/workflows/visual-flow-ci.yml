@@ -1,0 +1,46 @@
+name: Visual Flow Builder validation
+
+on:
+  push:
+    branches: [feature/visual-flow-reactflow]
+    paths:
+      - "src/flow/**"
+      - "src/pages/FlowBuilder.tsx"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/visual-flow-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  editor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Regenerate dependency lock deterministically
+        run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+      - name: Install locked dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: TypeScript strict check
+        run: npm run typecheck
+      - name: Model acceptance tests
+        run: npm run test:flows
+      - name: Production build
+        run: npm run build
+      - name: Commit lockfile from tested build
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package-lock.json
+          if ! git diff --cached --quiet; then
+            git commit -m "Lock tested React Flow editor dependencies"
+            git push origin HEAD:feature/visual-flow-reactflow
+          fi
