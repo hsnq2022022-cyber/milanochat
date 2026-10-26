@@ -1,0 +1,5 @@
+{
+  "extends": "./tsconfig.json",
+  "include": ["src/flow/**/*.ts", "src/flow/**/*.tsx", "src/pages/FlowBuilder.tsx"],
+  "exclude": ["src/flow/**/*.test.ts"]
+}
