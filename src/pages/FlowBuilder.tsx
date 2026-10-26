@@ -36,7 +36,7 @@ function load():Flow{
  return {version:2,name:"مسودة سابقة",nodes:ns,edges:es};}}
  }catch{/* Invalid browser draft; use example. */}return demo;
 }
-const curve=(x1:number,y1:number,x2:number,y2:number)=>"M "+x1+" "+y1+" C "+(x1+Math.max(65,Math.abs(x2-x1)*.5))+" "+y1+", "+(x2-Math.max(65,Math.abs(x2-x1)*.5))+" "+y2+", "+x2+" "+y2;
+const curve=(x1:number,y1:number,x2:number,y2:number)=>"M "+x1+" "+y1+" C "+(x1-Math.max(65,Math.abs(x2-x1)*.5))+" "+y1+", "+(x2+Math.max(65,Math.abs(x2-x1)*.5))+" "+y2+", "+x2+" "+y2;
 function issues(f:Flow):string[]{
  const result:string[]=[];const ids=new Set(f.nodes.map(n=>n.id));const start=f.nodes.find(n=>n.type==="trigger");
  if(!start)result.push("تحتاج خطوة بداية.");if(f.nodes.filter(n=>n.type==="trigger").length>1)result.push("يُسمح ببداية واحدة فقط.");
@@ -81,7 +81,7 @@ export default function FlowBuilder(){
    <section ref={canvas} className="relative min-w-0 flex-1 overflow-hidden bg-[#081710]" aria-label="مساحة محرر التدفقات" onPointerDown={startPan} onPointerMove={panMove} onPointerUp={()=>{pan.current=null;}} onPointerCancel={()=>{pan.current=null;}} onWheel={wheel}>
     <div className="flow-grid absolute inset-0" style={{backgroundImage:"radial-gradient(#355144 1px, transparent 1px)",backgroundSize:(20*zoom)+"px "+(20*zoom)+"px",backgroundPosition:offset.x+"px "+offset.y+"px",touchAction:"none"}}/>
     <div className="pointer-events-none absolute inset-0" style={{transform:"translate("+offset.x+"px, "+offset.y+"px) scale("+zoom+")",transformOrigin:"0 0"}}>
-     <svg className="absolute left-0 top-0 overflow-visible" width="1" height="1"><g fill="none" stroke="#8B9E96" strokeWidth="2.5">{flow.edges.map(e=>{const from=flow.nodes.find(n=>n.id===e.from),to=flow.nodes.find(n=>n.id===e.to);if(!from||!to)return null;const ps=ports(from),index=ps.findIndex(p=>p.id===e.port);const y1=from.y+height(from)-24-Math.max(0,ps.length-index-1)*38;return <path key={e.id} d={curve(from.x+SIZE,y1,to.x,to.y+43)} stroke={selected===from.id||selected===to.id?"#3DD189":"#80998F"}/>;})}</g></svg>
+     <svg className="absolute left-0 top-0 overflow-visible" width="1" height="1"><g fill="none" stroke="#8B9E96" strokeWidth="2.5">{flow.edges.map(e=>{const from=flow.nodes.find(n=>n.id===e.from),to=flow.nodes.find(n=>n.id===e.to);if(!from||!to)return null;const ps=ports(from),index=ps.findIndex(p=>p.id===e.port);const y1=from.y+height(from)-24-Math.max(0,ps.length-index-1)*38;return <path key={e.id} d={curve(from.x,y1,to.x+SIZE,to.y+43)} stroke={selected===from.id||selected===to.id?"#3DD189":"#80998F"}/>;})}</g></svg>
     </div>
     <div className="absolute inset-0" style={{transform:"translate("+offset.x+"px, "+offset.y+"px) scale("+zoom+")",transformOrigin:"0 0",pointerEvents:"none"}}>
      {flow.nodes.map(n=><div key={n.id} className={"absolute overflow-visible rounded-2xl border bg-[#F8FAFC] text-[#17251E] shadow-[0_12px_35px_rgba(0,0,0,.4)] "+(selected===n.id?"border-[#3DD189] ring-2 ring-[#3DD189]":"border-[#C5D4CD]")} style={{left:n.x,top:n.y,width:SIZE,minHeight:height(n),pointerEvents:"auto",touchAction:"none"}} onPointerDown={e=>nodeDown(e,n)} onPointerMove={nodeMove} onPointerUp={()=>{drag.current=null;}} onPointerCancel={()=>{drag.current=null;}} onClick={()=>setSelected(n.id)}>
