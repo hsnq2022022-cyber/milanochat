@@ -5,7 +5,7 @@ import {
   MessageSquare, Rocket, HelpCircle, GitBranch, Clock3, Zap,
   Shuffle, CornerDownRight, Globe, Flag, Plus,
 } from "lucide-react";
-import { ACCENT, LABELS, outputs } from "./model";
+import { ACCENT, LABELS, PLATFORM_LABELS, TRIGGER_OPTIONS, outputs } from "./model";
 import type { FlowNode as FlowNodeType, Kind } from "./model";
 import { useAddStepMenu } from "./addMenu";
 
@@ -18,12 +18,14 @@ export default function AutomationNode({id,data,selected}:NodeProps<FlowNodeType
   const updateInternals=useUpdateNodeInternals();
   const openMenu=useAddStepMenu(s=>s.open);
   const ports=outputs({id,position:{x:0,y:0},type:"flowNode",data});
+  const allPorts=data.kind==="message"?[{id:"next",label:"التالي"},...data.options]:
+    data.kind==="question"&&data.inputMode==="buttons"?data.options:ports;
   const handleSignature=data.kind+":"+data.inputMode+":"+ports.map(p=>p.id).join(":");
   useEffect(()=>{updateInternals(id);},[id,handleSignature,updateInternals]);
 
   const Icon=glyph[data.kind];
   const color=ACCENT[data.kind];
-  const hasOptions=ports.length>0;
+  const hasOptions=allPorts.length>0;
   const label=data.title||LABELS[data.kind];
   const message=["message","question"].includes(data.kind);
   return <div dir="rtl" className={"group relative w-[280px] overflow-visible rounded-2xl border bg-[#FCFEFD] text-[#17251E] shadow-[0_7px_22px_rgba(0,0,0,.20)] transition-[box-shadow,transform] duration-150 "+(selected?"border-[#3DD189] ring-[3px] ring-[#3DD189]/35":"border-[#D7E1DC] hover:shadow-[0_12px_30px_rgba(0,0,0,.30)]")}>
@@ -40,12 +42,15 @@ export default function AutomationNode({id,data,selected}:NodeProps<FlowNodeType
 
     <div className="space-y-2 px-3 py-3">
       {data.kind==="trigger"&&<>
-        <p className="text-xs text-[#506257]">عند {data.triggerMode==="keyword"?"ورود كلمة مفتاحية":data.triggerMode==="message"?"وصول رسالة":data.triggerMode==="comment"?"تعليق":"الرد على قصة"}</p>
+        <p className="mb-1 inline-flex rounded-lg bg-[#D1FAE5] px-2 py-1 text-[11px] font-bold text-[#065F46]">{PLATFORM_LABELS[data.platform]}</p>
+        <p className="text-xs text-[#506257]">{TRIGGER_OPTIONS[data.platform]?.find(t=>t.id===data.triggerMode)?.label||"حدث وارد"}</p>
         <p className="rounded-lg bg-[#E6F7ED] px-2 py-1.5 text-xs font-semibold text-[#176043]">{data.keywords||"أي رسالة"}</p>
       </>}
       {message&&<>
         <p className="line-clamp-4 whitespace-pre-wrap break-words rounded-xl bg-[#F3F7F5] px-3 py-2.5 text-[12px] leading-5">{data.text||"اضغط لتعديل الرسالة"}</p>
         {data.image&&<img alt="معاينة صورة الرسالة" src={data.image} className="max-h-36 w-full rounded-xl object-contain" loading="lazy"/>}
+        {(data.contentBlocks||[]).filter(block=>block.type==="image"&&block.url).slice(0,1).map(block=><img key={block.id} alt="صورة إضافية" src={block.url} className="max-h-28 w-full rounded-xl object-contain" loading="lazy"/>)}
+        {!!data.contentBlocks?.length&&<p className="rounded-lg border border-[#D7E1DC] bg-[#EAF5F0] px-2 py-1.5 text-[11px] text-[#35604D]">{data.contentBlocks.length} مكونات إضافية: {data.contentBlocks.map(block=>({text:"نص",image:"صورة",pdf:"PDF",delay:"انتظار",collection:"جمع بيانات"}[block.type])).join(" · ")}</p>}
       </>}
       {data.kind==="condition"&&<p className="text-xs leading-5">إذا كان {data.conditionField} {data.operator==="contains"?"يحتوي":data.operator==="equals"?"يساوي":data.operator==="not_equals"?"لا يساوي":"موجود"}: {data.conditionValue||"—"}</p>}
       {data.kind==="delay"&&<p className="text-xs">انتظار {data.delayValue} {({seconds:"ثانية",minutes:"دقيقة",hours:"ساعة",days:"يوم"} as const)[data.delayUnit]}</p>}
@@ -60,18 +65,18 @@ export default function AutomationNode({id,data,selected}:NodeProps<FlowNodeType
     </div>
 
     {hasOptions&&<div className="rounded-b-2xl border-t border-[#E6EBE8] bg-[#F4F8F6] px-3 pb-5 pt-3">
-      <div className="grid gap-2" style={{gridTemplateColumns:`repeat(${Math.min(ports.length,3)},minmax(0,1fr))`}}>
-        {ports.map(port=><div key={port.id} className="relative flex min-h-10 items-center justify-center rounded-lg border border-[#DAE4DE] bg-white px-1.5 py-2 text-center text-[11px] font-medium">
+      <div className="grid gap-2" style={{gridTemplateColumns:`repeat(${Math.min(allPorts.length,3)},minmax(0,1fr))`}}>
+        {allPorts.map(port=><div key={port.id} className="relative flex min-h-10 items-center justify-center rounded-lg border border-[#DAE4DE] bg-white px-1.5 py-2 text-center text-[11px] font-medium">
           <span className="w-full truncate" title={port.label}>{port.label}</span>
           {data.kind==="randomizer"&&<span className="text-[#9A4A09]">{port.weight||0}%</span>}
-          <Handle id={port.id} type="source" position={Position.Bottom}
+          {ports.some(p=>p.id===port.id)&&<Handle id={port.id} type="source" position={Position.Bottom}
             className="!h-3.5 !w-3.5 !border-[3px] !border-white !bg-[#60A5FA] hover:!h-4 hover:!w-4 hover:!bg-[#3DD189]"
-            style={{left:"50%",bottom:-9}}/>
+            style={{left:"50%",bottom:-9}}/>}
         </div>)}
       </div>
     </div>}
 
-    {hasOptions&&
+    {!!ports.length&&
       <button type="button"
         aria-label={"إضافة خطوة بعد "+label}
         title="أضف خطوة واربطها بهذا المسار"
