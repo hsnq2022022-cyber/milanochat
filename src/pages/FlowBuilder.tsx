@@ -204,7 +204,7 @@ function Editor(){
           <Controls showInteractive={false} className="!bg-[#0B241C] !border !border-[#275443]"/>
         </ReactFlow>
 
-        <button className="nodrag absolute bottom-4 right-4 z-20 flex h-12 w-12 items-center justify-center rounded-full border border-[#9BF0BD] bg-[#3DD189] text-[#061A14] shadow-[0_8px_25px_rgba(17,110,64,.4)] transition-transform hover:scale-105" title="إضافة خطوة" aria-label="فتح إضافة خطوة" onClick={e=>openAdd({x:e.clientX,y:e.clientY})}><Plus size={25}/></button>
+        <button className="nodrag absolute right-4 top-4 z-20 flex h-12 w-12 items-center justify-center rounded-full border border-[#9BF0BD] bg-[#3DD189] text-[#061A14] shadow-[0_8px_25px_rgba(17,110,64,.4)] transition-transform hover:scale-105" title="إضافة خطوة" aria-label="فتح إضافة خطوة" onClick={e=>openAdd({x:e.clientX,y:e.clientY})}><Plus size={25}/></button>
         {showIssues&&<div className="absolute left-3 top-3 z-20 w-[min(340px,90vw)] rounded-2xl border border-[#275443] bg-[#0B241C] p-4 shadow-xl">
           <div className="flex items-center justify-between gap-2"><h3 className="font-bold">فحص التدفق</h3><button onClick={()=>setShowIssues(false)} aria-label="إغلاق الفحص"><X size={18}/></button></div>
           {errors.length?<div className="mt-3 max-h-52 space-y-2 overflow-y-auto text-xs text-[#E5B54B]">{errors.slice(0,12).map((e,i)=><p key={i}>• {e}</p>)}</div>:<p className="mt-3 flex items-center gap-2 text-sm text-[#3DD189]"><CheckCircle2 size={18}/> لا توجد أخطاء بنيوية مكتشفة.</p>}
