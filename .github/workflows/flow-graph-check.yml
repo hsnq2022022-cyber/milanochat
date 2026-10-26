@@ -1,10 +1,12 @@
 name: Flow Graph Checks
 on:
   push:
-    branches: [flow-stage-3-1-instagram-events]
+    branches: [flow-stage-3-1-instagram-events, flow-engine-safe-prototype]
     paths:
       - 'supabase/functions/milan-api/flow-graph.ts'
       - 'supabase/functions/milan-api/flow-graph.test.ts'
+      - 'supabase/functions/milan-api/flow-interpreter.ts'
+      - 'supabase/functions/milan-api/flow-interpreter.test.ts'
       - '.github/workflows/flow-graph-check.yml'
   workflow_dispatch:
 
@@ -22,6 +24,6 @@ jobs:
       - name: Install locked dependencies
         run: npm ci --ignore-scripts
       - name: Typecheck flow graph module
-        run: npx tsc --noEmit --target ES2022 --module ESNext --moduleResolution bundler --lib ES2022,DOM supabase/functions/milan-api/flow-graph.ts
+        run: npx tsc --noEmit --target ES2022 --module ESNext --moduleResolution bundler --lib ES2022,DOM supabase/functions/milan-api/flow-graph.ts supabase/functions/milan-api/flow-interpreter.ts
       - name: Run graph tests
-        run: node --experimental-strip-types --test supabase/functions/milan-api/flow-graph.test.ts
+        run: node --experimental-strip-types --test supabase/functions/milan-api/flow-graph.test.ts supabase/functions/milan-api/flow-interpreter.test.ts
