@@ -46,7 +46,7 @@ export default function NodeEditor({node,onClose}:{node:FlowNode|null;onClose:()
       edit({image:data});setStatus("تمت إضافة الصورة محليًا، وتظهر في معاينة التدفق.");
     }catch{setStatus("تعذرت قراءة الصورة.");}finally{URL.revokeObjectURL(url);}
   };
-  return <aside dir="rtl" className="z-20 flex w-[min(40vw,385px)] min-w-[210px] shrink-0 flex-col border-r border-[#173D30] bg-[#0B241C] text-white">
+  return <aside dir="rtl" className="fixed inset-y-0 left-0 z-40 flex w-[min(96vw,410px)] shrink-0 flex-col border-r border-[#173D30] bg-[#0B241C] text-white shadow-2xl md:relative md:inset-auto md:z-20 md:w-[min(40vw,385px)] md:shadow-none">
     <div className="sticky top-0 flex items-center justify-between gap-2 border-b border-[#173D30] bg-[#0B241C] px-4 py-3">
       <div><p className="text-[11px] text-[#8B9E96]">خصائص العقدة</p><h2 className="text-base font-bold" style={{color:ACCENT[d.kind]}}>{LABELS[d.kind]}</h2></div>
       <button type="button" aria-label="إغلاق المحرر" className={btn} onClick={onClose}>إغلاق</button>
