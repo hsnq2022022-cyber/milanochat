@@ -1,15 +1,52 @@
 import type { Node, Edge, XYPosition, Connection } from "@xyflow/react";
 
 export type Kind = "trigger" | "message" | "question" | "condition" | "delay" | "action" | "randomizer" | "goto" | "request" | "end";
-export type Choice = { id: string; label: string; weight?: number };
+export type Platform = "instagram" | "messenger" | "whatsapp";
+export type TriggerMode = "keyword" | "message" | "comment" | "story" | "ad" | "live" | "referral";
+export type ButtonAction = "step" | "flow" | "website" | "ai" | "actions" | "condition" | "randomizer";
+export type Choice = {
+  id: string; label: string; weight?: number;
+  buttonType?: "button" | "quick_reply";
+  action?: ButtonAction;
+  targetFlowId?: string;
+  url?: string;
+};
+export type ContentBlock = {
+  id: string;
+  type: "text" | "image" | "pdf" | "delay" | "collection";
+  text?: string;
+  url?: string;
+  seconds?: number;
+  field?: string;
+  inputMode?: "text" | "email" | "phone" | "number";
+};
+export const PLATFORM_LABELS: Record<Platform,string> = {
+  instagram:"Instagram", messenger:"Messenger", whatsapp:"WhatsApp"
+};
+export const TRIGGER_OPTIONS: Record<Platform,Array<{id:TriggerMode;label:string}>> = {
+  instagram:[
+    {id:"message",label:"العميل يرسل رسالة"}, {id:"keyword",label:"رسالة تحتوي كلمة"},
+    {id:"comment",label:"تعليق على منشور أو Reel"}, {id:"story",label:"رد على Story"},
+    {id:"ad",label:"النقر على إعلان Instagram"}, {id:"live",label:"تعليق على البث المباشر"}
+  ],
+  messenger:[
+    {id:"message",label:"العميل يرسل رسالة"}, {id:"keyword",label:"رسالة تحتوي كلمة"},
+    {id:"comment",label:"تعليق على منشور"}, {id:"referral",label:"الدخول من رابط Messenger"}
+  ],
+  whatsapp:[
+    {id:"message",label:"وصول رسالة WhatsApp"}, {id:"keyword",label:"رسالة تحتوي كلمة"}
+  ]
+};
 export type FlowData = Record<string, unknown> & {
   kind: Kind;
   title: string;
   text: string;
   image: string;
   options: Choice[];
+  contentBlocks: ContentBlock[];
+  platform: Platform;
   keywords: string;
-  triggerMode: "keyword" | "message" | "comment" | "story";
+  triggerMode: TriggerMode;
   inputMode: "buttons" | "text" | "email" | "phone" | "number";
   inputField: string;
   conditionField: string;
@@ -17,7 +54,7 @@ export type FlowData = Record<string, unknown> & {
   conditionValue: string;
   delayValue: number;
   delayUnit: "seconds" | "minutes" | "hours" | "days";
-  actionType: "tag" | "untag" | "set_field" | "handoff" | "notify";
+  actionType: "tag" | "untag" | "set_field" | "handoff" | "notify" | "ai";
   actionValue: string;
   gotoNode: string;
   requestMethod: "GET" | "POST";
@@ -46,7 +83,7 @@ export function makeNode(kind: Kind, position: XYPosition, opts?: Partial<FlowDa
     data: {
       kind, title: LABELS[kind], text: kind==="message"?"أهلاً بيك! شلون نكدر نساعدك؟":kind==="question"?"اختار شتحتاج":"", image:"",
       options: kind==="question"?[{id:id(),label:"الأسعار"},{id:id(),label:"موظف"}]:kind==="randomizer"?[{id:id(),label:"A",weight:50},{id:id(),label:"B",weight:50}]:[],
-      keywords:"",triggerMode:"keyword",inputMode:"buttons",inputField:"response",
+      contentBlocks:[],platform:"instagram",keywords:"",triggerMode:"keyword",inputMode:"buttons",inputField:"response",
       conditionField:"message",operator:"contains",conditionValue:"",
       delayValue:1,delayUnit:"minutes",actionType:"tag",actionValue:"",
       gotoNode:"",requestMethod:"GET",requestUrl:"",...opts,
@@ -56,8 +93,8 @@ export function makeNode(kind: Kind, position: XYPosition, opts?: Partial<FlowDa
 export function outputs(node: FlowNode): Choice[] {
   const d=node.data;
   if(d.kind==="end"||d.kind==="goto")return [];
-  if(d.kind==="question")return d.inputMode==="buttons"?d.options:[{id:"valid",label:"صحيح"},{id:"invalid",label:"غير صحيح"}];
-  if(d.kind==="message")return [{id:"next",label:"التالي"},...d.options];
+  if(d.kind==="question")return d.inputMode==="buttons"?d.options.filter(o=>!o.action||o.action==="step"):[{id:"valid",label:"صحيح"},{id:"invalid",label:"غير صحيح"}];
+  if(d.kind==="message")return [{id:"next",label:"التالي"},...d.options.filter(o=>!o.action||o.action==="step")];
   if(d.kind==="condition")return [{id:"yes",label:"نعم"},{id:"no",label:"لا"}];
   if(d.kind==="request")return [{id:"success",label:"نجاح"},{id:"error",label:"خطأ"}];
   if(d.kind==="randomizer")return d.options;
@@ -97,7 +134,15 @@ export function validateDocument(doc: FlowDocument): string[] {
   const ids=new Set(doc.nodes.map(n=>n.id));if(ids.size!==doc.nodes.length)errors.push("تكرار معرّفات الخطوات.");
   const unique=new Set<string>();
   for(const n of doc.nodes){
-    if(["message","question"].includes(n.data.kind)&&!n.data.text.trim()&&!n.data.image)errors.push("نص الرسالة فارغ: "+n.data.title);
+    if(["message","question"].includes(n.data.kind)&&!n.data.text.trim()&&!n.data.image&&!n.data.contentBlocks?.some(b=>b.type!=="delay"))errors.push("محتوى الرسالة فارغ: "+n.data.title);
+    if(n.data.kind==="trigger"&&!TRIGGER_OPTIONS[n.data.platform]?.some(t=>t.id===n.data.triggerMode))errors.push("حدث البداية غير متاح للقناة المحددة.");
+    for(const option of n.data.options){
+      if(option.action==="website"&&(!option.url||!/^https:\/\/\S+$/i.test(option.url)))errors.push("رابط الموقع للزر "+option.label+" يجب أن يبدأ بـ HTTPS.");
+      if(option.action==="flow"&&!option.targetFlowId)errors.push("اختر التدفق المرتبط بالزر "+option.label+".");
+    }
+    for(const block of n.data.contentBlocks||[]){
+      if(["image","pdf"].includes(block.type)&&!(/^https:\/\/\S+$/i.test(block.url||"")||block.type==="image"&&/^data:image\/(?:webp|jpeg|png);base64,/i.test(block.url||"")||block.type==="pdf"&&/^data:application\/pdf;base64,/i.test(block.url||"")))errors.push("رابط "+(block.type==="pdf"?"PDF":"الصورة")+" غير صالح في "+n.data.title);
+    }
     if(n.data.image&&!/^https:\/\//i.test(n.data.image)&&!/^data:image\/(?:png|jpeg|webp);base64,/i.test(n.data.image))errors.push("رابط صورة غير آمن: "+n.data.title);
     if(n.data.kind==="question"&&n.data.inputMode==="buttons"&&n.data.options.length===0)errors.push("أضف خيارًا إلى "+n.data.title);
     if(n.data.kind==="randomizer"&&Math.abs(n.data.options.reduce((sum,o)=>sum+(o.weight||0),0)-100)>.01)errors.push("مجموع نسب التوزيع يجب أن يساوي 100%.");
@@ -126,15 +171,27 @@ function cleanImported(raw:unknown): FlowDocument | null {
     if(typeof n.id!=="string"||!position||!Number.isFinite(position.x)||!Number.isFinite(position.y)||Math.abs(position.x)>1e5||Math.abs(position.y)>1e5)return null;
     const d=n.data as Record<string,unknown>|undefined;if(!d||typeof d!=="object")return null;
     const kind=kindOf(d.kind);
-    const options:Array<Choice>=Array.isArray(d.options)?d.options.slice(0,12).filter((x:unknown)=>!!x&&typeof x==="object").map((x:unknown)=>{const c=x as Record<string,unknown>;return {id:safeString(c.id,id()),label:safeString(c.label).slice(0,100),weight:typeof c.weight==="number"?c.weight:undefined};}):[];
+    const options:Array<Choice>=Array.isArray(d.options)?d.options.slice(0,12).filter((x:unknown)=>!!x&&typeof x==="object").map((x:unknown)=>{const c=x as Record<string,unknown>;
+      const action:ButtonAction=["step","flow","website","ai","actions","condition","randomizer"].includes(String(c.action))?c.action as ButtonAction:"step";
+      return {id:safeString(c.id,id()),label:safeString(c.label).slice(0,100),weight:typeof c.weight==="number"?c.weight:undefined,
+        buttonType:c.buttonType==="quick_reply"?"quick_reply":"button",action,
+        targetFlowId:safeString(c.targetFlowId).slice(0,150),url:safeString(c.url).slice(0,2000)};
+    }):[];
+    const contentBlocks:ContentBlock[]=Array.isArray(d.contentBlocks)?d.contentBlocks.slice(0,24).filter((x:unknown)=>!!x&&typeof x==="object").map((x:unknown)=>{
+      const b=x as Record<string,unknown>;
+      return {id:safeString(b.id,id()),type:["text","image","pdf","delay","collection"].includes(String(b.type))?b.type as ContentBlock["type"]:"text",
+        text:safeString(b.text).slice(0,2000),url:safeString(b.url).slice(0,1400000),seconds:typeof b.seconds==="number"&&Number.isFinite(b.seconds)?Math.max(1,Math.min(86400,b.seconds)):3,
+        field:safeString(b.field,"response").slice(0,100),inputMode:["text","email","phone","number"].includes(String(b.inputMode))?b.inputMode as ContentBlock["inputMode"]:"text"};
+    }):[];
     const clean=makeNode(kind,position,{title:safeString(d.title,LABELS[kind]).slice(0,120),text:safeString(d.text).slice(0,2000),image:safeString(d.image).slice(0,1500000),options,keywords:safeString(d.keywords).slice(0,500),
-      triggerMode:["keyword","message","comment","story"].includes(String(d.triggerMode))?d.triggerMode as FlowData["triggerMode"]:"keyword",
+      platform:["instagram","messenger","whatsapp"].includes(String(d.platform))?d.platform as Platform:"instagram",contentBlocks,
+      triggerMode:["keyword","message","comment","story","ad","live","referral"].includes(String(d.triggerMode))?d.triggerMode as FlowData["triggerMode"]:"keyword",
       inputMode:["buttons","text","email","phone","number"].includes(String(d.inputMode))?d.inputMode as FlowData["inputMode"]:"buttons",
       inputField:safeString(d.inputField,"response").slice(0,100),conditionField:safeString(d.conditionField,"message").slice(0,100),
       operator:["contains","equals","not_equals","exists"].includes(String(d.operator))?d.operator as FlowData["operator"]:"contains",
       conditionValue:safeString(d.conditionValue).slice(0,250),delayValue:typeof d.delayValue==="number"?d.delayValue:1,
       delayUnit:["seconds","minutes","hours","days"].includes(String(d.delayUnit))?d.delayUnit as FlowData["delayUnit"]:"minutes",
-      actionType:["tag","untag","set_field","handoff","notify"].includes(String(d.actionType))?d.actionType as FlowData["actionType"]:"tag",
+      actionType:["tag","untag","set_field","handoff","notify","ai"].includes(String(d.actionType))?d.actionType as FlowData["actionType"]:"tag",
       actionValue:safeString(d.actionValue).slice(0,500),gotoNode:safeString(d.gotoNode),requestMethod:d.requestMethod==="POST"?"POST":"GET",requestUrl:safeString(d.requestUrl).slice(0,2048)});
     clean.id=n.id;nodes.push(clean);
   }

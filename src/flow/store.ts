@@ -1,11 +1,19 @@
 import { create } from "zustand";
 import { applyNodeChanges, applyEdgeChanges, reconnectEdge } from "@xyflow/react";
 import type { NodeChange, EdgeChange, Connection } from "@xyflow/react";
-import { canConnect, edgeFor, exampleFlow, loadFlow, outputs } from "./model";
+import { canConnect, edgeFor, outputs } from "./model";
+import { blankFlow, loadLibrary, snapshotLibrary } from "./library";
+import type { SavedFlow } from "./library";
 import type { FlowDocument, FlowData, FlowEdge, FlowNode } from "./model";
 
 export type FlowState = {
   doc: FlowDocument;
+  activeFlowId: string;
+  flows: SavedFlow[];
+  createFlow: (name?:string)=>string;
+  duplicateFlow: ()=>string|null;
+  switchFlow: (id:string)=>boolean;
+  deleteFlow: (id:string)=>boolean;
   past: FlowDocument[];
   future: FlowDocument[];
   selectedId: string | null;
@@ -28,9 +36,47 @@ export type FlowState = {
 function savePast(state: FlowState): Pick<FlowState,"past"|"future"> {
   return {past:[...state.past.slice(-99),state.doc],future:[]};
 }
-const initial=typeof window==="undefined"?exampleFlow():loadFlow();
+const initialLibrary=loadLibrary();
+const initial=initialLibrary.flows.find(flow=>flow.id===initialLibrary.activeFlowId)!.doc;
 export const useFlowStore=create<FlowState>((set,get)=>({
-  doc:initial,past:[],future:[],selectedId:null,
+  doc:initial,activeFlowId:initialLibrary.activeFlowId,flows:initialLibrary.flows,past:[],future:[],selectedId:null,
+  createFlow:(name)=>{
+    const id=crypto.randomUUID();
+    set(s=>{
+      if(s.flows.length>=30)return s;
+      const current=snapshotLibrary(s.activeFlowId,s.doc,s.flows);
+      const doc=blankFlow(name||"تدفق جديد "+(current.flows.length+1));
+      return {doc,activeFlowId:id,flows:[...current.flows,{id,doc}],selectedId:null,past:[],future:[]};
+    });
+    return id;
+  },
+  duplicateFlow:()=>{
+    const s=get();
+    if(s.flows.length>=30)return null;
+    const id=crypto.randomUUID();
+    const doc=structuredClone(s.doc);
+    doc.name=s.doc.name+" (نسخة)";
+    set({doc,activeFlowId:id,flows:[...snapshotLibrary(s.activeFlowId,s.doc,s.flows).flows,{id,doc}],selectedId:null,past:[],future:[]});
+    return id;
+  },
+  switchFlow:(id)=>{
+    const s=get();
+    if(s.activeFlowId===id)return true;
+    const target=s.flows.find(flow=>flow.id===id);
+    if(!target)return false;
+    const current=snapshotLibrary(s.activeFlowId,s.doc,s.flows);
+    set({activeFlowId:id,flows:current.flows,doc:target.doc,selectedId:null,past:[],future:[]});
+    return true;
+  },
+  deleteFlow:(id)=>{
+    const s=get();
+    if(s.flows.length<2||!s.flows.some(flow=>flow.id===id))return false;
+    const flows=snapshotLibrary(s.activeFlowId,s.doc,s.flows).flows.filter(flow=>flow.id!==id);
+    const activeFlowId=s.activeFlowId===id?flows[0].id:s.activeFlowId;
+    const doc=s.activeFlowId===id?flows[0].doc:s.doc;
+    set({flows,activeFlowId,doc,selectedId:null,past:[],future:[]});
+    return true;
+  },
   setSelected:(id)=>set({selectedId:id}),
   pushHistory:()=>set(s=>({...savePast(s)})),
   replace:(doc)=>set(s=>({doc,selectedId:s.selectedId&&doc.nodes.some(n=>n.id===s.selectedId)?s.selectedId:null,...savePast(s)})),

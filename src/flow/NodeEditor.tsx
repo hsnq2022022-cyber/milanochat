@@ -1,16 +1,17 @@
 import { useRef, useState } from "react";
 import { Image as ImageIcon, Plus, Trash2, Check, Copy, AlertTriangle } from "lucide-react";
-import { ACCENT, LABELS, makeNode, outputs } from "./model";
-import type { FlowData, FlowNode, Choice } from "./model";
+import { ACCENT, LABELS, makeNode, outputs, PLATFORM_LABELS, TRIGGER_OPTIONS } from "./model";
+import ButtonActionEditor from "./ButtonActionEditor";
+import MessageBlocksEditor from "./MessageBlocksEditor";
+import type { FlowData, FlowNode, Choice, Platform } from "./model";
 import { useFlowStore } from "./store";
 
 const input="w-full rounded-xl border border-[#275443] bg-[#0F2E24] px-3 py-2.5 text-sm text-white outline-none focus:border-[#3DD189]";
 const btn="inline-flex items-center gap-1.5 rounded-xl border border-[#275443] px-3 py-2 text-xs hover:bg-[#173D30]";
 const section="mb-2 mt-4 block text-xs font-semibold text-[#B8D0C3]";
 const units={seconds:"ثانية",minutes:"دقيقة",hours:"ساعة",days:"يوم"};
-const events={keyword:"كلمة مفتاحية",message:"رسالة واردة",comment:"تعليق على منشور",story:"رد على قصة"};
 const operators={contains:"يحتوي",equals:"يساوي",not_equals:"لا يساوي",exists:"موجود"};
-const actions={tag:"إضافة وسم",untag:"حذف وسم",set_field:"تعيين متغير",handoff:"تحويل إلى موظف",notify:"إشعار المسؤول"};
+const actions={tag:"إضافة وسم",untag:"حذف وسم",set_field:"تعيين متغير",handoff:"تحويل إلى موظف",notify:"إشعار المسؤول",ai:"AI Step تجريبية"};
 const modes={buttons:"أزرار سريعة",text:"نص",email:"بريد إلكتروني",phone:"هاتف",number:"رقم"};
 
 export default function NodeEditor({node,onClose}:{node:FlowNode|null;onClose:()=>void}){
@@ -54,13 +55,21 @@ export default function NodeEditor({node,onClose}:{node:FlowNode|null;onClose:()
     <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-6">
       <label className={section}>عنوان الخطوة</label><input className={input} value={d.title} maxLength={90} onChange={e=>edit({title:e.target.value})}/>
       {d.kind==="trigger"&&<>
+        <label className={section}>القناة التي يبدأ منها التدفق</label>
+        <select className={input} aria-label="قناة بدء الأتمتة" value={d.platform} onChange={e=>{
+          const platform=e.target.value as Platform;
+          const first=TRIGGER_OPTIONS[platform][0].id;
+          edit({platform,triggerMode:first});
+        }}>
+          {Object.entries(PLATFORM_LABELS).map(([key,label])=><option key={key} value={key}>{label}</option>)}
+        </select>
         <label className={section}>نوع الحدث</label>
         <select className={input} value={d.triggerMode} onChange={e=>edit({triggerMode:e.target.value as FlowData["triggerMode"]})}>
-          {Object.entries(events).map(([value,label])=><option key={value} value={value}>{label}</option>)}
+          {TRIGGER_OPTIONS[d.platform].map(event=><option key={event.id} value={event.id}>{event.label}</option>)}
         </select>
         <label className={section}>الكلمات المفتاحية (افصل بفاصلة)</label>
         <textarea className={input} rows={3} value={d.keywords} onChange={e=>edit({keywords:e.target.value})} placeholder="اشتراكات، الأسعار، TOD"/>
-        <p className="mt-2 text-[11px] text-[#8B9E96]">الأحداث تُضبط هنا كمسودة. لا يجري تسجيلها لدى Meta حاليًا.</p>
+        <p className="mt-2 text-[11px] leading-5 text-[#E5B54B]">هذه إعدادات التدفق فقط. اختيار WhatsApp أو Instagram أو Messenger لا يُنشئ ربط حساب جديدًا، ولا يمنح صلاحيات Meta تلقائيًا. الأحداث المسموح بها فعليًا تعتمد على القناة وحالة ربطها.</p>
       </>}
       {["message","question"].includes(d.kind)&&<>
         <label className={section}>نص الرسالة</label>
@@ -84,14 +93,8 @@ export default function NodeEditor({node,onClose}:{node:FlowNode|null;onClose:()
           <label className={section}>اسم الحقل الذي يستقبل الإجابة</label>
           <input className={input} value={d.inputField} maxLength={100} onChange={e=>edit({inputField:e.target.value})}/>
         </>}
-        {(d.kind==="message"||d.inputMode==="buttons")&&<div>
-          <label className={section}>{d.kind==="message"?"أزرار الرسالة":"خيارات الإجابة"}</label>
-          <div className="space-y-2">{d.options.map((o,index)=><div className="flex items-center gap-1.5" key={o.id}>
-            <input className={input} aria-label={"زر "+(index+1)} value={o.label} maxLength={60} onChange={e=>saveOptions(d.options.map(x=>x.id===o.id?{...x,label:e.target.value}:x))}/>
-            <button aria-label="حذف الخيار" className={btn+" text-red-300"} onClick={()=>saveOptions(d.options.filter(x=>x.id!==o.id))}><Trash2 size={16}/></button>
-          </div>)}</div>
-          <button className={btn+" mt-2"} onClick={addOption} disabled={d.options.length>=10}><Plus size={15}/> إضافة زر</button>
-        </div>}
+        <MessageBlocksEditor node={node}/>
+        {(d.kind==="message"||d.inputMode==="buttons")&&<ButtonActionEditor node={node}/>}
       </>}
       {d.kind==="condition"&&<>
         <label className={section}>الحقل</label><input className={input} value={d.conditionField} onChange={e=>edit({conditionField:e.target.value})} placeholder="message"/>
