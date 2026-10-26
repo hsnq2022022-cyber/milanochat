@@ -10,7 +10,9 @@ import AutomationNode from "../flow/AutomationNode";
 import AutomationEdge from "../flow/AutomationEdge";
 import NodeEditor from "../flow/NodeEditor";
 import FlowSimulator from "../flow/FlowSimulator";
-import { ACCENT, KIND_LIST, LABELS, SAVE_KEY, canConnect, exampleFlow, importFlow, makeNode, outputs, validateDocument } from "../flow/model";
+import { ACCENT, KIND_LIST, LABELS, SAVE_KEY, canConnect, edgeFor, importFlow, makeNode, outputs, validateDocument } from "../flow/model";
+import { arrangeFlow, cardSize } from "../flow/layout";
+import { useAddStepMenu } from "../flow/addMenu";
 import type { FlowNode, FlowEdge, Kind } from "../flow/model";
 import { useFlowStore } from "../flow/store";
 
@@ -26,8 +28,8 @@ function Editor(){
   const nodesChanged=useFlowStore(s=>s.nodesChanged),edgesChanged=useFlowStore(s=>s.edgesChanged);
   const selected=doc.nodes.find(n=>n.id===selectedId)||null;
   const [showSimulator,setShowSimulator]=useState(false),[trail,setTrail]=useState<string[]>([]);
-  const [notice,setNotice]=useState(""),[search,setSearch]=useState(""),[edgeMenu,setEdgeMenu]=useState<EdgeMenu>(null),[addMenu,setAddMenu]=useState<AddMenu>(null);
-  const [showAdd,setShowAdd]=useState(false);
+  const [notice,setNotice]=useState(""),[edgeMenu,setEdgeMenu]=useState<EdgeMenu>(null),[showIssues,setShowIssues]=useState(false);
+  const addRequest=useAddStepMenu(s=>s.request),openAdd=useAddStepMenu(s=>s.open),closeAdd=useAddStepMenu(s=>s.close);
   const input=useRef<HTMLInputElement>(null),clipboard=useRef<FlowNode|null>(null),reconnectOk=useRef(true),justReconnected=useRef(false);
   const instance=useReactFlow<FlowNode,FlowEdge>();
   const errors=useMemo(()=>validateDocument(doc),[doc]);
@@ -37,15 +39,38 @@ function Editor(){
     return()=>window.clearTimeout(timer);
   },[doc]);
   const addNode=(kind:Kind,point?:XYPosition,connectFrom?:{source:string;port:string})=>{
-    if(doc.nodes.length>=100){setNotice("الحد الأقصى 100 خطوة.");return;}
-    if(kind==="trigger"&&doc.nodes.some(n=>n.data.kind==="trigger")){setNotice("يوجد حدث بداية بالفعل.");return;}
-    const pos=point||instance.screenToFlowPosition({x:Math.round(window.innerWidth*.48),y:Math.round(window.innerHeight*.45)});
+    const current=useFlowStore.getState().doc;
+    if(current.nodes.length>=100){setNotice("الحد الأقصى 100 خطوة.");return;}
+    if(kind==="trigger"&&current.nodes.some(n=>n.data.kind==="trigger")){setNotice("توجد بداية واحدة بالفعل.");return;}
+    const source=connectFrom?current.nodes.find(n=>n.id===connectFrom.source):null;
+    const pos=point||(source
+      ? {x:source.position.x,y:source.position.y+cardSize(source).height+150}
+      :instance.screenToFlowPosition({x:Math.round(window.innerWidth*.48),y:Math.round(window.innerHeight*.5)}));
     const node=makeNode(kind,pos);
-    store().addNode(node);
-    if(connectFrom)store().connect({source:connectFrom.source,sourceHandle:connectFrom.port,target:node.id,targetHandle:"in"});
+    if(source&&connectFrom){
+      const c:Connection={source:source.id,sourceHandle:connectFrom.port,target:node.id,targetHandle:"in"};
+      const candidate={...current,nodes:[...current.nodes,node]};
+      if(canConnect(c,candidate)){
+        const label=outputs(source).find(p=>p.id===connectFrom.port)?.label||"";
+        const edges=[...candidate.edges.filter(e=>e.source!==source.id||e.sourceHandle!==connectFrom.port),edgeFor(c,label)];
+        store().replace(arrangeFlow({...candidate,edges}));
+        window.setTimeout(()=>instance.fitView({padding:.20,maxZoom:1,duration:300}),80);
+      }else{store().addNode(node);setNotice("أُضيفت الخطوة، لكن هذا الاتصال غير مسموح.");}
+    }else{store().addNode(node);}
     store().setSelected(node.id);
-    setShowAdd(false);setAddMenu(null);
+    closeAdd();
   };
+  useEffect(()=>{
+    // Arrange older drafts exactly once. User data/IDs remain unchanged; Undo can restore positions.
+    try{
+      const key="social_flow_dagre_arranged_v1";
+      if(!localStorage.getItem(key)){
+        store().replace(arrangeFlow(store().doc));
+        localStorage.setItem(key,"1");
+        window.setTimeout(()=>instance.fitView({padding:.20,maxZoom:.9,duration:350}),140);
+      }
+    }catch{/* Browser may disable localStorage; manual layout stays available. */}
+  },[]);
   const exportFile=()=>{
     const blob=new Blob([JSON.stringify(doc,null,2)],{type:"application/json"});
     const url=URL.createObjectURL(blob),anchor=document.createElement("a");
@@ -80,21 +105,9 @@ function Editor(){
   },[]);
   useEffect(()=>{window.addEventListener("keydown",onKeyboard);return()=>window.removeEventListener("keydown",onKeyboard);},[onKeyboard]);
   const arrange=()=>{
-    const root=doc.nodes.find(n=>n.data.kind==="trigger");if(!root)return;
-    const dist=new Map<string,number>([[root.id,0]]),queue=[root.id];
-    for(let i=0;i<queue.length;i++){
-      const n=queue[i];for(const e of doc.edges.filter(e=>e.source===n)){
-        if(!dist.has(e.target)){dist.set(e.target,(dist.get(n)||0)+1);queue.push(e.target);}
-      }
-    }
-    const levels=new Map<number,FlowNode[]>();
-    for(const n of doc.nodes){const depth=dist.get(n.id)??Math.max(0,...dist.values())+1;levels.set(depth,[...(levels.get(depth)||[]),n]);}
-    store().replace({...doc,nodes:doc.nodes.map(n=>{
-      const depth=dist.get(n.id)??Math.max(0,...dist.values())+1;
-      const group=levels.get(depth)||[],idx=group.findIndex(x=>x.id===n.id);
-      return {...n,position:{x:250+(idx-(group.length-1)/2)*375,y:depth*320}};
-    })});
-    window.setTimeout(()=>instance.fitView({padding:.2,duration:400}),60);
+    store().replace(arrangeFlow(useFlowStore.getState().doc));
+    window.setTimeout(()=>instance.fitView({padding:.22,maxZoom:1,duration:350}),75);
+    setNotice("تم ترتيب التدفق هرميًا، مع الحفاظ على جميع محتوياته.");
   };
   const deleteWithBridge=(id:string)=>{
     const n=doc.nodes.find(n=>n.id===id);
@@ -151,7 +164,7 @@ function Editor(){
           nodes={renderedNodes} edges={renderedEdges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
           onNodesChange={nodesChanged} onEdgesChange={edgesChanged}
           onNodeClick={(_,n)=>store().setSelected(n.id)}
-          onPaneClick={()=>{store().setSelected(null);setEdgeMenu(null);}}
+          onPaneClick={()=>{store().setSelected(null);setEdgeMenu(null);closeAdd();setShowIssues(false);}}
           onNodeDragStart={()=>store().pushHistory()}
           onConnect={c=>store().connect(c)}
           isValidConnection={validConnection}
@@ -168,9 +181,9 @@ function Editor(){
           onEdgeContextMenu={(e,edge)=>{e.preventDefault();setEdgeMenu({id:edge.id,x:e.clientX,y:e.clientY});}}
           onConnectEnd={(e,state)=>{
             if(justReconnected.current||state.isValid||!state.fromNode||!state.fromHandle||state.toHandle)return;
-            const event=e as MouseEvent; if(!("clientX" in event))return;
-            const pos=instance.screenToFlowPosition({x:event.clientX,y:event.clientY});
-            setAddMenu({source:state.fromNode.id,port:state.fromHandle.id||"next",position:pos,x:event.clientX,y:event.clientY});
+            if(!("clientX" in e))return;
+            const pos=instance.screenToFlowPosition({x:e.clientX,y:e.clientY});
+            openAdd({source:state.fromNode.id,port:state.fromHandle.id||"next",position:pos,x:e.clientX,y:e.clientY});
           }}
           deleteKeyCode={["Delete","Backspace"]}
           defaultEdgeOptions={{type:"flowEdge",interactionWidth:24,markerEnd:{type:MarkerType.ArrowClosed,width:17,height:17,color:"#87A39A"}}}
