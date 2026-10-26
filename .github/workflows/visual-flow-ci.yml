@@ -60,6 +60,7 @@ jobs:
           git add package-lock.json
           if ! git diff --cached --quiet; then
             git commit -m "Lock tested React Flow editor dependencies"
+            git reset --hard HEAD
             git fetch origin feature/visual-flow-reactflow
             git rebase origin/feature/visual-flow-reactflow
             git push origin HEAD:feature/visual-flow-reactflow
