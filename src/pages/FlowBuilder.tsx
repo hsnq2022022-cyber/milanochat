@@ -174,7 +174,9 @@ function Editor(){
           }}
           deleteKeyCode={["Delete","Backspace"]}
           defaultEdgeOptions={{type:"flowEdge",interactionWidth:24,markerEnd:{type:MarkerType.ArrowClosed,width:17,height:17,color:"#87A39A"}}}
-          minZoom={.2} maxZoom={2} fitView fitViewOptions={{padding:.28}} snapToGrid snapGrid={[20,20]}
+          minZoom={.2} maxZoom={2} fitView fitViewOptions={{padding:.28,maxZoom:.8}}
+          onInit={api=>{window.setTimeout(()=>{void api.fitView({padding:.18,maxZoom:.75,duration:200});},250);}}
+          snapToGrid snapGrid={[20,20]}
           selectionOnDrag panOnDrag={[1,2]} multiSelectionKeyCode={["Shift","Control","Meta"]}
           colorMode="dark" connectionLineStyle={{stroke:"#3DD189",strokeWidth:2}}
           proOptions={{hideAttribution:true}}
