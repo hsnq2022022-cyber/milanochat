@@ -11,6 +11,7 @@ import FAQ from "./components/FAQ";
 /* لوحة التحكم وحدة منفصلة — لا يتحمل زائر الصفحة الرئيسية حجمها */
 const Dashboard = lazy(() => import("./pages/Dashboard"));
 const Widgets = lazy(() => import("./pages/Widgets"));
+const FlowBuilder = lazy(() => import("./pages/FlowBuilder"));
 
 export default function App() {
   const [route, setRoute] = useState(() => window.location.hash);
@@ -20,6 +21,11 @@ export default function App() {
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
+
+  /* معاينة مستقلة لمصمم التدفقات؛ لا تغيّر لوحة التحكم أو الدوال المنشورة. */
+  if (route.startsWith("#/flows")) {
+    return <Suspense fallback={<div className="min-h-screen bg-night" />}><FlowBuilder /></Suspense>;
+  }
 
   /* لوحة التحكم: #/dashboard */
   if (route.startsWith("#/dashboard")) {
