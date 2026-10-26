@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import ReactFlow, {
-  ReactFlowProvider, Background, BackgroundVariant, Controls, MiniMap, MarkerType,
+import {
+  ReactFlow, ReactFlowProvider, Background, BackgroundVariant, Controls, MiniMap, MarkerType,
   useReactFlow,
 } from "@xyflow/react";
 import type { Connection, Edge, Node as RFNode, XYPosition } from "@xyflow/react";
