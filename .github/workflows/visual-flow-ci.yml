@@ -8,6 +8,7 @@ on:
       - "src/pages/FlowBuilder.tsx"
       - "package.json"
       - "package-lock.json"
+      - "tsconfig.flows.json"
       - ".github/workflows/visual-flow-ci.yml"
   workflow_dispatch:
 
@@ -29,8 +30,8 @@ jobs:
         run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
       - name: Install locked dependencies
         run: npm ci --ignore-scripts --no-audit --no-fund
-      - name: TypeScript strict check
-        run: npm run typecheck
+      - name: Strict TypeScript check of the isolated editor
+        run: npx tsc --noEmit -p tsconfig.flows.json
       - name: Model acceptance tests
         run: npm run test:flows
       - name: Production build
