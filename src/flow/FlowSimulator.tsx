@@ -97,7 +97,13 @@ export default function FlowSimulator({
         }
         if(pendingBlockIndex!==undefined)break;
         resumeIndex=undefined;
-        waiting=n.data.kind==="question"||n.data.options.length>0||!!nextFor(document,n.id,"next");
+        if(n.data.kind==="message"&&n.data.options.length===0){
+          // ManyChat sends sequential message blocks without asking the user to press "Next".
+          const following=nextFor(document,n.id,"next");
+          if(following){at=following;continue;}
+          at=null;waiting=false;break;
+        }
+        waiting=n.data.kind==="question"||n.data.options.length>0;
         if(!waiting)at=null;
         break;
       }
