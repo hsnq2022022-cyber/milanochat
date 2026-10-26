@@ -14,6 +14,10 @@ on:
       - ".github/workflows/visual-flow-ci.yml"
   workflow_dispatch:
 
+concurrency:
+  group: visual-flow-editor-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: write
 
@@ -39,7 +43,7 @@ jobs:
       - name: Production build
         run: npm run build
       - name: Install Chromium for interaction tests
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install chromium
       - name: Browser edge and node editing acceptance
         run: npm run test:browser
       - name: Upload browser evidence
@@ -56,5 +60,7 @@ jobs:
           git add package-lock.json
           if ! git diff --cached --quiet; then
             git commit -m "Lock tested React Flow editor dependencies"
+            git fetch origin feature/visual-flow-reactflow
+            git rebase origin/feature/visual-flow-reactflow
             git push origin HEAD:feature/visual-flow-reactflow
           fi
