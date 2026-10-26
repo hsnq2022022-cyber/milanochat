@@ -5,7 +5,7 @@ import {
 } from "@xyflow/react";
 import type { Connection, Edge, XYPosition } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { ArrowRight, Plus, Play, Save, Upload, Download, Undo2, Redo2, LayoutGrid, Trash2, AlertTriangle, CheckCircle2, X } from "lucide-react";
+import { ArrowRight, Plus, Play, Save, Upload, Download, Undo2, Redo2, LayoutGrid, Trash2, AlertTriangle, CheckCircle2, X, Copy } from "lucide-react";
 import AutomationNode from "../flow/AutomationNode";
 import AutomationEdge from "../flow/AutomationEdge";
 import NodeEditor from "../flow/NodeEditor";
@@ -15,6 +15,7 @@ import { arrangeFlow, cardSize } from "../flow/layout";
 import { useAddStepMenu } from "../flow/addMenu";
 import type { FlowNode, FlowEdge, Kind } from "../flow/model";
 import { useFlowStore } from "../flow/store";
+import { saveLibrary, snapshotLibrary } from "../flow/library";
 
 const nodeTypes={flowNode:AutomationNode};
 const edgeTypes={flowEdge:AutomationEdge};
@@ -23,6 +24,7 @@ type EdgeMenu={id:string;x:number;y:number}|null;
 
 function Editor(){
   const doc=useFlowStore(s=>s.doc),selectedId=useFlowStore(s=>s.selectedId);
+  const activeFlowId=useFlowStore(s=>s.activeFlowId),flows=useFlowStore(s=>s.flows);
   const store=useFlowStore.getState;
   const nodesChanged=useFlowStore(s=>s.nodesChanged),edgesChanged=useFlowStore(s=>s.edgesChanged);
   const selected=doc.nodes.find(n=>n.id===selectedId)||null;
@@ -34,9 +36,9 @@ function Editor(){
   const errors=useMemo(()=>validateDocument(doc),[doc]);
 
   useEffect(()=>{
-    const timer=window.setTimeout(()=>{try{localStorage.setItem(SAVE_KEY,JSON.stringify(doc));}catch{setNotice("مساحة تخزين المتصفح غير كافية؛ استخدم تصدير لحفظ التدفق.");}},700);
+    const timer=window.setTimeout(()=>{try{localStorage.setItem(SAVE_KEY,JSON.stringify(doc));saveLibrary(snapshotLibrary(activeFlowId,doc,flows));}catch{setNotice("مساحة تخزين المتصفح غير كافية؛ استخدم تصدير لحفظ التدفق.");}},700);
     return()=>window.clearTimeout(timer);
-  },[doc]);
+  },[doc,activeFlowId,flows]);
   const addNode=(kind:Kind,point?:XYPosition,connectFrom?:{source:string;port:string})=>{
     const current=useFlowStore.getState().doc;
     if(current.nodes.length>=100){setNotice("الحد الأقصى 100 خطوة.");return;}
@@ -146,6 +148,24 @@ function Editor(){
         <div className="min-w-0"><p className="text-[11px] text-[#8B9E96]">إدارة سوشيال / مصمم الأتمتة</p>
           <input className="max-w-36 bg-transparent text-sm font-bold outline-none md:max-w-64" aria-label="اسم التدفق" maxLength={100} value={doc.name} onChange={e=>store().rename(e.target.value)}/></div>
         <span className="hidden rounded-lg border border-[#E5B54B]/40 px-2 py-1 text-[11px] text-[#E5B54B] sm:block">مسودة</span>
+        <div className="flex flex-wrap items-center gap-1.5">
+          <select className="max-w-36 rounded-lg border border-[#275443] bg-[#0F2E24] px-2 py-2 text-xs text-white md:max-w-52" aria-label="اختيار التدفق" value={activeFlowId} onChange={e=>{
+            store().switchFlow(e.target.value);closeAdd();setNotice("تم فتح التدفق المحدد.");
+            window.setTimeout(()=>instance.fitView({padding:.2,duration:200}),90);
+          }}>
+            {flows.map(f=><option key={f.id} value={f.id}>{f.id===activeFlowId?doc.name:f.doc.name}</option>)}
+          </select>
+          <button className={btn} title="إنشاء تدفق جديد" aria-label="إنشاء تدفق جديد" onClick={()=>{
+            if(flows.length>=30){setNotice("الحد الأقصى 30 تدفقًا محليًا.");return;}
+            store().createFlow();closeAdd();setNotice("أُنشئ تدفق جديد. اربط الأزرار من لوحة الخطوة.");
+            window.setTimeout(()=>instance.fitView({padding:.25}),120);
+          }}><Plus size={16}/></button>
+          <button className={btn} title="نسخ التدفق" aria-label="نسخ التدفق" onClick={()=>{store().duplicateFlow();setNotice("تم إنشاء نسخة مستقلة من التدفق.");}}><Copy size={15}/></button>
+          <button className={btn+" text-red-300"} disabled={flows.length<2} title="حذف التدفق الحالي" aria-label="حذف التدفق الحالي" onClick={()=>{
+            if(!window.confirm("سيُحذف هذا التدفق المحلي. قد تكون أزرار في تدفقات أخرى مرتبطة به. هل تريد المتابعة؟"))return;
+            store().deleteFlow(activeFlowId);setNotice("حُذف التدفق المحلي.");
+          }}><Trash2 size={15}/></button>
+        </div>
       </div>
       <div className="flex flex-wrap items-center gap-1.5">
         <button className={btn} onClick={()=>store().undo()} title="تراجع Ctrl+Z"><Undo2 size={16}/></button>
@@ -238,7 +258,7 @@ function Editor(){
     </div>
     {notice&&<div role="status" className="fixed bottom-5 right-5 z-50 max-w-sm cursor-pointer rounded-xl border border-[#275443] bg-[#0B241C] px-4 py-3 text-xs text-[#3DD189] shadow-2xl" onClick={()=>setNotice("")}>{notice} ×</div>}
     <div className="pointer-events-none absolute bottom-1 left-1/2 z-10 -translate-x-1/2 rounded-lg bg-[#0B241C]/80 px-2 py-1 text-[10px] text-[#8B9E96]">معاينة محلية فقط — إرسال الرسائل وإجراءات API غير مفعّلة</div>
-    {showSimulator&&<FlowSimulator doc={doc} onVisited={setTrail} onClose={()=>setShowSimulator(false)}/>}
+    {showSimulator&&<FlowSimulator doc={doc} flowId={activeFlowId} flows={snapshotLibrary(activeFlowId,doc,flows).flows} onVisited={setTrail} onClose={()=>setShowSimulator(false)}/>}
   </div>;
 }
 export default function FlowBuilder(){
