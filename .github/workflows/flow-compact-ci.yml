@@ -62,6 +62,6 @@ jobs:
             git commit -m "Lock tested React Flow editor dependencies"
             git reset --hard HEAD
             git fetch origin feature/flow-dagre-compact-ui
-            git rebase origin/feature/visual-flow-reactflow
-            git push origin HEAD:feature/visual-flow-reactflow
+            git rebase origin/feature/flow-dagre-compact-ui
+            git push origin HEAD:feature/flow-dagre-compact-ui
           fi
