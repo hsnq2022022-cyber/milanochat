@@ -77,7 +77,7 @@ function Editor(){
       if(!localStorage.getItem(key)){
         store().replace(arrangeFlow(store().doc));
         localStorage.setItem(key,"1");
-        window.setTimeout(()=>instance.fitView({padding:.20,maxZoom:.9,duration:350}),140);
+        window.setTimeout(()=>instance.fitView({padding:.20,maxZoom:.85,duration:0}),350);
       }
     }catch{/* Browser may disable localStorage; manual layout stays available. */}
   },[]);
@@ -193,7 +193,7 @@ function Editor(){
           deleteKeyCode={["Delete","Backspace"]}
           defaultEdgeOptions={{type:"flowEdge",interactionWidth:24,markerEnd:{type:MarkerType.ArrowClosed,width:17,height:17,color:"#87A39A"}}}
           minZoom={.2} maxZoom={2} fitView fitViewOptions={{padding:.28,maxZoom:.8}}
-          onInit={api=>{window.setTimeout(()=>{void api.fitView({padding:.18,maxZoom:.75,duration:200});},250);}}
+          onInit={api=>{window.setTimeout(()=>{void api.fitView({padding:.20,maxZoom:.85,duration:0});},470);}}
           snapToGrid snapGrid={[20,20]}
           selectionOnDrag panOnDrag={[1,2]} multiSelectionKeyCode={["Shift","Control","Meta"]}
           colorMode="dark" connectionLineStyle={{stroke:"#3DD189",strokeWidth:2}}
