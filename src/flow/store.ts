@@ -30,10 +30,10 @@ function savePast(state: FlowState): Pick<FlowState,"past"|"future"> {
 }
 const initial=typeof window==="undefined"?exampleFlow():loadFlow();
 export const useFlowStore=create<FlowState>((set,get)=>({
-  doc:initial,past:[],future:[],selectedId:initial.nodes.find(n=>n.data.kind==="message")?.id??null,
+  doc:initial,past:[],future:[],selectedId:null,
   setSelected:(id)=>set({selectedId:id}),
   pushHistory:()=>set(s=>({...savePast(s)})),
-  replace:(doc)=>set(s=>({doc,selectedId:doc.nodes[0]?.id??null,...savePast(s)})),
+  replace:(doc)=>set(s=>({doc,selectedId:s.selectedId&&doc.nodes.some(n=>n.id===s.selectedId)?s.selectedId:null,...savePast(s)})),
   rename:(name)=>set(s=>({doc:{...s.doc,name:name.slice(0,100)}})),
   addNode:(node)=>set(s=>{
     if(s.doc.nodes.length>=100)return s;

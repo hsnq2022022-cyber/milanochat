@@ -1,4 +1,4 @@
-import { BaseEdge, EdgeLabelRenderer, getBezierPath } from "@xyflow/react";
+import { BaseEdge, EdgeLabelRenderer, getSmoothStepPath } from "@xyflow/react";
 import type { EdgeProps } from "@xyflow/react";
 import { Plus, X } from "lucide-react";
 import { makeNode } from "./model";
@@ -7,7 +7,7 @@ import { useFlowStore } from "./store";
 
 export default function AutomationEdge(props:EdgeProps<FlowEdge>){
   const {id,sourceX,sourceY,targetX,targetY,sourcePosition,targetPosition,selected,markerEnd}=props;
-  const [path,mx,my]=getBezierPath({sourceX,sourceY,targetX,targetY,sourcePosition,targetPosition});
+  const [path,mx,my]=getSmoothStepPath({sourceX,sourceY,targetX,targetY,sourcePosition,targetPosition,borderRadius:22,offset:34});
   const remove=useFlowStore(s=>s.deleteEdge);
   const insert=()=>{
     const store=useFlowStore.getState(),doc=store.doc,old=doc.edges.find(e=>e.id===id);
@@ -20,8 +20,8 @@ export default function AutomationEdge(props:EdgeProps<FlowEdge>){
   };
   return <>
     <BaseEdge id={id} path={path} markerEnd={markerEnd} interactionWidth={24}
-      style={{stroke:selected?"#3DD189":"#87A39A",strokeWidth:selected?3:2.2}}/>
-    <EdgeLabelRenderer><div className="nodrag nopan pointer-events-auto absolute flex -translate-x-1/2 -translate-y-1/2 items-center gap-1 rounded-lg border border-[#355D4E] bg-[#0B241C] px-1.5 py-1 text-[11px] text-[#DDEEE5] shadow-lg" style={{left:mx,top:my,transform:"translate(-50%, -50%)",pointerEvents:"all"}}>
+      style={{stroke:selected?"#3DD189":"#8CA99F",strokeWidth:selected?3:2.2,strokeLinejoin:"round",strokeLinecap:"round"}}/>
+    <EdgeLabelRenderer><div className="nodrag nopan pointer-events-auto absolute flex -translate-x-1/2 -translate-y-1/2 items-center gap-1 rounded-lg border border-[#355D4E] bg-[#0B241C] px-1.5 py-1 text-[11px] text-[#DDEEE5] shadow-md" style={{left:mx,top:my,transform:"translate(-50%, -50%)",pointerEvents:"all"}}>
       {!!props.data?.label&&<span className="max-w-28 truncate px-1">{String(props.data.label)}</span>}
       {selected&&<><button onClick={insert} title="إدراج خطوة بين العقدتين" aria-label="إدراج خطوة في الخط" className="rounded p-1 text-[#3DD189] hover:bg-[#173D30]"><Plus size={14}/></button>
       <button onClick={()=>remove(id)} aria-label="حذف الاتصال" title="حذف الاتصال" className="rounded p-1 text-red-300 hover:bg-[#173D30]"><X size={14}/></button></>}
