@@ -1229,7 +1229,7 @@ function extractIgMessages(entry: any): Array<{
     recipientId: string;
     text: string;
     mid: string | null;
-  postbackPayload?: string | null;
+    postbackPayload?: string | null;
   }> = [];
 
   // ─── 1) البنية القديمة: entry.messaging[] ───
