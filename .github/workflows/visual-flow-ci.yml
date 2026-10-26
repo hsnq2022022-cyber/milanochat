@@ -9,6 +9,8 @@ on:
       - "package.json"
       - "package-lock.json"
       - "tsconfig.flows.json"
+      - "tests/flow-editor.spec.ts"
+      - "playwright.config.ts"
       - ".github/workflows/visual-flow-ci.yml"
   workflow_dispatch:
 
@@ -36,6 +38,17 @@ jobs:
         run: npm run test:flows
       - name: Production build
         run: npm run build
+      - name: Install Chromium for interaction tests
+        run: npx playwright install --with-deps chromium
+      - name: Browser edge and node editing acceptance
+        run: npm run test:browser
+      - name: Upload browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flow-editor-browser-evidence
+          path: test-results/
+          if-no-files-found: ignore
       - name: Commit lockfile from tested build
         run: |
           git config user.name "github-actions[bot]"
