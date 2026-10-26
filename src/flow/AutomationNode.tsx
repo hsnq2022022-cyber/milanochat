@@ -1,4 +1,5 @@
-import { Handle, Position } from "@xyflow/react";
+import { Handle, Position, useUpdateNodeInternals } from "@xyflow/react";
+import { useEffect } from "react";
 import type { NodeProps } from "@xyflow/react";
 import { MessageSquare, Rocket, HelpCircle, GitBranch, Clock3, Zap, Shuffle, CornerDownRight, Globe, Flag } from "lucide-react";
 import { ACCENT, LABELS, outputs } from "./model";
@@ -8,7 +9,10 @@ const glyph:Record<Kind,typeof Rocket>={
   trigger:Rocket,message:MessageSquare,question:HelpCircle,condition:GitBranch,delay:Clock3,
   action:Zap,randomizer:Shuffle,goto:CornerDownRight,request:Globe,end:Flag,
 };
-export default function AutomationNode({data,selected}:NodeProps<FlowNodeType>){
+export default function AutomationNode({id,data,selected}:NodeProps<FlowNodeType>){
+  const updateInternals=useUpdateNodeInternals();
+  const handleSignature=data.kind+":"+data.inputMode+":"+data.options.map(o=>o.id).join(":");
+  useEffect(()=>{updateInternals(id);},[id,handleSignature,updateInternals]);
   const Icon=glyph[data.kind];
   const color=ACCENT[data.kind],options=outputs({id:"preview",position:{x:0,y:0},type:"flowNode",data});
   return <div dir="rtl" className={"w-[275px] overflow-visible rounded-2xl border bg-[#FCFEFD] text-[#17251E] shadow-[0_14px_35px_rgba(0,0,0,.30)] transition-shadow "+(selected?"border-[#3DD189] ring-[3px] ring-[#3DD189]/40":"border-[#D7E1DC] hover:shadow-[0_18px_40px_rgba(0,0,0,.38)]")}>
