@@ -38,6 +38,8 @@ test("compact canvas hides permanent sidebar and arranges the original graph",as
       return y[0]<y[1]&&y[1]<y[2];
     });
   }).toBe(true);
+  await expect(page.getByText("خصائص العقدة")).toHaveCount(0);
+  await page.waitForTimeout(650);
   await page.screenshot({path:"test-results/flow-compact-layout.png",fullPage:true});
 });
 
