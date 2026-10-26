@@ -54,7 +54,7 @@ export type FlowData = Record<string, unknown> & {
   conditionValue: string;
   delayValue: number;
   delayUnit: "seconds" | "minutes" | "hours" | "days";
-  actionType: "tag" | "untag" | "set_field" | "handoff" | "notify";
+  actionType: "tag" | "untag" | "set_field" | "handoff" | "notify" | "ai";
   actionValue: string;
   gotoNode: string;
   requestMethod: "GET" | "POST";
@@ -141,7 +141,7 @@ export function validateDocument(doc: FlowDocument): string[] {
       if(option.action==="flow"&&!option.targetFlowId)errors.push("اختر التدفق المرتبط بالزر "+option.label+".");
     }
     for(const block of n.data.contentBlocks||[]){
-      if(["image","pdf"].includes(block.type)&&!(/^https:\/\/\S+$/i.test(block.url||"")||block.type==="image"&&/^data:image\/(?:webp|jpeg|png);base64,/i.test(block.url||"")))errors.push("رابط "+(block.type==="pdf"?"PDF":"الصورة")+" غير صالح في "+n.data.title);
+      if(["image","pdf"].includes(block.type)&&!(/^https:\/\/\S+$/i.test(block.url||"")||block.type==="image"&&/^data:image\/(?:webp|jpeg|png);base64,/i.test(block.url||"")||block.type==="pdf"&&/^data:application\/pdf;base64,/i.test(block.url||"")))errors.push("رابط "+(block.type==="pdf"?"PDF":"الصورة")+" غير صالح في "+n.data.title);
     }
     if(n.data.image&&!/^https:\/\//i.test(n.data.image)&&!/^data:image\/(?:png|jpeg|webp);base64,/i.test(n.data.image))errors.push("رابط صورة غير آمن: "+n.data.title);
     if(n.data.kind==="question"&&n.data.inputMode==="buttons"&&n.data.options.length===0)errors.push("أضف خيارًا إلى "+n.data.title);
@@ -191,7 +191,7 @@ function cleanImported(raw:unknown): FlowDocument | null {
       operator:["contains","equals","not_equals","exists"].includes(String(d.operator))?d.operator as FlowData["operator"]:"contains",
       conditionValue:safeString(d.conditionValue).slice(0,250),delayValue:typeof d.delayValue==="number"?d.delayValue:1,
       delayUnit:["seconds","minutes","hours","days"].includes(String(d.delayUnit))?d.delayUnit as FlowData["delayUnit"]:"minutes",
-      actionType:["tag","untag","set_field","handoff","notify"].includes(String(d.actionType))?d.actionType as FlowData["actionType"]:"tag",
+      actionType:["tag","untag","set_field","handoff","notify","ai"].includes(String(d.actionType))?d.actionType as FlowData["actionType"]:"tag",
       actionValue:safeString(d.actionValue).slice(0,500),gotoNode:safeString(d.gotoNode),requestMethod:d.requestMethod==="POST"?"POST":"GET",requestUrl:safeString(d.requestUrl).slice(0,2048)});
     clean.id=n.id;nodes.push(clean);
   }
