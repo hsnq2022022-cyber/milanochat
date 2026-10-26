@@ -3,9 +3,9 @@ import {
   ReactFlow, ReactFlowProvider, Background, BackgroundVariant, Controls, MiniMap, MarkerType,
   useReactFlow,
 } from "@xyflow/react";
-import type { Connection, Edge, Node as RFNode, XYPosition } from "@xyflow/react";
+import type { Connection, Edge, XYPosition } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { ArrowRight, Plus, Play, Save, Upload, Download, Undo2, Redo2, Search, LayoutGrid, Trash2, AlertTriangle, CheckCircle2 } from "lucide-react";
+import { ArrowRight, Plus, Play, Save, Upload, Download, Undo2, Redo2, LayoutGrid, Trash2, AlertTriangle, CheckCircle2, X } from "lucide-react";
 import AutomationNode from "../flow/AutomationNode";
 import AutomationEdge from "../flow/AutomationEdge";
 import NodeEditor from "../flow/NodeEditor";
@@ -20,7 +20,6 @@ const nodeTypes={flowNode:AutomationNode};
 const edgeTypes={flowEdge:AutomationEdge};
 const btn="inline-flex items-center justify-center gap-1.5 rounded-xl border border-[#275443] bg-[#0B241C] px-3 py-2.5 text-xs font-semibold hover:border-[#3DD189] hover:bg-[#173D30]";
 type EdgeMenu={id:string;x:number;y:number}|null;
-type AddMenu={source:string;port:string;position:XYPosition;x:number;y:number}|null;
 
 function Editor(){
   const doc=useFlowStore(s=>s.doc),selectedId=useFlowStore(s=>s.selectedId);
@@ -140,7 +139,12 @@ function Editor(){
       <div className="flex flex-wrap items-center gap-1.5">
         <button className={btn} onClick={()=>store().undo()} title="تراجع Ctrl+Z"><Undo2 size={16}/></button>
         <button className={btn} onClick={()=>store().redo()} title="إعادة Ctrl+Shift+Z"><Redo2 size={16}/></button>
-        <button className={btn} onClick={arrange} title="ترتيب تلقائي"><LayoutGrid size={16}/></button>
+        <button className={btn} onClick={e=>openAdd({x:e.clientX,y:e.clientY})} title="إضافة خطوة"><Plus size={16}/> <span className="hidden sm:inline">إضافة</span></button>
+        <button className={btn} onClick={arrange} title="ترتيب تلقائي"><LayoutGrid size={16}/><span className="hidden md:inline">ترتيب</span></button>
+        <button className={btn} onClick={()=>setShowIssues(v=>!v)} title="فحص التدفق">
+          {errors.length?<AlertTriangle size={16} className="text-[#E5B54B]"/>:<CheckCircle2 size={16} className="text-[#3DD189]"/>}
+          <span className="hidden md:inline">فحص</span><span>{errors.length}</span>
+        </button>
         <button className={btn} onClick={()=>setShowSimulator(true)}><Play size={16}/> تجربة</button>
         <button className={btn} onClick={exportFile}><Download size={16}/> تصدير</button>
         <button className={btn} onClick={()=>input.current?.click()}><Upload size={16}/> استيراد</button>
@@ -149,16 +153,6 @@ function Editor(){
       </div>
     </header>
     <div className="relative flex min-h-0 flex-1 overflow-hidden">
-      <aside className="hidden w-52 shrink-0 overflow-y-auto border-l border-[#173D30] bg-[#0B241C] p-3 lg:block">
-        <h2 className="mb-2 font-semibold">مكتبة الخطوات</h2>
-        <label className="mb-3 flex items-center gap-2 rounded-xl border border-[#275443] px-2"><Search size={15}/><input className="w-full bg-transparent p-2 text-xs outline-none" placeholder="البحث في الخطوات" value={search} onChange={e=>setSearch(e.target.value)}/></label>
-        {KIND_LIST.filter(k=>LABELS[k].includes(search)).map(kind=><button className="mb-2 flex w-full items-center justify-between rounded-xl border border-[#275443] bg-[#0F2E24] p-3 text-right text-sm hover:border-[#3DD189]" key={kind} onClick={()=>addNode(kind)}><span style={{color:ACCENT[kind]}}>{LABELS[kind]}</span><Plus size={15}/></button>)}
-        <p className="mt-5 text-xs leading-6 text-[#8B9E96]">اسحب الخط من الدائرة الملونة إلى الخطوة التالية. اضغط أي خط لاختيار نقله أو حذفه.</p>
-        <div className="mt-5 rounded-xl border border-[#244A3A] bg-[#0F2E24] p-3 text-xs">
-          <h3 className="mb-1 font-semibold">فحص التدفق</h3>
-          {errors.length?errors.slice(0,8).map((e,i)=><p className="mt-1 text-[#E5B54B]" key={i}>• {e}</p>):<p className="flex gap-2 text-[#3DD189]"><CheckCircle2 size={15}/> لا توجد أخطاء بنيوية مكتشفة.</p>}
-        </div>
-      </aside>
       <section className="relative min-w-0 flex-1" aria-label="مساحة التدفقات" onClick={()=>{if(edgeMenu)setEdgeMenu(null);}}>
         <ReactFlow<FlowNode,FlowEdge>
           nodes={renderedNodes} edges={renderedEdges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
@@ -198,15 +192,35 @@ function Editor(){
           <MiniMap nodeColor={n=>ACCENT[(n.data as FlowNode["data"]).kind]||"#3DD189"} className="!bg-[#0B241C] !border !border-[#275443]" maskColor="rgba(1,12,8,.65)" pannable zoomable />
           <Controls showInteractive={false} className="!bg-[#0B241C] !border !border-[#275443]"/>
         </ReactFlow>
-        <div className="absolute right-3 top-3 z-10 flex gap-2 lg:hidden"><button className="rounded-xl bg-[#3DD189] px-3 py-2 text-xs font-bold text-[#061A14]" onClick={()=>setShowAdd(v=>!v)}><Plus size={15} className="inline"/> إضافة خطوة</button></div>
-        {showAdd&&<div className="absolute right-3 top-14 z-20 grid max-h-72 grid-cols-2 gap-2 overflow-auto rounded-xl border border-[#275443] bg-[#0B241C] p-3 lg:hidden">{KIND_LIST.map(k=><button key={k} className={btn} onClick={()=>addNode(k)}>{LABELS[k]}</button>)}</div>}
+
+        <button className="nodrag absolute bottom-4 right-4 z-20 flex h-12 w-12 items-center justify-center rounded-full border border-[#9BF0BD] bg-[#3DD189] text-[#061A14] shadow-[0_8px_25px_rgba(17,110,64,.4)] transition-transform hover:scale-105" title="إضافة خطوة" aria-label="فتح إضافة خطوة" onClick={e=>openAdd({x:e.clientX,y:e.clientY})}><Plus size={25}/></button>
+        {showIssues&&<div className="absolute left-3 top-3 z-20 w-[min(340px,90vw)] rounded-2xl border border-[#275443] bg-[#0B241C] p-4 shadow-xl">
+          <div className="flex items-center justify-between gap-2"><h3 className="font-bold">فحص التدفق</h3><button onClick={()=>setShowIssues(false)} aria-label="إغلاق الفحص"><X size={18}/></button></div>
+          {errors.length?<div className="mt-3 max-h-52 space-y-2 overflow-y-auto text-xs text-[#E5B54B]">{errors.slice(0,12).map((e,i)=><p key={i}>• {e}</p>)}</div>:<p className="mt-3 flex items-center gap-2 text-sm text-[#3DD189]"><CheckCircle2 size={18}/> لا توجد أخطاء بنيوية مكتشفة.</p>}
+        </div>}
         {edgeMenu&&<div className="fixed z-50 min-w-40 rounded-xl border border-[#275443] bg-[#0B241C] p-2 shadow-2xl" style={{left:Math.min(window.innerWidth-180,edgeMenu.x),top:Math.min(window.innerHeight-150,edgeMenu.y)}} onClick={e=>e.stopPropagation()}>
           <button className={btn+" mb-2 w-full"} onClick={()=>insertOnEdge(edgeMenu.id)}><Plus size={15}/> إدراج خطوة</button>
           <button className={btn+" w-full text-red-300"} onClick={()=>{store().deleteEdge(edgeMenu.id);setEdgeMenu(null);}}><Trash2 size={15}/> حذف الاتصال</button>
         </div>}
-        {addMenu&&<div className="fixed z-50 rounded-xl border border-[#275443] bg-[#0B241C] p-3 shadow-xl" style={{left:Math.min(window.innerWidth-230,addMenu.x),top:Math.min(window.innerHeight-260,addMenu.y)}}><p className="mb-2 text-xs">اختر عقدة لإضافتها وربطها تلقائيًا</p>
-          <div className="grid grid-cols-2 gap-1">{KIND_LIST.filter(k=>k!=="trigger").map(k=><button className={btn} key={k} onClick={()=>addNode(k,addMenu.position,{source:addMenu.source,port:addMenu.port})}>{LABELS[k]}</button>)}</div>
-          <button className="mt-2 text-xs text-[#8B9E96]" onClick={()=>setAddMenu(null)}>إلغاء</button>
+
+        {addRequest&&<div role="dialog" aria-label="إضافة خطوة" data-testid="add-step-menu"
+          className="fixed z-50 w-[min(285px,90vw)] max-h-[min(440px,75vh)] overflow-y-auto rounded-2xl border border-[#2C6448] bg-[#0B241C] p-3 text-white shadow-[0_15px_60px_rgba(0,0,0,.45)]"
+          style={{left:Math.max(8,Math.min(window.innerWidth-300,addRequest.x-24)),top:Math.max(55,Math.min(window.innerHeight-355,addRequest.y+8))}}
+          onClick={e=>e.stopPropagation()}>
+          <div className="mb-3 flex items-center justify-between gap-2"><h3 className="text-sm font-bold">{addRequest.source?"إضافة خطوة بعد المسار":"إضافة خطوة جديدة"}</h3>
+            <button className="rounded-lg p-1 hover:bg-[#173D30]" aria-label="إغلاق قائمة الإضافة" onClick={closeAdd}><X size={17}/></button></div>
+          {addRequest.source&&!addRequest.port?
+            <><p className="mb-2 text-xs text-[#8B9E96]">اختر أي فرع تريد توصيل الخطوة الجديدة به:</p>
+              <div className="space-y-1.5">{outputs(doc.nodes.find(n=>n.id===addRequest.source)!).map(port=>
+                <button key={port.id} className={btn+" w-full justify-between"} onClick={()=>openAdd({...addRequest,port:port.id})}>{port.label}<ArrowRight size={15}/></button>)}</div></>:
+            <div className="grid grid-cols-2 gap-2">
+              {KIND_LIST.filter(k=>k!=="trigger"||!addRequest.source).map(kind=>
+                <button key={kind} className="flex min-h-12 items-center justify-between gap-1 rounded-xl border border-[#275443] bg-[#0F2E24] px-2.5 py-2 text-right text-xs hover:border-[#3DD189] hover:bg-[#173D30]"
+                  onClick={()=>addNode(kind,addRequest.position,addRequest.source&&addRequest.port?{source:addRequest.source,port:addRequest.port}:undefined)}>
+                  <span>{LABELS[kind]}</span><span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{backgroundColor:ACCENT[kind]}}/>
+                </button>)}
+            </div>}
+          <p className="mt-3 text-[11px] leading-5 text-[#8B9E96]">بعد الإضافة يمكنك تحريك العقدة بحرية وإعادة ترتيب المخطط.</p>
         </div>}
       </section>
       {selected&&<NodeEditor node={selected} onClose={()=>store().setSelected(null)}/>}
