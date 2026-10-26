@@ -1222,19 +1222,21 @@ function extractIgMessages(entry: any): Array<{
   recipientId: string;
   text: string;
   mid: string | null;
+  postbackPayload?: string | null;
 }> {
   const out: Array<{
     senderId: string;
     recipientId: string;
     text: string;
     mid: string | null;
+    postbackPayload?: string | null;
   }> = [];
 
   // ─── 1) البنية القديمة: entry.messaging[] ───
 
   if (Array.isArray(entry.messaging)) {
     for (const ev of entry.messaging) {
-      if (!ev?.message || ev.message.is_echo) {
+      if ((!ev?.message && !ev?.postback) || ev.message?.is_echo) {
         continue;
       }
 
@@ -1242,21 +1244,29 @@ function extractIgMessages(entry: any): Array<{
       const recipientId = String(ev.recipient?.id ?? "");
 
       const text =
-        typeof ev.message.text === "string"
-          ? ev.message.text
+        typeof ev.message?.text === "string"
+          ? ev.message?.text
           : "";
 
       const mid =
-        typeof ev.message.mid === "string"
-          ? ev.message.mid
+        typeof ev.message?.mid === "string"
+          ? ev.message?.mid
           : null;
 
-      if (senderId && text) {
+      const postbackPayload =
+        typeof ev.message?.quick_reply?.payload === "string"
+          ? ev.message.quick_reply.payload
+          : typeof ev.postback?.payload === "string"
+            ? ev.postback.payload
+            : null;
+
+      if (senderId && (text || postbackPayload)) {
         out.push({
           senderId,
           recipientId,
           text,
           mid,
+          postbackPayload,
         });
       }
     }
@@ -1278,7 +1288,7 @@ function extractIgMessages(entry: any): Array<{
 
       if (Array.isArray(value.messaging)) {
         for (const ev of value.messaging) {
-          if (!ev?.message || ev.message.is_echo) {
+          if ((!ev?.message && !ev?.postback) || ev.message?.is_echo) {
             continue;
           }
 
@@ -1291,21 +1301,29 @@ function extractIgMessages(entry: any): Array<{
           );
 
           const text =
-            typeof ev.message.text === "string"
-              ? ev.message.text
+            typeof ev.message?.text === "string"
+              ? ev.message?.text
               : "";
 
           const mid =
-            typeof ev.message.mid === "string"
-              ? ev.message.mid
+            typeof ev.message?.mid === "string"
+              ? ev.message?.mid
               : null;
 
-          if (senderId && text) {
+          const postbackPayload =
+            typeof ev.message?.quick_reply?.payload === "string"
+              ? ev.message.quick_reply.payload
+              : typeof ev.postback?.payload === "string"
+                ? ev.postback.payload
+                : null;
+
+          if (senderId && (text || postbackPayload)) {
             out.push({
               senderId,
               recipientId,
               text,
               mid,
+              postbackPayload,
             });
           }
         }
@@ -1314,8 +1332,8 @@ function extractIgMessages(entry: any): Array<{
       }
 
       if (
-        value.message &&
-        !value.message.is_echo
+        (value.message || value.postback) &&
+        !value.message?.is_echo
       ) {
         const senderId = String(
           value.sender?.id ?? ""
@@ -1326,21 +1344,29 @@ function extractIgMessages(entry: any): Array<{
         );
 
         const text =
-          typeof value.message.text === "string"
+          typeof value.message?.text === "string"
             ? value.message.text
             : "";
 
         const mid =
-          typeof value.message.mid === "string"
+          typeof value.message?.mid === "string"
             ? value.message.mid
             : null;
 
-        if (senderId && text) {
+        const postbackPayload =
+          typeof value.message?.quick_reply?.payload === "string"
+            ? value.message.quick_reply.payload
+            : typeof value.postback?.payload === "string"
+              ? value.postback.payload
+              : null;
+
+        if (senderId && (text || postbackPayload)) {
           out.push({
             senderId,
             recipientId,
             text,
             mid,
+            postbackPayload,
           });
         }
       }
@@ -1564,8 +1590,16 @@ async function handleIncomingWebhookMessage(
   customerText: string,
   externalMsgId: string | null,
   channel: "whatsapp" | "instagram" | "facebook",
-  phoneId?: string
+  phoneId?: string,
+  postbackPayload?: string | null
 ) {
+  // Until a flow engine consumes these events, do not pass payload-only
+  // interactions to the existing knowledge-answering pipeline.
+  if (!customerText.trim() && postbackPayload) {
+    console.log(`[${channel}_webhook] payload-only interaction deferred`);
+    return;
+  }
+
   const tenantId: string =
     channel === "whatsapp"
       ? account.tenant_id
@@ -2508,7 +2542,9 @@ Deno.serve(async (req) => {
               msgId,
               channel as
                 | "instagram"
-                | "facebook"
+                | "facebook",
+              undefined,
+              msg.postbackPayload ?? null
             );
 
             /* ── جلب بيانات المرسل (اسم + صورة) وحفظها ──
