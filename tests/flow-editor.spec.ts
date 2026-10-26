@@ -93,6 +93,7 @@ test("a quick reply can jump to a second locally saved flow and run its preview"
   await page.locator(".react-flow__node").nth(2).click();
   await expect(page.getByText("الأزرار والردود السريعة")).toBeVisible();
   await page.locator("aside [data-testid^='flow-button']").first().click();
+  page.on("dialog",dialog=>{void dialog.accept();});
   await page.getByRole("button",{name:"الانتقال إلى تدفق آخر"}).click();
   await page.getByRole("combobox",{name:"اختر تدفقًا آخر"}).selectOption(optionIds[1]);
   await page.getByRole("button",{name:"تم",exact:true}).first().click();
