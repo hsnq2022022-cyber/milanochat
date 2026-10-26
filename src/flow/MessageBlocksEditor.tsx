@@ -80,7 +80,7 @@ export default function MessageBlocksEditor({node}:{node:FlowNode}){
           {block.type==="collection"&&<>
             <input className={input} aria-label="سؤال جمع البيانات" placeholder="اكتب رقم هاتفك" value={block.text||""} onChange={e=>patch(block.id,{text:e.target.value})}/>
             <label className="mb-1 mt-2 block text-xs">نوع البيانات</label>
-            <select className={input} value={block.inputMode||"text"} onChange={e=>patch(block.id,{inputMode:e.target.value as ContentBlock["inputMode"]})}>
+            <select aria-label="نوع البيانات" className={input} value={block.inputMode||"text"} onChange={e=>patch(block.id,{inputMode:e.target.value as ContentBlock["inputMode"]})}>
               <option value="text">نص</option><option value="email">بريد إلكتروني</option><option value="phone">هاتف</option><option value="number">رقم</option>
             </select>
             <label className="mb-1 mt-2 block text-xs">اسم المتغير</label>
