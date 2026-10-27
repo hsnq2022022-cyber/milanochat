@@ -40,6 +40,7 @@
 
 import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2";
 import * as cheerio from "npm:cheerio@1";
+import { classifyInboundInsert, verifyWebhookHmac } from "../_shared/webhook-safety.ts";
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
@@ -1170,47 +1171,14 @@ ${history ? `\nسياق المحادثة السابق:\n${history}\n` : ""}`
  */
 async function verifyMetaSignature(
   raw: string,
-  sigHeader: string
+  sigHeader: string,
+  product: "whatsapp" | "instagram",
 ): Promise<boolean> {
-  /**
-   * قد يوقّع Meta الـ webhook بسر تطبيق إنستغرام أو بسر تطبيق Meta الرئيسي
-   * حسب نوع الربط، لذلك نقبل التوقيع إن طابق أيًّا منهما.
-   */
-  const secrets = [
-    env("INSTAGRAM_APP_SECRET"),
-    env("META_APP_SECRET"),
-  ]
-    .map((v) => v.trim())
-    .filter(Boolean);
-
-  if (secrets.length === 0) return true;
-
-  if (!sigHeader) return false;
-
-  for (const secret of secrets) {
-    const expected =
-      "sha256=" +
-      hex(
-        await crypto.subtle.sign(
-          "HMAC",
-          await crypto.subtle.importKey(
-            "raw",
-            enc.encode(secret),
-            {
-              name: "HMAC",
-              hash: "SHA-256",
-            },
-            false,
-            ["sign"]
-          ),
-          enc.encode(raw)
-        )
-      );
-
-    if (sigHeader === expected) return true;
-  }
-
-  return false;
+  // التحقق إلزامي، مع استخدام سر التطبيق المناسب لنوع Webhook.
+  const configuredSecrets = product === "whatsapp"
+    ? [env("META_APP_SECRET")]
+    : [env("INSTAGRAM_APP_SECRET"), env("META_APP_SECRET")];
+  return verifyWebhookHmac(raw, sigHeader, configuredSecrets);
 }
 
 /**
@@ -1640,32 +1608,39 @@ async function handleIncomingWebhookMessage(
   }
 
   /**
-   * حفظ رسالة العميل الواردة.
+   * لا يسمح النظام بردّ آلي دون معرّف رسالة ثابت من المنصة.
+   * الفهرس الفريد wa_message_id هو ضمان منع التكرار في حالات التزامن.
    */
+  if (!externalMsgId || !externalMsgId.trim()) {
+    console.warn(`[${channel}_webhook] missing stable provider message ID; ignored`);
+    return;
+  }
+
   try {
-    await sb
+    const insertion = await sb
       .from("messages")
       .insert({
         conversation_id: conv.id,
         tenant_id: tenantId,
         direction: "in",
-        body_encrypted:
-          await encryptField(customerText),
+        body_encrypted: await encryptField(customerText),
         kind: "customer",
         is_auto: false,
         wa_message_id: externalMsgId,
       });
-  } catch (e: any) {
-    if (e?.code === "23505") {
-      console.log(
-        `[${channel}_webhook] duplicate message skipped: ${externalMsgId}`
-      );
-    } else {
-      console.error(
-        `[${channel}_webhook] incoming insert failed`,
-        e
-      );
+
+    // Supabase يعيد أخطاء PostgreSQL في result.error دون أن يرمي استثناء.
+    const decision = classifyInboundInsert(externalMsgId, insertion);
+    if (decision !== "accepted") {
+      if (decision === "duplicate") {
+        console.log(`[${channel}_webhook] duplicate skipped: ${externalMsgId}`);
+      } else {
+        console.error(`[${channel}_webhook] inbound insert not accepted`, insertion.error);
+      }
+      return; // منع AI أو أي تدفق من الرد عند فشل إدخال الرسالة.
     }
+  } catch (error) {
+    console.error(`[${channel}_webhook] inbound insert failed`, error);
     return;
   }
 
@@ -2205,6 +2180,15 @@ Deno.serve(async (req) => {
           );
         }
 
+        // يُرفض الطلب قبل لمس أي رسالة إذا لم يطابق توقيع Meta.
+        const whatsappSignatureOk = await verifyMetaSignature(
+          raw, req.headers.get("x-hub-signature-256") ?? "", "whatsapp"
+        );
+        if (!whatsappSignatureOk) {
+          console.warn("[whatsapp_webhook] invalid/missing signature");
+          return new Response("Forbidden", { status: 403 });
+        }
+
         if (
           body.object !==
           "whatsapp_business_account"
@@ -2298,6 +2282,10 @@ Deno.serve(async (req) => {
                 typeof message?.id === "string"
                   ? message.id
                   : null;
+              if (!msgId?.trim()) {
+                console.warn("[whatsapp_webhook] missing stable message ID");
+                continue;
+              }
 
               if (!text) {
                 /*
@@ -2410,9 +2398,8 @@ Deno.serve(async (req) => {
 
         const sigOk = await verifyMetaSignature(
           raw,
-          req.headers.get(
-            "x-hub-signature-256"
-          ) ?? ""
+          req.headers.get("x-hub-signature-256") ?? "",
+          "instagram"
         );
 
         if (!sigOk) {
@@ -2420,9 +2407,7 @@ Deno.serve(async (req) => {
             "[instagram_webhook] invalid signature — ignored"
           );
 
-          return json({
-            received: true,
-          });
+          return new Response("Forbidden", { status: 403 });
         }
 
         for (const entry of body.entry ?? []) {
@@ -2479,8 +2464,12 @@ Deno.serve(async (req) => {
             const chatId =
               `${channel}:${msg.senderId}`;
 
-            const msgId =
-              msg.mid || `ig_${Date.now()}`;
+            const msgId = msg.mid;
+            if (!msgId) {
+              // المعرّفات المولدة من الوقت تسمح للـ retries بإرسال ردود مزدوجة.
+              console.warn("[instagram_webhook] missing stable message ID");
+              continue;
+            }
 
             /**
              * منع التكرار.
