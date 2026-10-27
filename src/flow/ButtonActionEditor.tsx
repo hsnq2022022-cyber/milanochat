@@ -3,6 +3,7 @@ import { ArrowRight, Plus, Trash2, Link2, Globe2, Bot, Zap, GitBranch, Shuffle, 
 import { canConnect, edgeFor, makeNode } from "./model";
 import type { Choice, ButtonAction, FlowNode, FlowData, Kind } from "./model";
 import { useFlowStore } from "./store";
+import { cardSize, findOpenPosition } from "./layout";
 
 const input="w-full rounded-xl border border-[#275443] bg-[#0F2E24] px-3 py-2.5 text-sm text-white outline-none focus:border-[#3DD189]";
 const btn="inline-flex items-center gap-1.5 rounded-xl border border-[#275443] px-3 py-2 text-xs hover:bg-[#173D30]";
@@ -39,8 +40,10 @@ export default function ButtonActionEditor({node}:{node:FlowNode}){
     if(action==="ai"||action==="actions"||action==="condition"||action==="randomizer"){
       const kind:Kind=action==="condition"?"condition":action==="randomizer"?"randomizer":"action";
       if(store.doc.nodes.length>=100)return;
-      const n=makeNode(kind,{x:node.position.x+370,y:node.position.y+265},
+      const preferred={x:node.position.x+cardSize(node).width+90,y:node.position.y+265};
+      const draft=makeNode(kind,preferred,
         action==="ai"?{title:"AI Step (تجريبي)",actionType:"ai",actionValue:""}:{});
+      const n={...draft,position:findOpenPosition(store.doc.nodes,draft,preferred)};
       const options=d.options.map(o=>o.id===choice.id?{...o,action:"step" as const,targetFlowId:undefined,url:undefined}:o);
       const edge=edgeFor({source:node.id,sourceHandle:choice.id,target:n.id,targetHandle:"in"},choice.label);
       store.replace({...store.doc,nodes:[...store.doc.nodes.map(x=>x.id===node.id?{...x,data:{...x.data,options}}:x),n],
