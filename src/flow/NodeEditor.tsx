@@ -7,6 +7,8 @@ import TriggerKeywordsEditor from "./TriggerKeywordsEditor";
 import type { FlowData, FlowNode, Choice, Platform } from "./model";
 import { useFlowStore } from "./store";
 import { cardSize, findOpenPosition } from "./layout";
+import { flowText, flowKindLabel } from "./uiLocale";
+import type { FlowLanguage } from "./uiLocale";
 
 const input="w-full rounded-xl border border-[#275443] bg-[#0F2E24] px-3 py-2.5 text-sm text-white outline-none focus:border-[#3DD189]";
 const btn="inline-flex items-center gap-1.5 rounded-xl border border-[#275443] px-3 py-2 text-xs hover:bg-[#173D30]";
@@ -16,11 +18,12 @@ const operators={contains:"يحتوي",equals:"يساوي",not_equals:"لا يس
 const actions={tag:"إضافة وسم",untag:"حذف وسم",set_field:"تعيين متغير",handoff:"تحويل إلى موظف",notify:"إشعار المسؤول",ai:"AI Step تجريبية"};
 const modes={buttons:"أزرار سريعة",text:"نص",email:"بريد إلكتروني",phone:"هاتف",number:"رقم"};
 
-export default function NodeEditor({node,onClose}:{node:FlowNode|null;onClose:()=>void}){
+export default function NodeEditor({node,onClose,language="ar"}:{node:FlowNode|null;onClose:()=>void;language?:FlowLanguage}){
   const store=useFlowStore();
   const [status,setStatus]=useState("");
   const [collapsed,setCollapsed]=useState(false);
-  if(!node)return <aside dir="rtl" className="flex w-[min(40vw,370px)] min-w-[210px] shrink-0 flex-col border-r border-[#173D30] bg-[#0B241C] p-5 text-[#8B9E96]"><h2 className="font-semibold text-white">إعدادات الخطوة</h2><p className="mt-3 text-sm">اختر عقدة من مساحة العمل لتعديل محتواها.</p></aside>;
+  const t=(key:Parameters<typeof flowText>[0])=>flowText(key,language);
+  if(!node)return <aside dir={language==="ar"?"rtl":"ltr"} className="flex w-[min(40vw,370px)] min-w-[210px] shrink-0 flex-col border-r border-[#173D30] bg-[#0B241C] p-5 text-[#8B9E96]"><h2 className="font-semibold text-white">{t("panel")}</h2><p className="mt-3 text-sm">{t("noNode")}</p></aside>;
   const d=node.data;
   const edit=(part:Partial<FlowData>)=>store.changeNode(node.id,part);
   const saveOptions=(options:Choice[])=>{
@@ -46,20 +49,20 @@ export default function NodeEditor({node,onClose}:{node:FlowNode|null;onClose:()
   const duplicate=()=>{if(store.doc.nodes.length>=100)return;const preferred={x:node.position.x+cardSize(node).width+80,y:node.position.y+80};const n=makeNode(d.kind,preferred,{...d,options:d.options.map(o=>({...o,id:crypto.randomUUID()})),title:d.title+" (نسخة)"});store.addNode({...n,position:findOpenPosition(store.doc.nodes,n,preferred)});};
   const remove=()=>{if(d.kind==="trigger"&&!window.confirm("حذف البداية سيجعل التدفق دون نقطة تشغيل. هل تريد المتابعة؟"))return;store.deleteNode(node.id);onClose();};
 
-  return <aside dir="rtl" data-testid="step-settings-panel" role="complementary" aria-label="خصائص الخطوة" className={"fixed inset-x-0 bottom-0 z-40 flex w-full shrink-0 flex-col overflow-hidden rounded-t-2xl border-t border-[#173D30] bg-[#0B241C] text-white shadow-2xl md:relative md:inset-auto md:z-20 md:max-h-none md:w-[min(40vw,385px)] md:rounded-none md:border-r md:border-t-0 md:shadow-none "+(collapsed?"max-h-20 md:w-[240px]":"max-h-[min(78dvh,730px)]")}>
+  return <aside dir={language==="ar"?"rtl":"ltr"} data-testid="step-settings-panel" role="complementary" aria-label={t("stepProps")} className={"fixed inset-x-0 bottom-0 z-40 flex w-full shrink-0 flex-col overflow-hidden rounded-t-2xl border-t border-[#173D30] bg-[#0B241C] text-white shadow-2xl md:relative md:inset-auto md:z-20 md:max-h-none md:w-[min(40vw,385px)] md:rounded-none md:border-r md:border-t-0 md:shadow-none "+(collapsed?"max-h-20 md:w-[240px]":"max-h-[min(78dvh,730px)]")}>
     <div className="sticky top-0 flex min-h-16 items-center justify-between gap-2 border-b border-[#173D30] bg-[#0B241C] px-3 py-3 md:px-4">
-      <div><p className="text-[11px] text-[#8B9E96]">خصائص العقدة</p><h2 className="text-base font-bold" style={{color:ACCENT[d.kind]}}>{LABELS[d.kind]}</h2></div>
+      <div><p className="text-[11px] text-[#8B9E96]">{t("stepProps")}</p><h2 className="text-base font-bold" style={{color:ACCENT[d.kind]}}>{flowKindLabel(d.kind,language,LABELS[d.kind])}</h2></div>
       <div className="flex items-center gap-2">
-        <button type="button" aria-label={collapsed?"إظهار إعدادات الخطوة":"طي إعدادات الخطوة"} aria-expanded={!collapsed} className={btn} onClick={()=>setCollapsed(v=>!v)}>
-          {collapsed?<ChevronDown size={16}/>:<ChevronUp size={16}/>} {collapsed?"إظهار":"طي"}
+        <button type="button" aria-label={collapsed?t("expandStep"):t("collapseStep")} aria-expanded={!collapsed} className={btn} onClick={()=>setCollapsed(v=>!v)}>
+          {collapsed?<ChevronDown size={16}/>:<ChevronUp size={16}/>} {collapsed?(language==="ar"?"إظهار":"Show"):(language==="ar"?"طي":"Collapse")}
         </button>
-        <button type="button" aria-label="إغلاق المحرر" className={btn} onClick={onClose}>إغلاق</button>
+        <button type="button" aria-label={t("close")} className={btn} onClick={onClose}>{t("closeLabel")}</button>
       </div>
     </div>
     {!collapsed&&<div className="min-h-0 flex-1 overflow-y-auto px-4 pb-6">
-      {d.kind!=="trigger"&&<><label className={section}>عنوان الخطوة</label><input className={input} value={d.title} maxLength={90} onChange={e=>edit({title:e.target.value})}/></>}
+      {d.kind!=="trigger"&&<><label className={section}>{t("title")}</label><input className={input} value={d.title} maxLength={90} onChange={e=>edit({title:e.target.value})}/></>}
       {d.kind==="trigger"&&<>
-        <label className={section}>القناة التي يبدأ منها التدفق</label>
+        <label className={section}>{t("channel")}</label>
         <select className={input} aria-label="قناة بدء الأتمتة" value={d.platform} onChange={e=>{
           const platform=e.target.value as Platform;
           const first=TRIGGER_OPTIONS[platform][0].id;
@@ -67,8 +70,8 @@ export default function NodeEditor({node,onClose}:{node:FlowNode|null;onClose:()
         }}>
           {Object.entries(PLATFORM_LABELS).map(([key,label])=><option key={key} value={key}>{label}</option>)}
         </select>
-        <label className={section}>نوع الحدث</label>
-        <select className={input} aria-label="نوع الحدث" value={d.triggerMode} onChange={e=>edit({triggerMode:e.target.value as FlowData["triggerMode"]})}>
+        <label className={section}>{t("event")}</label>
+        <select className={input} aria-label={t("event")} value={d.triggerMode} onChange={e=>edit({triggerMode:e.target.value as FlowData["triggerMode"]})}>
           {TRIGGER_OPTIONS[d.platform].map(event=><option key={event.id} value={event.id}>{event.label}</option>)}
         </select>
         <TriggerKeywordsEditor key={node.id+":"+d.triggerMode} mode={d.triggerMode} value={d.keywords} onChange={keywords=>edit({keywords})}/>
@@ -76,8 +79,8 @@ export default function NodeEditor({node,onClose}:{node:FlowNode|null;onClose:()
       </>}
       {["message","question"].includes(d.kind)&&<>
         {d.kind==="question"&&<>
-          <label className={section}>نوع الإجابة</label>
-          <select className={input} aria-label="نوع الإجابة" value={d.inputMode} onChange={e=>{
+          <label className={section}>{t("answer")}</label>
+          <select className={input} aria-label={t("answer")} value={d.inputMode} onChange={e=>{
             const inputMode=e.target.value as FlowData["inputMode"];
             const current=useFlowStore.getState().doc;
             const allowed=inputMode==="buttons"?new Set(d.options.map(o=>o.id)):new Set(["valid","invalid"]);
@@ -91,7 +94,7 @@ export default function NodeEditor({node,onClose}:{node:FlowNode|null;onClose:()
           {d.inputMode!=="buttons"&&<section className="mt-4 rounded-xl border border-[#275443] bg-[#061A14]/60 p-3" data-testid="question-text-routes">
             <p className="mb-2 text-xs font-semibold text-[#B8D0C3]">بعد استلام إجابة صحيحة</p>
             <label className="mb-2 block text-xs">الخطوة التالية (اختياري)</label>
-            <select className={input} aria-label="الخطوة التالية بعد الإجابة"
+            <select className={input} aria-label={t("next")}
               value={store.doc.edges.find(e=>e.source===node.id&&e.sourceHandle==="valid")?.target||""}
               onChange={e=>setQuestionRoute("valid",e.target.value)}>
               <option value="">إنهاء التدفق بعد حفظ الإجابة</option>
@@ -147,6 +150,6 @@ export default function NodeEditor({node,onClose}:{node:FlowNode|null;onClose:()
       <div className="mt-5 flex flex-wrap gap-2"><button className={btn} onClick={duplicate}><Copy size={14}/> نسخ</button><button className={btn+" text-red-300"} onClick={remove}><Trash2 size={14}/> حذف الخطوة</button>
       <button className={btn} onClick={()=>{const ok=store.deleteNode(node.id,true);if(ok)onClose();}} disabled={store.doc.edges.filter(e=>e.source===node.id).length!==1||store.doc.edges.filter(e=>e.target===node.id).length!==1}>حذف مع إعادة التوصيل</button></div>
     </div>}
-    {!collapsed&&<div className="sticky bottom-0 border-t border-[#173D30] bg-[#0B241C] p-3"><button className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#3DD189] py-2.5 text-sm font-bold text-[#061A14]" onClick={onClose}><Check size={16}/> تم</button></div>}
+    {!collapsed&&<div className="sticky bottom-0 border-t border-[#173D30] bg-[#0B241C] p-3"><button className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#3DD189] py-2.5 text-sm font-bold text-[#061A14]" onClick={onClose}><Check size={16}/> {t("done")}</button></div>}
   </aside>;
 }
