@@ -4,6 +4,8 @@ import type { Choice, FlowDocument, FlowNode } from "./model";
 import { PLATFORM_LABELS } from "./model";
 import { chooseWeightedPort, MAX_SIMULATOR_STEPS, normalizeArabicDigits, validCustomerInput } from "./simulation";
 import type { SavedFlow } from "./library";
+import { flowText } from "./uiLocale";
+import type { FlowLanguage } from "./uiLocale";
 
 type Bubble = {id:string;side:"bot"|"user"|"system";text:string;image?:string;pdf?:string};
 type SimState = {
@@ -23,15 +25,16 @@ function evaluate(n:FlowNode,vars:Record<string,string>){
   return !!test&&value.toLocaleLowerCase().includes(test.toLocaleLowerCase());
 }
 export default function FlowSimulator({
-  doc,flowId,flows,onClose,onVisited
+  doc,flowId,flows,onClose,onVisited,language="ar"
 }:{
-  doc:FlowDocument;flowId:string;flows:SavedFlow[];onClose:()=>void;onVisited?:(ids:string[])=>void
+  doc:FlowDocument;flowId:string;flows:SavedFlow[];onClose:()=>void;onVisited?:(ids:string[])=>void;language?:FlowLanguage
 }){
   const [sim,setSim]=useState<SimState>({
     activeFlowId:flowId,at:null,history:[],
     variables:{message:"اشتراكات",first_name:"عميل"},visited:[],waiting:false,stepCount:0
   });
   const [input,setInput]=useState(""),[note,setNote]=useState("");
+  const t=(key:Parameters<typeof flowText>[0])=>flowText(key,language);
   const getDoc=(id:string)=>id===flowId?doc:flows.find(f=>f.id===id)?.doc||null;
   const currentDoc=getDoc(sim.activeFlowId)||doc;
   const find=(id:string)=>currentDoc.nodes.find(n=>n.id===id);
@@ -194,12 +197,12 @@ export default function FlowSimulator({
   };
   const collection=current&&sim.pendingBlockIndex!==undefined?current.data.contentBlocks[sim.pendingBlockIndex]:null;
   const showTextInput=!!collection||current?.data.kind==="question"&&current.data.inputMode!=="buttons";
-  return <div data-testid="flow-simulator" className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-3" dir="rtl" onClick={onClose}>
-    <div className="flex h-[min(770px,95vh)] w-full max-w-md flex-col overflow-hidden rounded-[28px] border border-[#305D49] bg-[#0B241C] text-white shadow-2xl" onClick={e=>e.stopPropagation()}>
+  return <div data-testid="flow-simulator" className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-3" dir={language==="ar"?"rtl":"ltr"} onClick={onClose}>
+    <div className="flex h-[min(770px,95dvh)] w-full max-w-md flex-col overflow-hidden rounded-[28px] border border-[#305D49] bg-[#0B241C] text-white shadow-2xl" onClick={e=>e.stopPropagation()}>
       <header className="flex items-center justify-between border-b border-[#275443] px-4 py-4">
         <div className="flex items-center gap-2"><Smartphone size={20} className="text-[#3DD189]"/>
-          <div><h2 className="font-semibold">تجربة: {currentDoc.name}</h2><p className="text-[11px] text-[#8B9E96]">رسائل وهمية فقط — دون Meta أو خصم رصيد</p></div>
-        </div><button aria-label="إغلاق المعاينة" onClick={onClose}><X size={20}/></button>
+          <div><h2 className="font-semibold">{t("testFlow")}{currentDoc.name}</h2><p className="text-[11px] text-[#8B9E96]">{t("noMeta")}</p></div>
+        </div><button aria-label={t("closePreview")} onClick={onClose}><X size={20}/></button>
       </header>
       <div className="flex-1 space-y-3 overflow-y-auto bg-[#061A14] p-4">
         {sim.history.map(m=><div key={m.id} className={"max-w-[90%] rounded-2xl px-3 py-2.5 text-sm "+(m.side==="user"?"mr-auto bg-[#235740]":m.side==="bot"?"ml-auto bg-[#173D30]":"mx-auto bg-[#25382D] text-center text-xs text-[#C7D5C9]")}>
@@ -207,21 +210,21 @@ export default function FlowSimulator({
           {m.text&&<p className="whitespace-pre-wrap break-words">{m.text}</p>}
           {m.pdf&&<a className="mt-2 inline-flex items-center gap-2 text-[#6FE6A8] underline" href={m.pdf} target="_blank" rel="noopener noreferrer" download={m.pdf.startsWith("data:")?"attachment.pdf":undefined}><FileText size={15}/> {m.pdf.startsWith("data:")?"عرض أو حفظ الملف":"فتح الرابط"}</a>}
         </div>)}
-        {!sim.waiting&&!sim.at&&<p className="mt-4 text-center text-xs text-[#8B9E96]">اكتملت المحاكاة.</p>}
+        {!sim.waiting&&!sim.at&&<p className="mt-4 text-center text-xs text-[#8B9E96]">{t("completed")}</p>}
       </div>
       {current&&sim.waiting&&<div className="space-y-2 border-t border-[#275443] p-3">
         {!collection&&(current.data.kind==="message"||current.data.kind==="question"&&current.data.inputMode==="buttons")&&
           <div className="flex flex-wrap gap-2">{current.data.options.map(option=><button className={btn} key={option.id} onClick={()=>respondChoice(option)}>{option.label}</button>)}</div>}
         {showTextInput&&<div className="flex gap-2"><input className="min-w-0 flex-1 rounded-xl border border-[#275443] bg-[#0F2E24] px-3 py-2 text-sm"
-          aria-label="إجابة العميل" inputMode={(collection?.inputMode||current.data.inputMode)==="email"?"email":(collection?.inputMode||current.data.inputMode)==="phone"?"tel":(collection?.inputMode||current.data.inputMode)==="number"?"decimal":"text"}
+          aria-label={t("customerAnswer")} inputMode={(collection?.inputMode||current.data.inputMode)==="email"?"email":(collection?.inputMode||current.data.inputMode)==="phone"?"tel":(collection?.inputMode||current.data.inputMode)==="number"?"decimal":"text"}
           placeholder={collection?"اكتب البيانات المطلوبة...":"اكتب الإجابة..."} value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")submit();}}/>
-          <button className={btn} onClick={submit}><Send size={16}/></button></div>}
+          <button className={btn} aria-label={t("submit")} onClick={submit}><Send size={16}/></button></div>}
         {!collection&&current.data.kind==="message"&&nextFor(currentDoc,current.id,"next")&&<button className={btn+" w-full"} onClick={next}>الخطوة التالية</button>}
         {!!note&&<p role="alert" className="text-xs text-[#E5B54B]">{note}</p>}
       </div>}
       <footer className="flex items-center justify-between border-t border-[#275443] px-4 py-3">
-        <button className={btn} onClick={restart}><RotateCcw size={15}/> إعادة</button>
-        <span data-testid="simulator-step-counter" className="text-[11px] text-[#8B9E96]">الخطوات: {sim.stepCount} / {MAX_SIMULATOR_STEPS}</span>
+        <button className={btn} onClick={restart}><RotateCcw size={15}/> {t("reset")}</button>
+        <span data-testid="simulator-step-counter" className="text-[11px] text-[#8B9E96]">{t("steps")}{sim.stepCount} / {MAX_SIMULATOR_STEPS}</span>
       </footer>
     </div>
   </div>;
