@@ -12,6 +12,9 @@ on:
       - "package-lock.json"
       - "tsconfig.flows.json"
       - "tests/flow-editor.spec.ts"
+      - "tests/generate-flow-main-fixtures.ts"
+      - "tests/flow-main-compat.test.ts"
+      - "tests/fixtures/**"
       - "playwright.config.ts"
       - ".github/workflows/flow-toggle-fresh-ci.yml"
   workflow_dispatch:
@@ -40,8 +43,16 @@ jobs:
         run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Strict TypeScript check of the isolated editor
         run: npx tsc --noEmit -p tsconfig.flows.json
-      - name: Model acceptance tests
-        run: npm run test:flows
+      - name: Prepare frozen main golden fixtures (first run only)
+        run: |
+          git fetch origin main:refs/remotes/origin/main --depth=1
+          if [ ! -f tests/fixtures/flow-main-compat.json ]; then
+            node --experimental-strip-types tests/generate-flow-main-fixtures.ts
+          fi
+      - name: Model and golden compatibility tests
+        run: |
+          npm run test:flows
+          node --experimental-strip-types --test tests/flow-main-compat.test.ts
       - name: Production build
         run: npm run build
       - name: Install Chromium for interaction tests
@@ -59,11 +70,11 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add package-lock.json
+          git add package-lock.json tests/fixtures/flow-main-compat.json
           if ! git diff --cached --quiet; then
             git commit -m "Lock tested React Flow editor dependencies"
             git reset --hard HEAD
-            git fetch origin feature/flow-toggle-fresh-start
-            git rebase origin/feature/flow-toggle-fresh-start
-            git push origin HEAD:feature/flow-toggle-fresh-start
+            git fetch origin feature/flows-batch1-validation
+            git rebase origin/feature/flows-batch1-validation
+            git push origin HEAD:feature/flows-batch1-validation
           fi
