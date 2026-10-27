@@ -7,6 +7,19 @@ export const MAX_CLOUD_DRAFT_BYTES=4*1024*1024;
 export const MAX_CLOUD_DRAFTS=30;
 export type CloudDraft={flow:SavedFlow;revision:number;updatedAt:string};
 export type DecodeResult={drafts:CloudDraft[];skipped:number};
+/** Require a full RFC3339 timestamp rather than Date.parse accepting date-only strings. */
+export function validCloudTimestamp(value:unknown):value is string {
+ if(typeof value!=="string")return false;
+ const m=/^(\\d{4})-(\\d{2})-(\\d{2})T([01]\\d|2[0-3]):([0-5]\\d):([0-5]\\d)(?:\\.\\d{1,6})?(Z|[+-](?:0\\d|1[0-4]):[0-5]\\d)$/.exec(value);
+ if(!m)return false;
+ const year=Number(m[1]),month=Number(m[2]),day=Number(m[3]);
+ if(month<1||month>12||day<1||day>31)return false;
+ const calendar=new Date(Date.UTC(year,month-1,day));
+ if(calendar.getUTCFullYear()!==year||calendar.getUTCMonth()!==month-1||calendar.getUTCDate()!==day)return false;
+ if(m[7]!== "Z"&&m[7].startsWith("+14:")&&m[7]!="+14:00")return false;
+ if(m[7]!== "Z"&&m[7].startsWith("-14:")&&m[7]!="-14:00")return false;
+ return Number.isFinite(Date.parse(value));
+}
 export type SaveResult=
  | {status:"saved";revision:number}
  | {status:"conflict"}
@@ -16,7 +29,7 @@ export type SaveResult=
 
 /** Draft-only transport; never claims to publish or activate a flow. */
 export function prepareCloudDraft(flow:SavedFlow):{flow_key:string;name:string;document:FlowDocument}{
- if(!flow.id||flow.id.length>128)throw new Error("invalid flow identifier");
+ if(!flow.id||!flow.id.trim()||flow.id.length>128)throw new Error("invalid flow identifier");
  const raw=JSON.stringify(flow.doc);
  if(!raw||new TextEncoder().encode(raw).length>MAX_CLOUD_DRAFT_BYTES)throw new Error("cloud draft exceeds 4 MiB");
  const document=JSON.parse(raw) as FlowDocument;
@@ -35,9 +48,9 @@ export function decodeCloudDraftRows(rows:unknown):DecodeResult{
  for(const raw of rows){
   if(!raw||typeof raw!=="object"){skipped++;continue;}
   const r=raw as Record<string,unknown>;
-  if(typeof r.flow_key!=="string"||!r.flow_key||r.flow_key.length>128||seen.has(r.flow_key)||
+  if(typeof r.flow_key!=="string"||!r.flow_key.trim()||r.flow_key.length>128||seen.has(r.flow_key)||
     typeof r.draft_revision!=="number"||!Number.isSafeInteger(r.draft_revision)||r.draft_revision<1||
-    typeof r.updated_at!=="string"||!Number.isFinite(Date.parse(r.updated_at))){skipped++;continue;}
+    !validCloudTimestamp(r.updated_at)){skipped++;continue;}
   // Reject oversized or malformed server rows before importing; never overwrite a local draft.
   let serialized:string;
   try{serialized=JSON.stringify(r.document);}catch{skipped++;continue;}
@@ -70,8 +83,10 @@ export async function resolveCloudTenant(client:SupabaseClient):Promise<string|n
 export async function fetchCloudDrafts(client:SupabaseClient,tenantId:string):Promise<DecodeResult>{
  const {data,error}=await client.from("automation_flow_drafts")
    .select("flow_key,name,document,draft_revision,updated_at")
-   .eq("tenant_id",tenantId).order("updated_at",{ascending:false}).limit(MAX_CLOUD_DRAFTS);
+   .eq("tenant_id",tenantId).order("updated_at",{ascending:false}).limit(MAX_CLOUD_DRAFTS+1);
  if(error)throw new Error("Cloud draft read unavailable ("+(error.code||"unknown")+")");
+ if(Array.isArray(data)&&data.length>MAX_CLOUD_DRAFTS)
+   throw new Error("Cloud draft count exceeds supported limit; existing browser drafts are unchanged");
  return decodeCloudDraftRows(data);
 }
 
@@ -80,7 +95,7 @@ export async function saveCloudDraft(
  client:SupabaseClient,tenantId:string,flow:SavedFlow,expectedRevision:number|null
 ):Promise<SaveResult>{
  const draft=prepareCloudDraft(flow);
- if(expectedRevision!==null&&(!Number.isSafeInteger(expectedRevision)||expectedRevision<1))
+ if(expectedRevision!==null&&(!Number.isSafeInteger(expectedRevision)||expectedRevision<1||expectedRevision>=2147483647))
    throw new Error("invalid expected revision");
  if(expectedRevision===null){
   const {data,error}=await client.from("automation_flow_drafts")
