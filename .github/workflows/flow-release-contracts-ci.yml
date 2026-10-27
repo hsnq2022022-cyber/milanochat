@@ -30,6 +30,7 @@ jobs:
           node --experimental-strip-types --test src/flow/publicationGate.test.ts
           node --experimental-strip-types --test src/flow/eventRouting.test.ts
           node --experimental-strip-types --test src/flow/runtimePlan.test.ts
+          node --experimental-strip-types --test src/flow/aiMetricsGate.test.ts
           node --experimental-strip-types --test tests/flow-main-compat.test.ts
       - name: Production build with feature flags off
         run: npm run build
