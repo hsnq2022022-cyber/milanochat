@@ -1,0 +1,48 @@
+name: Flow Stages 8-10 - Unified Runtime Contracts
+
+on:
+  push:
+    branches: [feature/flows-release-runtime-contracts]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Strict flow TypeScript
+        run: npx tsc --noEmit -p tsconfig.flows.json
+      - name: Run imported flows and runtime contracts
+        run: |
+          npm run test:flows
+          node --experimental-strip-types --test src/flow/simulation.test.ts
+          node --experimental-strip-types --test src/flow/cloudDraft.test.ts
+          node --experimental-strip-types --test src/flow/publicationGate.test.ts
+          node --experimental-strip-types --test src/flow/eventRouting.test.ts
+          node --experimental-strip-types --test src/flow/runtimePlan.test.ts
+          node --experimental-strip-types --test tests/flow-main-compat.test.ts
+      - name: Production build with feature flags off
+        run: npm run build
+      - name: Chromium
+        run: npx playwright install chromium
+      - name: Browser acceptance
+        env:
+          VITE_ENABLE_CLOUD_FLOW_DRAFTS: "true"
+        run: npm run test:browser
+      - name: Upload failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flow-release-contracts-failures
+          path: test-results/
+          if-no-files-found: ignore
