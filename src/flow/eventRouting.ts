@@ -97,3 +97,22 @@ export function matchInboundEvent(
   }
   return matches;
 }
+
+
+export type ExclusiveEventRoute =
+  | {status:"none";match:null}
+  | {status:"ambiguous";match:null;candidateCount:number}
+  | {status:"match";match:EventMatch};
+
+/**
+ * لا تشغّل أكثر من تدفق لنفس رسالة العميل.
+ * تعدد القواعد المتطابقة يعني إعداداً ملتبساً: أوقف الرد بدلاً من إرساله مرتين.
+ */
+export function resolveExclusiveEventRoute(
+  event:NormalizedInboundEvent,flows:readonly EnabledFlow[]
+):ExclusiveEventRoute {
+  const matches=matchInboundEvent(event,flows);
+  if(matches.length===0)return {status:"none",match:null};
+  if(matches.length!==1)return {status:"ambiguous",match:null,candidateCount:matches.length};
+  return {status:"match",match:matches[0]};
+}
