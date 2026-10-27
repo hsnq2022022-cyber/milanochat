@@ -125,3 +125,33 @@ test("rich message content adds PDF and data collection blocks that survive prev
   await page.getByRole("textbox",{name:"إجابة العميل"}).press("Enter");
   await expect(page.getByText("customer@example.com")).toBeVisible();
 });
+
+test("flow enable toggle is local-only and persists when switching documents",async({page})=>{
+ await page.goto("/milanochat/#/flows");
+ const toggle=page.getByTestId("flow-enabled-toggle");
+ await expect(toggle).toHaveAttribute("aria-pressed","false");
+ await toggle.click();
+ await expect(toggle).toHaveAttribute("aria-pressed","true");
+ await expect(page.getByText("تم تفعيل المسودة محليًا فقط.")).toBeVisible();
+ await page.getByRole("button",{name:"إنشاء تدفق جديد"}).click();
+ await expect(toggle).toHaveAttribute("aria-pressed","false");
+ const select=page.getByRole("combobox",{name:"اختيار التدفق"});
+ await select.selectOption("default");
+ await expect(toggle).toHaveAttribute("aria-pressed","true");
+ await page.waitForTimeout(900);
+ await page.reload();
+ await expect(toggle).toHaveAttribute("aria-pressed","true");
+ await toggle.click();
+ await expect(toggle).toHaveAttribute("aria-pressed","false");
+});
+
+test("start from scratch opens a separate flow with only a trigger, preserving the original flow",async({page})=>{
+ await page.goto("/milanochat/#/flows");
+ await expect(page.locator(".react-flow__node")).toHaveCount(6);
+ await page.getByRole("button",{name:"البدء من الصفر"}).click();
+ await expect(page.locator(".react-flow__node")).toHaveCount(1);
+ await expect(page.locator(".react-flow__edge")).toHaveCount(0);
+ await expect(page.locator(".react-flow__node")).toContainText(["بداية المحادثة"]);
+ await page.getByRole("combobox",{name:"اختيار التدفق"}).selectOption("default");
+ await expect(page.locator(".react-flow__node")).toHaveCount(6);
+});
