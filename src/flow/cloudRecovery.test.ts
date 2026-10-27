@@ -93,3 +93,17 @@ test("selecting nothing yields independent in-memory candidate with no local cha
   assert.equal(result.library.activeFlowId,mine.activeFlowId);
  }
 });
+
+test("with one remaining slot, selecting second remote item works while selecting two is rejected",()=>{
+ const mine=local();
+ for(let i=1;i<MAX_CLOUD_DRAFTS-1;i++)mine.flows.push({id:"local-"+i,doc:doc()});
+ const cloud=decodeCloudDraftRows([row("cloud-a"),row("cloud-b")]);
+ const preview=previewCloudRecovery(mine,cloud);
+ assert.deepEqual(preview.entries.map(e=>e.decision),["new","new"]);
+ const secondOnly=prepareSelectedCloudRecovery(mine,cloud,["cloud-b"]);
+ assert.equal(secondOnly.status,"ready");
+ if(secondOnly.status==="ready")assert.deepEqual(secondOnly.importedIds,["cloud-b"]);
+ assert.deepEqual(prepareSelectedCloudRecovery(mine,cloud,["cloud-a","cloud-b"]),
+   {status:"blocked",reason:"capacity_exceeded"});
+ assert.equal(mine.flows.length,MAX_CLOUD_DRAFTS-1);
+});
