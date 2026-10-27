@@ -17,6 +17,8 @@ export type FlowState = {
   deleteFlow: (id:string)=>boolean;
   past: FlowDocument[];
   future: FlowDocument[];
+  pastEnabled: boolean[];
+  futureEnabled: boolean[];
   selectedId: string | null;
   setSelected: (id: string | null) => void;
   pushHistory: () => void;
@@ -34,13 +36,15 @@ export type FlowState = {
   redo: ()=>void;
 };
 
-function savePast(state: FlowState): Pick<FlowState,"past"|"future"> {
-  return {past:[...state.past.slice(-99),state.doc],future:[]};
+function savePast(state: FlowState): Pick<FlowState,"past"|"future"|"pastEnabled"|"futureEnabled"> {
+  const enabled=state.flows.find(f=>f.id===state.activeFlowId)?.enabled===true;
+  return {past:[...state.past.slice(-99),state.doc],future:[],
+    pastEnabled:[...state.pastEnabled.slice(-99),enabled],futureEnabled:[]};
 }
 const initialLibrary=loadLibrary();
 const initial=initialLibrary.flows.find(flow=>flow.id===initialLibrary.activeFlowId)!.doc;
 export const useFlowStore=create<FlowState>((set,get)=>({
-  doc:initial,activeFlowId:initialLibrary.activeFlowId,flows:initialLibrary.flows,past:[],future:[],selectedId:null,
+  doc:initial,activeFlowId:initialLibrary.activeFlowId,flows:initialLibrary.flows,past:[],future:[],pastEnabled:[],futureEnabled:[],selectedId:null,
   createFlow:(name,fromScratch=false)=>{
     if(get().flows.length>=30)return null;
     const id=crypto.randomUUID();
@@ -48,15 +52,19 @@ export const useFlowStore=create<FlowState>((set,get)=>({
       if(s.flows.length>=30)return s;
       const current=snapshotLibrary(s.activeFlowId,s.doc,s.flows);
       const doc=blankFlow(name||"تدفق جديد "+(current.flows.length+1),fromScratch);
-      return {doc,activeFlowId:id,flows:[...current.flows,{id,doc,enabled:false}],selectedId:null,past:[],future:[]};
+      return {doc,activeFlowId:id,flows:[...current.flows,{id,doc,enabled:false}],selectedId:null,past:[],future:[],pastEnabled:[],futureEnabled:[]};
     });
     return id;
   },
   setFlowEnabled:(id,enabled)=>{
     const state=get();
     if(!state.flows.some(flow=>flow.id===id))return false;
-    set(s=>({flows:snapshotLibrary(s.activeFlowId,s.doc,s.flows).flows.map(flow=>
-      flow.id===id?{...flow,enabled}:flow)}));
+    set(s=>{
+      const current=s.flows.find(f=>f.id===id)?.enabled===true;
+      if(current===enabled)return s;
+      return {flows:snapshotLibrary(s.activeFlowId,s.doc,s.flows).flows.map(flow=>
+        flow.id===id?{...flow,enabled}:flow),...(id===s.activeFlowId?savePast(s):{})};
+    });
     return true;
   },
   duplicateFlow:()=>{
@@ -89,7 +97,7 @@ export const useFlowStore=create<FlowState>((set,get)=>({
   setSelected:(id)=>set({selectedId:id}),
   pushHistory:()=>set(s=>({...savePast(s)})),
   replace:(doc)=>set(s=>({doc,selectedId:s.selectedId&&doc.nodes.some(n=>n.id===s.selectedId)?s.selectedId:null,...savePast(s)})),
-  rename:(name)=>set(s=>({doc:{...s.doc,name:name.slice(0,100)}})),
+  rename:(name)=>set(s=>name.slice(0,100)===s.doc.name?s:{doc:{...s.doc,name:name.slice(0,100)},...savePast(s)}),
   addNode:(node)=>set(s=>{
     if(s.doc.nodes.length>=100)return s;
     return {doc:{...s.doc,nodes:[...s.doc.nodes,node]},selectedId:node.id,...savePast(s)};
@@ -140,10 +148,18 @@ export const useFlowStore=create<FlowState>((set,get)=>({
   },
   undo:()=>set(s=>{
     if(!s.past.length)return s;
-    return {doc:s.past[s.past.length-1],past:s.past.slice(0,-1),future:[s.doc,...s.future].slice(0,100),selectedId:null};
+    const oldEnabled=s.pastEnabled[s.pastEnabled.length-1]??false;
+    return {doc:s.past[s.past.length-1],past:s.past.slice(0,-1),future:[s.doc,...s.future].slice(0,100),
+      pastEnabled:s.pastEnabled.slice(0,-1),
+      futureEnabled:[s.flows.find(f=>f.id===s.activeFlowId)?.enabled===true,...s.futureEnabled].slice(0,100),
+      flows:s.flows.map(f=>f.id===s.activeFlowId?{...f,enabled:oldEnabled}:f),selectedId:null};
   }),
   redo:()=>set(s=>{
     if(!s.future.length)return s;
-    return {doc:s.future[0],future:s.future.slice(1),past:[...s.past.slice(-99),s.doc],selectedId:null};
+    const nextEnabled=s.futureEnabled[0]??false;
+    return {doc:s.future[0],future:s.future.slice(1),past:[...s.past.slice(-99),s.doc],
+      pastEnabled:[...s.pastEnabled.slice(-99),s.flows.find(f=>f.id===s.activeFlowId)?.enabled===true],
+      futureEnabled:s.futureEnabled.slice(1),
+      flows:s.flows.map(f=>f.id===s.activeFlowId?{...f,enabled:nextEnabled}:f),selectedId:null};
   }),
 }));
