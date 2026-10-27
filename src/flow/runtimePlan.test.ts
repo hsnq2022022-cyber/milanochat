@@ -105,3 +105,48 @@ test("missing published revision and malformed state are rejected",()=>{
   const state=createRuntimeState(flow,"f",1);
   assert.equal(planRuntimeTransition(flow,{...state,stepCount:-1},input).state.status,"blocked");
 });
+
+test("set_field updates bounded runtime state before a condition without any external effect",()=>{
+  const start=trigger();
+  const action=makeNode("action",{x:0,y:80},{actionType:"set_field",actionValue:"order_state=paid"});
+  const condition=makeNode("condition",{x:0,y:160},{
+    conditionField:"order_state",operator:"equals",conditionValue:"paid"
+  });
+  const yes=makeNode("message",{x:0,y:250},{text:"Order paid",options:[]});
+  const no=makeNode("message",{x:200,y:250},{text:"Order unpaid",options:[]});
+  const flow=doc([start,action,condition,yes,no],[
+    [start,"next",action],[action,"next",condition],
+    [condition,"yes",yes],[condition,"no",no]
+  ]);
+  const before=JSON.stringify(flow);
+  const result=planRuntimeTransition(flow,createRuntimeState(flow,"f",1),input);
+  assert.equal(result.state.status,"completed");
+  assert.equal(result.state.variables.order_state,"paid");
+  assert.equal(result.effects.length,1);
+  assert.equal(result.effects[0].kind,"message");
+  assert.equal((result.effects[0] as {text:string}).text,"Order paid");
+  assert.equal(JSON.stringify(flow),before);
+});
+
+test("set_field rejects unsafe names and storage overflows",()=>{
+  for(const assignment of ["__proto__=evil","bad-key=value","missingEquals",
+    "name="+("x".repeat(501))]){
+    const t=trigger(),action=makeNode("action",{x:0,y:80},{
+      actionType:"set_field",actionValue:assignment
+    });
+    const flow=doc([t,action],[[t,"next",action]]);
+    const result=planRuntimeTransition(flow,createRuntimeState(flow,"f",1),input);
+    assert.equal(result.state.status,"blocked",assignment);
+    assert.equal(result.effects.length,0);
+  }
+  const t=trigger(),action=makeNode("action",{x:0,y:80},{
+    actionType:"set_field",actionValue:"fresh=some value"
+  });
+  const flow=doc([t,action],[[t,"next",action]]);
+  const state=createRuntimeState(flow,"f",1);
+  state.variables.extra="x".repeat(32760);
+  const result=planRuntimeTransition(flow,state,input);
+  assert.equal(result.state.status,"blocked");
+  assert.equal(result.effects.length,0);
+  assert.equal(result.state.variables.fresh,undefined);
+});
