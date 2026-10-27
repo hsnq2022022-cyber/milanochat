@@ -2,7 +2,7 @@ name: Flow Stage 12 - Signed Meta Webhook and Replay Protection
 
 on:
   push:
-    branches: [feature/flows-stage12-webhook-safety]
+    branches: [feature/flows-stage12-webhook-safety, feature/flows-stage10-tenant-fk-verification]
   workflow_dispatch:
 
 permissions:
