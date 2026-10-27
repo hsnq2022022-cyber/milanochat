@@ -100,6 +100,7 @@ test("cloud adapter creates drafts and updates only with optimistic revision pre
   tenant_id:"11111111-1111-1111-1111-111111111111",flow_key:"default",draft_revision:3
  });
  assert.equal((captured[1].data as {draft_revision:number}).draft_revision,4);
+ assert.equal(Object.hasOwn(captured[1].data as object,"updated_at"),false); // Timestamp is server-owned.
 });
 
 test("cloud adapter reports a revision conflict rather than replacing newer server document",async()=>{
