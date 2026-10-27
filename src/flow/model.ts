@@ -213,7 +213,7 @@ export function validateDocument(doc: FlowDocument, library?: readonly Validatio
     if(n.data.kind==="end")continue;
     const paths=adjacency.get(n.id)||[];
     if(!paths.length&&!externalExit.has(n.id)){
-      const terminal=["message","action"].includes(n.data.kind);
+      const terminal=["message","action"].includes(n.data.kind)||(n.data.kind==="question"&&n.data.inputMode!=="buttons");
       add(terminal
         ?"نهاية ضمنية: هذه الخطوة بلا مخرج، وسينتهي التدفق بعدها — "+(n.data.title||n.id)
         :"العقدة بلا مخرج — "+(n.data.title||n.id),n.id,terminal?"warning":"error");
@@ -234,7 +234,7 @@ export function validateDocument(doc: FlowDocument, library?: readonly Validatio
   // Every reachable node must eventually lead to End or an external destination.
   // Cycles with an escape are legal. Cycles without one are not.
   const canFinish=new Set<string>([...externalExit,...doc.nodes.filter(n=>n.data.kind==="end"||
-    (["message","action"].includes(n.data.kind)&&(adjacency.get(n.id)||[]).length===0)).map(n=>n.id)]);
+    ((["message","action"].includes(n.data.kind)||(n.data.kind==="question"&&n.data.inputMode!=="buttons"))&&(adjacency.get(n.id)||[]).length===0)).map(n=>n.id)]);
   let changed=true;
   while(changed){
     changed=false;
