@@ -104,7 +104,7 @@ export async function saveCloudDraft(
   return typeof data?.draft_revision==="number"?{status:"saved",revision:data.draft_revision}:{status:"error",code:"empty_insert"};
  }
  const {data,error}=await client.from("automation_flow_drafts")
-  .update({name:draft.name,document:draft.document,draft_revision:expectedRevision+1,updated_at:new Date().toISOString()})
+  .update({name:draft.name,document:draft.document,draft_revision:expectedRevision+1})
   .eq("tenant_id",tenantId).eq("flow_key",flow.id).eq("draft_revision",expectedRevision)
   .select("draft_revision").maybeSingle();
  if(error)return classifyPostgrest(error);
