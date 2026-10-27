@@ -19,7 +19,7 @@ import { getLibraryRecoveryReport, saveLibrary, snapshotLibrary } from "../flow/
 
 const nodeTypes={flowNode:AutomationNode};
 const edgeTypes={flowEdge:AutomationEdge};
-const btn="inline-flex items-center justify-center gap-1.5 rounded-xl border border-[#275443] bg-[#0B241C] px-3 py-2.5 text-xs font-semibold hover:border-[#3DD189] hover:bg-[#173D30]";
+const btn="inline-flex min-h-11 items-center justify-center gap-1.5 rounded-xl border border-[#275443] bg-[#0B241C] px-3 py-2.5 text-xs font-semibold hover:border-[#3DD189] hover:bg-[#173D30]";
 type EdgeMenu={id:string;x:number;y:number}|null;
 
 function Editor(){
@@ -153,7 +153,7 @@ function Editor(){
         <div className="min-w-0"><p className="text-[11px] text-[#8B9E96]">إدارة سوشيال / مصمم الأتمتة</p>
           <input className="max-w-36 bg-transparent text-sm font-bold outline-none md:max-w-64" aria-label="اسم التدفق" maxLength={100} value={doc.name} onChange={e=>store().rename(e.target.value)}/></div>
         <span className="hidden rounded-lg border border-[#E5B54B]/40 px-2 py-1 text-[11px] text-[#E5B54B] sm:block">مسودة</span>
-        <div className="flex flex-wrap items-center gap-1.5">
+        <div className="flex flex-wrap items-center gap-1.5" data-testid="flow-toolbar-actions">
           <select className="max-w-36 rounded-lg border border-[#275443] bg-[#0F2E24] px-2 py-2 text-xs text-white md:max-w-52" aria-label="اختيار التدفق" value={activeFlowId} onChange={e=>{
             store().switchFlow(e.target.value);closeAdd();setNotice("تم فتح التدفق المحدد.");
             window.setTimeout(()=>instance.fitView({padding:.2,duration:200}),90);
@@ -287,7 +287,7 @@ function Editor(){
               <div className="space-y-1.5">{outputs(doc.nodes.find(n=>n.id===addRequest.source)!).map(port=>
                 <button key={port.id} className={btn+" w-full justify-between"} onClick={()=>openAdd({...addRequest,port:port.id})}>{port.label}<ArrowRight size={15}/></button>)}</div></>:
             <div className="grid grid-cols-2 gap-2">
-              {KIND_LIST.filter(k=>k!=="trigger"||!addRequest.source).map(kind=>
+              {KIND_LIST.filter(k=>k!=="trigger"||(!addRequest.source&&!doc.nodes.some(n=>n.data.kind==="trigger"))).map(kind=>
                 <button key={kind} className="flex min-h-12 items-center justify-between gap-1 rounded-xl border border-[#275443] bg-[#0F2E24] px-2.5 py-2 text-right text-xs hover:border-[#3DD189] hover:bg-[#173D30]"
                   onClick={()=>addNode(kind,addRequest.position,addRequest.source&&addRequest.port?{source:addRequest.source,port:addRequest.port}:undefined)}>
                   <span>{LABELS[kind]}</span><span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{backgroundColor:ACCENT[kind]}}/>
