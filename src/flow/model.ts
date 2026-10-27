@@ -93,7 +93,7 @@ export function makeNode(kind: Kind, position: XYPosition, opts?: Partial<FlowDa
 export function outputs(node: FlowNode): Choice[] {
   const d=node.data;
   if(d.kind==="end"||d.kind==="goto")return [];
-  if(d.kind==="question")return d.inputMode==="buttons"?d.options.filter(o=>!o.action||o.action==="step"):[{id:"valid",label:"صحيح"},{id:"invalid",label:"غير صحيح"}];
+  if(d.kind==="question")return d.inputMode==="buttons"?d.options.filter(o=>!o.action||o.action==="step"):[{id:"valid",label:"التالي"},{id:"invalid",label:"مسار قديم غير مستخدم"}];
   if(d.kind==="message")return [{id:"next",label:"التالي"},...d.options.filter(o=>!o.action||o.action==="step")];
   if(d.kind==="condition")return [{id:"yes",label:"نعم"},{id:"no",label:"لا"}];
   if(d.kind==="request")return [{id:"success",label:"نجاح"},{id:"error",label:"خطأ"}];
