@@ -85,7 +85,7 @@ test("corrupt library/draft is preserved under an ISO-stamped backup key",()=>{
   assert.equal(data.get(SAVE_KEY),draft);
   assert.equal(report.backups.length,2);
   for(const backup of report.backups){
-   assert.match(backup.key,/^social_flow_backup_\\d{4}-/);
+   assert.match(backup.key,/^social_flow_backup_[0-9]{4}-/);
    assert.equal(data.get(backup.key),backup.raw);
    assert.equal(backup.raw,backup.sourceKey===SAVE_KEY?draft:raw);
   }
