@@ -537,7 +537,7 @@ test("batch 5 delete-and-reconnect bridges one input and output atomically",asyn
 
 test("root cause: correct branch marker and absolutely no old valid-invalid cards on typed questions",async({page})=>{
  await page.goto("/milanochat/#/flows");
- await expect(page.getByTestId("flow-preview-version")).toContainText("5.3");
+ await expect(page.getByTestId("flow-preview-version")).toContainText("معاينة 6");
  await page.locator(".react-flow__node").nth(2).click();
  const editor=page.getByTestId("step-settings-panel");
  for(const value of ["email","phone","number","text"]){
@@ -654,7 +654,7 @@ test("batch 6 mobile zoom and fit buttons change the actual viewport",async({pag
  }
  const zoom=async()=>page.locator(".react-flow__viewport").evaluate(el=>{
   const m=el.getAttribute("style")||"";
-  return Number(m.match(/scale\\(([^)]+)\\)/)?.[1]||"1");
+  return Number(m.match(/scale\(([^)]+)\)/)?.[1]||"1");
  });
  const first=await zoom();
  await controls.getByRole("button",{name:"تكبير المخطط"}).click();
