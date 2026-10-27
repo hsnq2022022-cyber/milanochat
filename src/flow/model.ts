@@ -93,7 +93,7 @@ export function makeNode(kind: Kind, position: XYPosition, opts?: Partial<FlowDa
 export function outputs(node: FlowNode): Choice[] {
   const d=node.data;
   if(d.kind==="end"||d.kind==="goto")return [];
-  if(d.kind==="question")return d.inputMode==="buttons"?d.options.filter(o=>!o.action||o.action==="step"):[{id:"valid",label:"صحيح"},{id:"invalid",label:"غير صحيح"}];
+  if(d.kind==="question")return d.inputMode==="buttons"?d.options.filter(o=>!o.action||o.action==="step"):[{id:"valid",label:"التالي"},{id:"invalid",label:"مسار قديم غير مستخدم"}];
   if(d.kind==="message")return [{id:"next",label:"التالي"},...d.options.filter(o=>!o.action||o.action==="step")];
   if(d.kind==="condition")return [{id:"yes",label:"نعم"},{id:"no",label:"لا"}];
   if(d.kind==="request")return [{id:"success",label:"نجاح"},{id:"error",label:"خطأ"}];
@@ -151,6 +151,10 @@ export function validateDocument(doc: FlowDocument, library?: readonly Validatio
       error("محتوى الرسالة فارغ");
     if(d.kind==="trigger"&&!TRIGGER_OPTIONS[d.platform]?.some(t=>t.id===d.triggerMode))
       error("حدث البداية غير متاح للقناة المحددة");
+    if(d.kind==="trigger"&&d.triggerMode==="keyword"&&!d.keywords.trim())
+      error("أضف كلمة مفتاحية واحدة على الأقل لتشغيل هذا الحدث");
+    if(d.kind==="question"&&d.inputMode!=="buttons"&&!d.inputField.trim())
+      error("اسم حقل الإجابة مطلوب");
     for(const option of d.options){
       if(option.action==="website"){
         if(!option.url||!/^https:\/\/\S+$/i.test(option.url))error("رابط الموقع للزر "+option.label+" يجب أن يبدأ بـ HTTPS");
@@ -178,6 +182,13 @@ export function validateDocument(doc: FlowDocument, library?: readonly Validatio
     if(d.kind==="question"&&d.inputMode==="buttons"&&d.options.length===0)error("أضف خيارًا للسؤال");
     if(d.kind==="randomizer"&&Math.abs(d.options.reduce((sum,o)=>sum+(o.weight||0),0)-100)>.01)
       error("مجموع نسب التوزيع يجب أن يساوي 100%");
+    if(d.kind==="condition"&&!d.conditionField.trim())error("حقل الشرط مطلوب");
+    if(d.kind==="condition"&&d.operator!=="exists"&&!d.conditionValue.trim())error("قيمة المقارنة مطلوبة");
+    if(d.kind==="action"&&["tag","untag","set_field"].includes(d.actionType)&&!d.actionValue.trim())
+      error("قيمة الإجراء مطلوبة");
+    if(d.kind==="action"&&d.actionType==="set_field"&&!d.actionValue.includes("="))
+      error("اكتب المتغير بالشكل field=value");
+    if(d.kind==="request"&&!d.requestUrl.trim())error("رابط HTTPS مطلوب للطلب الخارجي");
     if(d.kind==="delay"&&d.delayValue<=0)error("حدد مدة انتظار موجبة");
     if(d.kind==="request"&&d.requestUrl&&!/^https:\/\//i.test(d.requestUrl))error("الطلب الخارجي يتطلب HTTPS");
     if(d.kind==="goto"){
@@ -202,7 +213,7 @@ export function validateDocument(doc: FlowDocument, library?: readonly Validatio
     if(n.data.kind==="end")continue;
     const paths=adjacency.get(n.id)||[];
     if(!paths.length&&!externalExit.has(n.id)){
-      const terminal=["message","action"].includes(n.data.kind);
+      const terminal=["message","action"].includes(n.data.kind)||(n.data.kind==="question"&&n.data.inputMode!=="buttons");
       add(terminal
         ?"نهاية ضمنية: هذه الخطوة بلا مخرج، وسينتهي التدفق بعدها — "+(n.data.title||n.id)
         :"العقدة بلا مخرج — "+(n.data.title||n.id),n.id,terminal?"warning":"error");
@@ -223,7 +234,7 @@ export function validateDocument(doc: FlowDocument, library?: readonly Validatio
   // Every reachable node must eventually lead to End or an external destination.
   // Cycles with an escape are legal. Cycles without one are not.
   const canFinish=new Set<string>([...externalExit,...doc.nodes.filter(n=>n.data.kind==="end"||
-    (["message","action"].includes(n.data.kind)&&(adjacency.get(n.id)||[]).length===0)).map(n=>n.id)]);
+    ((["message","action"].includes(n.data.kind)||(n.data.kind==="question"&&n.data.inputMode!=="buttons"))&&(adjacency.get(n.id)||[]).length===0)).map(n=>n.id)]);
   let changed=true;
   while(changed){
     changed=false;
