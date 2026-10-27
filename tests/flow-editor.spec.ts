@@ -618,3 +618,82 @@ test("always-visible content choices have no dead Add Content button",async({pag
  await expect(panel.getByRole("button",{name:"إضافة محتوى"})).toHaveCount(0);
  await expect(panel.getByTestId("content-block-menu").getByRole("button")).toHaveCount(5);
 });
+
+test("batch 6 phone toolbars scroll horizontally while keeping canvas visible",async({page})=>{
+ await page.setViewportSize({width:390,height:844});
+ await page.goto("/milanochat/#/flows");
+ const header=page.getByTestId("flow-editor-header"),actions=page.getByTestId("flow-toolbar-actions");
+ const secondary=page.getByTestId("flow-toolbar-secondary");
+ await expect(header).toBeVisible();
+ await expect(secondary).toBeVisible();
+ const metrics=await page.evaluate(()=>({
+  headerHeight:document.querySelector('[data-testid="flow-editor-header"]')!.getBoundingClientRect().height,
+  screen:window.innerHeight,
+  toolbarScroll:document.querySelector('[data-testid="flow-toolbar-secondary"]')!.scrollWidth,
+  toolbarView:document.querySelector('[data-testid="flow-toolbar-secondary"]')!.clientWidth,
+  pageWidth:document.documentElement.scrollWidth
+ }));
+ expect(metrics.headerHeight).toBeLessThan(metrics.screen*.46);
+ expect(metrics.toolbarScroll).toBeGreaterThan(metrics.toolbarView);
+ expect(metrics.pageWidth).toBeLessThanOrEqual(400);
+ await actions.evaluate(el=>{el.scrollLeft=el.scrollWidth;});
+ await expect(page.locator(".react-flow__node")).toHaveCount(6);
+});
+test("batch 6 mobile zoom and fit buttons change the actual viewport",async({page})=>{
+ await page.setViewportSize({width:390,height:844});
+ await page.goto("/milanochat/#/flows");
+ const controls=page.getByTestId("flow-mobile-zoom");
+ await expect(controls).toBeVisible();
+ for(const name of ["تكبير المخطط","تصغير المخطط","عرض كل الخطوات"]){
+  const item=controls.getByRole("button",{name});
+  await expect(item).toBeVisible();
+  const bounds=await item.boundingBox();
+  expect(bounds).not.toBeNull();
+  expect(bounds!.width).toBeGreaterThanOrEqual(44);
+  expect(bounds!.height).toBeGreaterThanOrEqual(44);
+ }
+ const zoom=async()=>page.locator(".react-flow__viewport").evaluate(el=>{
+  const m=el.getAttribute("style")||"";
+  return Number(m.match(/scale\\(([^)]+)\\)/)?.[1]||"1");
+ });
+ const first=await zoom();
+ await controls.getByRole("button",{name:"تكبير المخطط"}).click();
+ await expect.poll(zoom).toBeGreaterThan(first);
+ const increased=await zoom();
+ await controls.getByRole("button",{name:"تصغير المخطط"}).click();
+ await expect.poll(zoom).toBeLessThan(increased);
+ await controls.getByRole("button",{name:"عرض كل الخطوات"}).click();
+ await expect(page.locator(".react-flow__node")).toHaveCount(6);
+});
+test("batch 6 mobile settings slide up and can collapse without blocking the canvas",async({page})=>{
+ await page.setViewportSize({width:390,height:844});
+ await page.goto("/milanochat/#/flows");
+ await page.locator(".react-flow__node").nth(1).click();
+ const panel=page.getByTestId("step-settings-panel");
+ await expect(panel).toBeVisible();
+ const expanded=await panel.boundingBox();
+ expect(expanded).not.toBeNull();
+ expect(expanded!.width).toBeLessThanOrEqual(390);
+ expect(expanded!.height).toBeLessThan(720);
+ expect(expanded!.y).toBeGreaterThan(100);
+ await panel.getByRole("button",{name:"طي إعدادات الخطوة"}).click();
+ const collapsed=await panel.boundingBox();
+ expect(collapsed).not.toBeNull();
+ expect(collapsed!.height).toBeLessThanOrEqual(72);
+ await panel.getByRole("button",{name:"إظهار إعدادات الخطوة"}).click();
+ await expect(panel.getByRole("textbox",{name:"نص الرسالة"})).toBeVisible();
+});
+test("batch 6 mobile Add Step menu stays within viewport and inserts nodes",async({page})=>{
+ await page.setViewportSize({width:390,height:844});
+ await page.goto("/milanochat/#/flows");
+ await page.getByRole("button",{name:"فتح إضافة خطوة"}).click();
+ const menu=page.getByTestId("add-step-menu");
+ await expect(menu).toBeVisible();
+ const bounds=await menu.boundingBox();
+ expect(bounds).not.toBeNull();
+ expect(bounds!.x).toBeGreaterThanOrEqual(0);
+ expect(bounds!.x+bounds!.width).toBeLessThanOrEqual(390);
+ expect(bounds!.y+bounds!.height).toBeLessThanOrEqual(844);
+ await menu.getByRole("button",{name:"إرسال رسالة",exact:true}).click();
+ await expect(page.locator(".react-flow__node")).toHaveCount(7);
+});
