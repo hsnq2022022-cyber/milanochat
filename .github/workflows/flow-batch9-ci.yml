@@ -9,6 +9,7 @@ on:
       - "supabase/functions/_shared/inboundInsert.ts"
       - "tests/inbound-idempotency.test.ts"
       - "docs/automation-flow-storage-REVIEW-ONLY.sql"
+      - "docs/automation-engine-release-playbook.md"
       - "src/pages/FlowBuilder.tsx"
       - "tests/flow-editor.spec.ts"
       - "tests/flow-runtime-audit.spec.ts"
