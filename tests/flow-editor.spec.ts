@@ -656,6 +656,8 @@ test("batch 6 mobile zoom and fit buttons change the actual viewport",async({pag
   const m=el.getAttribute("style")||"";
   return Number(m.match(/scale\(([^)]+)\)/)?.[1]||"1");
  });
+ // Wait for the editor’s existing delayed fitView (350–470 ms) before measuring user zoom.
+ await page.waitForTimeout(850);
  const first=await zoom();
  await controls.getByRole("button",{name:"تكبير المخطط"}).click();
  await expect.poll(zoom).toBeGreaterThan(first);
