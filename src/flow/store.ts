@@ -1,14 +1,14 @@
 import { create } from "zustand";
 import { applyNodeChanges, applyEdgeChanges, reconnectEdge } from "@xyflow/react";
 import type { NodeChange, EdgeChange, Connection } from "@xyflow/react";
-import { canConnect, edgeFor, outputs } from "./model";
-import { blankFlow, loadLibrary, snapshotLibrary } from "./library";
-import { stageCloudDraftCopy } from "./cloudDraft";
-import { pasteSelection as cloneIntoDocument } from "./clipboard";
-import type { SelectionClipboard } from "./clipboard";
-import type { CloudDraft } from "./cloudDraft";
-import type { SavedFlow } from "./library";
-import type { FlowDocument, FlowData, FlowEdge, FlowNode } from "./model";
+import { canConnect, edgeFor, outputs } from "./model.ts";
+import { blankFlow, loadLibrary, snapshotLibrary } from "./library.ts";
+import { stageCloudDraftCopy } from "./cloudDraft.ts";
+import { pasteSelection as cloneIntoDocument } from "./clipboard.ts";
+import type { SelectionClipboard } from "./clipboard.ts";
+import type { CloudDraft } from "./cloudDraft.ts";
+import type { SavedFlow } from "./library.ts";
+import type { FlowDocument, FlowData, FlowEdge, FlowNode } from "./model.ts";
 
 export type FlowState = {
   doc: FlowDocument;
