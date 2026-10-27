@@ -31,6 +31,8 @@ function Editor(){
   const selected=doc.nodes.find(n=>n.id===selectedId)||null;
   const [showSimulator,setShowSimulator]=useState(false),[trail,setTrail]=useState<string[]>([]);
   const [toolbarCollapsed,setToolbarCollapsed]=useState(false);
+  const [isCompact,setIsCompact]=useState(()=>typeof window!=="undefined"&&window.innerWidth<768);
+  useEffect(()=>{const media=window.matchMedia("(max-width: 767px)");const update=()=>setIsCompact(media.matches);update();media.addEventListener("change",update);return()=>media.removeEventListener("change",update);},[]);
   const [notice,setNotice]=useState(""),[edgeMenu,setEdgeMenu]=useState<EdgeMenu>(null),[showIssues,setShowIssues]=useState(false);
   const addRequest=useAddStepMenu(s=>s.request),openAdd=useAddStepMenu(s=>s.open),closeAdd=useAddStepMenu(s=>s.close);
   const input=useRef<HTMLInputElement>(null),clipboard=useRef<FlowNode|null>(null),reconnectOk=useRef(true),justReconnected=useRef(false);
@@ -149,13 +151,13 @@ function Editor(){
   const renderedEdges=useMemo(()=>doc.edges.map(e=>({...e,animated:trail.includes(e.source)&&trail.includes(e.target)})),[doc.edges,trail]);
 
   return <div dir="rtl" className="flex h-[100dvh] flex-col bg-[#061A14] text-white" style={{fontFamily:"system-ui, sans-serif"}}>
-    <header className="z-30 flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-[#173D30] bg-[#0B241C] px-3 py-2 md:px-5">
-      <div className="flex min-w-0 items-center gap-2"><a className={btn} href="#/dashboard" aria-label="الرجوع إلى لوحة التحكم"><ArrowRight size={17}/></a>
+    <header className="z-30 flex shrink-0 flex-col gap-2 border-b border-[#173D30] bg-[#0B241C] px-2 py-2 md:flex-row md:flex-wrap md:items-center md:justify-between md:px-5">
+      <div className="flex min-w-0 w-full items-center gap-2 md:w-auto"><a className={btn} href="#/dashboard" aria-label="الرجوع إلى لوحة التحكم"><ArrowRight size={17}/></a>
         <div className="min-w-0"><p className="text-[11px] text-[#8B9E96]">إدارة سوشيال / مصمم الأتمتة</p>
           <input className="max-w-36 bg-transparent text-sm font-bold outline-none md:max-w-64" aria-label="اسم التدفق" maxLength={100} value={doc.name} onChange={e=>store().rename(e.target.value)}/></div>
         <span className="hidden rounded-lg border border-[#E5B54B]/40 px-2 py-1 text-[11px] text-[#E5B54B] sm:block">مسودة</span>
         {<span data-testid="flow-preview-version" className="rounded-lg border border-[#3DD189]/60 bg-[#173D30] px-2 py-1 text-[11px] text-[#3DD189]">معاينة 5.3 — سؤال بخانة واحدة</span>}
-        <div className="flex flex-wrap items-center gap-1.5" data-testid="flow-toolbar-actions">
+        <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto pb-1 md:flex-none md:overflow-visible" data-testid="flow-toolbar-actions">
           <select className="max-w-36 rounded-lg border border-[#275443] bg-[#0F2E24] px-2 py-2 text-xs text-white md:max-w-52" aria-label="اختيار التدفق" value={activeFlowId} onChange={e=>{
             store().switchFlow(e.target.value);closeAdd();setNotice("تم فتح التدفق المحدد.");
             window.setTimeout(()=>instance.fitView({padding:.2,duration:200}),90);
@@ -182,10 +184,10 @@ function Editor(){
           }}><Trash2 size={15}/></button>
         </div>
       </div>
-      <button type="button" className={btn} aria-label={toolbarCollapsed?"إظهار شريط أدوات التدفقات":"طي شريط أدوات التدفقات"} aria-expanded={!toolbarCollapsed} onClick={()=>setToolbarCollapsed(v=>!v)}>
+      <button type="button" className={btn+" self-end md:self-auto"} aria-label={toolbarCollapsed?"إظهار شريط أدوات التدفقات":"طي شريط أدوات التدفقات"} aria-expanded={!toolbarCollapsed} onClick={()=>setToolbarCollapsed(v=>!v)}>
         {toolbarCollapsed?<ChevronDown size={16}/>:<ChevronUp size={16}/>} <span className="hidden sm:inline">{toolbarCollapsed?"إظهار الأدوات":"طي الأدوات"}</span>
       </button>
-      {!toolbarCollapsed&&<div className="flex flex-wrap items-center gap-1.5" data-testid="flow-toolbar-secondary">
+      {!toolbarCollapsed&&<div className="flex w-full items-center gap-1.5 overflow-x-auto whitespace-nowrap pb-1 md:w-auto md:flex-wrap md:overflow-visible" data-testid="flow-toolbar-secondary">
         <button data-testid="flow-enabled-toggle" type="button" aria-label="تفعيل التدفق" aria-pressed={activeEnabled}
           className={"inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-xs font-bold "+(activeEnabled?"border-[#3DD189] bg-[#173D30] text-[#3DD189]":"border-[#275443] bg-[#0F2E24] text-[#C1D2CA]")}
           onClick={()=>{
@@ -267,13 +269,13 @@ function Editor(){
           minZoom={.2} maxZoom={2} fitView fitViewOptions={{padding:.28,maxZoom:.8}}
           onInit={api=>{window.setTimeout(()=>{void api.fitView({padding:.20,maxZoom:.85,duration:0});},470);}}
           snapToGrid snapGrid={[20,20]}
-          selectionOnDrag panOnDrag={[1,2]} multiSelectionKeyCode={["Shift","Control","Meta"]}
+          selectionOnDrag={!isCompact} panOnDrag={isCompact?true:[1,2]} multiSelectionKeyCode={["Shift","Control","Meta"]}
           colorMode="dark" connectionLineStyle={{stroke:"#3DD189",strokeWidth:2}}
           proOptions={{hideAttribution:true}}
         >
           <Background variant={BackgroundVariant.Dots} gap={20} size={1.2} color="#365849"/>
-          <MiniMap nodeColor={n=>ACCENT[(n.data as FlowNode["data"]).kind]||"#3DD189"} className="!bg-[#0B241C] !border !border-[#275443]" maskColor="rgba(1,12,8,.65)" pannable zoomable />
-          <Controls showInteractive={false} className="!bg-[#0B241C] !border !border-[#275443]"/>
+          <MiniMap nodeColor={n=>ACCENT[(n.data as FlowNode["data"]).kind]||"#3DD189"} className="!hidden md:!block !bg-[#0B241C] !border !border-[#275443]" maskColor="rgba(1,12,8,.65)" pannable zoomable />
+          <Controls showInteractive={false} className="!bg-[#0B241C] !border !border-[#275443] !bottom-10 md:!bottom-3"/>
         </ReactFlow>
 
         <button className="nodrag absolute right-4 top-4 z-20 flex h-12 w-12 items-center justify-center rounded-full border border-[#9BF0BD] bg-[#3DD189] text-[#061A14] shadow-[0_8px_25px_rgba(17,110,64,.4)] transition-transform hover:scale-105" title="إضافة خطوة" aria-label="فتح إضافة خطوة" onClick={e=>openAdd({x:e.clientX,y:e.clientY})}><Plus size={25}/></button>
@@ -315,7 +317,7 @@ function Editor(){
       {selected&&<NodeEditor node={selected} onClose={()=>store().setSelected(null)}/>}
     </div>
     {notice&&<div role="status" className="fixed bottom-5 right-5 z-50 max-w-sm cursor-pointer rounded-xl border border-[#275443] bg-[#0B241C] px-4 py-3 text-xs text-[#3DD189] shadow-2xl" onClick={()=>setNotice("")}>{notice} ×</div>}
-    <div className="pointer-events-none absolute bottom-1 left-1/2 z-10 -translate-x-1/2 rounded-lg bg-[#0B241C]/80 px-2 py-1 text-[10px] text-[#8B9E96]">التفعيل والتعطيل محليان فقط — لا توجد أتمتة حقيقية للحسابات المرتبطة</div>
+    <div className="pointer-events-none absolute bottom-1 left-1/2 z-10 hidden -translate-x-1/2 rounded-lg bg-[#0B241C]/80 px-2 py-1 text-[10px] text-[#8B9E96] sm:block">التفعيل والتعطيل محليان فقط — لا توجد أتمتة حقيقية للحسابات المرتبطة</div>
     {showSimulator&&<FlowSimulator doc={doc} flowId={activeFlowId} flows={snapshotLibrary(activeFlowId,doc,flows).flows} onVisited={setTrail} onClose={()=>setShowSimulator(false)}/>}
   </div>;
 }
