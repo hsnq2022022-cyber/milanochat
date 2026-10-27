@@ -102,10 +102,11 @@ test("reconnecting a selected edge endpoint preserves edge count and changes its
   await page.goto("/milanochat/#/flows");
   await expect(page.locator(".react-flow__edge")).toHaveCount(5);
   await page.locator(".react-flow__edge").first().click();
-  const target=page.locator(".react-flow__node").last().locator(".react-flow__handle.target");
+  const target=page.locator(".react-flow__node").nth(2).locator(".react-flow__handle.target");
   const b=await target.boundingBox();
   expect(b).not.toBeNull();
   await dragFrom(page,page.locator(".react-flow__edgeupdater-target").first(),
     {x:b!.x+b!.width/2,y:b!.y+b!.height/2});
   await expect(page.locator(".react-flow__edge")).toHaveCount(5);
+  await expect(page.getByTestId("add-step-menu")).toHaveCount(0);
 });
