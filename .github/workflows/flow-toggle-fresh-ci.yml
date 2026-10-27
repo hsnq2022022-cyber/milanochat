@@ -2,7 +2,7 @@ name: Omnichannel Flow Builder validation
 
 on:
   push:
-    branches: [feature/flow-toggle-fresh-start]
+    branches: [feature/flow-toggle-fresh-start, feature/flows-batch1-validation]
     paths:
       - "src/flow/**"
       - "src/pages/FlowBuilder.tsx"
