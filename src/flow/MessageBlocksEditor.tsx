@@ -16,14 +16,13 @@ const btn="inline-flex items-center gap-1.5 rounded-xl border border-[#275443] p
 export default function MessageBlocksEditor({node}:{node:FlowNode}){
   const store=useFlowStore();
   const blocks=node.data.contentBlocks||[];
-  const [expanded,setExpanded]=useState(false);
+  const [expanded,setExpanded]=useState(true);
   const [status,setStatus]=useState("");
   const edit=(items:ContentBlock[])=>store.changeNode(node.id,{contentBlocks:items});
   const patch=(id:string,part:Partial<ContentBlock>)=>edit(blocks.map(b=>b.id===id?{...b,...part}:b));
   const add=(type:ContentBlock["type"])=>{
     if(blocks.length>=24){setStatus("الحد الأقصى 24 مكوّنًا في الرسالة.");return;}
     edit([...blocks,{id:crypto.randomUUID(),type,text:type==="text"?"اكتب نصًا إضافيًا":type==="collection"?"اكتب بياناتك هنا":"",url:"",seconds:3,field:"response",inputMode:"text"}]);
-    setExpanded(false);
   };
   const reorder=(index:number,dir:-1|1)=>{
     const i=index+dir;if(i<0||i>=blocks.length)return;
@@ -55,7 +54,23 @@ export default function MessageBlocksEditor({node}:{node:FlowNode}){
   };
   return <section className="mt-5 rounded-2xl border border-[#275443] bg-[#061A14]/50 p-3" dir="rtl">
     <div className="mb-1 flex items-center justify-between gap-2"><h3 className="text-sm font-bold">محتويات الرسالة</h3><span className="text-[11px] text-[#8B9E96]">{blocks.length} / 24</span></div>
-    <p className="mb-3 text-[11px] text-[#8B9E96]">أضف نصوصًا وصورًا وPDF وانتظارًا وجمع بيانات داخل رسالة واحدة، كما في ManyChat.</p>
+    <p className="mb-3 text-[11px] text-[#8B9E96]">النص والصور والمرفقات في مكان واحد. اختر المكوّن مباشرة من القائمة الظاهرة بالأسفل.</p>
+    <div className="mb-3 rounded-xl border border-[#275443] bg-[#0F2E24] p-3" data-testid="primary-message-content">
+      <label className="mb-2 block text-xs font-bold text-white">النص الأساسي</label>
+      <textarea className={input} rows={4} maxLength={2000} aria-label="نص الرسالة" placeholder="اكتب الرسالة التي ستظهر للعميل"
+        value={node.data.text} onChange={e=>store.changeNode(node.id,{text:e.target.value})}/>
+      <div className="mt-2 flex items-center justify-between gap-2">
+        <button type="button" className={btn} onClick={()=>store.changeNode(node.id,{text:node.data.text+" {{first_name}}"})}>+ اسم العميل</button>
+        <span className="text-[11px] text-[#8B9E96]" dir="ltr">{node.data.text.length}/2000</span>
+      </div>
+    </div>
+    {!!node.data.image&&<div className="mb-3 rounded-xl border border-[#275443] bg-[#0F2E24] p-3" data-testid="legacy-message-image">
+      <div className="mb-2 flex items-center gap-2"><ImageIcon size={16} className="text-[#3DD189]"/><span className="flex-1 text-xs font-bold">صورة محفوظة سابقًا</span>
+        <button type="button" aria-label="إزالة الصورة المحفوظة" className="text-red-300" onClick={()=>store.changeNode(node.id,{image:""})}><Trash2 size={15}/></button>
+      </div>
+      <img className="max-h-40 w-full rounded-lg object-contain" alt="الصورة المحفوظة" src={node.data.image}/>
+      <p className="mt-2 text-[11px] text-[#8B9E96]">احتفظنا بالصورة القديمة في مكانها الأصلي داخل البيانات؛ يمكنك حذفها أو إضافة صور جديدة عبر المكونات أدناه.</p>
+    </div>}
     <div className="space-y-3">
       {blocks.map((block,i)=>{
         const def=types.find(t=>t.id===block.type)!;const Icon=def.icon;
@@ -89,8 +104,8 @@ export default function MessageBlocksEditor({node}:{node:FlowNode}){
         </div>;
       })}
     </div>
-    <button className={btn+" mt-3 w-full justify-center border-dashed"} onClick={()=>setExpanded(v=>!v)}><Plus size={15}/> إضافة محتوى</button>
-    {expanded&&<div className="mt-2 grid gap-2" data-testid="content-block-menu">{types.map(t=><button key={t.id} className="flex items-center gap-3 rounded-lg border border-[#275443] p-2 text-right hover:bg-[#173D30]" onClick={()=>add(t.id)}>
+    <button className={btn+" mt-3 w-full justify-center border-dashed"} onClick={()=>setExpanded(true)}><Plus size={15}/> إضافة محتوى</button>
+    {expanded&&<div className="mt-2 grid grid-cols-2 gap-2" data-testid="content-block-menu">{types.map(t=><button key={t.id} className="flex min-h-14 items-center gap-2 rounded-xl border border-[#275443] bg-[#0F2E24] p-2 text-right transition-colors hover:border-[#3DD189] hover:bg-[#173D30]" onClick={()=>add(t.id)}>
       <t.icon size={17} className="text-[#3DD189]"/><span><span className="block text-xs font-bold">{t.label}</span><span className="text-[11px] text-[#8B9E96]">{t.note}</span></span>
     </button>)}</div>}
     {!!status&&<p role="status" className="mt-3 text-xs text-[#3DD189]">{status}</p>}
