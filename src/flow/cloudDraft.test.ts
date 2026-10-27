@@ -178,7 +178,7 @@ test("opt-in cloud restore stages an inactive copy without replacing any existin
  assert.equal(staged.flows[1].id,"cloud-copy");
  assert.equal(staged.flows[1].enabled,false);
  assert.notEqual(staged.flows[1].doc,remote.flow.doc);
- assert.deepEqual(staged.flows[1].doc,remote.flow.doc);
+ assert.deepEqual(staged.flows[1].doc,prepareCloudDraft({id:"cloud-copy",doc:remote.flow.doc}).document);
  assert.equal(JSON.stringify(library),snapshot);
  assert.throws(()=>stageCloudDraftCopy(library,remote,"local"),/already exists/);
  assert.throws(()=>stageCloudDraftCopy(library,remote,"../bad"),/identifier/);
