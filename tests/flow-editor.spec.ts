@@ -382,9 +382,36 @@ test("audit: invalid email follows invalid route; valid email follows valid rout
  const answer=page.getByRole("textbox",{name:"إجابة العميل"});
  await answer.fill("wrong-email");
  await answer.press("Enter");
- await expect(page.getByText("wrong-email")).toBeVisible();
+ await expect(page.getByTestId("flow-simulator").getByText("تواصل ويانا لمعرفة الأسعار الحالية لخدمتك في عمان.")).toBeVisible();
  await page.getByRole("button",{name:"إعادة",exact:true}).click();
  await answer.fill("client@example.com");
  await answer.press("Enter");
- await expect(page.getByText("client@example.com")).toBeVisible();
+ await expect(page.getByTestId("flow-simulator").getByText("تواصل ويانا لمعرفة الأسعار الحالية لخدمتك في العراق.")).toBeVisible();
 });
+
+for(const sample of [
+ {mode:"phone",bad:"123",good:"٠٧٧٠١٢٣٤٥٦٧"},
+ {mode:"number",bad:"not-a-number",good:"۱۲۳"},
+ {mode:"text",bad:"",good:"مرحبا"}
+]){
+ test("audit: customer input "+sample.mode+" correctly routes to valid/invalid messages",async({page})=>{
+  await page.goto("/milanochat/#/flows");
+  await page.locator(".react-flow__node").nth(2).click();
+  const panel=page.locator("aside");
+  await panel.getByRole("combobox",{name:"نوع الإجابة"}).selectOption(sample.mode);
+  await panel.getByRole("combobox",{name:"وجهة الإجابة الصحيحة"}).selectOption({index:2});
+  await panel.getByRole("combobox",{name:"وجهة الإجابة غير الصحيحة"}).selectOption({index:3});
+  await page.getByRole("button",{name:"تجربة"}).click();
+  const modal=page.getByTestId("flow-simulator");
+  const answer=modal.getByRole("textbox",{name:"إجابة العميل"});
+  if(sample.bad){
+   await answer.fill(sample.bad);
+   await answer.press("Enter");
+   await expect(modal.getByText("تواصل ويانا لمعرفة الأسعار الحالية لخدمتك في عمان.")).toBeVisible();
+   await modal.getByRole("button",{name:"إعادة",exact:true}).click();
+  }
+  await answer.fill(sample.good);
+  await answer.press("Enter");
+  await expect(modal.getByText("تواصل ويانا لمعرفة الأسعار الحالية لخدمتك في العراق.")).toBeVisible();
+ });
+}
