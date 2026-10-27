@@ -5,6 +5,7 @@ import ButtonActionEditor from "./ButtonActionEditor";
 import MessageBlocksEditor from "./MessageBlocksEditor";
 import type { FlowData, FlowNode, Choice, Platform } from "./model";
 import { useFlowStore } from "./store";
+import { cardSize, findOpenPosition } from "./layout";
 
 const input="w-full rounded-xl border border-[#275443] bg-[#0F2E24] px-3 py-2.5 text-sm text-white outline-none focus:border-[#3DD189]";
 const btn="inline-flex items-center gap-1.5 rounded-xl border border-[#275443] px-3 py-2 text-xs hover:bg-[#173D30]";
@@ -30,7 +31,7 @@ export default function NodeEditor({node,onClose}:{node:FlowNode|null;onClose:()
     if(d.options.length>=10)return;
     saveOptions([...d.options,{id:crypto.randomUUID(),label:d.kind==="randomizer"?"فرع "+(d.options.length+1):"زر جديد",weight:d.kind==="randomizer"?0:undefined}]);
   };
-  const duplicate=()=>{if(store.doc.nodes.length>=100)return;const n=makeNode(d.kind,{x:node.position.x+65,y:node.position.y+80},{...d,options:d.options.map(o=>({...o,id:crypto.randomUUID()})),title:d.title+" (نسخة)"});store.addNode(n);};
+  const duplicate=()=>{if(store.doc.nodes.length>=100)return;const preferred={x:node.position.x+cardSize(node).width+80,y:node.position.y+80};const n=makeNode(d.kind,preferred,{...d,options:d.options.map(o=>({...o,id:crypto.randomUUID()})),title:d.title+" (نسخة)"});store.addNode({...n,position:findOpenPosition(store.doc.nodes,n,preferred)});};
   const remove=()=>{if(d.kind==="trigger"&&!window.confirm("حذف البداية سيجعل التدفق دون نقطة تشغيل. هل تريد المتابعة؟"))return;store.deleteNode(node.id);onClose();};
   const uploadImage=async(file?:File)=>{
     if(!file)return;if(!["image/jpeg","image/png","image/webp"].includes(file.type)||file.size>5*1024*1024){setStatus("يُسمح بصور JPG وPNG وWebP حتى 5MB.");return;}
