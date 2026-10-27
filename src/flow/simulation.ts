@@ -17,3 +17,23 @@ export function chooseWeightedPort(options:ReadonlyArray<{id:string;weight?:numb
 }
 
 export const MAX_SIMULATOR_STEPS=150;
+
+/** Preview input checks are local-only; live Meta execution needs a server validator. */
+export function normalizeArabicDigits(value:string):string{
+  return value.replace(/[٠-٩۰-۹]/g,char=>{
+    const code=char.charCodeAt(0);
+    return String(code>=0x6f0&&code<=0x6f9?code-0x6f0:code-0x660);
+  });
+}
+export function validCustomerInput(mode:string,raw:string):boolean{
+  const value=normalizeArabicDigits(raw.trim());
+  if(!value)return false;
+  if(mode==="email")return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+  if(mode==="phone"){
+    if(!/^\+?[\d\s-]+$/.test(value))return false;
+    const digits=value.replace(/\D/g,"");
+    return digits.length>=7&&digits.length<=15;
+  }
+  if(mode==="number")return /^[-+]?(?:\d+(?:\.\d+)?|\.\d+)$/.test(value)&&Number.isFinite(Number(value));
+  return true;
+}

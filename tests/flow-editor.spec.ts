@@ -334,3 +334,154 @@ test("batch 3 mobile step action stays visible and preview counts execution step
  await page.getByRole("button",{name:"إعادة",exact:true}).click();
  await expect(page.getByTestId("simulator-step-counter")).toContainText("/ 150");
 });
+
+test("audit: toolbar and step settings collapse and expand without erasing text",async({page})=>{
+ await page.goto("/milanochat/#/flows");
+ await page.getByRole("button",{name:"طي شريط أدوات التدفقات"}).click();
+ await expect(page.getByTestId("flow-toolbar-secondary")).toHaveCount(0);
+ await page.getByRole("button",{name:"إظهار شريط أدوات التدفقات"}).click();
+ await expect(page.getByTestId("flow-toolbar-secondary")).toBeVisible();
+ await page.locator(".react-flow__node").nth(1).click();
+ const panel=page.locator("aside");
+ const field=panel.getByRole("textbox",{name:"نص الرسالة"});
+ await field.fill("اختبار الطي والحفظ");
+ await panel.getByRole("button",{name:"طي إعدادات الخطوة"}).click();
+ await expect(field).toHaveCount(0);
+ await panel.getByRole("button",{name:"إظهار إعدادات الخطوة"}).click();
+ await expect(field).toHaveValue("اختبار الطي والحفظ");
+});
+
+test("audit: typed question modes expose two working routes and remove stale button edges",async({page})=>{
+ await page.goto("/milanochat/#/flows");
+ await page.locator(".react-flow__node").nth(2).click();
+ const panel=page.locator("aside");
+ const mode=panel.getByRole("combobox",{name:"نوع الإجابة"});
+ for(const value of ["text","email","phone","number"]){
+  await mode.selectOption(value);
+  const routes=panel.getByTestId("question-text-routes");
+  await expect(routes.getByRole("combobox",{name:"وجهة الإجابة الصحيحة"})).toBeVisible();
+  await expect(routes.getByRole("combobox",{name:"وجهة الإجابة غير الصحيحة"})).toBeVisible();
+  await expect(page.locator(".react-flow__edge")).toHaveCount(2);
+ }
+ await panel.getByRole("combobox",{name:"وجهة الإجابة الصحيحة"}).selectOption({index:2});
+ await panel.getByRole("combobox",{name:"وجهة الإجابة غير الصحيحة"}).selectOption({index:3});
+ await expect(page.locator(".react-flow__edge")).toHaveCount(4);
+ await mode.selectOption("buttons");
+ await expect(page.locator(".react-flow__edge")).toHaveCount(2);
+ await expect(panel.getByTestId("question-text-routes")).toHaveCount(0);
+});
+
+test("audit: invalid email follows invalid route; valid email follows valid route",async({page})=>{
+ await page.goto("/milanochat/#/flows");
+ await page.locator(".react-flow__node").nth(2).click();
+ const panel=page.locator("aside");
+ await panel.getByRole("combobox",{name:"نوع الإجابة"}).selectOption("email");
+ await panel.getByRole("combobox",{name:"وجهة الإجابة الصحيحة"}).selectOption({index:2});
+ await panel.getByRole("combobox",{name:"وجهة الإجابة غير الصحيحة"}).selectOption({index:3});
+ await page.getByRole("button",{name:"تجربة"}).click();
+ const answer=page.getByRole("textbox",{name:"إجابة العميل"});
+ await answer.fill("wrong-email");
+ await answer.press("Enter");
+ await expect(page.getByTestId("flow-simulator").getByText("تواصل ويانا لمعرفة الأسعار الحالية لخدمتك في عمان.")).toBeVisible();
+ await page.getByRole("button",{name:"إعادة",exact:true}).click();
+ await answer.fill("client@example.com");
+ await answer.press("Enter");
+ await expect(page.getByTestId("flow-simulator").getByText("تواصل ويانا لمعرفة الأسعار الحالية لخدمتك في العراق.")).toBeVisible();
+});
+
+for(const sample of [
+ {mode:"phone",bad:"123",good:"٠٧٧٠١٢٣٤٥٦٧"},
+ {mode:"number",bad:"not-a-number",good:"۱۲۳"},
+ {mode:"text",bad:"",good:"مرحبا"}
+]){
+ test("audit: customer input "+sample.mode+" correctly routes to valid/invalid messages",async({page})=>{
+  await page.goto("/milanochat/#/flows");
+  await page.locator(".react-flow__node").nth(2).click();
+  const panel=page.locator("aside");
+  await panel.getByRole("combobox",{name:"نوع الإجابة"}).selectOption(sample.mode);
+  await panel.getByRole("combobox",{name:"وجهة الإجابة الصحيحة"}).selectOption({index:2});
+  await panel.getByRole("combobox",{name:"وجهة الإجابة غير الصحيحة"}).selectOption({index:3});
+  await page.getByRole("button",{name:"تجربة"}).click();
+  const modal=page.getByTestId("flow-simulator");
+  const answer=modal.getByRole("textbox",{name:"إجابة العميل"});
+  if(sample.bad){
+   await answer.fill(sample.bad);
+   await answer.press("Enter");
+   await expect(modal.getByText("تواصل ويانا لمعرفة الأسعار الحالية لخدمتك في عمان.")).toBeVisible();
+   await modal.getByRole("button",{name:"إعادة",exact:true}).click();
+  }
+  await answer.fill(sample.good);
+  await answer.press("Enter");
+  await expect(modal.getByText("تواصل ويانا لمعرفة الأسعار الحالية لخدمتك في العراق.")).toBeVisible();
+ });
+}
+
+for(const kind of [
+ {label:"شرط",heading:"الحقل"},
+ {label:"انتظار ذكي",heading:"مدة الانتظار"},
+ {label:"إجراء",heading:"نوع الإجراء"},
+ {label:"توزيع عشوائي",heading:"نسب التوزيع"},
+ {label:"الانتقال لخطوة",heading:"الانتقال إلى خطوة"},
+ {label:"طلب خارجي",heading:"طريقة طلب HTTP"},
+ {label:"نهاية",heading:"تنهي المسار"}
+]){
+ test("audit: "+kind.label+" opens real editable settings",async({page})=>{
+  await page.goto("/milanochat/#/flows");
+  await page.getByRole("button",{name:"فتح إضافة خطوة"}).click();
+  await page.getByTestId("add-step-menu").getByRole("button",{name:kind.label,exact:true}).click();
+  const panel=page.getByTestId("step-settings-panel");
+  await expect(panel).toBeVisible();
+  await expect(panel.getByText(new RegExp(kind.heading)).first()).toBeVisible();
+  await expect(page.locator(".react-flow__node")).toHaveCount(7);
+ });
+}
+test("audit: randomizer equal distribution performs an actual value update",async({page})=>{
+ await page.goto("/milanochat/#/flows");
+ await page.getByRole("button",{name:"فتح إضافة خطوة"}).click();
+ await page.getByTestId("add-step-menu").getByRole("button",{name:"توزيع عشوائي",exact:true}).click();
+ const panel=page.getByTestId("step-settings-panel");
+ await panel.getByRole("spinbutton",{name:"النسبة 1"}).fill("80");
+ await panel.getByRole("button",{name:"توزيع متساوٍ"}).click();
+ await expect(panel.getByRole("spinbutton",{name:"النسبة 1"})).toHaveValue("50");
+ await expect(panel.getByRole("spinbutton",{name:"النسبة 2"})).toHaveValue("50");
+});
+
+test("audit: website button opens its HTTPS link in local preview",async({page})=>{
+ await page.goto("/milanochat/#/flows");
+ await page.locator(".react-flow__node").nth(1).click();
+ const panel=page.getByTestId("step-settings-panel");
+ await panel.getByRole("button",{name:"إضافة زر"}).click();
+ const editor=panel.getByTestId("button-action-editor");
+ await editor.getByRole("textbox",{name:"عنوان الزر"}).fill("موقع المتجر");
+ await editor.getByRole("button",{name:"فتح موقع"}).click();
+ await editor.getByRole("textbox",{name:"رابط الموقع"}).fill("https://example.com/shop");
+ await page.getByRole("button",{name:"تجربة"}).click();
+ const sim=page.getByTestId("flow-simulator");
+ await sim.getByRole("button",{name:"موقع المتجر"}).click();
+ await expect(sim.getByRole("link",{name:"فتح الرابط"})).toHaveAttribute("href","https://example.com/shop");
+});
+
+test("audit: quick reply connects to a real step and preview follows the connection",async({page})=>{
+ await page.goto("/milanochat/#/flows");
+ await page.locator(".react-flow__node").nth(1).click();
+ const panel=page.getByTestId("step-settings-panel");
+ await panel.getByRole("button",{name:"إضافة رد سريع"}).click();
+ const editor=panel.getByTestId("button-action-editor");
+ await editor.getByRole("textbox",{name:"عنوان الزر"}).fill("أسعار الإمارات");
+ await editor.getByRole("combobox",{name:"ربط الزر بخطوة"}).selectOption({index:4});
+ await page.getByRole("button",{name:"تجربة"}).click();
+ const sim=page.getByTestId("flow-simulator");
+ await sim.getByRole("button",{name:"أسعار الإمارات"}).click();
+ await expect(sim.getByText("تواصل ويانا لمعرفة الأسعار الحالية لخدمتك في الإمارات.")).toBeVisible();
+});
+
+test("audit: AI Step and action buttons create editable nodes rather than inert buttons",async({page})=>{
+ await page.goto("/milanochat/#/flows");
+ await page.locator(".react-flow__node").nth(1).click();
+ const panel=page.getByTestId("step-settings-panel");
+ await panel.getByRole("button",{name:"إضافة زر"}).click();
+ await panel.getByTestId("button-action-editor").getByRole("button",{name:"AI Step",exact:true}).click();
+ await expect(page.locator(".react-flow__node")).toHaveCount(7);
+ await expect(panel.getByText("نوع الإجراء")).toBeVisible();
+ await expect(panel.getByText("هذه إعدادات تصميمية، وليست أوامر مفعّلة في النظام الحقيقي.")).toBeVisible();
+});

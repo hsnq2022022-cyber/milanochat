@@ -1,6 +1,6 @@
 import { useState } from "react";
-import { Plus, Trash2, Check, Copy, AlertTriangle } from "lucide-react";
-import { ACCENT, LABELS, makeNode, outputs, PLATFORM_LABELS, TRIGGER_OPTIONS } from "./model";
+import { Plus, Trash2, Check, Copy, AlertTriangle, ChevronDown, ChevronUp } from "lucide-react";
+import { ACCENT, LABELS, makeNode, outputs, canConnect, edgeFor, PLATFORM_LABELS, TRIGGER_OPTIONS } from "./model";
 import ButtonActionEditor from "./ButtonActionEditor";
 import MessageBlocksEditor from "./MessageBlocksEditor";
 import TriggerKeywordsEditor from "./TriggerKeywordsEditor";
@@ -19,6 +19,7 @@ const modes={buttons:"أزرار سريعة",text:"نص",email:"بريد إلك�
 export default function NodeEditor({node,onClose}:{node:FlowNode|null;onClose:()=>void}){
   const store=useFlowStore();
   const [status,setStatus]=useState("");
+  const [collapsed,setCollapsed]=useState(false);
   if(!node)return <aside dir="rtl" className="flex w-[min(40vw,370px)] min-w-[210px] shrink-0 flex-col border-r border-[#173D30] bg-[#0B241C] p-5 text-[#8B9E96]"><h2 className="font-semibold text-white">إعدادات الخطوة</h2><p className="mt-3 text-sm">اختر عقدة من مساحة العمل لتعديل محتواها.</p></aside>;
   const d=node.data;
   const edit=(part:Partial<FlowData>)=>store.changeNode(node.id,part);
@@ -27,6 +28,17 @@ export default function NodeEditor({node,onClose}:{node:FlowNode|null;onClose:()
     store.replace({...store.doc,nodes:store.doc.nodes.map(n=>n.id===node.id?{...n,data:{...n.data,options}}:n),
       edges:store.doc.edges.filter(e=>e.source!==node.id||e.sourceHandle==="next"||validIds.has(e.sourceHandle||""))});
   };
+  const setQuestionRoute=(port:"valid"|"invalid",target:string)=>{
+    const current=useFlowStore.getState().doc;
+    const edges=current.edges.filter(e=>e.source!==node?.id||e.sourceHandle!==port);
+    if(!target){store.replace({...current,edges});return;}
+    const connection={source:node!.id,sourceHandle:port,target,targetHandle:"in"};
+    if(!canConnect(connection,{...current,edges})){
+      setStatus("تعذر توصيل مسار الإجابة: الخطوة غير صالحة.");return;
+    }
+    store.replace({...current,edges:[...edges,edgeFor(connection,port==="valid"?"إجابة صحيحة":"إجابة غير صحيحة")]});
+    setStatus("");
+  };
   const addOption=()=>{
     if(d.options.length>=10)return;
     saveOptions([...d.options,{id:crypto.randomUUID(),label:d.kind==="randomizer"?"فرع "+(d.options.length+1):"زر جديد",weight:d.kind==="randomizer"?0:undefined}]);
@@ -34,12 +46,17 @@ export default function NodeEditor({node,onClose}:{node:FlowNode|null;onClose:()
   const duplicate=()=>{if(store.doc.nodes.length>=100)return;const preferred={x:node.position.x+cardSize(node).width+80,y:node.position.y+80};const n=makeNode(d.kind,preferred,{...d,options:d.options.map(o=>({...o,id:crypto.randomUUID()})),title:d.title+" (نسخة)"});store.addNode({...n,position:findOpenPosition(store.doc.nodes,n,preferred)});};
   const remove=()=>{if(d.kind==="trigger"&&!window.confirm("حذف البداية سيجعل التدفق دون نقطة تشغيل. هل تريد المتابعة؟"))return;store.deleteNode(node.id);onClose();};
 
-  return <aside dir="rtl" className="fixed inset-y-0 left-0 z-40 flex w-[min(96vw,410px)] shrink-0 flex-col border-r border-[#173D30] bg-[#0B241C] text-white shadow-2xl md:relative md:inset-auto md:z-20 md:w-[min(40vw,385px)] md:shadow-none">
+  return <aside dir="rtl" data-testid="step-settings-panel" className={"flex shrink-0 flex-col border-r border-[#173D30] bg-[#0B241C] text-white shadow-2xl md:relative md:inset-auto md:z-20 md:shadow-none "+(collapsed?"fixed left-0 top-16 z-40 w-[min(85vw,265px)] md:w-[240px]":"fixed inset-y-0 left-0 z-40 w-[min(96vw,410px)] md:w-[min(40vw,385px)]")}>
     <div className="sticky top-0 flex items-center justify-between gap-2 border-b border-[#173D30] bg-[#0B241C] px-4 py-3">
       <div><p className="text-[11px] text-[#8B9E96]">خصائص العقدة</p><h2 className="text-base font-bold" style={{color:ACCENT[d.kind]}}>{LABELS[d.kind]}</h2></div>
-      <button type="button" aria-label="إغلاق المحرر" className={btn} onClick={onClose}>إغلاق</button>
+      <div className="flex items-center gap-2">
+        <button type="button" aria-label={collapsed?"إظهار إعدادات الخطوة":"طي إعدادات الخطوة"} aria-expanded={!collapsed} className={btn} onClick={()=>setCollapsed(v=>!v)}>
+          {collapsed?<ChevronDown size={16}/>:<ChevronUp size={16}/>} {collapsed?"إظهار":"طي"}
+        </button>
+        <button type="button" aria-label="إغلاق المحرر" className={btn} onClick={onClose}>إغلاق</button>
+      </div>
     </div>
-    <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-6">
+    {!collapsed&&<div className="min-h-0 flex-1 overflow-y-auto px-4 pb-6">
       {d.kind!=="trigger"&&<><label className={section}>عنوان الخطوة</label><input className={input} value={d.title} maxLength={90} onChange={e=>edit({title:e.target.value})}/></>}
       {d.kind==="trigger"&&<>
         <label className={section}>القناة التي يبدأ منها التدفق</label>
@@ -60,11 +77,31 @@ export default function NodeEditor({node,onClose}:{node:FlowNode|null;onClose:()
       {["message","question"].includes(d.kind)&&<>
         {d.kind==="question"&&<>
           <label className={section}>نوع الإجابة</label>
-          <select className={input} value={d.inputMode} onChange={e=>edit({inputMode:e.target.value as FlowData["inputMode"]})}>
+          <select className={input} aria-label="نوع الإجابة" value={d.inputMode} onChange={e=>{
+            const inputMode=e.target.value as FlowData["inputMode"];
+            const current=useFlowStore.getState().doc;
+            const allowed=inputMode==="buttons"?new Set(d.options.map(o=>o.id)):new Set(["valid","invalid"]);
+            store.replace({...current,nodes:current.nodes.map(n=>n.id===node.id?{...n,data:{...n.data,inputMode}}:n),
+              edges:current.edges.filter(edge=>edge.source!==node.id||allowed.has(edge.sourceHandle||""))});
+          }}>
             {Object.entries(modes).map(([v,label])=><option key={v} value={v}>{label}</option>)}
           </select>
           <label className={section}>اسم الحقل الذي يستقبل الإجابة</label>
           <input className={input} value={d.inputField} maxLength={100} onChange={e=>edit({inputField:e.target.value})}/>
+          {d.inputMode!=="buttons"&&<section className="mt-4 rounded-xl border border-[#275443] bg-[#061A14]/60 p-3" data-testid="question-text-routes">
+            <p className="mb-2 text-xs font-semibold text-[#B8D0C3]">مسارات التحقق من الإجابة</p>
+            {(["valid","invalid"] as const).map(port=><label key={port} className="mb-3 block text-xs">
+              <span className="mb-1 block">{port==="valid"?"عند إجابة صحيحة":"عند إجابة غير صحيحة"}</span>
+              <select className={input} aria-label={port==="valid"?"وجهة الإجابة الصحيحة":"وجهة الإجابة غير الصحيحة"}
+                value={store.doc.edges.find(e=>e.source===node.id&&e.sourceHandle===port)?.target||""}
+                onChange={e=>setQuestionRoute(port,e.target.value)}>
+                <option value="">غير مرتبط — ينتهي هذا المسار</option>
+                {store.doc.nodes.filter(n=>n.id!==node.id&&n.data.kind!=="trigger").map(n=>
+                  <option key={n.id} value={n.id}>{n.data.title}</option>)}
+              </select>
+            </label>)}
+            <p className="text-[11px] leading-5 text-[#8B9E96]">البريد والهاتف والرقم تُفحص صيغتها في المحاكاة؛ اختر وجهة كل نتيجة حتى لا ينتهي المسار دون متابعة.</p>
+          </section>}
         </>}
         <MessageBlocksEditor node={node}/>
         {(d.kind==="message"||d.inputMode==="buttons")&&<ButtonActionEditor node={node}/>}
@@ -111,7 +148,7 @@ export default function NodeEditor({node,onClose}:{node:FlowNode|null;onClose:()
       </div>
       <div className="mt-5 flex flex-wrap gap-2"><button className={btn} onClick={duplicate}><Copy size={14}/> نسخ</button><button className={btn+" text-red-300"} onClick={remove}><Trash2 size={14}/> حذف الخطوة</button>
       <button className={btn} onClick={()=>{const ok=store.deleteNode(node.id,true);if(ok)onClose();}} disabled={store.doc.edges.filter(e=>e.source===node.id).length!==1||store.doc.edges.filter(e=>e.target===node.id).length!==1}>حذف مع إعادة التوصيل</button></div>
-    </div>
-    <div className="sticky bottom-0 border-t border-[#173D30] bg-[#0B241C] p-3"><button className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#3DD189] py-2.5 text-sm font-bold text-[#061A14]" onClick={onClose}><Check size={16}/> تم</button></div>
+    </div>}
+    {!collapsed&&<div className="sticky bottom-0 border-t border-[#173D30] bg-[#0B241C] p-3"><button className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#3DD189] py-2.5 text-sm font-bold text-[#061A14]" onClick={onClose}><Check size={16}/> تم</button></div>}
   </aside>;
 }

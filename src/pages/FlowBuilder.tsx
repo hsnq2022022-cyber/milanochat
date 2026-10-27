@@ -5,7 +5,7 @@ import {
 } from "@xyflow/react";
 import type { Connection, Edge, XYPosition } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { ArrowRight, Plus, Play, Save, Upload, Download, Undo2, Redo2, LayoutGrid, Trash2, AlertTriangle, CheckCircle2, X, Copy } from "lucide-react";
+import { ArrowRight, Plus, Play, Save, Upload, Download, Undo2, Redo2, LayoutGrid, Trash2, AlertTriangle, CheckCircle2, X, Copy, ChevronUp, ChevronDown } from "lucide-react";
 import AutomationNode from "../flow/AutomationNode";
 import AutomationEdge from "../flow/AutomationEdge";
 import NodeEditor from "../flow/NodeEditor";
@@ -30,6 +30,7 @@ function Editor(){
   const nodesChanged=useFlowStore(s=>s.nodesChanged),edgesChanged=useFlowStore(s=>s.edgesChanged);
   const selected=doc.nodes.find(n=>n.id===selectedId)||null;
   const [showSimulator,setShowSimulator]=useState(false),[trail,setTrail]=useState<string[]>([]);
+  const [toolbarCollapsed,setToolbarCollapsed]=useState(false);
   const [notice,setNotice]=useState(""),[edgeMenu,setEdgeMenu]=useState<EdgeMenu>(null),[showIssues,setShowIssues]=useState(false);
   const addRequest=useAddStepMenu(s=>s.request),openAdd=useAddStepMenu(s=>s.open),closeAdd=useAddStepMenu(s=>s.close);
   const input=useRef<HTMLInputElement>(null),clipboard=useRef<FlowNode|null>(null),reconnectOk=useRef(true),justReconnected=useRef(false);
@@ -148,7 +149,7 @@ function Editor(){
   const renderedEdges=useMemo(()=>doc.edges.map(e=>({...e,animated:trail.includes(e.source)&&trail.includes(e.target)})),[doc.edges,trail]);
 
   return <div dir="rtl" className="flex h-[100dvh] flex-col bg-[#061A14] text-white" style={{fontFamily:"system-ui, sans-serif"}}>
-    <header className="z-30 flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-[#173D30] bg-[#0B241C] px-3 py-3 md:px-5">
+    <header className="z-30 flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-[#173D30] bg-[#0B241C] px-3 py-2 md:px-5">
       <div className="flex min-w-0 items-center gap-2"><a className={btn} href="#/dashboard" aria-label="الرجوع إلى لوحة التحكم"><ArrowRight size={17}/></a>
         <div className="min-w-0"><p className="text-[11px] text-[#8B9E96]">إدارة سوشيال / مصمم الأتمتة</p>
           <input className="max-w-36 bg-transparent text-sm font-bold outline-none md:max-w-64" aria-label="اسم التدفق" maxLength={100} value={doc.name} onChange={e=>store().rename(e.target.value)}/></div>
@@ -180,7 +181,10 @@ function Editor(){
           }}><Trash2 size={15}/></button>
         </div>
       </div>
-      <div className="flex flex-wrap items-center gap-1.5">
+      <button type="button" className={btn} aria-label={toolbarCollapsed?"إظهار شريط أدوات التدفقات":"طي شريط أدوات التدفقات"} aria-expanded={!toolbarCollapsed} onClick={()=>setToolbarCollapsed(v=>!v)}>
+        {toolbarCollapsed?<ChevronDown size={16}/>:<ChevronUp size={16}/>} <span className="hidden sm:inline">{toolbarCollapsed?"إظهار الأدوات":"طي الأدوات"}</span>
+      </button>
+      {!toolbarCollapsed&&<div className="flex flex-wrap items-center gap-1.5" data-testid="flow-toolbar-secondary">
         <button data-testid="flow-enabled-toggle" type="button" aria-label="تفعيل التدفق" aria-pressed={activeEnabled}
           className={"inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-xs font-bold "+(activeEnabled?"border-[#3DD189] bg-[#173D30] text-[#3DD189]":"border-[#275443] bg-[#0F2E24] text-[#C1D2CA]")}
           onClick={()=>{
@@ -213,7 +217,7 @@ function Editor(){
             setProtectStoredLibrary(false);setNotice("حُفظت المسودة ومكتبة التدفقات في متصفحك.");
           }catch{setNotice("تعذر الحفظ؛ استخدم التصدير.");}
         }}><Save size={16}/> حفظ</button>
-      </div>
+      </div>}
     </header>
     {recovery.messages.length>0&&<div role="alert" className="border-b border-[#E5B54B] bg-[#2C2414] px-4 py-3 text-xs text-[#F9E3A2]">
       <strong>تقرير استعادة التدفقات: </strong>{recovery.messages.join(" ")} تم استرجاع {recovery.recovered} وتجاهل {recovery.skipped}.
