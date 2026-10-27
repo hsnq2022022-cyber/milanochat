@@ -35,3 +35,21 @@ test("rejects invalid oversized and dangling imports",()=>{
   assert.equal(importFlow({version:3,name:"evil",nodes:[],edges:[]}),null);
   assert.equal(importFlow({version:3,name:"evil",nodes:exampleFlow().nodes,edges:[{source:"missing",target:"absent"}]}),null);
 });
+
+test("v3 export and import preserve stable graph identifiers and data",()=>{
+  const before=exampleFlow();
+  const result=importFlow(JSON.parse(JSON.stringify(before)));
+  assert.ok(result);
+  assert.deepEqual(result,before);
+});
+test("v2 importer preserves original IDs and existing edge ports",()=>{
+  const old={version:2,name:"old",nodes:[
+    {id:"trigger-one",type:"trigger",x:20,y:20,title:"بداية",keyword:"hello",choices:[]},
+    {id:"reply-one",type:"message",x:20,y:220,title:"رد",text:"مرحباً",choices:[]}
+  ],edges:[{id:"edge-one",from:"trigger-one",port:"next",to:"reply-one"}]};
+  const restored=importFlow(old);
+  assert.ok(restored);
+  assert.deepEqual(restored.nodes.map(n=>n.id),["trigger-one","reply-one"]);
+  assert.equal(restored.edges[0].id,"edge-one");
+  assert.equal(restored.edges[0].sourceHandle,"next");
+});
