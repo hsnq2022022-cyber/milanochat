@@ -21,7 +21,7 @@ import { flowText, flowKindLabel } from "../flow/uiLocale";
 import type { FlowLanguage } from "../flow/uiLocale";
 
 // لا تعرض أدوات الحفظ السحابي في الإنتاج قبل تجهيز الجدول والموافقة على النشر.
-const CLOUD_DRAFT_UI_ENABLED=import.meta.env.VITE_ENABLE_CLOUD_FLOW_DRAFTS==="true";
+const CLOUD_DRAFT_UI_ENABLED=(import.meta as ImportMeta & {env?:Record<string,string|undefined>}).env?.VITE_ENABLE_CLOUD_FLOW_DRAFTS==="true";
 const nodeTypes={flowNode:AutomationNode};
 const edgeTypes={flowEdge:AutomationEdge};
 const btn="inline-flex min-h-11 items-center justify-center gap-1.5 rounded-xl border border-[#275443] bg-[#0B241C] px-3 py-2.5 text-xs font-semibold hover:border-[#3DD189] hover:bg-[#173D30]";
