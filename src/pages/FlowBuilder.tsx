@@ -5,7 +5,7 @@ import {
 } from "@xyflow/react";
 import type { Connection, Edge, XYPosition } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { ArrowRight, Plus, Play, Save, Upload, Download, Undo2, Redo2, LayoutGrid, Trash2, AlertTriangle, CheckCircle2, X, Copy, ChevronUp, ChevronDown } from "lucide-react";
+import { ArrowRight, Plus, Play, Save, Upload, Download, Undo2, Redo2, LayoutGrid, Trash2, AlertTriangle, CheckCircle2, X, Copy, ChevronUp, ChevronDown, ZoomIn, ZoomOut, Maximize2 } from "lucide-react";
 import AutomationNode from "../flow/AutomationNode";
 import AutomationEdge from "../flow/AutomationEdge";
 import NodeEditor from "../flow/NodeEditor";
@@ -31,6 +31,13 @@ function Editor(){
   const selected=doc.nodes.find(n=>n.id===selectedId)||null;
   const [showSimulator,setShowSimulator]=useState(false),[trail,setTrail]=useState<string[]>([]);
   const [toolbarCollapsed,setToolbarCollapsed]=useState(false);
+  const [compact,setCompact]=useState(()=>window.matchMedia("(max-width: 767px)").matches);
+  useEffect(()=>{
+    const mq=window.matchMedia("(max-width: 767px)");
+    const sync=()=>setCompact(mq.matches);
+    mq.addEventListener("change",sync);
+    return()=>mq.removeEventListener("change",sync);
+  },[]);
   const [notice,setNotice]=useState(""),[edgeMenu,setEdgeMenu]=useState<EdgeMenu>(null),[showIssues,setShowIssues]=useState(false);
   const addRequest=useAddStepMenu(s=>s.request),openAdd=useAddStepMenu(s=>s.open),closeAdd=useAddStepMenu(s=>s.close);
   const input=useRef<HTMLInputElement>(null),clipboard=useRef<FlowNode|null>(null),reconnectOk=useRef(true),justReconnected=useRef(false);
@@ -149,14 +156,14 @@ function Editor(){
   const renderedEdges=useMemo(()=>doc.edges.map(e=>({...e,animated:trail.includes(e.source)&&trail.includes(e.target)})),[doc.edges,trail]);
 
   return <div dir="rtl" className="flex h-[100dvh] flex-col bg-[#061A14] text-white" style={{fontFamily:"system-ui, sans-serif"}}>
-    <header className="z-30 flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-[#173D30] bg-[#0B241C] px-3 py-2 md:px-5">
-      <div className="flex min-w-0 items-center gap-2"><a className={btn} href="#/dashboard" aria-label="الرجوع إلى لوحة التحكم"><ArrowRight size={17}/></a>
+    <header data-testid="flow-editor-header" className="z-30 flex max-h-[45dvh] shrink-0 flex-col gap-2 overflow-y-auto border-b border-[#173D30] bg-[#0B241C] px-2 py-2 md:max-h-none md:flex-row md:flex-wrap md:items-center md:justify-between md:overflow-visible md:px-5">
+      <div className="flex min-w-0 flex-wrap items-center gap-2"><a className={btn} href="#/dashboard" aria-label="الرجوع إلى لوحة التحكم"><ArrowRight size={17}/></a>
         <div className="min-w-0"><p className="text-[11px] text-[#8B9E96]">إدارة سوشيال / مصمم الأتمتة</p>
           <input className="max-w-36 bg-transparent text-sm font-bold outline-none md:max-w-64" aria-label="اسم التدفق" maxLength={100} value={doc.name} onChange={e=>store().rename(e.target.value)}/></div>
         <span className="hidden rounded-lg border border-[#E5B54B]/40 px-2 py-1 text-[11px] text-[#E5B54B] sm:block">مسودة</span>
-        {<span data-testid="flow-preview-version" className="rounded-lg border border-[#3DD189]/60 bg-[#173D30] px-2 py-1 text-[11px] text-[#3DD189]">معاينة 5.3 — سؤال بخانة واحدة</span>}
-        <div className="flex flex-wrap items-center gap-1.5" data-testid="flow-toolbar-actions">
-          <select className="max-w-36 rounded-lg border border-[#275443] bg-[#0F2E24] px-2 py-2 text-xs text-white md:max-w-52" aria-label="اختيار التدفق" value={activeFlowId} onChange={e=>{
+        <span data-testid="flow-preview-version" className="hidden rounded-lg border border-[#3DD189]/60 bg-[#173D30] px-2 py-1 text-[11px] text-[#3DD189] sm:inline">معاينة 6 — تحسين الهاتف</span>
+        <div className="flex w-full flex-nowrap items-center gap-1.5 overflow-x-auto pb-1 md:w-auto md:flex-wrap md:overflow-visible md:pb-0" data-testid="flow-toolbar-actions">
+          <select className="max-w-40 shrink-0 rounded-lg border border-[#275443] bg-[#0F2E24] px-2 py-2 text-xs text-white md:max-w-52" aria-label="اختيار التدفق" value={activeFlowId} onChange={e=>{
             store().switchFlow(e.target.value);closeAdd();setNotice("تم فتح التدفق المحدد.");
             window.setTimeout(()=>instance.fitView({padding:.2,duration:200}),90);
           }}>
@@ -185,9 +192,9 @@ function Editor(){
       <button type="button" className={btn} aria-label={toolbarCollapsed?"إظهار شريط أدوات التدفقات":"طي شريط أدوات التدفقات"} aria-expanded={!toolbarCollapsed} onClick={()=>setToolbarCollapsed(v=>!v)}>
         {toolbarCollapsed?<ChevronDown size={16}/>:<ChevronUp size={16}/>} <span className="hidden sm:inline">{toolbarCollapsed?"إظهار الأدوات":"طي الأدوات"}</span>
       </button>
-      {!toolbarCollapsed&&<div className="flex flex-wrap items-center gap-1.5" data-testid="flow-toolbar-secondary">
+      {!toolbarCollapsed&&<div className="flex w-full min-w-0 flex-nowrap items-center gap-1.5 overflow-x-auto pb-1 md:w-auto md:flex-wrap md:overflow-visible md:pb-0" data-testid="flow-toolbar-secondary">
         <button data-testid="flow-enabled-toggle" type="button" aria-label="تفعيل التدفق" aria-pressed={activeEnabled}
-          className={"inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-xs font-bold "+(activeEnabled?"border-[#3DD189] bg-[#173D30] text-[#3DD189]":"border-[#275443] bg-[#0F2E24] text-[#C1D2CA]")}
+          className={"inline-flex min-h-11 shrink-0 items-center gap-2 rounded-xl border px-3 py-2 text-xs font-bold "+(activeEnabled?"border-[#3DD189] bg-[#173D30] text-[#3DD189]":"border-[#275443] bg-[#0F2E24] text-[#C1D2CA]")}
           onClick={()=>{
             if(!activeEnabled&&errors.length>0){setShowIssues(true);setNotice("راجع الأخطاء قبل تفعيل المسودة.");return;}
             store().setFlowEnabled(activeFlowId,!activeEnabled);
@@ -267,14 +274,19 @@ function Editor(){
           minZoom={.2} maxZoom={2} fitView fitViewOptions={{padding:.28,maxZoom:.8}}
           onInit={api=>{window.setTimeout(()=>{void api.fitView({padding:.20,maxZoom:.85,duration:0});},470);}}
           snapToGrid snapGrid={[20,20]}
-          selectionOnDrag panOnDrag={[1,2]} multiSelectionKeyCode={["Shift","Control","Meta"]}
+          selectionOnDrag={!compact} panOnDrag={compact?true:[1,2]} multiSelectionKeyCode={["Shift","Control","Meta"]}
           colorMode="dark" connectionLineStyle={{stroke:"#3DD189",strokeWidth:2}}
           proOptions={{hideAttribution:true}}
         >
           <Background variant={BackgroundVariant.Dots} gap={20} size={1.2} color="#365849"/>
-          <MiniMap nodeColor={n=>ACCENT[(n.data as FlowNode["data"]).kind]||"#3DD189"} className="!bg-[#0B241C] !border !border-[#275443]" maskColor="rgba(1,12,8,.65)" pannable zoomable />
-          <Controls showInteractive={false} className="!bg-[#0B241C] !border !border-[#275443]"/>
+          <MiniMap nodeColor={n=>ACCENT[(n.data as FlowNode["data"]).kind]||"#3DD189"} className="hidden md:block !bg-[#0B241C] !border !border-[#275443]" maskColor="rgba(1,12,8,.65)" pannable zoomable />
+          <Controls showInteractive={false} className="hidden md:block !bg-[#0B241C] !border !border-[#275443]"/>
         </ReactFlow>
+        <div data-testid="flow-mobile-zoom" className="absolute bottom-5 right-3 z-20 flex flex-col gap-2 md:hidden">
+          <button type="button" className={btn+" !h-12 !w-12 !p-0 bg-[#0B241C]"} aria-label="تكبير المخطط" onClick={()=>void instance.zoomIn({duration:180})}><ZoomIn size={21}/></button>
+          <button type="button" className={btn+" !h-12 !w-12 !p-0 bg-[#0B241C]"} aria-label="تصغير المخطط" onClick={()=>void instance.zoomOut({duration:180})}><ZoomOut size={21}/></button>
+          <button type="button" className={btn+" !h-12 !w-12 !p-0 bg-[#0B241C]"} aria-label="عرض كل الخطوات" onClick={()=>void instance.fitView({padding:.24,maxZoom:1,duration:180})}><Maximize2 size={21}/></button>
+        </div>
 
         <button className="nodrag absolute right-4 top-4 z-20 flex h-12 w-12 items-center justify-center rounded-full border border-[#9BF0BD] bg-[#3DD189] text-[#061A14] shadow-[0_8px_25px_rgba(17,110,64,.4)] transition-transform hover:scale-105" title="إضافة خطوة" aria-label="فتح إضافة خطوة" onClick={e=>openAdd({x:e.clientX,y:e.clientY})}><Plus size={25}/></button>
         {showIssues&&<div className="absolute left-3 top-3 z-20 w-[min(340px,90vw)] rounded-2xl border border-[#275443] bg-[#0B241C] p-4 shadow-xl">
@@ -293,8 +305,8 @@ function Editor(){
         </div>}
 
         {addRequest&&<div role="dialog" aria-label="إضافة خطوة" data-testid="add-step-menu"
-          className="fixed z-50 w-[min(285px,90vw)] max-h-[min(440px,75vh)] overflow-y-auto rounded-2xl border border-[#2C6448] bg-[#0B241C] p-3 text-white shadow-[0_15px_60px_rgba(0,0,0,.45)]"
-          style={{left:Math.max(8,Math.min(window.innerWidth-300,addRequest.x-24)),top:Math.max(55,Math.min(window.innerHeight-355,addRequest.y+8))}}
+          className="fixed z-50 max-h-[min(440px,72dvh)] w-[min(285px,90vw)] overflow-y-auto rounded-2xl border border-[#2C6448] bg-[#0B241C] p-3 text-white shadow-[0_15px_60px_rgba(0,0,0,.45)]"
+          style={compact?{left:8,right:8,bottom:8,top:"auto",width:"calc(100vw - 16px)"}:{left:Math.max(8,Math.min(window.innerWidth-300,addRequest.x-24)),top:Math.max(55,Math.min(window.innerHeight-355,addRequest.y+8))}}
           onClick={e=>e.stopPropagation()}>
           <div className="mb-3 flex items-center justify-between gap-2"><h3 className="text-sm font-bold">{addRequest.source?"إضافة خطوة بعد المسار":"إضافة خطوة جديدة"}</h3>
             <button className="rounded-lg p-1 hover:bg-[#173D30]" aria-label="إغلاق قائمة الإضافة" onClick={closeAdd}><X size={17}/></button></div>
