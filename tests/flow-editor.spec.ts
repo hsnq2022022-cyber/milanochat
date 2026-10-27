@@ -110,11 +110,11 @@ test("a quick reply can jump to a second locally saved flow and run its preview"
 test("rich message content adds PDF and data collection blocks that survive preview",async({page})=>{
   await page.goto("/milanochat/#/flows");
   await page.locator(".react-flow__node").nth(1).click();
-  await page.getByRole("button",{name:"إضافة محتوى"}).click();
+  await expect(page.getByTestId("content-block-menu")).toBeVisible();
   await page.getByTestId("content-block-menu").getByRole("button").filter({hasText:"PDF"}).click();
   await expect(page.getByTestId("content-block-pdf")).toBeVisible();
   await page.getByRole("textbox",{name:"رابط PDF"}).fill("https://example.com/sample.pdf");
-  await page.getByRole("button",{name:"إضافة محتوى"}).click();
+  await expect(page.getByTestId("content-block-menu")).toBeVisible();
   await page.getByTestId("content-block-menu").getByRole("button").filter({hasText:"جمع بيانات"}).click();
   await page.getByRole("textbox",{name:"سؤال جمع البيانات"}).fill("شنو بريدك الإلكتروني؟");
   await page.getByRole("combobox",{name:"نوع البيانات"}).selectOption("email");
@@ -223,7 +223,7 @@ test("batch 2 repeated node duplicates have separate positions and undo",async({
 test("batch 2 arranging rich content and switching between flows preserves both graphs",async({page})=>{
  await page.goto("/milanochat/#/flows");
  await page.locator(".react-flow__node").nth(1).click();
- await page.getByRole("button",{name:"إضافة محتوى"}).click();
+ await expect(page.getByTestId("content-block-menu")).toBeVisible();
  await page.getByTestId("content-block-menu").getByRole("button").filter({hasText:"صورة"}).click();
  await page.getByRole("textbox",{name:"رابط صورة المكوّن"}).fill("https://example.com/demo.jpg");
  await page.getByTitle("ترتيب تلقائي").click();
@@ -609,4 +609,12 @@ test("image, pdf and delay blocks can be added, edited, reordered and removed",a
  await editor.getByTestId("content-block-delay").getByRole("button",{name:"حذف المكوّن"}).click();
  await expect(editor.getByTestId("content-block-delay")).toHaveCount(0);
  await expect(page.locator(".react-flow__node").nth(1)).toContainText("2 مكونات إضافية");
+});
+
+test("always-visible content choices have no dead Add Content button",async({page})=>{
+ await page.goto("/milanochat/#/flows");
+ await page.locator(".react-flow__node").nth(1).click();
+ const panel=page.getByTestId("step-settings-panel");
+ await expect(panel.getByRole("button",{name:"إضافة محتوى"})).toHaveCount(0);
+ await expect(panel.getByTestId("content-block-menu").getByRole("button")).toHaveCount(5);
 });
