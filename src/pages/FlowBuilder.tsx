@@ -214,7 +214,7 @@ function Editor(){
         </button>
         <button className={btn} onClick={()=>store().undo()} title={t("undo")}><Undo2 size={16}/></button>
         <button className={btn} onClick={()=>store().redo()} title={t("redo")}><Redo2 size={16}/></button>
-        <button className={btn} onClick={e=>openAdd({x:e.clientX,y:e.clientY})} title={t("addStep")}><Plus size={16}/> <span className="hidden sm:inline">{t("addShort")}</span></button>
+        <button className={btn} onClick={e=>openAdd({x:e.clientX,y:e.clientY})} title={t("add")}><Plus size={16}/> <span className="hidden sm:inline">{t("addShort")}</span></button>
         <button className={btn} onClick={arrange} title={t("arrange")}><LayoutGrid size={16}/><span className="hidden md:inline">{t("arrangeShort")}</span></button>
         <button className={btn} onClick={()=>setShowIssues(v=>!v)} title={t("check")}>
           {errors.length?<AlertTriangle size={16} className="text-[#E5B54B]"/>:<CheckCircle2 size={16} className="text-[#3DD189]"/>}
@@ -290,7 +290,7 @@ function Editor(){
           <Controls showInteractive={false} className="!bg-[#0B241C] !border !border-[#275443] !bottom-10 md:!bottom-3"/>
         </ReactFlow>
 
-        <button className="nodrag absolute right-4 top-4 z-20 flex h-12 w-12 items-center justify-center rounded-full border border-[#9BF0BD] bg-[#3DD189] text-[#061A14] shadow-[0_8px_25px_rgba(17,110,64,.4)] transition-transform hover:scale-105" title={t("addStep")} aria-label={t("openAdd")} onClick={e=>openAdd({x:e.clientX,y:e.clientY})}><Plus size={25}/></button>
+        <button className="nodrag absolute right-4 top-4 z-20 flex h-12 w-12 items-center justify-center rounded-full border border-[#9BF0BD] bg-[#3DD189] text-[#061A14] shadow-[0_8px_25px_rgba(17,110,64,.4)] transition-transform hover:scale-105" title={t("add")} aria-label={t("openAdd")} onClick={e=>openAdd({x:e.clientX,y:e.clientY})}><Plus size={25}/></button>
         {showIssues&&<div className="absolute left-3 top-3 z-20 w-[min(340px,90vw)] rounded-2xl border border-[#275443] bg-[#0B241C] p-4 shadow-xl">
           <div className="flex items-center justify-between gap-2"><h3 className="font-bold">{t("flowIssues")}</h3><button onClick={()=>setShowIssues(false)} aria-label={language==="ar"?"إغلاق الفحص":"Close validation"}><X size={18}/></button></div>
           {issues.length?<div className="mt-3 max-h-52 space-y-2 overflow-y-auto text-xs">{issues.slice(0,30).map((issue,i)=><button key={i} type="button" className={"block w-full rounded-md px-2 py-1 text-right hover:bg-[#173D30] "+(issue.severity==="warning"?"text-[#E5B54B]":"text-red-300")} onClick={()=>{
