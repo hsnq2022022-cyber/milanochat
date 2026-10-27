@@ -28,7 +28,7 @@ export default function NodeEditor({node,onClose}:{node:FlowNode|null;onClose:()
     store.replace({...store.doc,nodes:store.doc.nodes.map(n=>n.id===node.id?{...n,data:{...n.data,options}}:n),
       edges:store.doc.edges.filter(e=>e.source!==node.id||e.sourceHandle==="next"||validIds.has(e.sourceHandle||""))});
   };
-  const setQuestionRoute=(port:"valid"|"invalid",target:string)=>{
+  const setQuestionRoute=(port:"valid",target:string)=>{
     const current=useFlowStore.getState().doc;
     const edges=current.edges.filter(e=>e.source!==node?.id||e.sourceHandle!==port);
     if(!target){store.replace({...current,edges});return;}
@@ -36,7 +36,7 @@ export default function NodeEditor({node,onClose}:{node:FlowNode|null;onClose:()
     if(!canConnect(connection,{...current,edges})){
       setStatus("تعذر توصيل مسار الإجابة: الخطوة غير صالحة.");return;
     }
-    store.replace({...current,edges:[...edges,edgeFor(connection,port==="valid"?"إجابة صحيحة":"إجابة غير صحيحة")]});
+    store.replace({...current,edges:[...edges,edgeFor(connection,"التالي")]});
     setStatus("");
   };
   const addOption=()=>{
