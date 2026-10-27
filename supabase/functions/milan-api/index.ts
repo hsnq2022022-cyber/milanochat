@@ -40,6 +40,7 @@
 
 import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2";
 import * as cheerio from "npm:cheerio@1";
+import { inboundInsertDisposition } from "../_shared/inboundInsert.ts";
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
@@ -1643,7 +1644,7 @@ async function handleIncomingWebhookMessage(
    * حفظ رسالة العميل الواردة.
    */
   try {
-    await sb
+    const { error: incomingInsertError } = await sb
       .from("messages")
       .insert({
         conversation_id: conv.id,
@@ -1655,6 +1656,18 @@ async function handleIncomingWebhookMessage(
         is_auto: false,
         wa_message_id: externalMsgId,
       });
+    // Important: supabase-js returns a PostgREST error value instead of throwing.
+    // Concurrent webhook deliveries can both pass the earlier SELECT pre-check.
+    // The database's unique wa_message_id index is the final idempotency barrier.
+    const disposition = inboundInsertDisposition(incomingInsertError);
+    if (disposition === "duplicate") {
+      console.log(`[${channel}_webhook] duplicate message insert skipped`);
+      return;
+    }
+    if (disposition === "failed") {
+      console.error(`[${channel}_webhook] incoming insert rejected`, incomingInsertError?.code);
+      return;
+    }
   } catch (e: any) {
     if (e?.code === "23505") {
       console.log(
