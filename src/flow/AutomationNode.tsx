@@ -76,17 +76,15 @@ export default function AutomationNode({id,data,selected}:NodeProps<FlowNodeType
       {data.kind==="end"&&<p className="text-xs text-[#64748B]">انتهاء هذا المسار.</p>}
     </div>
 
-    {data.kind==="question"&&data.inputMode!=="buttons"&&<div data-testid="typed-question-routes" className="rounded-b-2xl border-t border-[#E6EBE8] bg-[#EFF7F2] px-3 pb-5 pt-3">
-      <p className="mb-2 text-[10px] font-bold text-[#587364]">مسارات التحقق الداخلية (ليست أزرار العميل)</p>
-      <div className="grid grid-cols-2 gap-2">
-        {ports.map(port=><div key={port.id} className={"relative flex min-h-10 items-center justify-center rounded-lg border px-2 py-2 text-center text-[11px] font-semibold "+(port.id==="valid"?"border-[#A4DEC0] bg-[#E1F7EB] text-[#166534]":"border-[#F2C0BF] bg-[#FEECEB] text-[#A33330]")}>
-          {port.id==="valid"?"✓ إجابة صحيحة":"✕ إجابة غير صحيحة"}
-          <Handle id={port.id} type="source" position={Position.Bottom}
-            aria-label={port.id==="valid"?"مخرج الإجابة الصحيحة":"مخرج الإجابة غير الصحيحة"}
-            className={"!h-4 !w-4 !border-[3px] !border-white "+(port.id==="valid"?"!bg-[#22C55E]":"!bg-[#EF4444]")}
-            style={{left:"50%",bottom:-9}}/>
-        </div>)}
-      </div>
+    {data.kind==="question"&&data.inputMode!=="buttons"&&<div data-testid="typed-question-next" className="relative rounded-b-2xl border-t border-[#E6EBE8] bg-[#EFF7F2] px-3 pb-5 pt-3 text-center text-xs font-semibold text-[#176043]">
+      التالي
+      <Handle id="valid" type="source" position={Position.Bottom}
+        aria-label="مخرج التالي بعد جمع البيانات"
+        className="!h-4 !w-4 !border-[3px] !border-white !bg-[#3DD189]"
+        style={{left:"50%",bottom:-9}}/>
+      {/* Retain legacy connections by keeping their internal port without showing confusing buttons. */}
+      <Handle id="invalid" type="source" position={Position.Bottom}
+        className="!invisible !pointer-events-none" style={{left:"50%",bottom:-9}}/>
     </div>}
     {hasOptions&&!(data.kind==="question"&&data.inputMode!=="buttons")&&<div className="rounded-b-2xl border-t border-[#E6EBE8] bg-[#F4F8F6] px-3 pb-5 pt-3">
       <div className="grid gap-2" style={{gridTemplateColumns:`repeat(${Math.min(allPorts.length,3)},minmax(0,1fr))`}}>
