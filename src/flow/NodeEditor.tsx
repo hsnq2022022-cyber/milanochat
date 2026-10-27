@@ -77,7 +77,13 @@ export default function NodeEditor({node,onClose}:{node:FlowNode|null;onClose:()
       {["message","question"].includes(d.kind)&&<>
         {d.kind==="question"&&<>
           <label className={section}>نوع الإجابة</label>
-          <select className={input} value={d.inputMode} onChange={e=>edit({inputMode:e.target.value as FlowData["inputMode"]})}>
+          <select className={input} aria-label="نوع الإجابة" value={d.inputMode} onChange={e=>{
+            const inputMode=e.target.value as FlowData["inputMode"];
+            const current=useFlowStore.getState().doc;
+            const allowed=inputMode==="buttons"?new Set(d.options.map(o=>o.id)):new Set(["valid","invalid"]);
+            store.replace({...current,nodes:current.nodes.map(n=>n.id===node.id?{...n,data:{...n.data,inputMode}}:n),
+              edges:current.edges.filter(edge=>edge.source!==node.id||allowed.has(edge.sourceHandle||""))});
+          }}>
             {Object.entries(modes).map(([v,label])=><option key={v} value={v}>{label}</option>)}
           </select>
           <label className={section}>اسم الحقل الذي يستقبل الإجابة</label>
