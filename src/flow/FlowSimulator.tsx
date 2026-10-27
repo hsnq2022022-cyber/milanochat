@@ -94,6 +94,13 @@ export default function FlowSimulator({
         }
         if(pendingBlockIndex!==undefined)break;
         resumeIndex=undefined;
+        if(n.data.kind==="question"&&n.data.inputMode!=="buttons"&&blocks.some(block=>block.type==="collection")){
+          // A collection content block already obtained the customer's reply.
+          // Never present a second, redundant email/phone/number input on the same question.
+          const following=nextFor(document,n.id,"valid");
+          if(following){at=following;continue;}
+          at=null;waiting=false;break;
+        }
         if(n.data.kind==="message"&&n.data.options.length===0){
           // ManyChat sends sequential message blocks without asking the user to press "Next".
           const following=nextFor(document,n.id,"next");
