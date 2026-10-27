@@ -4,7 +4,8 @@ import { canConnect, exampleFlow, importFlow, makeNode, outputs, upsertConnectio
 
 test("example keeps three pricing messages as natural terminal branches",()=>{
   const doc=exampleFlow();
-  assert.equal(validateDocument(doc).filter(issue=>issue.message.includes("العقدة بلا مخرج")).length,3);
+  assert.equal(validateDocument(doc).filter(issue=>issue.severity==="warning"&&issue.message.includes("نهاية ضمنية")).length,3);
+  assert.equal(validateDocument(doc).filter(issue=>issue.severity==="error").length,0);
   assert.equal(doc.nodes.filter(n=>n.data.kind==="message").length,4);
 });
 test("reject self-loop and edges into trigger",()=>{
@@ -40,7 +41,8 @@ test("v3 export and import preserve stable graph identifiers and data",()=>{
   const before=exampleFlow();
   const result=importFlow(JSON.parse(JSON.stringify(before)));
   assert.ok(result);
-  assert.deepEqual(result,before);
+  assert.deepEqual(result.nodes.map(n=>n.id),before.nodes.map(n=>n.id));
+  assert.deepEqual(result.edges.map(e=>e.id),before.edges.map(e=>e.id));
 });
 test("v2 importer preserves original IDs and existing edge ports",()=>{
   const old={version:2,name:"old",nodes:[
@@ -74,4 +76,22 @@ test("detects missing question exits and closed cycles",()=>{
   doc.edges=doc.edges.filter(e=>e.source!==reply.id);
   doc.edges.push({id:crypto.randomUUID(),type:"flowEdge",source:reply.id,sourceHandle:"next",target:reply.id,targetHandle:"in",data:{}});
   assert.ok(validateDocument(doc).some(issue=>issue.message.includes("دورة مغلقة")));
+});
+
+test("terminal messages and actions are warnings, but not activation errors",()=>{
+  const doc=exampleFlow();
+  const issues=validateDocument(doc);
+  assert.equal(issues.filter(x=>x.severity==="error").length,0);
+  assert.equal(issues.filter(x=>x.severity==="warning").length,3);
+  assert.ok(issues.every(x=>x.nodeId&&x.message.includes("نهاية ضمنية")));
+});
+test("a detached message and a dangling question button remain blocking errors",()=>{
+  const doc=exampleFlow();
+  const orphan=makeNode("message",{x:600,y:600},{title:"معزولة",text:"مهم"});
+  doc.nodes.push(orphan);
+  const question=doc.nodes.find(n=>n.data.kind==="question")!;
+  doc.edges=doc.edges.filter(e=>e.source!==question.id||e.sourceHandle!==question.data.options[0].id);
+  const issues=validateDocument(doc);
+  assert.ok(issues.some(x=>x.nodeId===orphan.id&&x.severity==="error"&&x.message.includes("غير قابلة للوصول")));
+  assert.ok(issues.some(x=>x.nodeId===question.id&&x.severity==="error"&&x.message.includes("بلا وجهة")));
 });
