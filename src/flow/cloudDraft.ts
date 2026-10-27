@@ -1,7 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { importFlow } from "./model";
+import { importFlow } from "./model.ts";
 import type { FlowDocument } from "./model";
-import type { SavedFlow } from "./library";
+import type { SavedFlow } from "./library.ts";
 
 export const MAX_CLOUD_DRAFT_BYTES=4*1024*1024;
 export const MAX_CLOUD_DRAFTS=30;
