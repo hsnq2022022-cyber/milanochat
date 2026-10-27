@@ -253,3 +253,60 @@ test("batch 2 insertion on edge is undoable and leaves all existing branches",as
  await expect(page.locator(".react-flow__node")).toHaveCount(6);
  await expect(page.locator(".react-flow__edge")).toHaveCount(5);
 });
+
+
+test("trigger settings show event-specific keyword chips instead of step title",async({page})=>{
+ await page.goto("/milanochat/#/flows");
+ await page.locator(".react-flow__node").first().click();
+ const aside=page.locator("aside");
+ await expect(aside.getByText("عنوان الخطوة")).toHaveCount(0);
+ const event=aside.getByRole("combobox",{name:"نوع الحدث"});
+ await event.selectOption("message");
+ await expect(aside.getByTestId("trigger-keyword-settings")).toHaveCount(0);
+ await event.selectOption("keyword");
+ const editor=aside.getByTestId("trigger-keyword-settings");
+ await expect(editor).toBeVisible();
+ const input=editor.getByRole("textbox",{name:"إدخال كلمة مفتاحية"});
+ await input.fill("عراق");
+ await input.press("Enter");
+ await expect(editor.getByTestId("saved-keywords")).toContainText("عراق");
+ await input.fill("اسعار");
+ await editor.getByRole("button",{name:"حفظ الكلمة المفتاحية"}).click();
+ await expect(editor.getByTestId("saved-keywords")).toContainText("اسعار");
+ await editor.getByRole("button",{name:"حذف الكلمة عراق"}).click();
+ await expect(editor.getByTestId("saved-keywords")).not.toContainText("عراق");
+ await event.selectOption("comment");
+ await expect(editor.getByRole("checkbox",{name:"تحديد كلمات للتعليقات"})).toBeChecked();
+ await event.selectOption("message");
+ await expect(aside.getByTestId("trigger-keyword-settings")).toHaveCount(0);
+});
+
+test("comment keywords are optional and saved chips appear as selected criteria",async({page})=>{
+ await page.goto("/milanochat/#/flows");
+ await page.locator(".react-flow__node").first().click();
+ const aside=page.locator("aside");
+ await aside.getByRole("combobox",{name:"نوع الحدث"}).selectOption("comment");
+ const editor=aside.getByTestId("trigger-keyword-settings");
+ await editor.getByRole("checkbox",{name:"تحديد كلمات للتعليقات"}).check();
+ const field=editor.getByRole("textbox",{name:"إدخال كلمة مفتاحية"});
+ await field.fill("TOD");
+ await field.press("Enter");
+ await expect(editor.getByTestId("saved-keywords")).toContainText("TOD");
+ await expect(page.locator(".react-flow__node").first()).toContainText("TOD");
+ await editor.getByRole("checkbox",{name:"تحديد كلمات للتعليقات"}).uncheck();
+ await expect(editor.getByText("سيُطبَّق الحدث على أي تعليق")).toBeVisible();
+});
+
+test("message content controls are available without expanding and legacy image stays visible",async({page})=>{
+ await page.goto("/milanochat/#/flows");
+ await page.locator(".react-flow__node").nth(1).click();
+ const aside=page.locator("aside");
+ await expect(aside.getByTestId("primary-message-content")).toBeVisible();
+ await expect(aside.getByTestId("content-block-menu")).toBeVisible();
+ await expect(aside.getByText("صورة الرسالة")).toHaveCount(0);
+ await aside.getByRole("textbox",{name:"نص الرسالة"}).fill("رسالة جديدة");
+ await aside.getByTestId("content-block-menu").getByRole("button").filter({hasText:"صورة"}).click();
+ await expect(aside.getByTestId("content-block-image")).toBeVisible();
+ await aside.getByRole("textbox",{name:"رابط صورة المكوّن"}).fill("https://example.com/photo.jpg");
+ await expect(page.locator(".react-flow__node").nth(1)).toContainText("رسالة جديدة");
+});
