@@ -468,7 +468,7 @@ test("audit: quick reply connects to a real step and preview follows the connect
  await panel.getByRole("button",{name:"إضافة رد سريع"}).click();
  const editor=panel.getByTestId("button-action-editor");
  await editor.getByRole("textbox",{name:"عنوان الزر"}).fill("أسعار الإمارات");
- await editor.getByRole("combobox",{name:"ربط الزر بخطوة"}).selectOption({index:5});
+ await editor.getByRole("combobox",{name:"ربط الزر بخطوة"}).selectOption({index:4});
  await page.getByRole("button",{name:"تجربة"}).click();
  const sim=page.getByTestId("flow-simulator");
  await sim.getByRole("button",{name:"أسعار الإمارات"}).click();
