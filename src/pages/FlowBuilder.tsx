@@ -14,6 +14,8 @@ import CloudDraftPanel from "../flow/CloudDraftPanel";
 import { ACCENT, KIND_LIST, LABELS, SAVE_KEY, canConnect, edgeFor, importFlow, makeNode, outputs, validateDocument } from "../flow/model";
 import { arrangeFlow, cardSize, findOpenPosition } from "../flow/layout";
 import { useAddStepMenu } from "../flow/addMenu";
+import { copySelection } from "../flow/clipboard";
+import type { SelectionClipboard } from "../flow/clipboard";
 import type { FlowNode, FlowEdge, Kind } from "../flow/model";
 import { useFlowStore } from "../flow/store";
 import { getLibraryRecoveryReport, saveLibrary, snapshotLibrary } from "../flow/library";
@@ -43,7 +45,7 @@ function Editor(){
   useEffect(()=>{const media=window.matchMedia("(max-width: 767px)");const update=()=>setIsCompact(media.matches);update();media.addEventListener("change",update);return()=>media.removeEventListener("change",update);},[]);
   const [notice,setNotice]=useState(""),[edgeMenu,setEdgeMenu]=useState<EdgeMenu>(null),[showIssues,setShowIssues]=useState(false);
   const addRequest=useAddStepMenu(s=>s.request),openAdd=useAddStepMenu(s=>s.open),closeAdd=useAddStepMenu(s=>s.close);
-  const input=useRef<HTMLInputElement>(null),clipboard=useRef<FlowNode|null>(null),reconnectOk=useRef(true),justReconnected=useRef(false);
+  const input=useRef<HTMLInputElement>(null),clipboard=useRef<SelectionClipboard|null>(null),reconnectOk=useRef(true),justReconnected=useRef(false);
   const instance=useReactFlow<FlowNode,FlowEdge>();
   const issues=useMemo(()=>validateDocument(doc,flows),[doc,flows]);
   const errors=useMemo(()=>issues.filter(issue=>issue.severity==="error"),[issues]);
@@ -85,7 +87,12 @@ function Editor(){
           window.setTimeout(()=>instance.fitView({padding:.20,maxZoom:1,duration:300}),80);
         }
       }else{store().addNode(node);setNotice("أُضيفت الخطوة، لكن هذا الاتصال غير مسموح.");}
-    }else{store().addNode(node);}
+    }else{
+      const result=store().addNode(node);
+      if(result!=="added"){
+        setNotice(result==="duplicate_trigger"?"توجد بداية واحدة فقط؛ تعذرت الإضافة.":"الحد الأقصى 100 خطوة.");return;
+      }
+    }
     store().setSelected(node.id);
     closeAdd();
   };
@@ -128,11 +135,26 @@ function Editor(){
     const key=e.key.toLowerCase(),s=useFlowStore.getState();
     if(key==="z"){e.preventDefault();if(e.shiftKey)s.redo();else s.undo();}
     if(key==="y"){e.preventDefault();s.redo();}
-    if(key==="c"&&s.selectedId){const n=s.doc.nodes.find(n=>n.id===s.selectedId);if(n){e.preventDefault();clipboard.current=n;setNotice("تم نسخ العقدة.");}}
-    if(key==="v"&&clipboard.current){e.preventDefault();const n=clipboard.current;const draft=makeNode(n.data.kind,{x:n.position.x+cardSize(n).width+85,y:n.position.y+85},{...n.data,options:n.data.options.map(o=>({...o,id:crypto.randomUUID()}))});
-      s.addNode({...draft,position:findOpenPosition(s.doc.nodes,draft,draft.position)});setNotice("تم لصق العقدة.");}
-    if(key==="d"&&s.selectedId){e.preventDefault();const n=s.doc.nodes.find(n=>n.id===s.selectedId);if(n){const draft=makeNode(n.data.kind,{x:n.position.x+cardSize(n).width+85,y:n.position.y+85},{...n.data,options:n.data.options.map(o=>({...o,id:crypto.randomUUID()}))});
-      s.addNode({...draft,position:findOpenPosition(s.doc.nodes,draft,draft.position)});}}
+    const ids=s.doc.nodes.filter(n=>n.selected||n.id===s.selectedId).map(n=>n.id);
+    if(key==="c"&&ids.length){
+      e.preventDefault();
+      clipboard.current=copySelection(s.doc,ids);
+      setNotice("تم نسخ "+ids.length+" خطوة. عند اللصق لن تُكرّر نقطة البداية.");
+    }
+    if(key==="v"&&clipboard.current){
+      e.preventDefault();
+      const result=s.pasteSelection(clipboard.current);
+      setNotice(result==="added"?"تم لصق الخطوات والاتصالات الداخلية.":
+        result==="no_copyable_nodes"?"لا يمكن نسخ نقطة البداية؛ لكل تدفق بداية واحدة.":
+        "الحد الأقصى 100 خطوة؛ تعذر اللصق.");
+    }
+    if(key==="d"&&ids.length){
+      e.preventDefault();
+      const result=s.pasteSelection(copySelection(s.doc,ids));
+      setNotice(result==="added"?"تم تكرار الخطوات المحددة دون نقطة البداية.":
+        result==="no_copyable_nodes"?"توجد بداية واحدة فقط؛ لا يمكن تكرارها.":
+        "الحد الأقصى 100 خطوة؛ تعذر التكرار.");
+    }
   },[]);
   useEffect(()=>{window.addEventListener("keydown",onKeyboard);return()=>window.removeEventListener("keydown",onKeyboard);},[onKeyboard]);
   const arrange=()=>{
@@ -214,7 +236,8 @@ function Editor(){
           <span className={"relative inline-flex h-4 w-8 shrink-0 rounded-full "+(activeEnabled?"bg-[#3DD189]":"bg-[#60766B]")}>
             <span className={"absolute top-0.5 h-3 w-3 rounded-full bg-[#061A14] transition-transform "+(activeEnabled?"translate-x-0.5":"translate-x-[18px]")}/>
           </span>
-          {activeEnabled?t("enabled"):t("disabled")}
+          {language==="ar"?"تفعيل محلي للتجربة — لا يرسل رسائل":"Local test enable — sends no messages"}
+          <span className="text-[10px] opacity-80">({activeEnabled?t("enabled"):t("disabled")})</span>
         </button>
         <button className={btn} onClick={()=>store().undo()} title={t("undo")}><Undo2 size={16}/></button>
         <button className={btn} onClick={()=>store().redo()} title={t("redo")}><Redo2 size={16}/></button>
@@ -242,7 +265,21 @@ function Editor(){
     {CLOUD_DRAFT_UI_ENABLED&&showCloudDrafts&&<CloudDraftPanel language={language} onClose={()=>setShowCloudDrafts(false)}/>}
     {recovery.messages.length>0&&<div role="alert" className="border-b border-[#E5B54B] bg-[#2C2414] px-4 py-3 text-xs text-[#F9E3A2]">
       <strong>تقرير استعادة التدفقات: </strong>{recovery.messages.join(" ")} تم استرجاع {recovery.recovered} وتجاهل {recovery.skipped}.
-      {protectStoredLibrary&&<span className="mr-2 font-bold">الحفظ التلقائي متوقف لحماية بيانات المكتبة الأصلية؛ استخدم «تصدير» قبل تأكيد الحفظ اليدوي.</span>}
+      {protectStoredLibrary&&<span className="mr-2 font-bold">الحفظ التلقائي متوقف لحماية البيانات الأصلية؛ نزّل نسخة خام قبل تأكيد الحفظ اليدوي.</span>}
+      {recovery.backups.map(backup=><span key={backup.key} className="mr-2 inline-flex flex-wrap items-center gap-2">
+        <button type="button" className="rounded-lg border border-[#E5B54B] px-2 py-1 font-semibold"
+          onClick={()=>{
+            const blob=new Blob([backup.raw],{type:"text/plain;charset=utf-8"});
+            const link=URL.createObjectURL(blob),a=document.createElement("a");
+            a.href=link;a.download=backup.key+".txt";a.click();window.setTimeout(()=>URL.revokeObjectURL(link),1000);
+          }}>تنزيل النسخة الخام ({backup.sourceKey})</button>
+        <button type="button" className="rounded-lg border border-[#E5B54B] px-2 py-1"
+          onClick={()=>{
+            if(!window.confirm("ستُستعاد البايتات الأصلية إلى المفتاح السابق، وقد تبقى غير صالحة؛ هل تريد المتابعة؟"))return;
+            try{localStorage.setItem(backup.sourceKey,backup.raw);window.location.reload();}
+            catch{setNotice("تعذر استرجاع النسخة الخام إلى تخزين المتصفح.");}
+          }}>استرجاع البايتات الأصلية</button>
+      </span>)}
     </div>}
     <div className="relative flex min-h-0 flex-1 overflow-hidden">
       <section className="relative min-w-0 flex-1" aria-label="مساحة التدفقات" data-touch-pan={isCompact} onClick={()=>{if(edgeMenu)setEdgeMenu(null);}}>
