@@ -73,7 +73,7 @@ export const useFlowStore=create<FlowState>((set,get)=>({
     const id=crypto.randomUUID();
     const doc=structuredClone(s.doc);
     doc.name=s.doc.name+" (نسخة)";
-    set({doc,activeFlowId:id,flows:[...snapshotLibrary(s.activeFlowId,s.doc,s.flows).flows,{id,doc,enabled:false}],selectedId:null,past:[],future:[]});
+    set({doc,activeFlowId:id,flows:[...snapshotLibrary(s.activeFlowId,s.doc,s.flows).flows,{id,doc,enabled:false}],selectedId:null,past:[],future:[],pastEnabled:[],futureEnabled:[]});
     return id;
   },
   switchFlow:(id)=>{
@@ -82,7 +82,7 @@ export const useFlowStore=create<FlowState>((set,get)=>({
     const target=s.flows.find(flow=>flow.id===id);
     if(!target)return false;
     const current=snapshotLibrary(s.activeFlowId,s.doc,s.flows);
-    set({activeFlowId:id,flows:current.flows,doc:target.doc,selectedId:null,past:[],future:[]});
+    set({activeFlowId:id,flows:current.flows,doc:target.doc,selectedId:null,past:[],future:[],pastEnabled:[],futureEnabled:[]});
     return true;
   },
   deleteFlow:(id)=>{
@@ -91,7 +91,7 @@ export const useFlowStore=create<FlowState>((set,get)=>({
     const flows=snapshotLibrary(s.activeFlowId,s.doc,s.flows).flows.filter(flow=>flow.id!==id);
     const activeFlowId=s.activeFlowId===id?flows[0].id:s.activeFlowId;
     const doc=s.activeFlowId===id?flows[0].doc:s.doc;
-    set({flows,activeFlowId,doc,selectedId:null,past:[],future:[]});
+    set({flows,activeFlowId,doc,selectedId:null,past:[],future:[],pastEnabled:[],futureEnabled:[]});
     return true;
   },
   setSelected:(id)=>set({selectedId:id}),
