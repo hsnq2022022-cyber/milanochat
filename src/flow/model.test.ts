@@ -119,3 +119,13 @@ test("audit: required options reject incomplete flows before local activation",(
   assert.ok(validateDocument(doc).some(i=>i.severity==="error"&&i.message.includes(scenario.expected)),scenario.kind+":"+scenario.expected);
  }
 });
+
+test("typed question may be a valid terminal collection step without a next route",()=>{
+ const doc=exampleFlow(),q=doc.nodes.find(n=>n.data.kind==="question")!;
+ q.data={...q.data,inputMode:"email",inputField:"email"};
+ doc.edges=doc.edges.filter(e=>e.source!==q.id);
+ doc.nodes=doc.nodes.filter(n=>n.id===q.id||n.data.kind==="trigger"||n.data.title==="الترحيب");
+ const findings=validateDocument(doc);
+ assert.equal(findings.filter(i=>i.severity==="error").length,0);
+ assert.ok(findings.some(i=>i.nodeId===q.id&&i.severity==="warning"&&i.message.includes("نهاية ضمنية")));
+});

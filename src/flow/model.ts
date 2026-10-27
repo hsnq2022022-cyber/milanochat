@@ -93,7 +93,7 @@ export function makeNode(kind: Kind, position: XYPosition, opts?: Partial<FlowDa
 export function outputs(node: FlowNode): Choice[] {
   const d=node.data;
   if(d.kind==="end"||d.kind==="goto")return [];
-  if(d.kind==="question")return d.inputMode==="buttons"?d.options.filter(o=>!o.action||o.action==="step"):[{id:"valid",label:"صحيح"},{id:"invalid",label:"غير صحيح"}];
+  if(d.kind==="question")return d.inputMode==="buttons"?d.options.filter(o=>!o.action||o.action==="step"):[{id:"valid",label:"التالي"},{id:"invalid",label:"مسار قديم غير مستخدم"}];
   if(d.kind==="message")return [{id:"next",label:"التالي"},...d.options.filter(o=>!o.action||o.action==="step")];
   if(d.kind==="condition")return [{id:"yes",label:"نعم"},{id:"no",label:"لا"}];
   if(d.kind==="request")return [{id:"success",label:"نجاح"},{id:"error",label:"خطأ"}];
@@ -213,7 +213,7 @@ export function validateDocument(doc: FlowDocument, library?: readonly Validatio
     if(n.data.kind==="end")continue;
     const paths=adjacency.get(n.id)||[];
     if(!paths.length&&!externalExit.has(n.id)){
-      const terminal=["message","action"].includes(n.data.kind);
+      const terminal=["message","action"].includes(n.data.kind)||(n.data.kind==="question"&&n.data.inputMode!=="buttons");
       add(terminal
         ?"نهاية ضمنية: هذه الخطوة بلا مخرج، وسينتهي التدفق بعدها — "+(n.data.title||n.id)
         :"العقدة بلا مخرج — "+(n.data.title||n.id),n.id,terminal?"warning":"error");
@@ -234,7 +234,7 @@ export function validateDocument(doc: FlowDocument, library?: readonly Validatio
   // Every reachable node must eventually lead to End or an external destination.
   // Cycles with an escape are legal. Cycles without one are not.
   const canFinish=new Set<string>([...externalExit,...doc.nodes.filter(n=>n.data.kind==="end"||
-    (["message","action"].includes(n.data.kind)&&(adjacency.get(n.id)||[]).length===0)).map(n=>n.id)]);
+    ((["message","action"].includes(n.data.kind)||(n.data.kind==="question"&&n.data.inputMode!=="buttons"))&&(adjacency.get(n.id)||[]).length===0)).map(n=>n.id)]);
   let changed=true;
   while(changed){
     changed=false;

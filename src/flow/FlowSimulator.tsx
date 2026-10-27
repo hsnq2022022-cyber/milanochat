@@ -173,17 +173,17 @@ export default function FlowSimulator({
       return;
     }
     const valid=validCustomerInput(current.data.inputMode,answer);
-    if(!valid&&!nextFor(currentDoc,current.id,"invalid")){
+    if(!valid){
       setNote("الإجابة غير صالحة؛ تحقق من البريد أو رقم الهاتف أو الرقم وأعد المحاولة.");
       return;
     }
     const stored=["number","phone"].includes(current.data.inputMode)?normalizeArabicDigits(answer):answer;
     const vars={...sim.variables,message:stored,...(valid?{[current.data.inputField]:stored}:{})};
-    const dest=nextFor(currentDoc,current.id,valid?"valid":"invalid");
+    const dest=nextFor(currentDoc,current.id,"valid");
     const history=[...sim.history,bubble("user",answer)];
     setInput("");setNote("");
     if(dest)walk(dest,{...sim,history,variables:vars});
-    else end(history,valid?"انتهى المسار.":"الإجابة غير صالحة ولا يوجد مسار بديل.");
+    else end(history,"تم حفظ الإجابة وانتهى المسار.");
   };
   const collection=current&&sim.pendingBlockIndex!==undefined?current.data.contentBlocks[sim.pendingBlockIndex]:null;
   const showTextInput=!!collection||current?.data.kind==="question"&&current.data.inputMode!=="buttons";

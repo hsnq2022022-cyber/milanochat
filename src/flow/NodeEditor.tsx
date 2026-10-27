@@ -28,7 +28,7 @@ export default function NodeEditor({node,onClose}:{node:FlowNode|null;onClose:()
     store.replace({...store.doc,nodes:store.doc.nodes.map(n=>n.id===node.id?{...n,data:{...n.data,options}}:n),
       edges:store.doc.edges.filter(e=>e.source!==node.id||e.sourceHandle==="next"||validIds.has(e.sourceHandle||""))});
   };
-  const setQuestionRoute=(port:"valid"|"invalid",target:string)=>{
+  const setQuestionRoute=(port:"valid",target:string)=>{
     const current=useFlowStore.getState().doc;
     const edges=current.edges.filter(e=>e.source!==node?.id||e.sourceHandle!==port);
     if(!target){store.replace({...current,edges});return;}
@@ -36,7 +36,7 @@ export default function NodeEditor({node,onClose}:{node:FlowNode|null;onClose:()
     if(!canConnect(connection,{...current,edges})){
       setStatus("تعذر توصيل مسار الإجابة: الخطوة غير صالحة.");return;
     }
-    store.replace({...current,edges:[...edges,edgeFor(connection,port==="valid"?"إجابة صحيحة":"إجابة غير صحيحة")]});
+    store.replace({...current,edges:[...edges,edgeFor(connection,"التالي")]});
     setStatus("");
   };
   const addOption=()=>{
@@ -89,18 +89,16 @@ export default function NodeEditor({node,onClose}:{node:FlowNode|null;onClose:()
           <label className={section}>اسم الحقل الذي يستقبل الإجابة</label>
           <input className={input} value={d.inputField} maxLength={100} onChange={e=>edit({inputField:e.target.value})}/>
           {d.inputMode!=="buttons"&&<section className="mt-4 rounded-xl border border-[#275443] bg-[#061A14]/60 p-3" data-testid="question-text-routes">
-            <p className="mb-2 text-xs font-semibold text-[#B8D0C3]">مسارات التحقق من الإجابة</p>
-            {(["valid","invalid"] as const).map(port=><label key={port} className="mb-3 block text-xs">
-              <span className="mb-1 block">{port==="valid"?"عند إجابة صحيحة":"عند إجابة غير صحيحة"}</span>
-              <select className={input} aria-label={port==="valid"?"وجهة الإجابة الصحيحة":"وجهة الإجابة غير الصحيحة"}
-                value={store.doc.edges.find(e=>e.source===node.id&&e.sourceHandle===port)?.target||""}
-                onChange={e=>setQuestionRoute(port,e.target.value)}>
-                <option value="">غير مرتبط — ينتهي هذا المسار</option>
-                {store.doc.nodes.filter(n=>n.id!==node.id&&n.data.kind!=="trigger").map(n=>
-                  <option key={n.id} value={n.id}>{n.data.title}</option>)}
-              </select>
-            </label>)}
-            <p className="text-[11px] leading-5 text-[#8B9E96]">البريد والهاتف والرقم تُفحص صيغتها في المحاكاة؛ اختر وجهة كل نتيجة حتى لا ينتهي المسار دون متابعة.</p>
+            <p className="mb-2 text-xs font-semibold text-[#B8D0C3]">بعد استلام إجابة صحيحة</p>
+            <label className="mb-2 block text-xs">الخطوة التالية (اختياري)</label>
+            <select className={input} aria-label="الخطوة التالية بعد الإجابة"
+              value={store.doc.edges.find(e=>e.source===node.id&&e.sourceHandle==="valid")?.target||""}
+              onChange={e=>setQuestionRoute("valid",e.target.value)}>
+              <option value="">إنهاء التدفق بعد حفظ الإجابة</option>
+              {store.doc.nodes.filter(n=>n.id!==node.id&&n.data.kind!=="trigger").map(n=>
+                <option key={n.id} value={n.id}>{n.data.title}</option>)}
+            </select>
+            <p className="mt-2 text-[11px] leading-5 text-[#8B9E96]">عند إدخال بريد أو هاتف أو رقم غير صحيح، سيُطلب من العميل تصحيحه تلقائيًا، دون الحاجة لمسار منفصل.</p>
           </section>}
         </>}
         <MessageBlocksEditor node={node}/>
