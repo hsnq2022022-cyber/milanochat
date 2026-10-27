@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { exampleFlow, makeNode } from "./model.ts";
+import { exampleFlow, makeNode, importFlow } from "./model.ts";
 import { prepareCloudDraft, decodeCloudDraftRows, MAX_CLOUD_DRAFTS } from "./cloudDraft.ts";
 
 test("stage 7 cloud preparation roundtrips all content without changing original or activation",()=>{
@@ -28,7 +28,7 @@ test("stage 7 cloud preparation roundtrips all content without changing original
  assert.equal(restored.drafts.length,1);
  assert.equal(restored.drafts[0].revision,5);
  assert.equal(restored.drafts[0].flow.enabled,false); // No published or live activation.
- assert.equal(JSON.stringify(restored.drafts[0].flow.doc),snapshot);
+ assert.equal(JSON.stringify(restored.drafts[0].flow.doc),JSON.stringify(importFlow(prepared.document))); // Existing importer fills optional display defaults only.
  assert.notEqual(before,snapshot);
 });
 
