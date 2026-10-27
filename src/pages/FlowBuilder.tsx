@@ -11,7 +11,7 @@ import AutomationEdge from "../flow/AutomationEdge";
 import NodeEditor from "../flow/NodeEditor";
 import FlowSimulator from "../flow/FlowSimulator";
 import { ACCENT, KIND_LIST, LABELS, SAVE_KEY, canConnect, edgeFor, importFlow, makeNode, outputs, validateDocument } from "../flow/model";
-import { arrangeFlow, cardSize } from "../flow/layout";
+import { arrangeFlow, cardSize, findOpenPosition } from "../flow/layout";
 import { useAddStepMenu } from "../flow/addMenu";
 import type { FlowNode, FlowEdge, Kind } from "../flow/model";
 import { useFlowStore } from "../flow/store";
@@ -52,7 +52,8 @@ function Editor(){
     const pos=point||(source
       ? {x:source.position.x,y:source.position.y+cardSize(source).height+150}
       :instance.screenToFlowPosition({x:Math.round(window.innerWidth*.48),y:Math.round(window.innerHeight*.5)}));
-    const node=makeNode(kind,pos);
+    const candidateNode=makeNode(kind,pos);
+    const node={...candidateNode,position:findOpenPosition(current.nodes,candidateNode,pos)};
     if(source&&connectFrom){
       const c:Connection={source:source.id,sourceHandle:connectFrom.port,target:node.id,targetHandle:"in"};
       const candidate={...current,nodes:[...current.nodes,node]};
@@ -78,16 +79,16 @@ function Editor(){
     closeAdd();
   };
   useEffect(()=>{
-    // Arrange older drafts exactly once. User data/IDs remain unchanged; Undo can restore positions.
+    // Arrange each flow independently, preserving user data and retaining the original positions in undo history.
     try{
-      const key="social_flow_dagre_arranged_v1";
+      const key="social_flow_dagre_arranged_v2_"+activeFlowId;
       if(!localStorage.getItem(key)){
         store().replace(arrangeFlow(store().doc));
         localStorage.setItem(key,"1");
         window.setTimeout(()=>instance.fitView({padding:.20,maxZoom:.85,duration:0}),350);
       }
     }catch{/* Browser may disable localStorage; manual layout stays available. */}
-  },[]);
+  },[activeFlowId,instance]);
   const exportFile=()=>{
     const blob=new Blob([JSON.stringify(doc,null,2)],{type:"application/json"});
     const url=URL.createObjectURL(blob),anchor=document.createElement("a");
@@ -117,8 +118,10 @@ function Editor(){
     if(key==="z"){e.preventDefault();if(e.shiftKey)s.redo();else s.undo();}
     if(key==="y"){e.preventDefault();s.redo();}
     if(key==="c"&&s.selectedId){const n=s.doc.nodes.find(n=>n.id===s.selectedId);if(n){e.preventDefault();clipboard.current=n;setNotice("تم نسخ العقدة.");}}
-    if(key==="v"&&clipboard.current){e.preventDefault();const n=clipboard.current;const duplicated=makeNode(n.data.kind,{x:n.position.x+85,y:n.position.y+85},{...n.data,options:n.data.options.map(o=>({...o,id:crypto.randomUUID()}))});s.addNode(duplicated);setNotice("تم لصق العقدة.");}
-    if(key==="d"&&s.selectedId){e.preventDefault();const n=s.doc.nodes.find(n=>n.id===s.selectedId);if(n)s.addNode(makeNode(n.data.kind,{x:n.position.x+85,y:n.position.y+85},{...n.data,options:n.data.options.map(o=>({...o,id:crypto.randomUUID()}))}));}
+    if(key==="v"&&clipboard.current){e.preventDefault();const n=clipboard.current;const draft=makeNode(n.data.kind,{x:n.position.x+cardSize(n).width+85,y:n.position.y+85},{...n.data,options:n.data.options.map(o=>({...o,id:crypto.randomUUID()}))});
+      s.addNode({...draft,position:findOpenPosition(s.doc.nodes,draft,draft.position)});setNotice("تم لصق العقدة.");}
+    if(key==="d"&&s.selectedId){e.preventDefault();const n=s.doc.nodes.find(n=>n.id===s.selectedId);if(n){const draft=makeNode(n.data.kind,{x:n.position.x+cardSize(n).width+85,y:n.position.y+85},{...n.data,options:n.data.options.map(o=>({...o,id:crypto.randomUUID()}))});
+      s.addNode({...draft,position:findOpenPosition(s.doc.nodes,draft,draft.position)});}}
   },[]);
   useEffect(()=>{window.addEventListener("keydown",onKeyboard);return()=>window.removeEventListener("keydown",onKeyboard);},[onKeyboard]);
   const arrange=()=>{
@@ -126,17 +129,14 @@ function Editor(){
     window.setTimeout(()=>instance.fitView({padding:.22,maxZoom:1,duration:350}),75);
     setNotice("تم ترتيب التدفق هرميًا، مع الحفاظ على جميع محتوياته.");
   };
-  const deleteWithBridge=(id:string)=>{
-    const n=doc.nodes.find(n=>n.id===id);
-    if(n?.data.kind==="trigger"&&!window.confirm("سيصبح التدفق دون نقطة بداية. حذف؟"))return;
-    store().deleteNode(id,true);setEdgeMenu(null);
-  };
   const insertOnEdge=(id:string)=>{
     const old=doc.edges.find(e=>e.id===id);
     if(!old)return;
     const a=doc.nodes.find(n=>n.id===old.source),b=doc.nodes.find(n=>n.id===old.target);
     if(!a||!b)return;
-    const fresh=makeNode("message",{x:(a.position.x+b.position.x)/2+50,y:(a.position.y+b.position.y)/2+80},{title:"خطوة جديدة",text:"اكتب رسالتك"});
+    const preferred={x:(a.position.x+b.position.x)/2+50,y:(a.position.y+b.position.y)/2+80};
+    const draft=makeNode("message",preferred,{title:"خطوة جديدة",text:"اكتب رسالتك"});
+    const fresh={...draft,position:findOpenPosition(doc.nodes,draft,preferred)};
     store().replace({...doc,nodes:[...doc.nodes,fresh],edges:[
       ...doc.edges.filter(e=>e.id!==id),
       {...old,id:crypto.randomUUID(),target:fresh.id,targetHandle:"in"},
