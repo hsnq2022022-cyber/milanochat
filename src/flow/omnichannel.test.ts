@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { exampleFlow, importFlow, makeNode, outputs, validateDocument } from "./model.ts";
-import { blankFlow, snapshotLibrary } from "./library.ts";
+import { blankFlow, snapshotLibrary, loadLibrary, FLOW_LIBRARY_KEY } from "./library.ts";
 
 test("new flow starts with usable trigger and message",()=>{
   const doc=blankFlow("اختبار");
@@ -58,4 +58,23 @@ test("library snapshot saves current document without changing other flows",()=>
   const state=snapshotLibrary("a",a,[{id:"a",doc:blankFlow("A")},{id:"b",doc:b}]);
   assert.equal(state.flows[0].doc.name,"مُعدّل");
   assert.equal(state.flows[1].doc.name,"B");
+});
+
+test("existing library preserves documents and enables after JSON roundtrip",()=>{
+ const a=blankFlow("تدفق أول"),b=blankFlow("تدفق ثان");
+ const first={activeFlowId:"first",flows:[{id:"first",doc:a,enabled:true},{id:"second",doc:b,enabled:false}]};
+ const raw=JSON.parse(JSON.stringify(first));
+ assert.equal(raw.flows[0].doc.version,3);
+ assert.deepEqual(raw.flows[0].doc,a);
+});
+test("corrupt library JSON returns a fallback without overwriting stored bytes",()=>{
+ const old=(globalThis as any).window, prev=(globalThis as any).localStorage;
+ const data=new Map([[FLOW_LIBRARY_KEY,"{invalid-json"]]);
+ (globalThis as any).window={};
+ (globalThis as any).localStorage={getItem:(key:string)=>data.get(key)??null,setItem:(key:string,value:string)=>data.set(key,value)};
+ try{
+   const recovered=loadLibrary();
+   assert.equal(recovered.flows.length,1);
+   assert.equal(data.get(FLOW_LIBRARY_KEY),"{invalid-json");
+ }finally{(globalThis as any).window=old;(globalThis as any).localStorage=prev;}
 });
