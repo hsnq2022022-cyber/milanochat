@@ -16,7 +16,7 @@ import { useAddStepMenu } from "../flow/addMenu";
 import type { FlowNode, FlowEdge, Kind } from "../flow/model";
 import { useFlowStore } from "../flow/store";
 import { getLibraryRecoveryReport, saveLibrary, snapshotLibrary } from "../flow/library";
-import { flowText } from "../flow/uiLocale";
+import { flowText, flowKindLabel } from "../flow/uiLocale";
 import type { FlowLanguage } from "../flow/uiLocale";
 
 const nodeTypes={flowNode:AutomationNode};
@@ -320,7 +320,7 @@ function Editor(){
               {KIND_LIST.filter(k=>k!=="trigger"||(!addRequest.source&&!doc.nodes.some(n=>n.data.kind==="trigger"))).map(kind=>
                 <button key={kind} className="flex min-h-12 items-center justify-between gap-1 rounded-xl border border-[#275443] bg-[#0F2E24] px-2.5 py-2 text-right text-xs hover:border-[#3DD189] hover:bg-[#173D30]"
                   onClick={()=>addNode(kind,addRequest.position,addRequest.source&&addRequest.port?{source:addRequest.source,port:addRequest.port}:undefined)}>
-                  <span>{LABELS[kind]}</span><span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{backgroundColor:ACCENT[kind]}}/>
+                  <span>{flowKindLabel(kind,language,LABELS[kind])}</span><span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{backgroundColor:ACCENT[kind]}}/>
                 </button>)}
             </div>}
           <p className="mt-3 text-[11px] leading-5 text-[#8B9E96]">بعد الإضافة يمكنك تحريك العقدة بحرية وإعادة ترتيب المخطط.</p>
