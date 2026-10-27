@@ -1,5 +1,5 @@
 import type { CloudDraft, DecodeResult } from "./cloudDraft";
-import { MAX_CLOUD_DRAFTS } from "./cloudDraft";
+import { MAX_CLOUD_DRAFTS } from "./cloudDraft.ts";
 import type { FlowLibrary, SavedFlow } from "./library";
 import type { FlowDocument } from "./model";
 
