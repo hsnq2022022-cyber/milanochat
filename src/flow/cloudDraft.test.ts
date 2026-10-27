@@ -117,3 +117,18 @@ test("cloud adapter reports a revision conflict rather than replacing newer serv
  const result=await saveCloudDraft(fake,"tenant",{id:"default",doc:exampleFlow()},5);
  assert.deepEqual(result,{status:"conflict"});
 });
+
+test("cloud read rejects oversized payloads and malformed timestamps without modifying inputs",()=>{
+ const valid=exampleFlow();
+ const huge={...valid,nodes:valid.nodes.map((n,i)=>i===0?{...n,data:{...n.data,text:"a".repeat(4*1024*1024)}}:n)};
+ const rows=[
+  {flow_key:"valid",document:valid,draft_revision:1,updated_at:"2026-10-27T19:00:00Z"},
+  {flow_key:"oversized",document:huge,draft_revision:1,updated_at:"2026-10-27T19:00:00Z"},
+  {flow_key:"bad-date",document:valid,draft_revision:1,updated_at:"not-a-timestamp"}
+ ];
+ const before=rows[0].document;
+ const result=decodeCloudDraftRows(rows);
+ assert.deepEqual(result.drafts.map(d=>d.flow.id),["valid"]);
+ assert.equal(result.skipped,2);
+ assert.equal(rows[0].document,before);
+});
