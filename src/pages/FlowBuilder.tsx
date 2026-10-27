@@ -154,7 +154,7 @@ function Editor(){
         <div className="min-w-0"><p className="text-[11px] text-[#8B9E96]">إدارة سوشيال / مصمم الأتمتة</p>
           <input className="max-w-36 bg-transparent text-sm font-bold outline-none md:max-w-64" aria-label="اسم التدفق" maxLength={100} value={doc.name} onChange={e=>store().rename(e.target.value)}/></div>
         <span className="hidden rounded-lg border border-[#E5B54B]/40 px-2 py-1 text-[11px] text-[#E5B54B] sm:block">مسودة</span>
-        {import.meta.env.DEV&&<span data-testid="flow-preview-version" className="rounded-lg border border-[#3DD189]/60 bg-[#173D30] px-2 py-1 text-[11px] text-[#3DD189]">معاينة 5.3 — سؤال بخانة واحدة</span>}
+        {<span data-testid="flow-preview-version" className="rounded-lg border border-[#3DD189]/60 bg-[#173D30] px-2 py-1 text-[11px] text-[#3DD189]">معاينة 5.3 — سؤال بخانة واحدة</span>}
         <div className="flex flex-wrap items-center gap-1.5" data-testid="flow-toolbar-actions">
           <select className="max-w-36 rounded-lg border border-[#275443] bg-[#0F2E24] px-2 py-2 text-xs text-white md:max-w-52" aria-label="اختيار التدفق" value={activeFlowId} onChange={e=>{
             store().switchFlow(e.target.value);closeAdd();setNotice("تم فتح التدفق المحدد.");
