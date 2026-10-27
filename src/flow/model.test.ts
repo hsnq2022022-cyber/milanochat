@@ -4,7 +4,8 @@ import { canConnect, exampleFlow, importFlow, makeNode, outputs, upsertConnectio
 
 test("example keeps three pricing messages as natural terminal branches",()=>{
   const doc=exampleFlow();
-  assert.deepEqual(validateDocument(doc),[]);
+  assert.equal(validateDocument(doc).filter(issue=>issue.severity==="warning"&&issue.message.includes("نهاية ضمنية")).length,3);
+  assert.equal(validateDocument(doc).filter(issue=>issue.severity==="error").length,0);
   assert.equal(doc.nodes.filter(n=>n.data.kind==="message").length,4);
 });
 test("reject self-loop and edges into trigger",()=>{
@@ -34,4 +35,63 @@ test("imports previous version two drafts safely",()=>{
 test("rejects invalid oversized and dangling imports",()=>{
   assert.equal(importFlow({version:3,name:"evil",nodes:[],edges:[]}),null);
   assert.equal(importFlow({version:3,name:"evil",nodes:exampleFlow().nodes,edges:[{source:"missing",target:"absent"}]}),null);
+});
+
+test("v3 export and import preserve stable graph identifiers and data",()=>{
+  const before=exampleFlow();
+  const result=importFlow(JSON.parse(JSON.stringify(before)));
+  assert.ok(result);
+  assert.deepEqual(result.nodes.map(n=>n.id),before.nodes.map(n=>n.id));
+  assert.deepEqual(result.edges.map(e=>e.id),before.edges.map(e=>e.id));
+});
+test("v2 importer preserves original IDs and existing edge ports",()=>{
+  const old={version:2,name:"old",nodes:[
+    {id:"trigger-one",type:"trigger",x:20,y:20,title:"بداية",keyword:"hello",choices:[]},
+    {id:"reply-one",type:"message",x:20,y:220,title:"رد",text:"مرحباً",choices:[]}
+  ],edges:[{id:"edge-one",from:"trigger-one",port:"next",to:"reply-one"}]};
+  const restored=importFlow(old);
+  assert.ok(restored);
+  assert.deepEqual(restored.nodes.map(n=>n.id),["trigger-one","reply-one"]);
+  assert.equal(restored.edges[0].id,"edge-one");
+  assert.equal(restored.edges[0].sourceHandle,"next");
+});
+
+test("reports distinct orphan nodes with clickable identities",()=>{
+  const doc=exampleFlow();
+  const a=makeNode("message",{x:100,y:140},{title:"منعزلة",text:"X"});
+  const b=makeNode("message",{x:150,y:190},{title:"منعزلة",text:"Y"});
+  doc.nodes.push(a,b);
+  const issues=validateDocument(doc);
+  assert.ok(issues.some(issue=>issue.nodeId===a.id&&issue.message.includes("غير قابلة للوصول")));
+  assert.ok(issues.some(issue=>issue.nodeId===b.id&&issue.message.includes("غير قابلة للوصول")));
+  assert.notEqual(a.id,b.id);
+});
+test("detects missing question exits and closed cycles",()=>{
+  const doc=exampleFlow();
+  const question=doc.nodes.find(n=>n.data.kind==="question")!;
+  const selected=question.data.options[0];
+  doc.edges=doc.edges.filter(e=>!(e.source===question.id&&e.sourceHandle===selected.id));
+  assert.ok(validateDocument(doc).some(issue=>issue.nodeId===question.id&&issue.message.includes("بلا وجهة")));
+  const start=doc.nodes[0],reply=doc.nodes[1];
+  doc.edges=doc.edges.filter(e=>e.source!==reply.id);
+  doc.edges.push({id:crypto.randomUUID(),type:"flowEdge",source:reply.id,sourceHandle:"next",target:reply.id,targetHandle:"in",data:{}});
+  assert.ok(validateDocument(doc).some(issue=>issue.message.includes("دورة مغلقة")));
+});
+
+test("terminal messages and actions are warnings, but not activation errors",()=>{
+  const doc=exampleFlow();
+  const issues=validateDocument(doc);
+  assert.equal(issues.filter(x=>x.severity==="error").length,0);
+  assert.equal(issues.filter(x=>x.severity==="warning").length,3);
+  assert.ok(issues.every(x=>x.nodeId&&x.message.includes("نهاية ضمنية")));
+});
+test("a detached message and a dangling question button remain blocking errors",()=>{
+  const doc=exampleFlow();
+  const orphan=makeNode("message",{x:600,y:600},{title:"معزولة",text:"مهم"});
+  doc.nodes.push(orphan);
+  const question=doc.nodes.find(n=>n.data.kind==="question")!;
+  doc.edges=doc.edges.filter(e=>e.source!==question.id||e.sourceHandle!==question.data.options[0].id);
+  const issues=validateDocument(doc);
+  assert.ok(issues.some(x=>x.nodeId===orphan.id&&x.severity==="error"&&x.message.includes("غير قابلة للوصول")));
+  assert.ok(issues.some(x=>x.nodeId===question.id&&x.severity==="error"&&x.message.includes("بلا وجهة")));
 });

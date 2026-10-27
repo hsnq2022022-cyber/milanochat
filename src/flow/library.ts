@@ -3,7 +3,10 @@ import type { FlowDocument } from "./model";
 
 export const FLOW_LIBRARY_KEY="social_flow_library_v1";
 export type SavedFlow={id:string;doc:FlowDocument;enabled?:boolean};
+export type RecoveryReport = { messages: string[]; recovered: number; skipped: number };
 export type FlowLibrary={activeFlowId:string;flows:SavedFlow[]};
+let lastRecoveryReport: RecoveryReport={messages:[],recovered:0,skipped:0};
+export function getLibraryRecoveryReport(): RecoveryReport {return {...lastRecoveryReport,messages:[...lastRecoveryReport.messages]};}
 
 export function blankFlow(name:string,fromScratch=false):FlowDocument {
   const trigger=makeNode("trigger",{x:420,y:60},{title:"بداية المحادثة",triggerMode:"message",keywords:""});
@@ -15,25 +18,40 @@ export function blankFlow(name:string,fromScratch=false):FlowDocument {
 }
 
 export function loadLibrary():FlowLibrary {
-  if(typeof window!=="undefined") {
-    try {
-      const raw=localStorage.getItem(FLOW_LIBRARY_KEY);
-      if(raw) {
+  lastRecoveryReport={messages:[],recovered:0,skipped:0};
+  if(typeof window!=="undefined"){
+    let raw:string|null=null;
+    try{raw=localStorage.getItem(FLOW_LIBRARY_KEY);}
+    catch{lastRecoveryReport.messages.push("تعذّر قراءة تخزين المتصفح. لم نُعدّل بياناتك.");}
+    if(raw){
+      try{
         const data:unknown=JSON.parse(raw);
-        if(data&&typeof data==="object"&&"flows" in data&&Array.isArray(data.flows)) {
+        if(data&&typeof data==="object"&&"flows" in data&&Array.isArray(data.flows)){
           const arr:SavedFlow[]=[];
-          for(const item of data.flows.slice(0,30)) {
-            if(!item||typeof item!=="object"||typeof item.id!=="string"||item.id.length>128)continue;
-            const doc=importFlow(item.doc);
-            if(doc&& !arr.some(x=>x.id===item.id))arr.push({id:item.id,doc,enabled:item.enabled===true});
+          const items=data.flows as unknown[];
+          for(const item of items.slice(0,30)){
+            if(!item||typeof item!=="object"||typeof (item as SavedFlow).id!=="string"||(item as SavedFlow).id.length>128){
+              lastRecoveryReport.skipped++;continue;
+            }
+            const candidate=item as SavedFlow, doc=importFlow(candidate.doc);
+            if(doc&&!arr.some(x=>x.id===candidate.id)){
+              arr.push({id:candidate.id,doc,enabled:candidate.enabled===true});
+            }else lastRecoveryReport.skipped++;
           }
-          if(arr.length) {
+          lastRecoveryReport.skipped+=Math.max(0,items.length-30);
+          lastRecoveryReport.recovered=arr.length;
+          if(lastRecoveryReport.skipped)
+            lastRecoveryReport.messages.push("استُرجع "+arr.length+" تدفق، وتُجاهل "+lastRecoveryReport.skipped+" عنصر غير صالح أو زائد. لم تُحذف النسخة الأصلية.");
+          if(arr.length){
             const active=String("activeFlowId" in data?data.activeFlowId:"");
             return {activeFlowId:arr.some(x=>x.id===active)?active:arr[0].id,flows:arr};
           }
-        }
+          lastRecoveryReport.messages.push("لم يمكن استرجاع تدفق صالح من المكتبة المحفوظة. بيانات التخزين الأصلية باقية.");
+        }else lastRecoveryReport.messages.push("صيغة مكتبة التدفقات غير صالحة؛ استخدم تصدير نسخة احتياطية قبل أي تعديل.");
+      }catch{
+        lastRecoveryReport.messages.push("ملف مكتبة التدفقات المحلية تالف (JSON غير صالح). لم يُحذف أو يُكتب فوقه أثناء الاسترجاع.");
       }
-    } catch { /* Fall back to existing single-flow draft; do not erase it. */ }
+    }
   }
   return {activeFlowId:"default",flows:[{id:"default",doc:typeof window==="undefined"?exampleFlow():loadFlow(),enabled:false}]};
 }

@@ -127,36 +127,132 @@ export function exampleFlow(): FlowDocument {
   const edges=[edgeFor({source:a.id,sourceHandle:"next",target:b.id,targetHandle:"in"}),edgeFor({source:b.id,sourceHandle:"next",target:c.id,targetHandle:"in"}),...ds.map((n,i)=>edgeFor({source:c.id,sourceHandle:c.data.options[i].id,target:n.id,targetHandle:"in"},c.data.options[i].label))];
   return {version:3,name:"تدفق ترحيبي",nodes:[a,b,c,...ds],edges};
 }
-export function validateDocument(doc: FlowDocument): string[] {
-  const errors:string[]=[];if(!doc.nodes.length||doc.nodes.length>100)errors.push("عدد الخطوات يجب أن يكون بين 1 و100.");
-  if(doc.edges.length>250)errors.push("التوصيلات تتجاوز الحد الأقصى.");
-  const starts=doc.nodes.filter(n=>n.data.kind==="trigger");if(starts.length!==1)errors.push("أضف خطوة بداية واحدة فقط.");
-  const ids=new Set(doc.nodes.map(n=>n.id));if(ids.size!==doc.nodes.length)errors.push("تكرار معرّفات الخطوات.");
-  const unique=new Set<string>();
+export type ValidationIssue = { message: string; nodeId?: string; severity: "error" | "warning" };
+export type ValidationLibraryItem = { id: string; doc?: FlowDocument };
+/** One issue per affected node/port. Existing v3 document fields remain unchanged. */
+export function validateDocument(doc: FlowDocument, library?: readonly ValidationLibraryItem[]): ValidationIssue[] {
+  const issues: ValidationIssue[]=[];
+  const add=(message:string,nodeId?:string,severity:"error"|"warning"="error")=>issues.push(nodeId?{message,nodeId,severity}:{message,severity});
+  if(!doc.nodes.length||doc.nodes.length>100)add("عدد الخطوات يجب أن يكون بين 1 و100.");
+  if(doc.edges.length>250)add("التوصيلات تتجاوز الحد الأقصى.");
+  const starts=doc.nodes.filter(n=>n.data.kind==="trigger");
+  if(starts.length!==1)add("أضف خطوة بداية واحدة فقط.");
+  const byId=new Map(doc.nodes.map(n=>[n.id,n]));
+  if(byId.size!==doc.nodes.length)add("تكرار معرّفات الخطوات.");
+  const unique=new Map<string,string>();
+  const adjacency=new Map<string,string[]>();
+  const externalExit=new Set<string>();
+  for(const n of doc.nodes)adjacency.set(n.id,[]);
+
   for(const n of doc.nodes){
-    if(["message","question"].includes(n.data.kind)&&!n.data.text.trim()&&!n.data.image&&!n.data.contentBlocks?.some(b=>b.type!=="delay"))errors.push("محتوى الرسالة فارغ: "+n.data.title);
-    if(n.data.kind==="trigger"&&!TRIGGER_OPTIONS[n.data.platform]?.some(t=>t.id===n.data.triggerMode))errors.push("حدث البداية غير متاح للقناة المحددة.");
-    for(const option of n.data.options){
-      if(option.action==="website"&&(!option.url||!/^https:\/\/\S+$/i.test(option.url)))errors.push("رابط الموقع للزر "+option.label+" يجب أن يبدأ بـ HTTPS.");
-      if(option.action==="flow"&&!option.targetFlowId)errors.push("اختر التدفق المرتبط بالزر "+option.label+".");
+    const d=n.data;
+    const error=(message:string)=>add(message+" — "+(d.title||n.id),n.id);
+    if(["message","question"].includes(d.kind)&&!d.text.trim()&&!d.image&&!d.contentBlocks?.some(b=>b.type!=="delay"))
+      error("محتوى الرسالة فارغ");
+    if(d.kind==="trigger"&&!TRIGGER_OPTIONS[d.platform]?.some(t=>t.id===d.triggerMode))
+      error("حدث البداية غير متاح للقناة المحددة");
+    for(const option of d.options){
+      if(option.action==="website"){
+        if(!option.url||!/^https:\/\/\S+$/i.test(option.url))error("رابط الموقع للزر "+option.label+" يجب أن يبدأ بـ HTTPS");
+        else externalExit.add(n.id);
+      }
+      if(option.action==="flow"){
+        if(!option.targetFlowId)error("اختر التدفق المرتبط بالزر "+option.label);
+        else if(library&&!library.some(flow=>flow.id===option.targetFlowId))error("التدفق المستهدف للزر "+option.label+" غير موجود");
+        else externalExit.add(n.id);
+      }
+      if((!option.action||option.action==="step")&&
+         ["message","question"].includes(d.kind)&&
+         (d.kind==="message"||d.inputMode==="buttons")&&
+         !doc.edges.some(e=>e.source===n.id&&e.sourceHandle===option.id))
+        error("الخيار «"+option.label+"» بلا وجهة");
     }
-    for(const block of n.data.contentBlocks||[]){
-      if(["image","pdf"].includes(block.type)&&!(/^https:\/\/\S+$/i.test(block.url||"")||block.type==="image"&&/^data:image\/(?:webp|jpeg|png);base64,/i.test(block.url||"")||block.type==="pdf"&&/^data:application\/pdf;base64,/i.test(block.url||"")))errors.push("رابط "+(block.type==="pdf"?"PDF":"الصورة")+" غير صالح في "+n.data.title);
+    for(const block of d.contentBlocks||[]){
+      if(["image","pdf"].includes(block.type)&&!(/^https:\/\/\S+$/i.test(block.url||"")||
+         block.type==="image"&&/^data:image\/(?:webp|jpeg|png);base64,/i.test(block.url||"")||
+         block.type==="pdf"&&/^data:application\/pdf;base64,/i.test(block.url||"")))
+        error("رابط "+(block.type==="pdf"?"PDF":"الصورة")+" غير صالح");
     }
-    if(n.data.image&&!/^https:\/\//i.test(n.data.image)&&!/^data:image\/(?:png|jpeg|webp);base64,/i.test(n.data.image))errors.push("رابط صورة غير آمن: "+n.data.title);
-    if(n.data.kind==="question"&&n.data.inputMode==="buttons"&&n.data.options.length===0)errors.push("أضف خيارًا إلى "+n.data.title);
-    if(n.data.kind==="randomizer"&&Math.abs(n.data.options.reduce((sum,o)=>sum+(o.weight||0),0)-100)>.01)errors.push("مجموع نسب التوزيع يجب أن يساوي 100%.");
-    if(n.data.kind==="delay"&&n.data.delayValue<=0)errors.push("حدد مدة انتظار موجبة.");
-    if(n.data.kind==="request"&&n.data.requestUrl&&!/^https:\/\//i.test(n.data.requestUrl))errors.push("الطلب الخارجي يتطلب HTTPS.");
+    if(d.image&&!/^https:\/\//i.test(d.image)&&!/^data:image\/(?:png|jpeg|webp);base64,/i.test(d.image))
+      error("رابط صورة غير آمن");
+    if(d.kind==="question"&&d.inputMode==="buttons"&&d.options.length===0)error("أضف خيارًا للسؤال");
+    if(d.kind==="randomizer"&&Math.abs(d.options.reduce((sum,o)=>sum+(o.weight||0),0)-100)>.01)
+      error("مجموع نسب التوزيع يجب أن يساوي 100%");
+    if(d.kind==="delay"&&d.delayValue<=0)error("حدد مدة انتظار موجبة");
+    if(d.kind==="request"&&d.requestUrl&&!/^https:\/\//i.test(d.requestUrl))error("الطلب الخارجي يتطلب HTTPS");
+    if(d.kind==="goto"){
+      if(!byId.has(d.gotoNode))error("خطوة الانتقال غير موجودة");
+      else adjacency.get(n.id)?.push(d.gotoNode);
+    }
   }
-  for(const e of doc.edges){
-    if(!ids.has(e.source)||!ids.has(e.target))errors.push("خط متصل بخطوة محذوفة.");
-    const signature=e.source+":"+(e.sourceHandle||"next");
-    if(unique.has(signature))errors.push("هناك أكثر من اتصال لنفس مخرج الخطوة.");
-    unique.add(signature);
-    if(!canConnect({source:e.source,sourceHandle:e.sourceHandle||"next",target:e.target,targetHandle:e.targetHandle||"in"}, {...doc,edges:doc.edges.filter(x=>x.id!==e.id)}))errors.push("توصيل غير صالح.");
+  for(const edge of doc.edges){
+    if(!byId.has(edge.source)||!byId.has(edge.target)){
+      add("خط متصل بخطوة محذوفة",byId.has(edge.source)?edge.source:undefined);
+      continue;
+    }
+    const signature=edge.source+":"+(edge.sourceHandle||"next");
+    if(unique.has(signature))add("هناك أكثر من اتصال لنفس مخرج الخطوة — "+byId.get(edge.source)!.data.title,edge.source);
+    unique.set(signature,edge.id);
+    if(!canConnect({source:edge.source,sourceHandle:edge.sourceHandle||"next",target:edge.target,targetHandle:edge.targetHandle||"in"},
+      {...doc,edges:doc.edges.filter(e=>e.id!==edge.id)}))
+      add("توصيل غير صالح — "+byId.get(edge.source)!.data.title,edge.source);
+    adjacency.get(edge.source)?.push(edge.target);
   }
-  return [...new Set(errors)];
+  for(const n of doc.nodes){
+    if(n.data.kind==="end")continue;
+    const paths=adjacency.get(n.id)||[];
+    if(!paths.length&&!externalExit.has(n.id)){
+      const terminal=["message","action"].includes(n.data.kind);
+      add(terminal
+        ?"نهاية ضمنية: هذه الخطوة بلا مخرج، وسينتهي التدفق بعدها — "+(n.data.title||n.id)
+        :"العقدة بلا مخرج — "+(n.data.title||n.id),n.id,terminal?"warning":"error");
+    }
+  }
+  if(starts.length===1){
+    const seen=new Set<string>();
+    const visit=(id:string)=>{
+      if(seen.has(id))return;
+      seen.add(id);
+      for(const next of adjacency.get(id)||[])visit(next);
+    };
+    visit(starts[0].id);
+    for(const n of doc.nodes)if(!seen.has(n.id))
+      add("العقدة غير قابلة للوصول من البداية — "+(n.data.title||n.id)+" ("+n.id+")",n.id);
+  }
+
+  // Every reachable node must eventually lead to End or an external destination.
+  // Cycles with an escape are legal. Cycles without one are not.
+  const canFinish=new Set<string>([...externalExit,...doc.nodes.filter(n=>n.data.kind==="end"||
+    (["message","action"].includes(n.data.kind)&&(adjacency.get(n.id)||[]).length===0)).map(n=>n.id)]);
+  let changed=true;
+  while(changed){
+    changed=false;
+    for(const [id,targets] of adjacency){
+      if(!canFinish.has(id)&&targets.some(target=>canFinish.has(target))){
+        canFinish.add(id);changed=true;
+      }
+    }
+  }
+  // Flag each SCC cycle only once: independent cycles remain independently visible.
+  const color=new Map<string,number>(),stack:string[]=[];
+  const flagged=new Set<string>();
+  const dfs=(id:string)=>{
+    color.set(id,1);stack.push(id);
+    for(const next of adjacency.get(id)||[]){
+      if(!byId.has(next)||canFinish.has(id))continue;
+      if(color.get(next)===1){
+        const members=stack.slice(stack.indexOf(next));
+        const signature=[...members].sort().join("|");
+        if(!flagged.has(signature)){
+          flagged.add(signature);
+          add("دورة مغلقة بلا مسار خروج — "+members.map(x=>byId.get(x)?.data.title||x).join(" ← "),next);
+        }
+      }else if(!color.has(next))dfs(next);
+    }
+    stack.pop();color.set(id,2);
+  };
+  for(const n of doc.nodes)if(!color.has(n.id)&&!canFinish.has(n.id))dfs(n.id);
+  return issues;
 }
 const safeString=(v:unknown,d="")=>typeof v==="string"?v:d;
 const kindOf=(v:unknown):Kind=>KIND_LIST.includes(v as Kind)?v as Kind:"message";

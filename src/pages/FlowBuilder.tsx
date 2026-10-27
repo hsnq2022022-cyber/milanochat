@@ -15,7 +15,7 @@ import { arrangeFlow, cardSize } from "../flow/layout";
 import { useAddStepMenu } from "../flow/addMenu";
 import type { FlowNode, FlowEdge, Kind } from "../flow/model";
 import { useFlowStore } from "../flow/store";
-import { saveLibrary, snapshotLibrary } from "../flow/library";
+import { getLibraryRecoveryReport, saveLibrary, snapshotLibrary } from "../flow/library";
 
 const nodeTypes={flowNode:AutomationNode};
 const edgeTypes={flowEdge:AutomationEdge};
@@ -34,12 +34,16 @@ function Editor(){
   const addRequest=useAddStepMenu(s=>s.request),openAdd=useAddStepMenu(s=>s.open),closeAdd=useAddStepMenu(s=>s.close);
   const input=useRef<HTMLInputElement>(null),clipboard=useRef<FlowNode|null>(null),reconnectOk=useRef(true),justReconnected=useRef(false);
   const instance=useReactFlow<FlowNode,FlowEdge>();
-  const errors=useMemo(()=>validateDocument(doc),[doc]);
+  const issues=useMemo(()=>validateDocument(doc,flows),[doc,flows]);
+  const errors=useMemo(()=>issues.filter(issue=>issue.severity==="error"),[issues]);
+  const warnings=useMemo(()=>issues.filter(issue=>issue.severity==="warning"),[issues]);
+  const recovery=useMemo(()=>getLibraryRecoveryReport(),[]);
+  const [protectStoredLibrary,setProtectStoredLibrary]=useState(recovery.messages.length>0);
 
   useEffect(()=>{
-    const timer=window.setTimeout(()=>{try{localStorage.setItem(SAVE_KEY,JSON.stringify(doc));saveLibrary(snapshotLibrary(activeFlowId,doc,flows));}catch{setNotice("مساحة تخزين المتصفح غير كافية؛ استخدم تصدير لحفظ التدفق.");}},700);
+    const timer=window.setTimeout(()=>{if(protectStoredLibrary)return;try{localStorage.setItem(SAVE_KEY,JSON.stringify(doc));saveLibrary(snapshotLibrary(activeFlowId,doc,flows));}catch{setNotice("مساحة تخزين المتصفح غير كافية؛ استخدم تصدير لحفظ التدفق.");}},700);
     return()=>window.clearTimeout(timer);
-  },[doc,activeFlowId,flows]);
+  },[doc,activeFlowId,flows,protectStoredLibrary]);
   const addNode=(kind:Kind,point?:XYPosition,connectFrom?:{source:string;port:string})=>{
     const current=useFlowStore.getState().doc;
     if(current.nodes.length>=100){setNotice("الحد الأقصى 100 خطوة.");return;}
@@ -158,12 +162,14 @@ function Editor(){
           </select>
           <button className={btn} title="إنشاء تدفق جديد" aria-label="إنشاء تدفق جديد" onClick={()=>{
             if(flows.length>=30){setNotice("الحد الأقصى 30 تدفقًا محليًا.");return;}
-            store().createFlow();closeAdd();setNotice("أُنشئ تدفق جديد. اربط الأزرار من لوحة الخطوة.");
+            const created=store().createFlow();if(!created){setNotice("تعذّر إنشاء التدفق: وصلت إلى الحد الأقصى (30).");return;}
+            closeAdd();setNotice("أُنشئ تدفق جديد. اربط الأزرار من لوحة الخطوة.");
             window.setTimeout(()=>instance.fitView({padding:.25}),120);
           }}><Plus size={16}/></button>
           <button className={btn} title="البدء من الصفر" aria-label="البدء من الصفر" onClick={()=>{
             if(flows.length>=30){setNotice("الحد الأقصى 30 تدفقًا محليًا.");return;}
-            store().createFlow("تدفق فارغ "+(flows.length+1),true);
+            const created=store().createFlow("تدفق فارغ "+(flows.length+1),true);
+            if(!created){setNotice("تعذّر إنشاء التدفق: وصلت إلى الحد الأقصى (30).");return;}
             closeAdd();setNotice("تم إنشاء تدفق فارغ يحتوي على نقطة البداية فقط. التدفق القديم محفوظ.");
             window.setTimeout(()=>instance.fitView({padding:.25}),120);
           }}><LayoutGrid size={16}/> <span className="hidden sm:inline">البدء من الصفر</span></button>
@@ -193,15 +199,26 @@ function Editor(){
         <button className={btn} onClick={arrange} title="ترتيب تلقائي"><LayoutGrid size={16}/><span className="hidden md:inline">ترتيب</span></button>
         <button className={btn} onClick={()=>setShowIssues(v=>!v)} title="فحص التدفق">
           {errors.length?<AlertTriangle size={16} className="text-[#E5B54B]"/>:<CheckCircle2 size={16} className="text-[#3DD189]"/>}
-          <span className="hidden md:inline">فحص</span><span>{errors.length}</span>
+          <span className="hidden md:inline">فحص</span><span>{errors.length}</span><span className="text-[#E5B54B]">⚠ {warnings.length}</span>
         </button>
         <button className={btn} onClick={()=>setShowSimulator(true)}><Play size={16}/> تجربة</button>
         <button className={btn} onClick={exportFile}><Download size={16}/> تصدير</button>
         <button className={btn} onClick={()=>input.current?.click()}><Upload size={16}/> استيراد</button>
         <input ref={input} className="hidden" type="file" accept=".json,application/json" onChange={e=>{void importFile(e.target.files?.[0]);e.target.value="";}}/>
-        <button className="flex items-center gap-1 rounded-xl bg-[#3DD189] px-3 py-2.5 text-xs font-bold text-[#061A14]" onClick={()=>{try{localStorage.setItem(SAVE_KEY,JSON.stringify(doc));setNotice("حُفظت المسودة في متصفحك.");}catch{setNotice("تعذر الحفظ؛ استخدم التصدير.");}}}><Save size={16}/> حفظ</button>
+        <button className="flex items-center gap-1 rounded-xl bg-[#3DD189] px-3 py-2.5 text-xs font-bold text-[#061A14]" onClick={()=>{
+          if(protectStoredLibrary&&!window.confirm("المكتبة المحلية تحتوي بيانات تالفـة أو غير قابلة للاسترجاع. الحفظ الآن سيستبدل الأصل؛ يُنصح بأخذ نسخة احتياطية أولًا. هل تريد المتابعة؟"))return;
+          try{
+            localStorage.setItem(SAVE_KEY,JSON.stringify(doc));
+            saveLibrary(snapshotLibrary(activeFlowId,doc,flows));
+            setProtectStoredLibrary(false);setNotice("حُفظت المسودة ومكتبة التدفقات في متصفحك.");
+          }catch{setNotice("تعذر الحفظ؛ استخدم التصدير.");}
+        }}><Save size={16}/> حفظ</button>
       </div>
     </header>
+    {recovery.messages.length>0&&<div role="alert" className="border-b border-[#E5B54B] bg-[#2C2414] px-4 py-3 text-xs text-[#F9E3A2]">
+      <strong>تقرير استعادة التدفقات: </strong>{recovery.messages.join(" ")} تم استرجاع {recovery.recovered} وتجاهل {recovery.skipped}.
+      {protectStoredLibrary&&<span className="mr-2 font-bold">الحفظ التلقائي متوقف لحماية بيانات المكتبة الأصلية؛ استخدم «تصدير» قبل تأكيد الحفظ اليدوي.</span>}
+    </div>}
     <div className="relative flex min-h-0 flex-1 overflow-hidden">
       <section className="relative min-w-0 flex-1" aria-label="مساحة التدفقات" onClick={()=>{if(edgeMenu)setEdgeMenu(null);}}>
         <ReactFlow<FlowNode,FlowEdge>
@@ -246,7 +263,13 @@ function Editor(){
         <button className="nodrag absolute right-4 top-4 z-20 flex h-12 w-12 items-center justify-center rounded-full border border-[#9BF0BD] bg-[#3DD189] text-[#061A14] shadow-[0_8px_25px_rgba(17,110,64,.4)] transition-transform hover:scale-105" title="إضافة خطوة" aria-label="فتح إضافة خطوة" onClick={e=>openAdd({x:e.clientX,y:e.clientY})}><Plus size={25}/></button>
         {showIssues&&<div className="absolute left-3 top-3 z-20 w-[min(340px,90vw)] rounded-2xl border border-[#275443] bg-[#0B241C] p-4 shadow-xl">
           <div className="flex items-center justify-between gap-2"><h3 className="font-bold">فحص التدفق</h3><button onClick={()=>setShowIssues(false)} aria-label="إغلاق الفحص"><X size={18}/></button></div>
-          {errors.length?<div className="mt-3 max-h-52 space-y-2 overflow-y-auto text-xs text-[#E5B54B]">{errors.slice(0,12).map((e,i)=><p key={i}>• {e}</p>)}</div>:<p className="mt-3 flex items-center gap-2 text-sm text-[#3DD189]"><CheckCircle2 size={18}/> لا توجد أخطاء بنيوية مكتشفة.</p>}
+          {issues.length?<div className="mt-3 max-h-52 space-y-2 overflow-y-auto text-xs">{issues.slice(0,30).map((issue,i)=><button key={i} type="button" className={"block w-full rounded-md px-2 py-1 text-right hover:bg-[#173D30] "+(issue.severity==="warning"?"text-[#E5B54B]":"text-red-300")} onClick={()=>{
+              if(issue.nodeId){
+                const node=doc.nodes.find(n=>n.id===issue.nodeId);
+                if(node){store().setSelected(node.id);void instance.setCenter(node.position.x+140,node.position.y+90,{zoom:1,duration:350});}
+              }
+              setShowIssues(false);
+            }}>{issue.severity==="warning"?"⚠ تحذير: ":"● خطأ: "}{issue.message}{issue.nodeId?" (انتقل إلى العقدة)":""}</button>)}</div>:<p className="mt-3 flex items-center gap-2 text-sm text-[#3DD189]"><CheckCircle2 size={18}/> لا توجد أخطاء بنيوية مكتشفة.</p>}
         </div>}
         {edgeMenu&&<div className="fixed z-50 min-w-40 rounded-xl border border-[#275443] bg-[#0B241C] p-2 shadow-2xl" style={{left:Math.min(window.innerWidth-180,edgeMenu.x),top:Math.min(window.innerHeight-150,edgeMenu.y)}} onClick={e=>e.stopPropagation()}>
           <button className={btn+" mb-2 w-full"} onClick={()=>insertOnEdge(edgeMenu.id)}><Plus size={15}/> إدراج خطوة</button>

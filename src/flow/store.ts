@@ -10,7 +10,7 @@ export type FlowState = {
   doc: FlowDocument;
   activeFlowId: string;
   flows: SavedFlow[];
-  createFlow: (name?:string,fromScratch?:boolean)=>string;
+  createFlow: (name?:string,fromScratch?:boolean)=>string|null;
   setFlowEnabled: (id:string,enabled:boolean)=>boolean;
   duplicateFlow: ()=>string|null;
   switchFlow: (id:string)=>boolean;
@@ -42,6 +42,7 @@ const initial=initialLibrary.flows.find(flow=>flow.id===initialLibrary.activeFlo
 export const useFlowStore=create<FlowState>((set,get)=>({
   doc:initial,activeFlowId:initialLibrary.activeFlowId,flows:initialLibrary.flows,past:[],future:[],selectedId:null,
   createFlow:(name,fromScratch=false)=>{
+    if(get().flows.length>=30)return null;
     const id=crypto.randomUUID();
     set(s=>{
       if(s.flows.length>=30)return s;

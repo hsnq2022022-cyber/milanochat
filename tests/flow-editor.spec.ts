@@ -155,3 +155,37 @@ test("start from scratch opens a separate flow with only a trigger, preserving t
  await page.getByRole("combobox",{name:"اختيار التدفق"}).selectOption("default");
  await expect(page.locator(".react-flow__node")).toHaveCount(6);
 });
+
+test("default pricing messages show three nonblocking warnings and can be enabled",async({page})=>{
+  await page.goto("/milanochat/#/flows");
+  const toggle=page.getByTestId("flow-enabled-toggle");
+  await expect(toggle).toHaveAttribute("aria-pressed","false");
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-pressed","true");
+  await page.getByTitle("فحص التدفق").click();
+  const panel=page.getByText("فحص التدفق").last().locator("..");
+  await expect(page.getByText(/⚠ تحذير: نهاية ضمنية/)).toHaveCount(3);
+  await expect(page.getByText(/● خطأ:/)).toHaveCount(0);
+});
+test("an isolated node and a question option without a route block activation",async({page})=>{
+  await page.goto("/milanochat/#/flows");
+  const toggle=page.getByTestId("flow-enabled-toggle");
+  await page.getByRole("button",{name:"فتح إضافة خطوة"}).click();
+  await page.getByTestId("add-step-menu").getByRole("button",{name:"إرسال رسالة"}).click();
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-pressed","false");
+  // Blocking errors open the findings panel automatically.
+  await expect(page.getByText(/غير قابلة للوصول/).first()).toBeVisible();
+  await expect(page.getByText(/● خطأ:/).first()).toBeVisible();
+});
+
+test("an unconnected quick reply blocks local activation and identifies its question node",async({page})=>{
+  await page.goto("/milanochat/#/flows");
+  await page.locator(".react-flow__node").nth(2).click();
+  await page.locator("aside [data-testid^='flow-button']").first().click();
+  await page.getByRole("combobox",{name:"ربط الزر بخطوة"}).selectOption("");
+  const toggle=page.getByTestId("flow-enabled-toggle");
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-pressed","false");
+  await expect(page.getByText(/بلا وجهة/).first()).toBeVisible();
+});

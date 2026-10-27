@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { ArrowRight, Plus, Trash2, Link2, Globe2, Bot, Zap, GitBranch, Shuffle, Copy } from "lucide-react";
-import { edgeFor, makeNode } from "./model";
+import { canConnect, edgeFor, makeNode } from "./model";
 import type { Choice, ButtonAction, FlowNode, FlowData, Kind } from "./model";
 import { useFlowStore } from "./store";
 
@@ -19,6 +19,7 @@ export default function ButtonActionEditor({node}:{node:FlowNode}){
   const store=useFlowStore();
   const d=node.data;
   const [active,setActive]=useState<string|null>(null);
+  const [connectionError,setConnectionError]=useState("");
   const option=d.options.find(o=>o.id===active);
   const persist=(options:Choice[],dropIds:string[]=[])=>{
     const valid=new Set(options.filter(o=>!o.action||o.action==="step").map(o=>o.id));
@@ -60,8 +61,15 @@ export default function ButtonActionEditor({node}:{node:FlowNode}){
     if(target===node.id)return;
     const candidate=store.doc.nodes.find(n=>n.id===target);
     if(!candidate||candidate.data.kind==="trigger")return;
+    const connection={source:node.id,sourceHandle:choice.id,target,targetHandle:"in"};
+    const existing=store.doc.edges.find(e=>e.source===node.id&&e.sourceHandle===choice.id);
+    if(!canConnect(connection,store.doc,existing?.id)){
+      setConnectionError("لا يمكن ربط الزر بهذه الخطوة: اتصال غير صالح.");
+      return;
+    }
+    setConnectionError("");
     const options=d.options.map(o=>o.id===choice.id?{...o,action:"step" as const}:o);
-    const edge=edgeFor({source:node.id,sourceHandle:choice.id,target,targetHandle:"in"},choice.label);
+    const edge=edgeFor(connection,choice.label);
     store.replace({...store.doc,nodes:store.doc.nodes.map(n=>n.id===node.id?{...n,data:{...n.data,options}}:n),
       edges:[...store.doc.edges.filter(e=>e.source!==node.id||e.sourceHandle!==choice.id),edge]});
   };
@@ -107,6 +115,7 @@ export default function ButtonActionEditor({node}:{node:FlowNode}){
           className={"rounded-lg border p-2 text-right text-[11px] "+((option.action||"step")===a.id?"border-[#3DD189] bg-[#173D30]":"border-[#275443] bg-[#0B241C]")}
           onClick={()=>setAction(option,a.id)}>{a.label}</button>)}
       </div>
+      {!!connectionError&&<p role="alert" className="mt-2 text-xs text-[#E5B54B]">{connectionError}</p>}
       {(option.action==="step"||!option.action)&&<>
         <label className="mb-1 mt-3 block text-xs">الخطوة التي يتوجه إليها هذا الزر</label>
         <select className={input} aria-label="ربط الزر بخطوة" value={currentTarget(option)} onChange={e=>linkStep(option,e.target.value)}>
