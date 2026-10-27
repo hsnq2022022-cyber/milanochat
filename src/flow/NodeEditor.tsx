@@ -46,8 +46,8 @@ export default function NodeEditor({node,onClose}:{node:FlowNode|null;onClose:()
   const duplicate=()=>{if(store.doc.nodes.length>=100)return;const preferred={x:node.position.x+cardSize(node).width+80,y:node.position.y+80};const n=makeNode(d.kind,preferred,{...d,options:d.options.map(o=>({...o,id:crypto.randomUUID()})),title:d.title+" (نسخة)"});store.addNode({...n,position:findOpenPosition(store.doc.nodes,n,preferred)});};
   const remove=()=>{if(d.kind==="trigger"&&!window.confirm("حذف البداية سيجعل التدفق دون نقطة تشغيل. هل تريد المتابعة؟"))return;store.deleteNode(node.id);onClose();};
 
-  return <aside dir="rtl" data-testid="step-settings-panel" className={"flex shrink-0 flex-col border-r border-[#173D30] bg-[#0B241C] text-white shadow-2xl md:relative md:inset-auto md:z-20 md:shadow-none "+(collapsed?"fixed left-0 top-16 z-40 w-[min(85vw,265px)] md:w-[240px]":"fixed inset-y-0 left-0 z-40 w-[min(96vw,410px)] md:w-[min(40vw,385px)]")}>
-    <div className="sticky top-0 flex items-center justify-between gap-2 border-b border-[#173D30] bg-[#0B241C] px-4 py-3">
+  return <aside dir="rtl" data-testid="step-settings-panel" role="complementary" aria-label="خصائص الخطوة" className={"fixed inset-x-0 bottom-0 z-40 flex w-full shrink-0 flex-col overflow-hidden rounded-t-2xl border-t border-[#173D30] bg-[#0B241C] text-white shadow-2xl md:relative md:inset-auto md:z-20 md:max-h-none md:w-[min(40vw,385px)] md:rounded-none md:border-r md:border-t-0 md:shadow-none "+(collapsed?"max-h-20 md:w-[240px]":"max-h-[min(78dvh,730px)]")}>
+    <div className="sticky top-0 flex min-h-16 items-center justify-between gap-2 border-b border-[#173D30] bg-[#0B241C] px-3 py-3 md:px-4">
       <div><p className="text-[11px] text-[#8B9E96]">خصائص العقدة</p><h2 className="text-base font-bold" style={{color:ACCENT[d.kind]}}>{LABELS[d.kind]}</h2></div>
       <div className="flex items-center gap-2">
         <button type="button" aria-label={collapsed?"إظهار إعدادات الخطوة":"طي إعدادات الخطوة"} aria-expanded={!collapsed} className={btn} onClick={()=>setCollapsed(v=>!v)}>
