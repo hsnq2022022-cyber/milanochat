@@ -3,6 +3,8 @@ import { applyNodeChanges, applyEdgeChanges, reconnectEdge } from "@xyflow/react
 import type { NodeChange, EdgeChange, Connection } from "@xyflow/react";
 import { canConnect, edgeFor, outputs } from "./model";
 import { blankFlow, loadLibrary, snapshotLibrary } from "./library";
+import { stageCloudDraftCopy } from "./cloudDraft";
+import type { CloudDraft } from "./cloudDraft";
 import type { SavedFlow } from "./library";
 import type { FlowDocument, FlowData, FlowEdge, FlowNode } from "./model";
 
@@ -15,6 +17,7 @@ export type FlowState = {
   duplicateFlow: ()=>string|null;
   switchFlow: (id:string)=>boolean;
   deleteFlow: (id:string)=>boolean;
+  restoreCloudCopy: (source:CloudDraft,copyId:string)=>boolean;
   past: FlowDocument[];
   future: FlowDocument[];
   pastEnabled: boolean[];
@@ -93,6 +96,21 @@ export const useFlowStore=create<FlowState>((set,get)=>({
     const doc=s.activeFlowId===id?flows[0].doc:s.doc;
     set({flows,activeFlowId,doc,selectedId:null,past:[],future:[],pastEnabled:[],futureEnabled:[]});
     return true;
+  },
+  restoreCloudCopy:(source,copyId)=>{
+    let restored=false;
+    set(s=>{
+      try{
+        // نسخة جديدة غير مفعّلة، دون التعديل على التدفق المفتوح أو تاريخه.
+        const snapshot=snapshotLibrary(s.activeFlowId,s.doc,s.flows);
+        const staged=stageCloudDraftCopy(snapshot,source,copyId);
+        restored=true;
+        return {...s,flows:staged.flows};
+      }catch{
+        return s;
+      }
+    });
+    return restored;
   },
   setSelected:(id)=>set({selectedId:id}),
   pushHistory:()=>set(s=>({...savePast(s)})),
