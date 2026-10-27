@@ -151,7 +151,7 @@ test("start from scratch opens a separate flow with only a trigger, preserving t
  await page.getByRole("button",{name:"البدء من الصفر"}).click();
  await expect(page.locator(".react-flow__node")).toHaveCount(1);
  await expect(page.locator(".react-flow__edge")).toHaveCount(0);
- await expect(page.locator(".react-flow__node")).toContainText(["بداية المحادثة"]);
+ await expect(page.locator(".react-flow__node")).toContainText(["بداية الأتمتة"]);
  await page.getByRole("combobox",{name:"اختيار التدفق"}).selectOption("default");
  await expect(page.locator(".react-flow__node")).toHaveCount(6);
 });
