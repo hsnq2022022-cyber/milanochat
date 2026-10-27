@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { exampleFlow, makeNode } from "./model.ts";
 import { decodeCloudDraftRows, MAX_CLOUD_DRAFTS } from "./cloudDraft.ts";
-import { previewCloudRecovery, prepareSelectedCloudRecovery } from "./cloudRecovery.ts";
+import { previewCloudRecovery, prepareSelectedCloudRecovery, prepareIndependentCloudCopy } from "./cloudRecovery.ts";
 import type { FlowLibrary } from "./library.ts";
 
 const doc=()=>exampleFlow();
@@ -106,4 +106,43 @@ test("with one remaining slot, selecting second remote item works while selectin
  assert.deepEqual(prepareSelectedCloudRecovery(mine,cloud,["cloud-a","cloud-b"]),
    {status:"blocked",reason:"capacity_exceeded"});
  assert.equal(mine.flows.length,MAX_CLOUD_DRAFTS-1);
+});
+
+test("preview identifies local-only flows and staged cloud copy never overwrites collision",()=>{
+ const mine=local(),changed=doc();
+ changed.name="Cloud variant";
+ const remote=decodeCloudDraftRows([row("local",changed)]);
+ const preview=previewCloudRecovery(mine,remote);
+ assert.deepEqual(preview.localOnlyIds,[]);
+ assert.equal(preview.entries[0].decision,"conflict");
+ const before=JSON.stringify({mine,remote});
+ const staged=prepareIndependentCloudCopy(mine,remote.drafts[0],"restored-local-01");
+ assert.equal(staged.status,"ready");
+ if(staged.status==="ready"){
+  assert.deepEqual(staged.library.flows.map(x=>x.id),["local","restored-local-01"]);
+  assert.equal(staged.library.flows[0].enabled,true);
+  assert.equal(staged.library.flows[1].enabled,false);
+  assert.equal(staged.library.activeFlowId,"local");
+  assert.equal(staged.library.flows[1].doc.name,"Cloud variant");
+ }
+ assert.equal(JSON.stringify({mine,remote}),before);
+});
+
+test("copy staging refuses collisions, malformed IDs and exhausted capacity",()=>{
+ const mine=local(),remote=decodeCloudDraftRows([row("cloud-copy")]).drafts[0];
+ for(const [id,reason] of [
+  ["local","already_exists"],
+  ["bad name!","invalid_copy_id"],
+  ["","invalid_copy_id"]
+ ] as const){
+  assert.deepEqual(prepareIndependentCloudCopy(mine,remote,id),{status:"blocked",reason});
+ }
+ for(let i=1;i<MAX_CLOUD_DRAFTS;i++)mine.flows.push({id:"existing-"+i,doc:doc()});
+ assert.deepEqual(prepareIndependentCloudCopy(mine,remote,"available-id"),
+  {status:"blocked",reason:"capacity_exceeded"});
+});
+
+test("preview explicitly lists browser-only flows",()=>{
+ const mine=local(),remote=decodeCloudDraftRows([row("cloud-only")]);
+ assert.deepEqual(previewCloudRecovery(mine,remote).localOnlyIds,["local"]);
 });
