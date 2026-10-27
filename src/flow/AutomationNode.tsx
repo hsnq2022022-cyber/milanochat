@@ -62,7 +62,7 @@ export default function AutomationNode({id,data,selected}:NodeProps<FlowNodeType
         </div>}
         {data.image&&<img alt="معاينة صورة الرسالة" src={data.image} className="max-h-36 w-full rounded-xl object-contain" loading="lazy"/>}
         {(data.contentBlocks||[]).filter(block=>block.type==="image"&&block.url).slice(0,1).map(block=><img key={block.id} alt="صورة إضافية" src={block.url} className="max-h-28 w-full rounded-xl object-contain" loading="lazy"/>)}
-        {!!data.contentBlocks?.length&&<p className="rounded-lg border border-[#D7E1DC] bg-[#EAF5F0] px-2 py-1.5 text-[11px] text-[#35604D]">{data.contentBlocks.length} مكونات إضافية: {data.contentBlocks.map(block=>({text:"نص",image:"صورة",pdf:"PDF",delay:"انتظار",collection:"جمع بيانات"}[block.type])).join(" · ")}</p>}
+        {!!data.contentBlocks?.length&&<p className="rounded-lg border border-[#D7E1DC] bg-[#EAF5F0] px-2 py-1.5 text-[11px] text-[#35604D]">{data.contentBlocks.length} مكونات إضافية: {data.contentBlocks.map(block=>block.type==="collection"?"جمع بيانات: "+(({text:"نص",email:"بريد إلكتروني",phone:"هاتف",number:"رقم"} as const)[block.inputMode||"text"]):({text:"نص",image:"صورة",pdf:"PDF",delay:"انتظار"} as const)[block.type]).join(" · ")}</p>}
       </>}
       {data.kind==="condition"&&<p className="text-xs leading-5">إذا كان {data.conditionField} {data.operator==="contains"?"يحتوي":data.operator==="equals"?"يساوي":data.operator==="not_equals"?"لا يساوي":"موجود"}: {data.conditionValue||"—"}</p>}
       {data.kind==="delay"&&<p className="text-xs">انتظار {data.delayValue} {({seconds:"ثانية",minutes:"دقيقة",hours:"ساعة",days:"يوم"} as const)[data.delayUnit]}</p>}

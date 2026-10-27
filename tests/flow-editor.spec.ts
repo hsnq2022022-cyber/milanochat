@@ -110,11 +110,11 @@ test("a quick reply can jump to a second locally saved flow and run its preview"
 test("rich message content adds PDF and data collection blocks that survive preview",async({page})=>{
   await page.goto("/milanochat/#/flows");
   await page.locator(".react-flow__node").nth(1).click();
-  await page.getByRole("button",{name:"إضافة محتوى"}).click();
+  await expect(page.getByTestId("content-block-menu")).toBeVisible();
   await page.getByTestId("content-block-menu").getByRole("button").filter({hasText:"PDF"}).click();
   await expect(page.getByTestId("content-block-pdf")).toBeVisible();
   await page.getByRole("textbox",{name:"رابط PDF"}).fill("https://example.com/sample.pdf");
-  await page.getByRole("button",{name:"إضافة محتوى"}).click();
+  await expect(page.getByTestId("content-block-menu")).toBeVisible();
   await page.getByTestId("content-block-menu").getByRole("button").filter({hasText:"جمع بيانات"}).click();
   await page.getByRole("textbox",{name:"سؤال جمع البيانات"}).fill("شنو بريدك الإلكتروني؟");
   await page.getByRole("combobox",{name:"نوع البيانات"}).selectOption("email");
@@ -223,7 +223,7 @@ test("batch 2 repeated node duplicates have separate positions and undo",async({
 test("batch 2 arranging rich content and switching between flows preserves both graphs",async({page})=>{
  await page.goto("/milanochat/#/flows");
  await page.locator(".react-flow__node").nth(1).click();
- await page.getByRole("button",{name:"إضافة محتوى"}).click();
+ await expect(page.getByTestId("content-block-menu")).toBeVisible();
  await page.getByTestId("content-block-menu").getByRole("button").filter({hasText:"صورة"}).click();
  await page.getByRole("textbox",{name:"رابط صورة المكوّن"}).fill("https://example.com/demo.jpg");
  await page.getByTitle("ترتيب تلقائي").click();
@@ -533,4 +533,88 @@ test("batch 5 delete-and-reconnect bridges one input and output atomically",asyn
  await page.getByTitle("تراجع Ctrl+Z").click();
  await expect(page.locator(".react-flow__node")).toHaveCount(6);
  await expect(page.locator(".react-flow__edge")).toHaveCount(5);
+});
+
+test("root cause: correct branch marker and absolutely no old valid-invalid cards on typed questions",async({page})=>{
+ await page.goto("/milanochat/#/flows");
+ await expect(page.getByTestId("flow-preview-version")).toContainText("5.3");
+ await page.locator(".react-flow__node").nth(2).click();
+ const editor=page.getByTestId("step-settings-panel");
+ for(const value of ["email","phone","number","text"]){
+  await editor.getByRole("combobox",{name:"نوع الإجابة"}).selectOption(value);
+  const question=page.locator(".react-flow__node").nth(2);
+  await expect(question.getByTestId("typed-question-next")).toContainText("التالي");
+  await expect(question).not.toContainText("غير صحيح");
+  await expect(question).not.toContainText("صحيح");
+  await expect(editor.getByTestId("question-text-routes")).toBeVisible();
+  await expect(editor.getByText("عند إجابة غير صحيحة")).toHaveCount(0);
+  await expect(question.locator(".react-flow__handle.source:visible")).toHaveCount(1);
+ }
+ await editor.getByRole("combobox",{name:"نوع الإجابة"}).selectOption("buttons");
+ await expect(page.locator(".react-flow__node").nth(2).getByTestId("typed-question-next")).toHaveCount(0);
+});
+
+test("content block buttons actually change node preview and simulator",async({page})=>{
+ await page.goto("/milanochat/#/flows");
+ await page.locator(".react-flow__node").nth(1).click();
+ const editor=page.getByTestId("step-settings-panel");
+ const menu=editor.getByTestId("content-block-menu");
+ await menu.getByRole("button").filter({hasText:"نص"}).click();
+ const block=editor.getByTestId("content-block-text");
+ await block.getByRole("textbox",{name:"نص المكوّن"}).fill("تفاصيل كاملة للزبون");
+ await expect(page.locator(".react-flow__node").nth(1)).toContainText("1 مكونات إضافية: نص");
+ await page.getByRole("button",{name:"تجربة"}).click();
+ await expect(page.getByTestId("flow-simulator")).toContainText("تفاصيل كاملة للزبون");
+});
+
+test("collection controls genuinely update the canvas and do not ask twice for typed question",async({page})=>{
+ await page.goto("/milanochat/#/flows");
+ await page.locator(".react-flow__node").nth(2).click();
+ const editor=page.getByTestId("step-settings-panel");
+ await editor.getByRole("combobox",{name:"نوع الإجابة"}).selectOption("email");
+ const collection=editor.getByTestId("content-block-collection");
+ if(await collection.count()===0){
+  await editor.getByTestId("content-block-menu").getByRole("button").filter({hasText:"جمع بيانات"}).click();
+ }
+ const field=editor.getByTestId("content-block-collection");
+ await field.getByRole("combobox",{name:"نوع البيانات"}).selectOption("phone");
+ await expect(page.locator(".react-flow__node").nth(2)).toContainText("جمع بيانات: هاتف");
+ await field.getByRole("combobox",{name:"نوع البيانات"}).selectOption("email");
+ await field.getByRole("textbox",{name:"سؤال جمع البيانات"}).fill("أرسل بريدك الآن");
+ await expect(page.locator(".react-flow__node").nth(2)).toContainText("جمع بيانات: بريد إلكتروني");
+ await editor.getByRole("combobox",{name:"الخطوة التالية بعد الإجابة"}).selectOption({index:2});
+ await page.getByRole("button",{name:"تجربة"}).click();
+ const sim=page.getByTestId("flow-simulator");
+ const answer=sim.getByRole("textbox",{name:"إجابة العميل"});
+ await answer.fill("customer@example.org");
+ await answer.press("Enter");
+ await expect(sim.getByText("تواصل ويانا لمعرفة الأسعار الحالية لخدمتك في العراق.")).toBeVisible();
+ await expect(answer).toHaveCount(0);
+});
+
+test("image, pdf and delay blocks can be added, edited, reordered and removed",async({page})=>{
+ await page.goto("/milanochat/#/flows");
+ await page.locator(".react-flow__node").nth(1).click();
+ const editor=page.getByTestId("step-settings-panel");
+ const menu=editor.getByTestId("content-block-menu");
+ await menu.getByRole("button").filter({hasText:"صورة"}).click();
+ await editor.getByTestId("content-block-image").getByRole("textbox",{name:"رابط صورة المكوّن"}).fill("https://example.com/photo.jpg");
+ await menu.getByRole("button").filter({hasText:"PDF"}).click();
+ await editor.getByTestId("content-block-pdf").getByRole("textbox",{name:"رابط PDF"}).fill("https://example.com/info.pdf");
+ await menu.getByRole("button").filter({hasText:"انتظار"}).click();
+ await editor.getByTestId("content-block-delay").getByRole("spinbutton",{name:"فاصل الانتظار بالثواني"}).fill("12");
+ await expect(page.locator(".react-flow__node").nth(1)).toContainText("3 مكونات إضافية");
+ await editor.getByTestId("content-block-delay").getByRole("button",{name:"نقل للأعلى"}).click();
+ await expect(editor.locator('[data-testid^="content-block-"]').nth(1)).toHaveAttribute("data-testid","content-block-delay");
+ await editor.getByTestId("content-block-delay").getByRole("button",{name:"حذف المكوّن"}).click();
+ await expect(editor.getByTestId("content-block-delay")).toHaveCount(0);
+ await expect(page.locator(".react-flow__node").nth(1)).toContainText("2 مكونات إضافية");
+});
+
+test("always-visible content choices have no dead Add Content button",async({page})=>{
+ await page.goto("/milanochat/#/flows");
+ await page.locator(".react-flow__node").nth(1).click();
+ const panel=page.getByTestId("step-settings-panel");
+ await expect(panel.getByRole("button",{name:"إضافة محتوى"})).toHaveCount(0);
+ await expect(panel.getByTestId("content-block-menu").getByRole("button")).toHaveCount(5);
 });
