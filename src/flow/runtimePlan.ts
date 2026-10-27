@@ -201,6 +201,21 @@ export function planRuntimeTransition(
         return { state: { ...state, status: "sleeping", wakeAt }, effects: [effect] };
       }
       case "action": {
+        if (data.actionType === "set_field") {
+          // تخزين متغير محلي داخل سياق التنفيذ فقط، دون تعديل ملف العميل.
+          const equalsAt = data.actionValue.indexOf("=");
+          const field = data.actionValue.slice(0, equalsAt).trim();
+          const value = data.actionValue.slice(equalsAt + 1).trim();
+          if (equalsAt < 1 || !/^[a-zA-Z_][a-zA-Z0-9_]{0,63}$/.test(field) ||
+              field.startsWith("__") || value.length > 500)
+            return fail(state, "invalid custom field assignment");
+          const variables = { ...state.variables, [field]: value };
+          if (new TextEncoder().encode(JSON.stringify(variables)).length > 32768)
+            return fail(state, "runtime variables exceed storage limit");
+          state = proceed({ ...state, variables }, nextNode(doc, node, "next"));
+          if (state.status === "completed") return { state, effects: [] };
+          break;
+        }
         if (data.actionType !== "handoff")
           return fail(state, "action needs explicit trusted server implementation");
         const effect: PlannedEffect = {
