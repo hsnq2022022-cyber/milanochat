@@ -53,6 +53,13 @@ export default function AutomationNode({id,data,selected}:NodeProps<FlowNodeType
       </>}
       {message&&<>
         <p className="line-clamp-4 whitespace-pre-wrap break-words rounded-xl bg-[#F3F7F5] px-3 py-2.5 text-[12px] leading-5">{data.text||"اضغط لتعديل الرسالة"}</p>
+        {data.kind==="question"&&data.inputMode!=="buttons"&&<div data-testid="typed-question-preview" className="rounded-xl border border-[#D7E1DC] bg-[#F3F7F5] p-2.5">
+          <p className="mb-2 text-[11px] font-semibold text-[#506257]">إجابة العميل المطلوبة: {({text:"نص",email:"بريد إلكتروني",phone:"رقم هاتف",number:"رقم"} as const)[data.inputMode]}</p>
+          <div className="rounded-lg border border-dashed border-[#B7C9C0] bg-white px-3 py-2 text-xs text-[#74877E]">
+            {({text:"يكتب العميل إجابته هنا…",email:"name@example.com",phone:"07XXXXXXXXX",number:"123"} as const)[data.inputMode]}
+          </div>
+          <p className="mt-2 text-[10px] text-[#60766B]">حقل إدخال في معاينة العميل، وليس أزرارًا سريعة</p>
+        </div>}
         {data.image&&<img alt="معاينة صورة الرسالة" src={data.image} className="max-h-36 w-full rounded-xl object-contain" loading="lazy"/>}
         {(data.contentBlocks||[]).filter(block=>block.type==="image"&&block.url).slice(0,1).map(block=><img key={block.id} alt="صورة إضافية" src={block.url} className="max-h-28 w-full rounded-xl object-contain" loading="lazy"/>)}
         {!!data.contentBlocks?.length&&<p className="rounded-lg border border-[#D7E1DC] bg-[#EAF5F0] px-2 py-1.5 text-[11px] text-[#35604D]">{data.contentBlocks.length} مكونات إضافية: {data.contentBlocks.map(block=>({text:"نص",image:"صورة",pdf:"PDF",delay:"انتظار",collection:"جمع بيانات"}[block.type])).join(" · ")}</p>}
@@ -69,7 +76,19 @@ export default function AutomationNode({id,data,selected}:NodeProps<FlowNodeType
       {data.kind==="end"&&<p className="text-xs text-[#64748B]">انتهاء هذا المسار.</p>}
     </div>
 
-    {hasOptions&&<div className="rounded-b-2xl border-t border-[#E6EBE8] bg-[#F4F8F6] px-3 pb-5 pt-3">
+    {data.kind==="question"&&data.inputMode!=="buttons"&&<div data-testid="typed-question-routes" className="rounded-b-2xl border-t border-[#E6EBE8] bg-[#EFF7F2] px-3 pb-5 pt-3">
+      <p className="mb-2 text-[10px] font-bold text-[#587364]">مسارات التحقق الداخلية (ليست أزرار العميل)</p>
+      <div className="grid grid-cols-2 gap-2">
+        {ports.map(port=><div key={port.id} className={"relative flex min-h-10 items-center justify-center rounded-lg border px-2 py-2 text-center text-[11px] font-semibold "+(port.id==="valid"?"border-[#A4DEC0] bg-[#E1F7EB] text-[#166534]":"border-[#F2C0BF] bg-[#FEECEB] text-[#A33330]")}>
+          {port.id==="valid"?"✓ إجابة صحيحة":"✕ إجابة غير صحيحة"}
+          <Handle id={port.id} type="source" position={Position.Bottom}
+            aria-label={port.id==="valid"?"مخرج الإجابة الصحيحة":"مخرج الإجابة غير الصحيحة"}
+            className={"!h-4 !w-4 !border-[3px] !border-white "+(port.id==="valid"?"!bg-[#22C55E]":"!bg-[#EF4444]")}
+            style={{left:"50%",bottom:-9}}/>
+        </div>)}
+      </div>
+    </div>}
+    {hasOptions&&!(data.kind==="question"&&data.inputMode!=="buttons")&&<div className="rounded-b-2xl border-t border-[#E6EBE8] bg-[#F4F8F6] px-3 pb-5 pt-3">
       <div className="grid gap-2" style={{gridTemplateColumns:`repeat(${Math.min(allPorts.length,3)},minmax(0,1fr))`}}>
         {allPorts.map(port=><div key={port.id} className="relative flex min-h-10 items-center justify-center rounded-lg border border-[#DAE4DE] bg-white px-1.5 py-2 text-center text-[11px] font-medium">
           <span className="w-full truncate" title={port.label}>{port.label}</span>
