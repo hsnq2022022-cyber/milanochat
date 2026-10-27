@@ -8,6 +8,7 @@ import type { FlowData, FlowNode, Choice, Platform } from "./model";
 import { useFlowStore } from "./store";
 import { cardSize, findOpenPosition } from "./layout";
 import { flowText, flowKindLabel } from "./uiLocale";
+import { delaySafetyWarning } from "./channelLimits";
 import type { FlowLanguage } from "./uiLocale";
 
 const input="w-full rounded-xl border border-[#275443] bg-[#0F2E24] px-3 py-2.5 text-sm text-white outline-none focus:border-[#3DD189]";
@@ -117,7 +118,7 @@ export default function NodeEditor({node,onClose,language="ar"}:{node:FlowNode|n
         <label className={section}>مدة الانتظار</label>
         <div className="flex gap-2"><input type="number" min={1} className={input} value={d.delayValue} onChange={e=>edit({delayValue:Math.min(365,Math.max(1,Number(e.target.value)||1))})}/>
           <select className={input} value={d.delayUnit} onChange={e=>edit({delayUnit:e.target.value as FlowData["delayUnit"]})}>{Object.entries(units).map(([v,t])=><option key={v} value={v}>{t}</option>)}</select></div>
-        <p className="mt-3 flex gap-2 rounded-xl border border-[#E5B54B]/40 bg-[#E5B54B]/10 p-3 text-xs text-[#E5B54B]"><AlertTriangle size={18} className="shrink-0"/>الانتظار لا يتجاوز نافذة مراسلة Meta المسموح بها. المحاكاة تتجاوز الوقت، ولا تُرسل أي رسائل فعلية.</p>
+        <p className="mt-3 flex gap-2 rounded-xl border border-[#E5B54B]/40 bg-[#E5B54B]/10 p-3 text-xs text-[#E5B54B]"><AlertTriangle size={18} className="shrink-0"/>{delaySafetyWarning(d.delayValue,d.delayUnit)}</p>
       </>}
       {d.kind==="action"&&<>
         <label className={section}>نوع الإجراء</label><select className={input} value={d.actionType} onChange={e=>edit({actionType:e.target.value as FlowData["actionType"]})}>{Object.entries(actions).map(([v,t])=><option key={v} value={v}>{t}</option>)}</select>
