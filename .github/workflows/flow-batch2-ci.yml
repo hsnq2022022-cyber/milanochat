@@ -1,0 +1,51 @@
+name: Flow Builder Batch 2 - Layout and History
+
+on:
+  push:
+    branches: [feature/flows-batch2-layout-history]
+    paths:
+      - "src/flow/**"
+      - "src/pages/FlowBuilder.tsx"
+      - "tests/flow-editor.spec.ts"
+      - "tests/flow-main-compat.test.ts"
+      - "tests/fixtures/**"
+      - ".github/workflows/flow-batch2-ci.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: flow-batch2-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  editor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install dependencies from unchanged lockfile
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: TypeScript
+        run: npx tsc --noEmit -p tsconfig.flows.json
+      - name: Existing and batch 2 model tests
+        run: npm run test:flows
+      - name: Frozen main compatibility fixtures
+        run: node --experimental-strip-types --test tests/flow-main-compat.test.ts
+      - name: Production build
+        run: npm run build
+      - name: Install Chromium
+        run: npx playwright install chromium
+      - name: Playwright browser acceptance
+        run: npm run test:browser
+      - name: Upload browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flow-batch2-browser-evidence
+          path: test-results/
+          if-no-files-found: ignore
