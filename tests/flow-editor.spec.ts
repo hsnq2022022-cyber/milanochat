@@ -209,8 +209,13 @@ test("batch 2 repeated node duplicates have separate positions and undo",async({
  await expect(page.locator(".react-flow__node")).toHaveCount(7);
  await duplicate.click();
  await expect(page.locator(".react-flow__node")).toHaveCount(8);
- const positions=await page.locator(".react-flow__node").evaluateAll(nodes=>nodes.map(n=>({x:parseFloat((n as HTMLElement).style.transform.match(/translate\\(([-\\d.]+)px/)?.[1]||"0"),label:n.textContent?.slice(0,20)})));
- expect(positions.length).toBe(8);
+ const rects=await page.locator(".react-flow__node").evaluateAll(elements=>elements.map(el=>{const r=el.getBoundingClientRect();return {x:r.x,y:r.y,w:r.width,h:r.height};}));
+ expect(rects.length).toBe(8);
+ for(const i of [6,7])for(let j=0;j<i;j++){
+   const a=rects[i],b=rects[j];
+   const intersect=a.x<b.x+b.w&&a.x+a.w>b.x&&a.y<b.y+b.h&&a.y+a.h>b.y;
+   expect(intersect,"Copied nodes must not intersect existing cards").toBe(false);
+ }
  await page.getByTitle("تراجع Ctrl+Z").click();
  await expect(page.locator(".react-flow__node")).toHaveCount(7);
 });
