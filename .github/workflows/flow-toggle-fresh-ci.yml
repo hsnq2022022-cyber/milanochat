@@ -6,6 +6,8 @@ on:
     paths:
       - "src/flow/**"
       - "src/pages/FlowBuilder.tsx"
+      - "src/pages/Dashboard.tsx"
+      - "src/components/SafeAvatar.tsx"
       - "package.json"
       - "package-lock.json"
       - "tsconfig.flows.json"
