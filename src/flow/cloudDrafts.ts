@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { getSupabase } from "../lib/supabase";
-import { importFlow } from "./model";
+import { getSupabase } from "../lib/supabase.ts";
+import { importFlow } from "./model.ts";
 import type { FlowDocument } from "./model";
 
 /**
@@ -15,11 +15,11 @@ export type CloudDraft={
 };
 
 export class CloudDraftError extends Error {
-  constructor(
-    public code:"not_configured"|"unauthenticated"|"no_tenant"|
-      "invalid_document"|"oversized"|"conflict"|"storage_failure",
-    message:string
-  ){super(message);this.name="CloudDraftError";}
+  readonly code:"not_configured"|"unauthenticated"|"no_tenant"|
+    "invalid_document"|"oversized"|"conflict"|"storage_failure";
+  constructor(code:CloudDraftError["code"],message:string) {
+    super(message);this.name="CloudDraftError";this.code=code;
+  }
 }
 
 export function prepareCloudDocument(input:unknown):FlowDocument {
