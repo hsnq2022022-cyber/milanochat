@@ -19,8 +19,8 @@ export function prepareCloudDraft(flow:SavedFlow):{flow_key:string;name:string;d
  if(!flow.id||flow.id.length>128)throw new Error("invalid flow identifier");
  const raw=JSON.stringify(flow.doc);
  if(!raw||new TextEncoder().encode(raw).length>MAX_CLOUD_DRAFT_BYTES)throw new Error("cloud draft exceeds 4 MiB");
- const document=importFlow(JSON.parse(raw));
- if(!document||document.version!==3)throw new Error("invalid draft document");
+ const document=JSON.parse(raw) as FlowDocument;
+ if(!importFlow(document)||document.version!==3)throw new Error("invalid draft document");
  const name=document.name.trim();
  if(!name||name.length>100)throw new Error("invalid draft name");
  return {flow_key:flow.id,name,document};
