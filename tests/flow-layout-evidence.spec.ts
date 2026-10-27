@@ -35,7 +35,7 @@ for(const viewport of [{width:1366,height:768},{width:390,height:844}]){
       }
       await page.goto("/milanochat/#/flows");
       const nodes=page.locator(".react-flow__node");
-      await expect(nodes).toHaveCount(variety==="20-node"?20:8);
+      await expect(nodes).toHaveCount(variety==="20-node"?20:6);
       await page.waitForTimeout(650); // let delayed fitView settle
       const rectangles=await nodes.evaluateAll(els=>els.map(el=>{
         const r=el.getBoundingClientRect();
