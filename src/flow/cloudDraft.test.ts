@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { exampleFlow, makeNode, importFlow } from "./model.ts";
-import { prepareCloudDraft, decodeCloudDraftRows, MAX_CLOUD_DRAFTS, saveCloudDraft } from "./cloudDraft.ts";
+import { prepareCloudDraft, decodeCloudDraftRows, MAX_CLOUD_DRAFTS, saveCloudDraft, fetchCloudDrafts, validCloudTimestamp } from "./cloudDraft.ts";
 
 test("stage 7 cloud preparation roundtrips all content without changing original or activation",()=>{
  const doc=exampleFlow(),before=JSON.stringify(doc);
@@ -100,6 +100,7 @@ test("cloud adapter creates drafts and updates only with optimistic revision pre
   tenant_id:"11111111-1111-1111-1111-111111111111",flow_key:"default",draft_revision:3
  });
  assert.equal((captured[1].data as {draft_revision:number}).draft_revision,4);
+ assert.equal(Object.hasOwn(captured[1].data as object,"updated_at"),false); // Timestamp is server-owned.
 });
 
 test("cloud adapter reports a revision conflict rather than replacing newer server document",async()=>{
@@ -131,4 +132,68 @@ test("cloud read rejects oversized payloads and malformed timestamps without mod
  assert.deepEqual(result.drafts.map(d=>d.flow.id),["valid"]);
  assert.equal(result.skipped,2);
  assert.equal(rows[0].document,before);
+});
+
+test("strict cloud timestamps accept valid Postgres offsets, reject rolled dates and date-only strings",()=>{
+ const ok=["2026-10-27T19:00:00Z","2026-10-27T19:00:00.123+00:00","2026-10-27T22:30:59-03:00"];
+ const bad=["2026-10-27","2026","2026-02-31T12:00:00Z","2026-13-01T12:00:00Z",
+  "2026-10-27 19:00:00+00:00","2026-10-27T25:00:00Z","2026-10-27T14:00:00+14:30",""];
+ for(const v of ok)assert.equal(validCloudTimestamp(v),true,v);
+ for(const v of bad)assert.equal(validCloudTimestamp(v),false,v);
+});
+
+test("blank identifiers and overflowing PostgreSQL integer revision are rejected before any network write",async()=>{
+ const d=exampleFlow();
+ assert.throws(()=>prepareCloudDraft({id:"   ",doc:d}),/identifier/);
+ const fake={from:()=>{throw new Error("must not send request");}} as unknown as Parameters<typeof saveCloudDraft>[0];
+ await assert.rejects(saveCloudDraft(fake,"tenant",{id:"valid",doc:d},2147483647),/invalid expected revision/);
+});
+
+test("cloud fetch checks 31st row and fails closed before silently truncating server drafts",async()=>{
+ const d=exampleFlow();
+ let count=0,limit=0;
+ const fake={
+  from:(table:string)=>{
+   assert.equal(table,"automation_flow_drafts");
+   const query={
+    select:()=>query,
+    eq:()=>query,
+    order:()=>query,
+    limit:(n:number)=>{
+      limit=n;
+      return Promise.resolve({data:Array.from({length:n},(_,i)=>({
+        flow_key:"cloud-"+i,document:d,draft_revision:1,updated_at:"2026-10-27T14:00:00Z"
+      })),error:null});
+    }
+   };
+   count++;return query;
+  }
+ } as unknown as Parameters<typeof fetchCloudDrafts>[0];
+ await assert.rejects(fetchCloudDrafts(fake,"tenant"),/exceeds supported limit/);
+ assert.equal(limit,MAX_CLOUD_DRAFTS+1);
+ assert.equal(count,1);
+});
+
+test("cloud decoder rejects all forms of malformed timestamp and blank flow key",()=>{
+ const d=exampleFlow();
+ const result=decodeCloudDraftRows([
+  {flow_key:"good",document:d,draft_revision:1,updated_at:"2026-10-27T12:00:00+00:00"},
+  {flow_key:"blank",document:d,draft_revision:1,updated_at:"2026-02-31T12:00:00Z"},
+  {flow_key:"  ",document:d,draft_revision:1,updated_at:"2026-10-27T12:00:00Z"},
+  {flow_key:"date-only",document:d,draft_revision:1,updated_at:"2026-10-27"}
+ ]);
+ assert.equal(result.drafts.length,1);
+ assert.equal(result.skipped,3);
+});
+
+test("PGRST116 row cardinality error must not claim the draft table is unprovisioned",async()=>{
+ const fake={
+  from:()=>({
+   insert:()=>({select:()=>({maybeSingle:async()=>({
+    data:null,error:{code:"PGRST116"}
+   })})})
+  })
+ } as unknown as Parameters<typeof saveCloudDraft>[0];
+ const result=await saveCloudDraft(fake,"tenant",{id:"new",doc:exampleFlow()},null);
+ assert.deepEqual(result,{status:"error",code:"PGRST116"});
 });
