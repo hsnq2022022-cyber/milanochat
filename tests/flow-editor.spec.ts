@@ -415,3 +415,33 @@ for(const sample of [
   await expect(modal.getByText("تواصل ويانا لمعرفة الأسعار الحالية لخدمتك في العراق.")).toBeVisible();
  });
 }
+
+for(const kind of [
+ {label:"شرط",heading:"الحقل"},
+ {label:"انتظار ذكي",heading:"مدة الانتظار"},
+ {label:"إجراء",heading:"نوع الإجراء"},
+ {label:"توزيع عشوائي",heading:"نسب التوزيع"},
+ {label:"الانتقال لخطوة",heading:"الانتقال إلى خطوة"},
+ {label:"طلب خارجي",heading:"طريقة طلب HTTP"},
+ {label:"نهاية",heading:"تنهي المسار"}
+]){
+ test("audit: "+kind.label+" opens real editable settings",async({page})=>{
+  await page.goto("/milanochat/#/flows");
+  await page.getByRole("button",{name:"فتح إضافة خطوة"}).click();
+  await page.getByTestId("add-step-menu").getByRole("button",{name:kind.label,exact:true}).click();
+  const panel=page.getByTestId("step-settings-panel");
+  await expect(panel).toBeVisible();
+  await expect(panel.getByText(new RegExp(kind.heading)).first()).toBeVisible();
+  await expect(page.locator(".react-flow__node")).toHaveCount(7);
+ });
+}
+test("audit: randomizer equal distribution performs an actual value update",async({page})=>{
+ await page.goto("/milanochat/#/flows");
+ await page.getByRole("button",{name:"فتح إضافة خطوة"}).click();
+ await page.getByTestId("add-step-menu").getByRole("button",{name:"توزيع عشوائي",exact:true}).click();
+ const panel=page.getByTestId("step-settings-panel");
+ await panel.getByRole("spinbutton",{name:"النسبة 1"}).fill("80");
+ await panel.getByRole("button",{name:"توزيع متساوٍ"}).click();
+ await expect(panel.getByRole("spinbutton",{name:"النسبة 1"})).toHaveValue("50");
+ await expect(panel.getByRole("spinbutton",{name:"النسبة 2"})).toHaveValue("50");
+});
