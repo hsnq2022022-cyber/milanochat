@@ -17,7 +17,7 @@ Status: **Flow editor and opt-in cloud drafts released**; **real customer automa
 - The existing webhook handler calls answerFromKnowledge and sends a provider response when agent_enabled/auto_reply allow it; a new flow handler that also sends would cause duplicate replies.
 - The existing webhook path respects human transfer and low-credit states. The flow engine must preserve those checks and own the exclusive responder decision before sending.
 - Stage 7 drafts table is deployed with owner RLS in production, checked using two real tenant owners and ROLLBACK. Stage 8–11 runtime SQL remains review-only.
-- Default VITE_ENABLE_CLOUD_FLOW_DRAFTS unset: cloud draft controls are not exposed in the ordinary site build. Runtime has no activation flag or outgoing sender connected.
+- Current Pages build sets `VITE_ENABLE_CLOUD_FLOW_DRAFTS=true`, exposing manual cloud drafts UI only. This flag has **no** server-side authorization effect. Runtime activation and outgoing flow sender remain unconnected.
 
 ## Mandatory release blockers: all must be independently verified
 
@@ -33,6 +33,8 @@ Status: **Flow editor and opt-in cloud drafts released**; **real customer automa
 | Stage 11: AI and telemetry | CONTRACT ONLY | Live tenant-scoped approved RAG retrieval, constrained evidence-only answer, safe fallback, privacy/reconciliation verification |
 | Stage 12: canary and rollback | BLOCKED | Two real test-owned accounts, Instagram/Facebook/WhatsApp supported permissions, replay/failure drills, Android viewport and rollback verification |
 | Final GitHub Pages deployment | BLOCKED | All above, full PR stack review, CI green and explicit go/no-go with verified artifacts |
+
+For the exact per-gate canary evidence and rollback checklist, see [flows-canary-runbook.md](./flows-canary-runbook.md). This document records **zero** new gates passed by the runbook alone.
 
 ## Launch sequencing
 
