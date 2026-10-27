@@ -37,7 +37,11 @@ export function decodeCloudDraftRows(rows:unknown):DecodeResult{
   const r=raw as Record<string,unknown>;
   if(typeof r.flow_key!=="string"||!r.flow_key||r.flow_key.length>128||seen.has(r.flow_key)||
     typeof r.draft_revision!=="number"||!Number.isSafeInteger(r.draft_revision)||r.draft_revision<1||
-    typeof r.updated_at!=="string"){skipped++;continue;}
+    typeof r.updated_at!=="string"||!Number.isFinite(Date.parse(r.updated_at))){skipped++;continue;}
+  // Reject oversized or malformed server rows before importing; never overwrite a local draft.
+  let serialized:string;
+  try{serialized=JSON.stringify(r.document);}catch{skipped++;continue;}
+  if(!serialized||new TextEncoder().encode(serialized).length>MAX_CLOUD_DRAFT_BYTES){skipped++;continue;}
   const doc=importFlow(r.document);
   if(!doc){skipped++;continue;}
   if(drafts.length===MAX_CLOUD_DRAFTS){skipped++;continue;}
