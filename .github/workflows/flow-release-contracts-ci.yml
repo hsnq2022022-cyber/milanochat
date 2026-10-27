@@ -1,0 +1,87 @@
+name: Flow Stages 8-10 - Unified Runtime Contracts
+
+on:
+  push:
+    branches: [feature/flows-release-runtime-contracts]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Strict flow TypeScript
+        run: npx tsc --noEmit -p tsconfig.flows.json
+      - name: Run imported flows and runtime contracts
+        run: |
+          npm run test:flows
+          node --experimental-strip-types --test src/flow/simulation.test.ts
+          node --experimental-strip-types --test src/flow/cloudDraft.test.ts
+          node --experimental-strip-types --test src/flow/publicationGate.test.ts
+          node --experimental-strip-types --test src/flow/eventRouting.test.ts
+          node --experimental-strip-types --test src/flow/runtimePlan.test.ts
+          node --experimental-strip-types --test src/flow/aiMetricsGate.test.ts
+          node --experimental-strip-types --test tests/flow-main-compat.test.ts
+      - name: Production build with feature flags off
+        run: npm run build
+      - name: Chromium
+        run: npx playwright install chromium
+      - name: Browser acceptance
+        env:
+          VITE_ENABLE_CLOUD_FLOW_DRAFTS: "true"
+        run: npm run test:browser
+      - name: Upload failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flow-release-contracts-failures
+          path: test-results/
+          if-no-files-found: ignore
+
+  postgres-release-schema:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: isolated_ci_only
+          POSTGRES_DB: flow_release_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d flow_release_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: isolated_ci_only
+      PGDATABASE: flow_release_ci
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare synthetic user and owner relation
+        run: |
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-drafts-bootstrap.sql
+          psql -X -v ON_ERROR_STOP=1 -c 'create role service_role nologin bypassrls'
+      - name: Apply stage 7 review-only drafts schema in CI
+        run: psql -X -v ON_ERROR_STOP=1 -f supabase/proposals/automation_flow_drafts.review.sql
+      - name: Check stage 7 RLS again
+        run: psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-drafts-rls.test.sql
+      - name: Apply stages 8-11 review-only runtime schema in CI
+        run: psql -X -v ON_ERROR_STOP=1 -f supabase/proposals/automation_flow_runtime.review.sql
+      - name: Verify immutable publications, isolation and event/outbox deduplication
+        run: psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-runtime-rls.test.sql
