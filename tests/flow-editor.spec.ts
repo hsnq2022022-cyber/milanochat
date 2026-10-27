@@ -485,3 +485,74 @@ test("audit: AI Step and action buttons create editable nodes rather than inert 
  await expect(panel.getByText("نوع الإجراء")).toBeVisible();
  await expect(panel.getByText("هذه إعدادات تصميمية، وليست أوامر مفعّلة في النظام الحقيقي.")).toBeVisible();
 });
+
+test("batch 5 typed email and phone use input previews, never quick-reply buttons",async({page})=>{
+ await page.goto("/milanochat/#/flows");
+ await page.locator(".react-flow__node").nth(2).click();
+ const editor=page.getByTestId("step-settings-panel");
+ const mode=editor.getByRole("combobox",{name:"نوع الإجابة"});
+ for(const value of ["email","phone","number","text"]){
+   await mode.selectOption(value);
+   const question=page.locator(".react-flow__node").nth(2);
+   await expect(question.getByTestId("typed-question-preview")).toBeVisible();
+   await expect(question.getByTestId("typed-question-routes")).toContainText("إجابة صحيحة");
+   await expect(question.getByTestId("typed-question-routes")).toContainText("إجابة غير صحيحة");
+   await expect(question.locator(".react-flow__handle.source")).toHaveCount(2);
+   await expect(question.getByText("العراق", {exact:true})).toHaveCount(0);
+ }
+ await mode.selectOption("buttons");
+ const question=page.locator(".react-flow__node").nth(2);
+ await expect(question.getByTestId("typed-question-preview")).toHaveCount(0);
+ await expect(question.getByTestId("typed-question-routes")).toHaveCount(0);
+ await expect(question.getByText("العراق",{exact:true})).toBeVisible();
+});
+test("batch 5 deleting selected edge then undo redo restores the exact count",async({page})=>{
+ await page.goto("/milanochat/#/flows");
+ await expect(page.locator(".react-flow__edge")).toHaveCount(5);
+ await page.locator(".react-flow__edge").first().click();
+ await page.keyboard.press("Delete");
+ await expect(page.locator(".react-flow__edge")).toHaveCount(4);
+ await page.getByTitle("تراجع Ctrl+Z").click();
+ await expect(page.locator(".react-flow__edge")).toHaveCount(5);
+ await page.getByTitle("إعادة Ctrl+Shift+Z").click();
+ await expect(page.locator(".react-flow__edge")).toHaveCount(4);
+});
+test("batch 5 deleting selected node removes attached edges and undo restores them",async({page})=>{
+ await page.goto("/milanochat/#/flows");
+ await expect(page.locator(".react-flow__edge")).toHaveCount(5);
+ await page.locator(".react-flow__node").nth(2).click();
+ await page.keyboard.press("Delete");
+ await expect(page.locator(".react-flow__node")).toHaveCount(5);
+ await expect(page.locator(".react-flow__edge")).toHaveCount(1);
+ await page.getByTitle("تراجع Ctrl+Z").click();
+ await expect(page.locator(".react-flow__node")).toHaveCount(6);
+ await expect(page.locator(".react-flow__edge")).toHaveCount(5);
+});
+
+test("batch 5 context-menu removes exact edge and undo restores it",async({page})=>{
+ await page.goto("/milanochat/#/flows");
+ const path=page.locator(".react-flow__edge-interaction").first();
+ const point=await path.evaluate(element=>{
+   const p=element as SVGPathElement;
+   const center=p.getPointAtLength(p.getTotalLength()/2);
+   const screen=center.matrixTransform(p.getScreenCTM()!);
+   return {x:screen.x,y:screen.y};
+ });
+ await page.mouse.click(point.x,point.y,{button:"right"});
+ await page.getByRole("button",{name:"حذف الاتصال"}).last().click();
+ await expect(page.locator(".react-flow__edge")).toHaveCount(4);
+ await page.getByTitle("تراجع Ctrl+Z").click();
+ await expect(page.locator(".react-flow__edge")).toHaveCount(5);
+});
+
+test("batch 5 delete-and-reconnect bridges one input and output atomically",async({page})=>{
+ await page.goto("/milanochat/#/flows");
+ await page.locator(".react-flow__node").nth(1).click();
+ const panel=page.getByTestId("step-settings-panel");
+ await panel.getByRole("button",{name:"حذف مع إعادة التوصيل"}).click();
+ await expect(page.locator(".react-flow__node")).toHaveCount(5);
+ await expect(page.locator(".react-flow__edge")).toHaveCount(4);
+ await page.getByTitle("تراجع Ctrl+Z").click();
+ await expect(page.locator(".react-flow__node")).toHaveCount(6);
+ await expect(page.locator(".react-flow__edge")).toHaveCount(5);
+});

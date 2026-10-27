@@ -242,7 +242,18 @@ function Editor(){
             reconnectOk.current=true;
             window.setTimeout(()=>{justReconnected.current=false;},60);
           }}
-          onBeforeDelete={async({nodes})=>nodes.some(n=>n.data.kind==="trigger")?window.confirm("حذف البداية سيجعل التدفق بلا Trigger. هل تريد المتابعة؟"):true}
+          onBeforeDelete={async({nodes,edges})=>{
+             if(nodes.some(n=>n.data.kind==="trigger")&&!window.confirm("حذف البداية سيجعل التدفق بلا Trigger. هل تريد المتابعة؟"))return false;
+             const deletedNodes=new Set(nodes.map(n=>n.id)),deletedEdges=new Set(edges.map(e=>e.id));
+             const state=useFlowStore.getState(),current=state.doc;
+             const nextNodes=current.nodes.filter(n=>!deletedNodes.has(n.id));
+             const nextEdges=current.edges.filter(e=>!deletedEdges.has(e.id)&&!deletedNodes.has(e.source)&&!deletedNodes.has(e.target));
+             if(nextNodes.length!==current.nodes.length||nextEdges.length!==current.edges.length)
+               state.replace({...current,nodes:nextNodes,edges:nextEdges});
+             // React Flow's separate node/edge remove events would create two undo entries.
+             // We applied the complete deletion atomically and cancel the default change events.
+             return false;
+           }}
           onEdgeContextMenu={(e,edge)=>{e.preventDefault();setEdgeMenu({id:edge.id,x:e.clientX,y:e.clientY});}}
           onConnectEnd={(e,state)=>{
             if(justReconnected.current||state.isValid||!state.fromNode||!state.fromHandle||state.toHandle)return;
