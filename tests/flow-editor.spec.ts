@@ -189,3 +189,62 @@ test("an unconnected quick reply blocks local activation and identifies its ques
   await expect(toggle).toHaveAttribute("aria-pressed","false");
   await expect(page.getByText(/بلا وجهة/).first()).toBeVisible();
 });
+
+test("batch 2 undo restores local flow enabled toggle",async({page})=>{
+ await page.goto("/milanochat/#/flows");
+ const toggle=page.getByTestId("flow-enabled-toggle");
+ await toggle.click();
+ await expect(toggle).toHaveAttribute("aria-pressed","true");
+ await page.getByTitle("تراجع Ctrl+Z").click();
+ await expect(toggle).toHaveAttribute("aria-pressed","false");
+ await page.getByTitle("إعادة Ctrl+Shift+Z").click();
+ await expect(toggle).toHaveAttribute("aria-pressed","true");
+});
+
+test("batch 2 repeated node duplicates have separate positions and undo",async({page})=>{
+ await page.goto("/milanochat/#/flows");
+ await page.locator(".react-flow__node").nth(1).click();
+ const duplicate=page.getByRole("button",{name:"نسخ",exact:true});
+ await duplicate.click();
+ await expect(page.locator(".react-flow__node")).toHaveCount(7);
+ await duplicate.click();
+ await expect(page.locator(".react-flow__node")).toHaveCount(8);
+ const positions=await page.locator(".react-flow__node").evaluateAll(nodes=>nodes.map(n=>({x:parseFloat((n as HTMLElement).style.transform.match(/translate\\(([-\\d.]+)px/)?.[1]||"0"),label:n.textContent?.slice(0,20)})));
+ expect(positions.length).toBe(8);
+ await page.getByTitle("تراجع Ctrl+Z").click();
+ await expect(page.locator(".react-flow__node")).toHaveCount(7);
+});
+
+test("batch 2 arranging rich content and switching between flows preserves both graphs",async({page})=>{
+ await page.goto("/milanochat/#/flows");
+ await page.locator(".react-flow__node").nth(1).click();
+ await page.getByRole("button",{name:"إضافة محتوى"}).click();
+ await page.getByTestId("content-block-menu").getByRole("button").filter({hasText:"صورة"}).click();
+ await page.getByRole("textbox",{name:"رابط صورة المكوّن"}).fill("https://example.com/demo.jpg");
+ await page.getByTitle("ترتيب تلقائي").click();
+ await expect(page.locator(".react-flow__node")).toHaveCount(6);
+ await page.getByRole("button",{name:"إنشاء تدفق جديد"}).click();
+ await expect(page.locator(".react-flow__node")).toHaveCount(2);
+ await page.getByTitle("ترتيب تلقائي").click();
+ await page.getByRole("combobox",{name:"اختيار التدفق"}).selectOption("default");
+ await expect(page.locator(".react-flow__node")).toHaveCount(6);
+ await page.locator(".react-flow__node").nth(1).click();
+ await expect(page.getByTestId("content-block-image")).toHaveCount(1);
+});
+
+test("batch 2 insertion on edge is undoable and leaves all existing branches",async({page})=>{
+ await page.goto("/milanochat/#/flows");
+ const point=await page.locator(".react-flow__edge-interaction").first().evaluate(element=>{
+  const path=element as SVGPathElement;
+  const center=path.getPointAtLength(path.getTotalLength()/2);
+  const screen=center.matrixTransform(path.getScreenCTM()!);
+  return {x:screen.x,y:screen.y};
+ });
+ await page.mouse.click(point.x,point.y,{button:"right"});
+ await page.getByRole("button",{name:"إدراج خطوة"}).last().click();
+ await expect(page.locator(".react-flow__node")).toHaveCount(7);
+ await expect(page.locator(".react-flow__edge")).toHaveCount(6);
+ await page.getByTitle("تراجع Ctrl+Z").click();
+ await expect(page.locator(".react-flow__node")).toHaveCount(6);
+ await expect(page.locator(".react-flow__edge")).toHaveCount(5);
+});
