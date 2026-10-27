@@ -81,6 +81,8 @@ jobs:
         run: psql -X -v ON_ERROR_STOP=1 -f supabase/proposals/automation_flow_drafts.review.sql
       - name: Check stage 7 RLS again
         run: psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-drafts-rls.test.sql
+      - name: Prepare synthetic connected accounts and conversations
+        run: psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-runtime-bootstrap.sql
       - name: Apply stages 8-11 review-only runtime schema in CI
         run: psql -X -v ON_ERROR_STOP=1 -f supabase/proposals/automation_flow_runtime.review.sql
       - name: Verify immutable publications, isolation and event/outbox deduplication
