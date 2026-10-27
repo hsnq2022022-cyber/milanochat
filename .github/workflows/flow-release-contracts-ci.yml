@@ -2,7 +2,7 @@ name: Flow Stages 8-10 - Unified Runtime Contracts
 
 on:
   push:
-    branches: [feature/flows-release-runtime-contracts]
+    branches: [feature/flows-release-runtime-contracts, feature/flows-stage10-tenant-fk-verification]
   workflow_dispatch:
 
 permissions:
