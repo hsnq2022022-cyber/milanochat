@@ -95,3 +95,27 @@ test("a detached message and a dangling question button remain blocking errors",
   assert.ok(issues.some(x=>x.nodeId===orphan.id&&x.severity==="error"&&x.message.includes("غير قابلة للوصول")));
   assert.ok(issues.some(x=>x.nodeId===question.id&&x.severity==="error"&&x.message.includes("بلا وجهة")));
 });
+
+test("audit: required options reject incomplete flows before local activation",()=>{
+ const scenarios:Array<{kind:string;patch:Record<string,unknown>;expected:string}>=[
+  {kind:"trigger",patch:{triggerMode:"keyword",keywords:""},expected:"كلمة مفتاحية"},
+  {kind:"question",patch:{inputMode:"email",inputField:""},expected:"اسم حقل الإجابة"},
+  {kind:"condition",patch:{conditionField:""},expected:"حقل الشرط"},
+  {kind:"condition",patch:{conditionValue:""},expected:"قيمة المقارنة"},
+  {kind:"action",patch:{actionType:"tag",actionValue:""},expected:"قيمة الإجراء"},
+  {kind:"action",patch:{actionType:"set_field",actionValue:"without-equals"},expected:"field=value"},
+  {kind:"request",patch:{requestUrl:""},expected:"رابط HTTPS مطلوب"}
+ ];
+ for(const scenario of scenarios){
+  const doc=exampleFlow();
+  if(scenario.kind==="trigger"){
+   Object.assign(doc.nodes[0].data,scenario.patch);
+  }else if(scenario.kind==="question"){
+   Object.assign(doc.nodes[2].data,scenario.patch);
+  }else{
+   const n=makeNode(scenario.kind as import("./model.ts").Kind,{x:1200,y:100},scenario.patch);
+   doc.nodes.push(n);
+  }
+  assert.ok(validateDocument(doc).some(i=>i.severity==="error"&&i.message.includes(scenario.expected)),scenario.kind+":"+scenario.expected);
+ }
+});
