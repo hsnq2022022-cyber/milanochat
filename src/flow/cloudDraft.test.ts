@@ -185,3 +185,15 @@ test("cloud decoder rejects all forms of malformed timestamp and blank flow key"
  assert.equal(result.drafts.length,1);
  assert.equal(result.skipped,3);
 });
+
+test("PGRST116 row cardinality error must not claim the draft table is unprovisioned",async()=>{
+ const fake={
+  from:()=>({
+   insert:()=>({select:()=>({maybeSingle:async()=>({
+    data:null,error:{code:"PGRST116"}
+   })})})
+  })
+ } as unknown as Parameters<typeof saveCloudDraft>[0];
+ const result=await saveCloudDraft(fake,"tenant",{id:"new",doc:exampleFlow()},null);
+ assert.deepEqual(result,{status:"error",code:"PGRST116"});
+});
