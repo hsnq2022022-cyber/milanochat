@@ -10,7 +10,7 @@ export type DecodeResult={drafts:CloudDraft[];skipped:number};
 /** Require a full RFC3339 timestamp rather than Date.parse accepting date-only strings. */
 export function validCloudTimestamp(value:unknown):value is string {
  if(typeof value!=="string")return false;
- const m=/^(\\d{4})-(\\d{2})-(\\d{2})T([01]\\d|2[0-3]):([0-5]\\d):([0-5]\\d)(?:\\.\\d{1,6})?(Z|[+-](?:0\\d|1[0-4]):[0-5]\\d)$/.exec(value);
+ const m=/^(\d{4})-(\d{2})-(\d{2})T([01]\d|2[0-3]):([0-5]\d):([0-5]\d)(?:\.\d{1,6})?(Z|[+-](?:0\d|1[0-4]):[0-5]\d)$/.exec(value);
  if(!m)return false;
  const year=Number(m[1]),month=Number(m[2]),day=Number(m[3]);
  if(month<1||month>12||day<1||day>31)return false;
