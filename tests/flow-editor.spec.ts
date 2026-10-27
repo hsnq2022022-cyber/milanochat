@@ -174,7 +174,18 @@ test("an isolated node and a question option without a route block activation",a
   await page.getByTestId("add-step-menu").getByRole("button",{name:"إرسال رسالة"}).click();
   await toggle.click();
   await expect(toggle).toHaveAttribute("aria-pressed","false");
-  await page.getByTitle("فحص التدفق").click();
+  // Blocking errors open the findings panel automatically.
   await expect(page.getByText(/غير قابلة للوصول/).first()).toBeVisible();
   await expect(page.getByText(/● خطأ:/).first()).toBeVisible();
+});
+
+test("an unconnected quick reply blocks local activation and identifies its question node",async({page})=>{
+  await page.goto("/milanochat/#/flows");
+  await page.locator(".react-flow__node").nth(2).click();
+  await page.locator("aside [data-testid^='flow-button']").first().click();
+  await page.getByRole("combobox",{name:"ربط الزر بخطوة"}).selectOption("");
+  const toggle=page.getByTestId("flow-enabled-toggle");
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-pressed","false");
+  await expect(page.getByText(/بلا وجهة/).first()).toBeVisible();
 });
