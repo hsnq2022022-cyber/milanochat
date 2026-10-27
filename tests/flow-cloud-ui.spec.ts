@@ -7,6 +7,7 @@ test("cloud draft preview requires explicit action and never overwrites local fl
   await expect(page.getByRole("dialog", { name: "المسودات السحابية" })).toHaveCount(0);
 
   // التأكد من عدم وجود طلبات سحابية أو تعديل محلي قبل الضغط.
+  await page.waitForTimeout(900); // انتظار أول حفظ محلي تلقائي لتثبيت نقطة المقارنة
   const savedBefore = await page.evaluate(() => localStorage.getItem("social_flow_library_v1"));
   await button.click();
   const dialog = page.getByRole("dialog", { name: "المسودات السحابية" });
