@@ -127,12 +127,12 @@ export function exampleFlow(): FlowDocument {
   const edges=[edgeFor({source:a.id,sourceHandle:"next",target:b.id,targetHandle:"in"}),edgeFor({source:b.id,sourceHandle:"next",target:c.id,targetHandle:"in"}),...ds.map((n,i)=>edgeFor({source:c.id,sourceHandle:c.data.options[i].id,target:n.id,targetHandle:"in"},c.data.options[i].label))];
   return {version:3,name:"تدفق ترحيبي",nodes:[a,b,c,...ds],edges};
 }
-export type ValidationIssue = { message: string; nodeId?: string };
+export type ValidationIssue = { message: string; nodeId?: string; severity: "error" | "warning" };
 export type ValidationLibraryItem = { id: string; doc?: FlowDocument };
 /** One issue per affected node/port. Existing v3 document fields remain unchanged. */
 export function validateDocument(doc: FlowDocument, library?: readonly ValidationLibraryItem[]): ValidationIssue[] {
   const issues: ValidationIssue[]=[];
-  const add=(message:string,nodeId?:string)=>issues.push(nodeId?{message,nodeId}:{message});
+  const add=(message:string,nodeId?:string,severity:"error"|"warning"="error")=>issues.push(nodeId?{message,nodeId,severity}:{message,severity});
   if(!doc.nodes.length||doc.nodes.length>100)add("عدد الخطوات يجب أن يكون بين 1 و100.");
   if(doc.edges.length>250)add("التوصيلات تتجاوز الحد الأقصى.");
   const starts=doc.nodes.filter(n=>n.data.kind==="trigger");
@@ -201,8 +201,12 @@ export function validateDocument(doc: FlowDocument, library?: readonly Validatio
   for(const n of doc.nodes){
     if(n.data.kind==="end")continue;
     const paths=adjacency.get(n.id)||[];
-    if(!paths.length&&!externalExit.has(n.id))
-      add("العقدة بلا مخرج — "+(n.data.title||n.id),n.id);
+    if(!paths.length&&!externalExit.has(n.id)){
+      const terminal=["message","action"].includes(n.data.kind);
+      add(terminal
+        ?"نهاية ضمنية: هذه الخطوة بلا مخرج، وسينتهي التدفق بعدها — "+(n.data.title||n.id)
+        :"العقدة بلا مخرج — "+(n.data.title||n.id),n.id,terminal?"warning":"error");
+    }
   }
   if(starts.length===1){
     const seen=new Set<string>();
@@ -218,7 +222,8 @@ export function validateDocument(doc: FlowDocument, library?: readonly Validatio
 
   // Every reachable node must eventually lead to End or an external destination.
   // Cycles with an escape are legal. Cycles without one are not.
-  const canFinish=new Set<string>([...externalExit,...doc.nodes.filter(n=>n.data.kind==="end").map(n=>n.id)]);
+  const canFinish=new Set<string>([...externalExit,...doc.nodes.filter(n=>n.data.kind==="end"||
+    (["message","action"].includes(n.data.kind)&&(adjacency.get(n.id)||[]).length===0)).map(n=>n.id)]);
   let changed=true;
   while(changed){
     changed=false;
@@ -264,12 +269,9 @@ function cleanImported(raw:unknown): FlowDocument | null {
     const kind=kindOf(d.kind);
     const options:Array<Choice>=Array.isArray(d.options)?d.options.slice(0,12).filter((x:unknown)=>!!x&&typeof x==="object").map((x:unknown)=>{const c=x as Record<string,unknown>;
       const action:ButtonAction=["step","flow","website","ai","actions","condition","randomizer"].includes(String(c.action))?c.action as ButtonAction:"step";
-      return {id:safeString(c.id,id()),label:safeString(c.label).slice(0,100),
-        ...(typeof c.weight==="number"?{weight:c.weight}:{}),
-        ...(c.buttonType!==undefined?{buttonType:c.buttonType==="quick_reply"?"quick_reply":"button" as const}:{}),
-        ...(c.action!==undefined?{action}:{}),
-        ...(c.targetFlowId!==undefined?{targetFlowId:safeString(c.targetFlowId).slice(0,150)}:{}),
-        ...(c.url!==undefined?{url:safeString(c.url).slice(0,2000)}:{})};
+      return {id:safeString(c.id,id()),label:safeString(c.label).slice(0,100),weight:typeof c.weight==="number"?c.weight:undefined,
+        buttonType:c.buttonType==="quick_reply"?"quick_reply":"button",action,
+        targetFlowId:safeString(c.targetFlowId).slice(0,150),url:safeString(c.url).slice(0,2000)};
     }):[];
     const contentBlocks:ContentBlock[]=Array.isArray(d.contentBlocks)?d.contentBlocks.slice(0,24).filter((x:unknown)=>!!x&&typeof x==="object").map((x:unknown)=>{
       const b=x as Record<string,unknown>;
