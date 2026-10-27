@@ -23,13 +23,18 @@ export class CloudDraftError extends Error {
 }
 
 export function prepareCloudDocument(input:unknown):FlowDocument {
+  let bytes:number;
+  try{bytes=new TextEncoder().encode(JSON.stringify(input)).length;}
+  catch{throw new CloudDraftError("invalid_document","محتوى التدفق غير قابل للتسلسل إلى JSON.");}
+  if(bytes>CLOUD_DRAFT_MAX_BYTES)
+    throw new CloudDraftError("oversized","حجم التدفق أكبر من الحد السحابي 1MB. قلّل الصور المضمنة.");
   const valid=importFlow(input);
   if(!valid||valid.version!==3)
     throw new CloudDraftError("invalid_document","صيغة التدفق غير صالحة للحفظ السحابي.");
-  if(valid.nodes.length>100||valid.edges.length>350)
-    throw new CloudDraftError("invalid_document","تجاوز التدفق حدود العقد أو التوصيلات.");
+  if(!valid.name.trim()||valid.name.length>100||valid.nodes.length>100||valid.edges.length>350)
+    throw new CloudDraftError("invalid_document","اسم التدفق أو عدد العقد والتوصيلات غير صالح.");
   if(new TextEncoder().encode(JSON.stringify(valid)).length>CLOUD_DRAFT_MAX_BYTES)
-    throw new CloudDraftError("oversized","حجم التدفق أكبر من الحد السحابي 1MB. قلّل الصور المضمنة.");
+    throw new CloudDraftError("oversized","حجم التدفق بعد التطبيع أكبر من الحد السحابي 1MB.");
   return valid;
 }
 
