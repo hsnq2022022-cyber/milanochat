@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Plus, Trash2, ArrowUp, ArrowDown, Type, Image as ImageIcon, FileText, Clock3, ClipboardList } from "lucide-react";
+import { Trash2, ArrowUp, ArrowDown, Type, Image as ImageIcon, FileText, Clock3, ClipboardList } from "lucide-react";
 import type { ContentBlock, FlowNode } from "./model";
 import { useFlowStore } from "./store";
 
@@ -16,7 +16,6 @@ const btn="inline-flex items-center gap-1.5 rounded-xl border border-[#275443] p
 export default function MessageBlocksEditor({node}:{node:FlowNode}){
   const store=useFlowStore();
   const blocks=node.data.contentBlocks||[];
-  const [expanded,setExpanded]=useState(true);
   const [status,setStatus]=useState("");
   const edit=(items:ContentBlock[])=>store.changeNode(node.id,{contentBlocks:items});
   const patch=(id:string,part:Partial<ContentBlock>)=>edit(blocks.map(b=>b.id===id?{...b,...part}:b));
@@ -104,10 +103,9 @@ export default function MessageBlocksEditor({node}:{node:FlowNode}){
         </div>;
       })}
     </div>
-    <button className={btn+" mt-3 w-full justify-center border-dashed"} onClick={()=>setExpanded(true)}><Plus size={15}/> إضافة محتوى</button>
-    {expanded&&<div className="mt-2 grid grid-cols-2 gap-2" data-testid="content-block-menu">{types.map(t=><button key={t.id} className="flex min-h-14 items-center gap-2 rounded-xl border border-[#275443] bg-[#0F2E24] p-2 text-right transition-colors hover:border-[#3DD189] hover:bg-[#173D30]" onClick={()=>add(t.id)}>
+    <div className="mt-2 grid grid-cols-2 gap-2" data-testid="content-block-menu">{types.map(t=><button key={t.id} className="flex min-h-14 items-center gap-2 rounded-xl border border-[#275443] bg-[#0F2E24] p-2 text-right transition-colors hover:border-[#3DD189] hover:bg-[#173D30]" onClick={()=>add(t.id)}>
       <t.icon size={17} className="text-[#3DD189]"/><span><span className="block text-xs font-bold">{t.label}</span><span className="text-[11px] text-[#8B9E96]">{t.note}</span></span>
-    </button>)}</div>}
+    </button>)}</div>
     {!!status&&<p role="status" className="mt-3 text-xs text-[#3DD189]">{status}</p>}
     <p className="mt-3 text-[11px] text-[#8B9E96]">المرفقات والمعلومات موجودة في المسودة المحلية فقط؛ دعم إرسال الصور وPDF يعتمد على القناة وصلاحيات Meta بعد تفعيل الخادم.</p>
   </section>;
