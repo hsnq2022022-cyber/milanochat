@@ -1,6 +1,7 @@
 import type { CloudDraft, DecodeResult } from "./cloudDraft";
 import { MAX_CLOUD_DRAFTS } from "./cloudDraft.ts";
 import type { FlowLibrary, SavedFlow } from "./library";
+import { importFlow } from "./model.ts";
 import type { FlowDocument } from "./model";
 
 export type RecoveryDecision = "already_local" | "conflict" | "new" | "capacity_exceeded";
@@ -29,7 +30,12 @@ export function previewCloudRecovery(local:FlowLibrary,cloud:DecodeResult):Recov
     const existing=byId.get(candidate.flow.id);
     let decision:RecoveryDecision;
     if(existing){
-      decision=JSON.stringify(existing.doc)===JSON.stringify(candidate.flow.doc)?"already_local":"conflict";
+      // Compare canonicalized importer representations, not optional UI-only fields.
+      // Both versions retain persistent port/node IDs and meaningful content.
+      const localCanonical=importFlow(existing.doc);
+      const cloudCanonical=importFlow(candidate.flow.doc);
+      decision=localCanonical&&cloudCanonical&&
+        JSON.stringify(localCanonical)===JSON.stringify(cloudCanonical)?"already_local":"conflict";
     }else if(remaining>0){
       decision="new";
     }else decision="capacity_exceeded";
