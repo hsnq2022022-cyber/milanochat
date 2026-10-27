@@ -10,6 +10,7 @@ on:
       - "tests/flow-runtime-audit.spec.ts"
       - "tests/flow-mobile-locale.spec.ts"
       - "supabase/proposals/automation_flow_drafts.review.sql"
+      - "docs/automation-flow-rollout.md"
       - ".github/workflows/flow-batch7-ci.yml"
   workflow_dispatch:
 
