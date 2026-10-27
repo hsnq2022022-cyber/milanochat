@@ -31,6 +31,21 @@
 applied. A separate stage-8 migration must reconcile the publication schema with
 the approved draft structure; never run both proposal files.
 
+### PR #106 overlap (also a draft from #105)
+
+PR #106 independently adds `compareCloudDrafts` and `stageCloudDraftCopy`
+directly to `src/flow/cloudDraft.ts`. The present reconciliation branch addresses
+the same safe-import intention through **`src/flow/cloudRecovery.ts`**, with a
+complete no-write recovery plan, normalized document comparisons, and
+`prepareIndependentCloudCopy` for explicit inactive copies.
+It also adopts the independently verified **PGRST116** error-classification fix.
+
+**Integration decision for review:** keep one canonical recovery API instead of
+merging two separate implementations. #106 and this PR are sibling branches from
+#105; merging both blindly would duplicate preview/copy APIs. Retain #106 open
+until one implementation has been explicitly reviewed and selected; do not
+silently delete or force-update either branch.
+
 ## Stage 7 safeguards now represented in code
 
 - Cloud rows have a strict 4 MiB payload boundary, full timestamp syntax check,
