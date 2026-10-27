@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { RotateCcw, Send, X, Smartphone, FileText } from "lucide-react";
 import type { Choice, FlowDocument, FlowNode } from "./model";
 import { PLATFORM_LABELS } from "./model";
+import { chooseWeightedPort, MAX_SIMULATOR_STEPS } from "./simulation";
 import type { SavedFlow } from "./library";
 
 type Bubble = {id:string;side:"bot"|"user"|"system";text:string;image?:string;pdf?:string};
@@ -9,6 +10,7 @@ type SimState = {
   activeFlowId:string; at:string|null; history:Bubble[];
   variables:Record<string,string>; visited:string[]; waiting:boolean;
   pendingBlockIndex?:number;
+  stepCount:number;
 };
 const btn="rounded-xl border border-[#275443] bg-[#0F2E24] px-3 py-2 text-xs hover:bg-[#173D30]";
 const bubble=(side:Bubble["side"],text:string,extra?:Partial<Bubble>):Bubble=>({id:crypto.randomUUID(),side,text,...extra});
@@ -33,7 +35,7 @@ export default function FlowSimulator({
 }){
   const [sim,setSim]=useState<SimState>({
     activeFlowId:flowId,at:null,history:[],
-    variables:{message:"اشتراكات",first_name:"عميل"},visited:[],waiting:false
+    variables:{message:"اشتراكات",first_name:"عميل"},visited:[],waiting:false,stepCount:0
   });
   const [input,setInput]=useState(""),[note,setNote]=useState("");
   const getDoc=(id:string)=>id===flowId?doc:flows.find(f=>f.id===id)?.doc||null;
@@ -41,6 +43,7 @@ export default function FlowSimulator({
   const find=(id:string)=>currentDoc.nodes.find(n=>n.id===id);
   const nextFor=(document:FlowDocument,source:string,port:string)=>
     document.edges.find(e=>e.source===source&&e.sourceHandle===port)?.target;
+  const simulatorSeed=42; // Fixed preview seed: restarting this flow follows the same weighted choices.
   const walk=useCallback((start:string|undefined,seed:SimState,targetFlowId=seed.activeFlowId,resumeIndex?:number)=>{
     const document=targetFlowId===flowId?doc:flows.find(f=>f.id===targetFlowId)?.doc;
     if(!document){
@@ -50,9 +53,10 @@ export default function FlowSimulator({
     const history=[...seed.history],visited=[...seed.visited],variables={...seed.variables};
     let at=start||null,waiting=false,pendingBlockIndex: number|undefined;
     let steps=0;
-    while(at&&steps++<40){
+    while(at&&seed.stepCount+steps<MAX_SIMULATOR_STEPS){
       const n=document.nodes.find(item=>item.id===at);
       if(!n){history.push(bubble("system","خطوة غير موجودة في هذا التدفق."));at=null;break;}
+      steps++;
       visited.push(n.id);
       if(n.data.kind==="trigger"){at=nextFor(document,n.id,"next")||null;continue;}
       if(n.data.kind==="action"){
@@ -73,8 +77,7 @@ export default function FlowSimulator({
         at=nextFor(document,n.id,"error")||null;continue;
       }
       if(n.data.kind==="randomizer"){
-        let remaining=Math.random()*100,out=n.data.options[n.data.options.length-1]?.id||"next";
-        for(const item of n.data.options){remaining-=item.weight||0;if(remaining<=0){out=item.id;break;}}
+        const out=chooseWeightedPort(n.data.options,simulatorSeed,seed.stepCount+steps);
         at=nextFor(document,n.id,out)||null;continue;
       }
       if(n.data.kind==="goto"){at=n.data.gotoNode||null;continue;}
@@ -109,8 +112,11 @@ export default function FlowSimulator({
       }
       at=null;
     }
-    if(steps>=40){history.push(bubble("system","توقف التنفيذ لمنع حلقة لا نهائية."));at=null;waiting=false;}
-    setSim({at,activeFlowId:targetFlowId,history,variables,visited,waiting,pendingBlockIndex});
+    if(at&&seed.stepCount+steps>=MAX_SIMULATOR_STEPS){
+      history.push(bubble("system","توقف التنفيذ بعد "+MAX_SIMULATOR_STEPS+" خطوة لمنع حلقة لا نهائية."));
+      at=null;waiting=false;
+    }
+    setSim({at,activeFlowId:targetFlowId,history,variables,visited,waiting,pendingBlockIndex,stepCount:seed.stepCount+steps});
     onVisited?.(visited);
   },[doc,flowId,flows,onVisited]);
   const restart=()=>{
@@ -118,7 +124,7 @@ export default function FlowSimulator({
     const vars={message:"اشتراكات",first_name:"عميل"};
     const start=doc.nodes.find(n=>n.data.kind==="trigger");
     const platform=start?.data.platform||"instagram";
-    const initial:SimState={activeFlowId:flowId,at:null,history:[bubble("system","معاينة "+PLATFORM_LABELS[platform]+" — لا يجري إرسال رسائل فعلية")],variables:vars,visited:[],waiting:false};
+    const initial:SimState={activeFlowId:flowId,at:null,history:[bubble("system","معاينة "+PLATFORM_LABELS[platform]+" — لا يجري إرسال رسائل فعلية")],variables:vars,visited:[],waiting:false,stepCount:0};
     walk(start?.id,initial,flowId);
   };
   useEffect(()=>{restart();},[]);
@@ -207,7 +213,7 @@ export default function FlowSimulator({
       </div>}
       <footer className="flex items-center justify-between border-t border-[#275443] px-4 py-3">
         <button className={btn} onClick={restart}><RotateCcw size={15}/> إعادة</button>
-        <span className="text-[11px] text-[#8B9E96]">المسارات المجربة: {sim.visited.length}</span>
+        <span data-testid="simulator-step-counter" className="text-[11px] text-[#8B9E96]">الخطوات: {sim.stepCount} / {MAX_SIMULATOR_STEPS}</span>
       </footer>
     </div>
   </div>;
