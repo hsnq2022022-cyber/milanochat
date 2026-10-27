@@ -45,7 +45,7 @@ export default function AutomationNode({id,data,selected}:NodeProps<FlowNodeType
         <p className="mb-1 inline-flex rounded-lg bg-[#D1FAE5] px-2 py-1 text-[11px] font-bold text-[#065F46]">{PLATFORM_LABELS[data.platform]}</p>
         <p className="text-xs text-[#506257]">{TRIGGER_OPTIONS[data.platform]?.find(t=>t.id===data.triggerMode)?.label||"حدث وارد"}</p>
         {(data.triggerMode==="keyword"||(data.triggerMode==="comment"&&!!data.keywords.trim()))&&
-          <div className="flex flex-wrap gap-1.5">{data.keywords.split(/[,،\\n]+/).map(w=>w.trim()).filter(Boolean).map(word=>
+          <div className="flex flex-wrap gap-1.5">{data.keywords.split(/[,،\n]+/).map(w=>w.trim()).filter(Boolean).map(word=>
             <span key={word} className="rounded-full bg-[#E6F7ED] px-2 py-1 text-[11px] font-semibold text-[#176043]">{word}</span>)}
           </div>}
         {data.triggerMode==="message"&&<p className="rounded-lg bg-[#E6F7ED] px-2 py-1.5 text-xs font-semibold text-[#176043]">أي رسالة واردة</p>}
