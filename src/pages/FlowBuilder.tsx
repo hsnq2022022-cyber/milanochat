@@ -239,7 +239,7 @@ function Editor(){
       {protectStoredLibrary&&<span className="mr-2 font-bold">الحفظ التلقائي متوقف لحماية بيانات المكتبة الأصلية؛ استخدم «تصدير» قبل تأكيد الحفظ اليدوي.</span>}
     </div>}
     <div className="relative flex min-h-0 flex-1 overflow-hidden">
-      <section className="relative min-w-0 flex-1" aria-label="مساحة التدفقات" onClick={()=>{if(edgeMenu)setEdgeMenu(null);}}>
+      <section className="relative min-w-0 flex-1" aria-label="مساحة التدفقات" data-touch-pan={isCompact} onClick={()=>{if(edgeMenu)setEdgeMenu(null);}}>
         <ReactFlow<FlowNode,FlowEdge>
           nodes={renderedNodes} edges={renderedEdges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
           onNodesChange={nodesChanged} onEdgesChange={edgesChanged}
