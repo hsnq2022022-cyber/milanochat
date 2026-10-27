@@ -528,3 +528,31 @@ test("batch 5 deleting selected node removes attached edges and undo restores th
  await expect(page.locator(".react-flow__node")).toHaveCount(6);
  await expect(page.locator(".react-flow__edge")).toHaveCount(5);
 });
+
+test("batch 5 context-menu removes exact edge and undo restores it",async({page})=>{
+ await page.goto("/milanochat/#/flows");
+ const path=page.locator(".react-flow__edge-interaction").first();
+ const point=await path.evaluate(element=>{
+   const p=element as SVGPathElement;
+   const center=p.getPointAtLength(p.getTotalLength()/2);
+   const screen=center.matrixTransform(p.getScreenCTM()!);
+   return {x:screen.x,y:screen.y};
+ });
+ await page.mouse.click(point.x,point.y,{button:"right"});
+ await page.getByRole("button",{name:"حذف الاتصال"}).last().click();
+ await expect(page.locator(".react-flow__edge")).toHaveCount(4);
+ await page.getByTitle("تراجع Ctrl+Z").click();
+ await expect(page.locator(".react-flow__edge")).toHaveCount(5);
+});
+
+test("batch 5 delete-and-reconnect bridges one input and output atomically",async({page})=>{
+ await page.goto("/milanochat/#/flows");
+ await page.locator(".react-flow__node").nth(1).click();
+ const panel=page.getByTestId("step-settings-panel");
+ await panel.getByRole("button",{name:"حذف مع إعادة التوصيل"}).click();
+ await expect(page.locator(".react-flow__node")).toHaveCount(5);
+ await expect(page.locator(".react-flow__edge")).toHaveCount(4);
+ await page.getByTitle("تراجع Ctrl+Z").click();
+ await expect(page.locator(".react-flow__node")).toHaveCount(6);
+ await expect(page.locator(".react-flow__edge")).toHaveCount(5);
+});
