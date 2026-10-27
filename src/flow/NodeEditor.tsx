@@ -1,8 +1,9 @@
-import { useRef, useState } from "react";
-import { Image as ImageIcon, Plus, Trash2, Check, Copy, AlertTriangle } from "lucide-react";
+import { useState } from "react";
+import { Plus, Trash2, Check, Copy, AlertTriangle } from "lucide-react";
 import { ACCENT, LABELS, makeNode, outputs, PLATFORM_LABELS, TRIGGER_OPTIONS } from "./model";
 import ButtonActionEditor from "./ButtonActionEditor";
 import MessageBlocksEditor from "./MessageBlocksEditor";
+import TriggerKeywordsEditor from "./TriggerKeywordsEditor";
 import type { FlowData, FlowNode, Choice, Platform } from "./model";
 import { useFlowStore } from "./store";
 import { cardSize, findOpenPosition } from "./layout";
@@ -18,7 +19,6 @@ const modes={buttons:"أزرار سريعة",text:"نص",email:"بريد إلك�
 export default function NodeEditor({node,onClose}:{node:FlowNode|null;onClose:()=>void}){
   const store=useFlowStore();
   const [status,setStatus]=useState("");
-  const fileInput=useRef<HTMLInputElement>(null);
   if(!node)return <aside dir="rtl" className="flex w-[min(40vw,370px)] min-w-[210px] shrink-0 flex-col border-r border-[#173D30] bg-[#0B241C] p-5 text-[#8B9E96]"><h2 className="font-semibold text-white">إعدادات الخطوة</h2><p className="mt-3 text-sm">اختر عقدة من مساحة العمل لتعديل محتواها.</p></aside>;
   const d=node.data;
   const edit=(part:Partial<FlowData>)=>store.changeNode(node.id,part);
@@ -33,28 +33,14 @@ export default function NodeEditor({node,onClose}:{node:FlowNode|null;onClose:()
   };
   const duplicate=()=>{if(store.doc.nodes.length>=100)return;const preferred={x:node.position.x+cardSize(node).width+80,y:node.position.y+80};const n=makeNode(d.kind,preferred,{...d,options:d.options.map(o=>({...o,id:crypto.randomUUID()})),title:d.title+" (نسخة)"});store.addNode({...n,position:findOpenPosition(store.doc.nodes,n,preferred)});};
   const remove=()=>{if(d.kind==="trigger"&&!window.confirm("حذف البداية سيجعل التدفق دون نقطة تشغيل. هل تريد المتابعة؟"))return;store.deleteNode(node.id);onClose();};
-  const uploadImage=async(file?:File)=>{
-    if(!file)return;if(!["image/jpeg","image/png","image/webp"].includes(file.type)||file.size>5*1024*1024){setStatus("يُسمح بصور JPG وPNG وWebP حتى 5MB.");return;}
-    const url=URL.createObjectURL(file);
-    try{
-      const image=new Image();
-      await new Promise<void>((resolve,reject)=>{image.onload=()=>resolve();image.onerror=()=>reject(Error("image"));image.src=url;});
-      const scale=Math.min(1,1100/Math.max(image.naturalWidth,image.naturalHeight));
-      const canvas=document.createElement("canvas");canvas.width=Math.max(1,Math.floor(image.naturalWidth*scale));canvas.height=Math.max(1,Math.floor(image.naturalHeight*scale));
-      const context=canvas.getContext("2d");if(!context)throw Error("canvas");
-      context.drawImage(image,0,0,canvas.width,canvas.height);
-      const data=canvas.toDataURL("image/webp",.75);
-      if(data.length>1000000){setStatus("حجم الصورة بعد الضغط كبير؛ اختر صورة أصغر.");return;}
-      edit({image:data});setStatus("تمت إضافة الصورة محليًا، وتظهر في معاينة التدفق.");
-    }catch{setStatus("تعذرت قراءة الصورة.");}finally{URL.revokeObjectURL(url);}
-  };
+
   return <aside dir="rtl" className="fixed inset-y-0 left-0 z-40 flex w-[min(96vw,410px)] shrink-0 flex-col border-r border-[#173D30] bg-[#0B241C] text-white shadow-2xl md:relative md:inset-auto md:z-20 md:w-[min(40vw,385px)] md:shadow-none">
     <div className="sticky top-0 flex items-center justify-between gap-2 border-b border-[#173D30] bg-[#0B241C] px-4 py-3">
       <div><p className="text-[11px] text-[#8B9E96]">خصائص العقدة</p><h2 className="text-base font-bold" style={{color:ACCENT[d.kind]}}>{LABELS[d.kind]}</h2></div>
       <button type="button" aria-label="إغلاق المحرر" className={btn} onClick={onClose}>إغلاق</button>
     </div>
     <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-6">
-      <label className={section}>عنوان الخطوة</label><input className={input} value={d.title} maxLength={90} onChange={e=>edit({title:e.target.value})}/>
+      {d.kind!=="trigger"&&<><label className={section}>عنوان الخطوة</label><input className={input} value={d.title} maxLength={90} onChange={e=>edit({title:e.target.value})}/></>}
       {d.kind==="trigger"&&<>
         <label className={section}>القناة التي يبدأ منها التدفق</label>
         <select className={input} aria-label="قناة بدء الأتمتة" value={d.platform} onChange={e=>{
@@ -65,27 +51,13 @@ export default function NodeEditor({node,onClose}:{node:FlowNode|null;onClose:()
           {Object.entries(PLATFORM_LABELS).map(([key,label])=><option key={key} value={key}>{label}</option>)}
         </select>
         <label className={section}>نوع الحدث</label>
-        <select className={input} value={d.triggerMode} onChange={e=>edit({triggerMode:e.target.value as FlowData["triggerMode"]})}>
+        <select className={input} aria-label="نوع الحدث" value={d.triggerMode} onChange={e=>edit({triggerMode:e.target.value as FlowData["triggerMode"]})}>
           {TRIGGER_OPTIONS[d.platform].map(event=><option key={event.id} value={event.id}>{event.label}</option>)}
         </select>
-        <label className={section}>الكلمات المفتاحية (افصل بفاصلة)</label>
-        <textarea className={input} rows={3} value={d.keywords} onChange={e=>edit({keywords:e.target.value})} placeholder="اشتراكات، الأسعار، TOD"/>
+        <TriggerKeywordsEditor key={node.id+":"+d.triggerMode} mode={d.triggerMode} value={d.keywords} onChange={keywords=>edit({keywords})}/>
         <p className="mt-2 text-[11px] leading-5 text-[#E5B54B]">هذه إعدادات التدفق فقط. اختيار WhatsApp أو Instagram أو Messenger لا يُنشئ ربط حساب جديدًا، ولا يمنح صلاحيات Meta تلقائيًا. الأحداث المسموح بها فعليًا تعتمد على القناة وحالة ربطها.</p>
       </>}
       {["message","question"].includes(d.kind)&&<>
-        <label className={section}>نص الرسالة</label>
-        <textarea className={input} rows={5} maxLength={2000} value={d.text} onChange={e=>edit({text:e.target.value})} placeholder="اكتب الرسالة التي ستظهر للعميل"/>
-        <div className="mt-1 text-left text-[11px] text-[#8B9E96]" dir="ltr">{d.text.length}/2000</div>
-        <button className={btn+" mt-2"} onClick={()=>edit({text:d.text+" {{first_name}}"})}>+ اسم العميل</button>
-        {d.kind==="message"&&<>
-          <label className={section}>صورة الرسالة</label>
-          <input ref={fileInput} className="hidden" type="file" accept="image/jpeg,image/png,image/webp" onChange={e=>{void uploadImage(e.target.files?.[0]);e.target.value="";}}/>
-          <button className={btn+" w-full justify-center border-dashed py-4"} onClick={()=>fileInput.current?.click()}><ImageIcon size={20}/> رفع صورة من الجهاز</button>
-          <label className={section}>أو رابط صورة HTTPS</label>
-          <input dir="ltr" className={input} placeholder="https://example.com/photo.jpg" value={d.image.startsWith("data:")?"":d.image} onChange={e=>edit({image:e.target.value})}/>
-          {!!d.image&&<div className="mt-2 rounded-xl bg-[#061A14] p-2"><img className="max-h-40 w-full rounded-lg object-contain" src={d.image} alt="معاينة الصورة"/><button className={btn+" mt-2 text-red-300"} onClick={()=>edit({image:""})}><Trash2 size={14}/> إزالة الصورة</button></div>}
-          <p className="mt-2 text-[11px] text-[#8B9E96]">الصور المرفوعة تُخزن ضمن المسودة على هذا المتصفح فقط.</p>
-        </>}
         {d.kind==="question"&&<>
           <label className={section}>نوع الإجابة</label>
           <select className={input} value={d.inputMode} onChange={e=>edit({inputMode:e.target.value as FlowData["inputMode"]})}>
