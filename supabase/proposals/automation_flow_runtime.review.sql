@@ -3,6 +3,15 @@
 -- Publication and execution belong to trusted service code, NEVER the browser.
 begin;
 
+-- Composite references prevent even privileged services from linking another tenant's accounts.
+-- REVIEW ONLY. Check indexes and migration locks before applying in production.
+alter table public.channel_accounts
+  add constraint automation_channel_accounts_owner_id_key unique(tenant_id,id);
+alter table public.channel_accounts
+  add constraint automation_channel_accounts_owner_platform_key unique(tenant_id,id,platform);
+alter table public.conversations
+  add constraint automation_conversations_owner_id_key unique(tenant_id,id);
+
 create table public.automation_flow_publications (
   tenant_id uuid not null references public.tenants(id) on delete cascade,
   flow_key text not null check (length(flow_key) between 1 and 128),
@@ -35,7 +44,7 @@ for each row execute function public.reject_automation_flow_publication_mutation
 create table public.automation_flow_activations (
   tenant_id uuid not null references public.tenants(id) on delete cascade,
   channel_account_id uuid not null,
-  platform text not null check (platform in ('instagram','messenger','whatsapp')),
+  platform text not null check (platform in ('instagram','facebook','whatsapp')),
   flow_key text not null,
   revision bigint not null,
   is_active boolean not null default false,
@@ -43,17 +52,21 @@ create table public.automation_flow_activations (
   updated_at timestamptz not null default now(),
   primary key (tenant_id,channel_account_id,platform,flow_key),
   foreign key (tenant_id,flow_key,revision)
-    references public.automation_flow_publications(tenant_id,flow_key,revision)
+    references public.automation_flow_publications(tenant_id,flow_key,revision),
+  foreign key (tenant_id,channel_account_id,platform)
+    references public.channel_accounts(tenant_id,id,platform)
 );
 
 -- التكرار حسب الحدث والقناة والمتجر، قبل إنشاء أي تنفيذ أو محاولة إرسال.
 create table public.automation_flow_event_receipts (
   tenant_id uuid not null references public.tenants(id) on delete cascade,
   channel_account_id uuid not null,
-  platform text not null check (platform in ('instagram','messenger','whatsapp')),
+  platform text not null check (platform in ('instagram','facebook','whatsapp')),
   provider_event_id text not null check (length(provider_event_id) between 1 and 256),
   received_at timestamptz not null default now(),
-  primary key (tenant_id,channel_account_id,platform,provider_event_id)
+  primary key (tenant_id,channel_account_id,platform,provider_event_id),
+  foreign key (tenant_id,channel_account_id,platform)
+    references public.channel_accounts(tenant_id,id,platform)
 );
 
 create table public.automation_flow_runs (
@@ -75,7 +88,11 @@ create table public.automation_flow_runs (
   updated_at timestamptz not null default now(),
   primary key (tenant_id,id),
   foreign key (tenant_id,flow_key,publication_revision)
-    references public.automation_flow_publications(tenant_id,flow_key,revision)
+    references public.automation_flow_publications(tenant_id,flow_key,revision),
+  foreign key (tenant_id,channel_account_id)
+    references public.channel_accounts(tenant_id,id),
+  foreign key (tenant_id,conversation_id)
+    references public.conversations(tenant_id,id)
 );
 
 create index automation_flow_runs_due_idx on public.automation_flow_runs(wake_at)
@@ -134,7 +151,7 @@ grant select, insert, update, delete on public.automation_flow_publications,
   public.automation_flow_metrics
   to service_role;
 
--- REVIEW: Verify channel_account_id, conversation_id and tenant_id match
--- via trusted code/constraints before deployment. This proposal is NOT sufficient
--- to send messages or prevent the existing milan-api AI from replying too.
+-- Channel platform values match the actual database; adapters must convert
+-- editor "messenger" into database "facebook" before storing activation/receipt.
+-- Existing AI responder integration and Meta permission gating are still required.
 commit;
