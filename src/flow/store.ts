@@ -22,12 +22,13 @@ export type FlowState = {
   future: FlowDocument[];
   pastEnabled: boolean[];
   futureEnabled: boolean[];
+  lastEdit: { id:string; fields:string; at:number } | null;
   selectedId: string | null;
   setSelected: (id: string | null) => void;
   pushHistory: () => void;
   replace: (doc: FlowDocument) => void;
   rename: (name:string) => void;
-  addNode: (node:FlowNode) => void;
+  addNode: (node:FlowNode) => "added" | "duplicate_trigger" | "limit_reached";
   changeNode: (id:string, data:Partial<FlowData>) => void;
   nodesChanged: (changes:NodeChange<FlowNode>[])=>void;
   edgesChanged: (changes:EdgeChange<FlowEdge>[])=>void;
@@ -39,15 +40,15 @@ export type FlowState = {
   redo: ()=>void;
 };
 
-function savePast(state: FlowState): Pick<FlowState,"past"|"future"|"pastEnabled"|"futureEnabled"> {
+function savePast(state: FlowState): Pick<FlowState,"past"|"future"|"pastEnabled"|"futureEnabled"|"lastEdit"> {
   const enabled=state.flows.find(f=>f.id===state.activeFlowId)?.enabled===true;
-  return {past:[...state.past.slice(-99),state.doc],future:[],
+  return {lastEdit:null,past:[...state.past.slice(-99),state.doc],future:[],
     pastEnabled:[...state.pastEnabled.slice(-99),enabled],futureEnabled:[]};
 }
 const initialLibrary=loadLibrary();
 const initial=initialLibrary.flows.find(flow=>flow.id===initialLibrary.activeFlowId)!.doc;
 export const useFlowStore=create<FlowState>((set,get)=>({
-  doc:initial,activeFlowId:initialLibrary.activeFlowId,flows:initialLibrary.flows,past:[],future:[],pastEnabled:[],futureEnabled:[],selectedId:null,
+  doc:initial,activeFlowId:initialLibrary.activeFlowId,flows:initialLibrary.flows,past:[],future:[],pastEnabled:[],futureEnabled:[],lastEdit:null,selectedId:null,
   createFlow:(name,fromScratch=false)=>{
     if(get().flows.length>=30)return null;
     const id=crypto.randomUUID();
@@ -115,12 +116,33 @@ export const useFlowStore=create<FlowState>((set,get)=>({
   setSelected:(id)=>set({selectedId:id}),
   pushHistory:()=>set(s=>({...savePast(s)})),
   replace:(doc)=>set(s=>({doc,selectedId:s.selectedId&&doc.nodes.some(n=>n.id===s.selectedId)?s.selectedId:null,...savePast(s)})),
-  rename:(name)=>set(s=>name.slice(0,100)===s.doc.name?s:{doc:{...s.doc,name:name.slice(0,100)},...savePast(s)}),
-  addNode:(node)=>set(s=>{
-    if(s.doc.nodes.length>=100)return s;
-    return {doc:{...s.doc,nodes:[...s.doc.nodes,node]},selectedId:node.id,...savePast(s)};
+  rename:(name)=>set(s=>{
+    const normalized=name.slice(0,100);
+    if(normalized===s.doc.name)return s;
+    const now=Date.now();
+    const coalesced=s.lastEdit?.id==="@document"&&s.lastEdit.fields==="name"&&now-s.lastEdit.at>=0&&now-s.lastEdit.at<500;
+    return {doc:{...s.doc,name:normalized},...(coalesced?{}:savePast(s)),lastEdit:{id:"@document",fields:"name",at:now}};
   }),
-  changeNode:(id,data)=>set(s=>({doc:{...s.doc,nodes:s.doc.nodes.map(n=>n.id===id?{...n,data:{...n.data,...data}}:n)},...savePast(s)})),
+  addNode:(node)=>{
+    const previous=get();
+    if(previous.doc.nodes.length>=100)return "limit_reached";
+    if(node.data.kind==="trigger"&&previous.doc.nodes.some(n=>n.data.kind==="trigger"))
+      return "duplicate_trigger";
+    set(s=>({doc:{...s.doc,nodes:[...s.doc.nodes,node]},selectedId:node.id,...savePast(s)}));
+    return "added";
+  },
+  changeNode:(id,data)=>set(s=>{
+    const before=s.doc.nodes.find(n=>n.id===id);
+    if(!before||Object.keys(data).every(key=>Object.is(before.data[key as keyof FlowData],data[key as keyof FlowData])))return s;
+    const fields=Object.keys(data).sort().join("|");
+    const now=Date.now();
+    const coalesced=s.lastEdit?.id===id&&s.lastEdit.fields===fields&&
+      now-s.lastEdit.at>=0&&now-s.lastEdit.at<500;
+    return {
+      doc:{...s.doc,nodes:s.doc.nodes.map(n=>n.id===id?{...n,data:{...n.data,...data}}:n)},
+      ...(coalesced?{}:savePast(s)),lastEdit:{id,fields,at:now}
+    };
+  }),
   nodesChanged:(changes)=>set(s=>{
     const remove=changes.some(c=>c.type==="remove");
     const nodes=applyNodeChanges(changes,s.doc.nodes) as FlowNode[];
@@ -167,7 +189,7 @@ export const useFlowStore=create<FlowState>((set,get)=>({
   undo:()=>set(s=>{
     if(!s.past.length)return s;
     const oldEnabled=s.pastEnabled[s.pastEnabled.length-1]??false;
-    return {doc:s.past[s.past.length-1],past:s.past.slice(0,-1),future:[s.doc,...s.future].slice(0,100),
+    return {doc:s.past[s.past.length-1],past:s.past.slice(0,-1),future:[s.doc,...s.future].slice(0,100),lastEdit:null,
       pastEnabled:s.pastEnabled.slice(0,-1),
       futureEnabled:[s.flows.find(f=>f.id===s.activeFlowId)?.enabled===true,...s.futureEnabled].slice(0,100),
       flows:s.flows.map(f=>f.id===s.activeFlowId?{...f,enabled:oldEnabled}:f),selectedId:null};
@@ -175,7 +197,7 @@ export const useFlowStore=create<FlowState>((set,get)=>({
   redo:()=>set(s=>{
     if(!s.future.length)return s;
     const nextEnabled=s.futureEnabled[0]??false;
-    return {doc:s.future[0],future:s.future.slice(1),past:[...s.past.slice(-99),s.doc],
+    return {doc:s.future[0],future:s.future.slice(1),past:[...s.past.slice(-99),s.doc],lastEdit:null,
       pastEnabled:[...s.pastEnabled.slice(-99),s.flows.find(f=>f.id===s.activeFlowId)?.enabled===true],
       futureEnabled:s.futureEnabled.slice(1),
       flows:s.flows.map(f=>f.id===s.activeFlowId?{...f,enabled:nextEnabled}:f),selectedId:null};
