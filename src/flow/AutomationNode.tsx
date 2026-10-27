@@ -26,7 +26,7 @@ export default function AutomationNode({id,data,selected}:NodeProps<FlowNodeType
   const Icon=glyph[data.kind];
   const color=ACCENT[data.kind];
   const hasOptions=allPorts.length>0;
-  const label=data.title||LABELS[data.kind];
+  const label=data.kind==="trigger"?LABELS.trigger:(data.title||LABELS[data.kind]);
   const message=["message","question"].includes(data.kind);
   return <div dir="rtl" className={"group relative w-[280px] overflow-visible rounded-2xl border bg-[#FCFEFD] text-[#17251E] shadow-[0_7px_22px_rgba(0,0,0,.20)] transition-[box-shadow,transform] duration-150 "+(selected?"border-[#3DD189] ring-[3px] ring-[#3DD189]/35":"border-[#D7E1DC] hover:shadow-[0_12px_30px_rgba(0,0,0,.30)]")}>
     {data.kind!=="trigger"&&
@@ -44,7 +44,12 @@ export default function AutomationNode({id,data,selected}:NodeProps<FlowNodeType
       {data.kind==="trigger"&&<>
         <p className="mb-1 inline-flex rounded-lg bg-[#D1FAE5] px-2 py-1 text-[11px] font-bold text-[#065F46]">{PLATFORM_LABELS[data.platform]}</p>
         <p className="text-xs text-[#506257]">{TRIGGER_OPTIONS[data.platform]?.find(t=>t.id===data.triggerMode)?.label||"حدث وارد"}</p>
-        <p className="rounded-lg bg-[#E6F7ED] px-2 py-1.5 text-xs font-semibold text-[#176043]">{data.keywords||"أي رسالة"}</p>
+        {(data.triggerMode==="keyword"||(data.triggerMode==="comment"&&!!data.keywords.trim()))&&
+          <div className="flex flex-wrap gap-1.5">{data.keywords.split(/[,،\\n]+/).map(w=>w.trim()).filter(Boolean).map(word=>
+            <span key={word} className="rounded-full bg-[#E6F7ED] px-2 py-1 text-[11px] font-semibold text-[#176043]">{word}</span>)}
+          </div>}
+        {data.triggerMode==="message"&&<p className="rounded-lg bg-[#E6F7ED] px-2 py-1.5 text-xs font-semibold text-[#176043]">أي رسالة واردة</p>}
+        {data.triggerMode==="comment"&&!data.keywords.trim()&&<p className="rounded-lg bg-[#E6F7ED] px-2 py-1.5 text-xs font-semibold text-[#176043]">أي تعليق</p>}
       </>}
       {message&&<>
         <p className="line-clamp-4 whitespace-pre-wrap break-words rounded-xl bg-[#F3F7F5] px-3 py-2.5 text-[12px] leading-5">{data.text||"اضغط لتعديل الرسالة"}</p>
