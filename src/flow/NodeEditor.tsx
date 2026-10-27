@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Plus, Trash2, Check, Copy, AlertTriangle } from "lucide-react";
+import { Plus, Trash2, Check, Copy, AlertTriangle, ChevronDown, ChevronUp } from "lucide-react";
 import { ACCENT, LABELS, makeNode, outputs, PLATFORM_LABELS, TRIGGER_OPTIONS } from "./model";
 import ButtonActionEditor from "./ButtonActionEditor";
 import MessageBlocksEditor from "./MessageBlocksEditor";
@@ -19,6 +19,7 @@ const modes={buttons:"أزرار سريعة",text:"نص",email:"بريد إلك�
 export default function NodeEditor({node,onClose}:{node:FlowNode|null;onClose:()=>void}){
   const store=useFlowStore();
   const [status,setStatus]=useState("");
+  const [collapsed,setCollapsed]=useState(false);
   if(!node)return <aside dir="rtl" className="flex w-[min(40vw,370px)] min-w-[210px] shrink-0 flex-col border-r border-[#173D30] bg-[#0B241C] p-5 text-[#8B9E96]"><h2 className="font-semibold text-white">إعدادات الخطوة</h2><p className="mt-3 text-sm">اختر عقدة من مساحة العمل لتعديل محتواها.</p></aside>;
   const d=node.data;
   const edit=(part:Partial<FlowData>)=>store.changeNode(node.id,part);
@@ -37,9 +38,14 @@ export default function NodeEditor({node,onClose}:{node:FlowNode|null;onClose:()
   return <aside dir="rtl" className="fixed inset-y-0 left-0 z-40 flex w-[min(96vw,410px)] shrink-0 flex-col border-r border-[#173D30] bg-[#0B241C] text-white shadow-2xl md:relative md:inset-auto md:z-20 md:w-[min(40vw,385px)] md:shadow-none">
     <div className="sticky top-0 flex items-center justify-between gap-2 border-b border-[#173D30] bg-[#0B241C] px-4 py-3">
       <div><p className="text-[11px] text-[#8B9E96]">خصائص العقدة</p><h2 className="text-base font-bold" style={{color:ACCENT[d.kind]}}>{LABELS[d.kind]}</h2></div>
-      <button type="button" aria-label="إغلاق المحرر" className={btn} onClick={onClose}>إغلاق</button>
+      <div className="flex items-center gap-2">
+        <button type="button" aria-label={collapsed?"إظهار إعدادات الخطوة":"طي إعدادات الخطوة"} aria-expanded={!collapsed} className={btn} onClick={()=>setCollapsed(v=>!v)}>
+          {collapsed?<ChevronDown size={16}/>:<ChevronUp size={16}/>} {collapsed?"إظهار":"طي"}
+        </button>
+        <button type="button" aria-label="إغلاق المحرر" className={btn} onClick={onClose}>إغلاق</button>
+      </div>
     </div>
-    <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-6">
+    {!collapsed&&<div className="min-h-0 flex-1 overflow-y-auto px-4 pb-6">
       {d.kind!=="trigger"&&<><label className={section}>عنوان الخطوة</label><input className={input} value={d.title} maxLength={90} onChange={e=>edit({title:e.target.value})}/></>}
       {d.kind==="trigger"&&<>
         <label className={section}>القناة التي يبدأ منها التدفق</label>
@@ -111,7 +117,7 @@ export default function NodeEditor({node,onClose}:{node:FlowNode|null;onClose:()
       </div>
       <div className="mt-5 flex flex-wrap gap-2"><button className={btn} onClick={duplicate}><Copy size={14}/> نسخ</button><button className={btn+" text-red-300"} onClick={remove}><Trash2 size={14}/> حذف الخطوة</button>
       <button className={btn} onClick={()=>{const ok=store.deleteNode(node.id,true);if(ok)onClose();}} disabled={store.doc.edges.filter(e=>e.source===node.id).length!==1||store.doc.edges.filter(e=>e.target===node.id).length!==1}>حذف مع إعادة التوصيل</button></div>
-    </div>
-    <div className="sticky bottom-0 border-t border-[#173D30] bg-[#0B241C] p-3"><button className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#3DD189] py-2.5 text-sm font-bold text-[#061A14]" onClick={onClose}><Check size={16}/> تم</button></div>
+    </div>}
+    {!collapsed&&<div className="sticky bottom-0 border-t border-[#173D30] bg-[#0B241C] p-3"><button className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#3DD189] py-2.5 text-sm font-bold text-[#061A14]" onClick={onClose}><Check size={16}/> تم</button></div>}
   </aside>;
 }
