@@ -25,6 +25,7 @@ type EdgeMenu={id:string;x:number;y:number}|null;
 function Editor(){
   const doc=useFlowStore(s=>s.doc),selectedId=useFlowStore(s=>s.selectedId);
   const activeFlowId=useFlowStore(s=>s.activeFlowId),flows=useFlowStore(s=>s.flows);
+  const activeEnabled=flows.find(flow=>flow.id===activeFlowId)?.enabled===true;
   const store=useFlowStore.getState;
   const nodesChanged=useFlowStore(s=>s.nodesChanged),edgesChanged=useFlowStore(s=>s.edgesChanged);
   const selected=doc.nodes.find(n=>n.id===selectedId)||null;
@@ -160,6 +161,12 @@ function Editor(){
             store().createFlow();closeAdd();setNotice("أُنشئ تدفق جديد. اربط الأزرار من لوحة الخطوة.");
             window.setTimeout(()=>instance.fitView({padding:.25}),120);
           }}><Plus size={16}/></button>
+          <button className={btn} title="البدء من الصفر" aria-label="البدء من الصفر" onClick={()=>{
+            if(flows.length>=30){setNotice("الحد الأقصى 30 تدفقًا محليًا.");return;}
+            store().createFlow("تدفق فارغ "+(flows.length+1),true);
+            closeAdd();setNotice("تم إنشاء تدفق فارغ يحتوي على نقطة البداية فقط. التدفق القديم محفوظ.");
+            window.setTimeout(()=>instance.fitView({padding:.25}),120);
+          }}><LayoutGrid size={16}/> <span className="hidden sm:inline">البدء من الصفر</span></button>
           <button className={btn} title="نسخ التدفق" aria-label="نسخ التدفق" onClick={()=>{store().duplicateFlow();setNotice("تم إنشاء نسخة مستقلة من التدفق.");}}><Copy size={15}/></button>
           <button className={btn+" text-red-300"} disabled={flows.length<2} title="حذف التدفق الحالي" aria-label="حذف التدفق الحالي" onClick={()=>{
             if(!window.confirm("سيُحذف هذا التدفق المحلي. قد تكون أزرار في تدفقات أخرى مرتبطة به. هل تريد المتابعة؟"))return;
@@ -168,6 +175,18 @@ function Editor(){
         </div>
       </div>
       <div className="flex flex-wrap items-center gap-1.5">
+        <button data-testid="flow-enabled-toggle" type="button" aria-label="تفعيل التدفق" aria-pressed={activeEnabled}
+          className={"inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-xs font-bold "+(activeEnabled?"border-[#3DD189] bg-[#173D30] text-[#3DD189]":"border-[#275443] bg-[#0F2E24] text-[#C1D2CA]")}
+          onClick={()=>{
+            if(!activeEnabled&&errors.length>0){setShowIssues(true);setNotice("راجع الأخطاء قبل تفعيل المسودة.");return;}
+            store().setFlowEnabled(activeFlowId,!activeEnabled);
+            setNotice(!activeEnabled?"تم تفعيل المسودة محليًا فقط. لم تُفعّل الأتمتة على الحساب المرتبط.":"تم تعطيل المسودة محليًا.");
+          }}>
+          <span className={"relative inline-flex h-4 w-8 shrink-0 rounded-full "+(activeEnabled?"bg-[#3DD189]":"bg-[#60766B]")}>
+            <span className={"absolute top-0.5 h-3 w-3 rounded-full bg-[#061A14] transition-transform "+(activeEnabled?"translate-x-0.5":"translate-x-[18px]")}/>
+          </span>
+          {activeEnabled?"مفعّل محليًا":"معطّل"}
+        </button>
         <button className={btn} onClick={()=>store().undo()} title="تراجع Ctrl+Z"><Undo2 size={16}/></button>
         <button className={btn} onClick={()=>store().redo()} title="إعادة Ctrl+Shift+Z"><Redo2 size={16}/></button>
         <button className={btn} onClick={e=>openAdd({x:e.clientX,y:e.clientY})} title="إضافة خطوة"><Plus size={16}/> <span className="hidden sm:inline">إضافة</span></button>
@@ -257,7 +276,7 @@ function Editor(){
       {selected&&<NodeEditor node={selected} onClose={()=>store().setSelected(null)}/>}
     </div>
     {notice&&<div role="status" className="fixed bottom-5 right-5 z-50 max-w-sm cursor-pointer rounded-xl border border-[#275443] bg-[#0B241C] px-4 py-3 text-xs text-[#3DD189] shadow-2xl" onClick={()=>setNotice("")}>{notice} ×</div>}
-    <div className="pointer-events-none absolute bottom-1 left-1/2 z-10 -translate-x-1/2 rounded-lg bg-[#0B241C]/80 px-2 py-1 text-[10px] text-[#8B9E96]">معاينة محلية فقط — إرسال الرسائل وإجراءات API غير مفعّلة</div>
+    <div className="pointer-events-none absolute bottom-1 left-1/2 z-10 -translate-x-1/2 rounded-lg bg-[#0B241C]/80 px-2 py-1 text-[10px] text-[#8B9E96]">التفعيل والتعطيل محليان فقط — لا توجد أتمتة حقيقية للحسابات المرتبطة</div>
     {showSimulator&&<FlowSimulator doc={doc} flowId={activeFlowId} flows={snapshotLibrary(activeFlowId,doc,flows).flows} onVisited={setTrail} onClose={()=>setShowSimulator(false)}/>}
   </div>;
 }
