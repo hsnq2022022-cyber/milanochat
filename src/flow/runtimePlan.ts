@@ -73,6 +73,13 @@ function safeInput(input: RuntimeInput): boolean {
 function safeValue(raw: unknown): string {
   return typeof raw === "string" ? raw : "";
 }
+function validFieldName(name: string): boolean {
+  return /^[a-zA-Z_][a-zA-Z0-9_]{0,63}$/.test(name) &&
+    !name.startsWith("__") && name !== "constructor" && name !== "prototype";
+}
+function variablesFit(variables: Record<string,string>): boolean {
+  return new TextEncoder().encode(JSON.stringify(variables)).length <= 32768;
+}
 
 /** Process a bounded amount of logic. Never perform IO or mutate input state/doc. */
 export function planRuntimeTransition(
@@ -112,9 +119,11 @@ export function planRuntimeTransition(
     } else {
       if (!validCustomerInput(mode, input.answer))
         return { state, effects: [], error: "invalid customer answer" };
-      if (!/^[a-zA-Z_][a-zA-Z0-9_]{0,63}$/.test(node.data.inputField))
+      if (!validFieldName(node.data.inputField))
         return fail(state, "invalid input field");
-      state.variables[node.data.inputField] = input.answer.trim();
+      const nextVars = {...state.variables,[node.data.inputField]:input.answer.trim()};
+      if (!variablesFit(nextVars)) return fail(state,"runtime variables exceed storage limit");
+      state = {...state,variables:nextVars};
       port = nextNode(doc, node, "valid") ? "valid" : "next";
     }
     const target = nextNode(doc, node, port);
@@ -201,6 +210,20 @@ export function planRuntimeTransition(
         return { state: { ...state, status: "sleeping", wakeAt }, effects: [effect] };
       }
       case "action": {
+        if (data.actionType === "set_field") {
+          // تخزين متغير محلي داخل سياق التنفيذ فقط، دون تعديل ملف العميل.
+          const equalsAt = data.actionValue.indexOf("=");
+          const field = data.actionValue.slice(0, equalsAt).trim();
+          const value = data.actionValue.slice(equalsAt + 1).trim();
+          if (equalsAt < 1 || !validFieldName(field) || value.length > 500)
+            return fail(state, "invalid custom field assignment");
+          const variables = { ...state.variables, [field]: value };
+          if (!variablesFit(variables))
+            return fail(state, "runtime variables exceed storage limit");
+          state = proceed({ ...state, variables }, nextNode(doc, node, "next"));
+          if (state.status === "completed") return { state, effects: [] };
+          break;
+        }
         if (data.actionType !== "handoff")
           return fail(state, "action needs explicit trusted server implementation");
         const effect: PlannedEffect = {

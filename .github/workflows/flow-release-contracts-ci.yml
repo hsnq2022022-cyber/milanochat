@@ -2,7 +2,7 @@ name: Flow Stages 8-10 - Unified Runtime Contracts
 
 on:
   push:
-    branches: [feature/flows-release-runtime-contracts, feature/flows-phase7-editor-release]
+    branches: [feature/flows-release-runtime-contracts, feature/flows-phase7-editor-release, feature/flows-stage10-set-field]
   workflow_dispatch:
 
 permissions:
