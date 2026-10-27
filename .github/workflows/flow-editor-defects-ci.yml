@@ -1,0 +1,37 @@
+name: Flow Editor Defects - Review CI
+on:
+  push:
+    branches: [fix/flow-editor-defects]
+  pull_request:
+    paths:
+      - "src/flow/**"
+      - "src/pages/FlowBuilder.tsx"
+      - "tests/flow-editor.spec.ts"
+      - "tests/flow-layout-evidence.spec.ts"
+permissions:
+  contents: read
+jobs:
+  editor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: "22", cache: npm}
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npx tsc --noEmit -p tsconfig.flows.json
+      - name: All flow unit tests including new regressions
+        run: node --experimental-strip-types --test src/flow/*.test.ts
+      - run: npm run build
+      - run: npx playwright install chromium
+      - name: Browser E2E and layout screenshot acceptance
+        env:
+          VITE_ENABLE_CLOUD_FLOW_DRAFTS: "true"
+        run: npm run test:browser
+      - name: Retain UI screenshots and traces
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flow-editor-layout-evidence
+          path: test-results/
+          if-no-files-found: ignore
