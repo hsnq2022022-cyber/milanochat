@@ -310,3 +310,27 @@ test("message content controls are available without expanding and legacy image 
  await aside.getByRole("textbox",{name:"رابط صورة المكوّن"}).fill("https://example.com/photo.jpg");
  await expect(page.locator(".react-flow__node").nth(1)).toContainText("رسالة جديدة");
 });
+
+test("batch 3 hides a second trigger and preserves the current starting node",async({page})=>{
+ await page.goto("/milanochat/#/flows");
+ await page.getByRole("button",{name:"فتح إضافة خطوة"}).click();
+ const menu=page.getByTestId("add-step-menu");
+ await expect(menu).toBeVisible();
+ await expect(menu.getByRole("button",{name:"بداية الأتمتة"})).toHaveCount(0);
+ await expect(menu.getByRole("button",{name:"إرسال رسالة"})).toBeVisible();
+});
+
+test("batch 3 mobile step action stays visible and preview counts execution steps",async({page})=>{
+ await page.setViewportSize({width:390,height:844});
+ await page.goto("/milanochat/#/flows");
+ const add=page.locator(".react-flow__node").first().locator("button[aria-label^='إضافة خطوة بعد']");
+ await expect(add).toBeVisible();
+ const size=await add.boundingBox();
+ expect(size).not.toBeNull();
+ expect(size!.width).toBeGreaterThanOrEqual(44);
+ expect(size!.height).toBeGreaterThanOrEqual(44);
+ await page.getByRole("button",{name:"تجربة"}).click();
+ await expect(page.getByTestId("simulator-step-counter")).toContainText("الخطوات:");
+ await page.getByRole("button",{name:"إعادة",exact:true}).click();
+ await expect(page.getByTestId("simulator-step-counter")).toContainText("/ 150");
+});
