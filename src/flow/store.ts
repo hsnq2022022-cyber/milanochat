@@ -142,7 +142,7 @@ export const useFlowStore=create<FlowState>((set,get)=>({
       doc:{...s.doc,
         nodes:[...s.doc.nodes.map(n=>({...n,selected:false})),...result.nodes],
         edges:[...s.doc.edges,...result.edges]},
-      selectedId:result.nodes.at(-1)?.id??null,...savePast(s)
+      selectedId:result.nodes[result.nodes.length-1]?.id??null,...savePast(s)
     }));
     return "added";
   },
