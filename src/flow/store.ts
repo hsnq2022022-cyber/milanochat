@@ -10,7 +10,8 @@ export type FlowState = {
   doc: FlowDocument;
   activeFlowId: string;
   flows: SavedFlow[];
-  createFlow: (name?:string)=>string;
+  createFlow: (name?:string,fromScratch?:boolean)=>string;
+  setFlowEnabled: (id:string,enabled:boolean)=>boolean;
   duplicateFlow: ()=>string|null;
   switchFlow: (id:string)=>boolean;
   deleteFlow: (id:string)=>boolean;
@@ -40,15 +41,22 @@ const initialLibrary=loadLibrary();
 const initial=initialLibrary.flows.find(flow=>flow.id===initialLibrary.activeFlowId)!.doc;
 export const useFlowStore=create<FlowState>((set,get)=>({
   doc:initial,activeFlowId:initialLibrary.activeFlowId,flows:initialLibrary.flows,past:[],future:[],selectedId:null,
-  createFlow:(name)=>{
+  createFlow:(name,fromScratch=false)=>{
     const id=crypto.randomUUID();
     set(s=>{
       if(s.flows.length>=30)return s;
       const current=snapshotLibrary(s.activeFlowId,s.doc,s.flows);
-      const doc=blankFlow(name||"تدفق جديد "+(current.flows.length+1));
-      return {doc,activeFlowId:id,flows:[...current.flows,{id,doc}],selectedId:null,past:[],future:[]};
+      const doc=blankFlow(name||"تدفق جديد "+(current.flows.length+1),fromScratch);
+      return {doc,activeFlowId:id,flows:[...current.flows,{id,doc,enabled:false}],selectedId:null,past:[],future:[]};
     });
     return id;
+  },
+  setFlowEnabled:(id,enabled)=>{
+    const state=get();
+    if(!state.flows.some(flow=>flow.id===id))return false;
+    set(s=>({flows:snapshotLibrary(s.activeFlowId,s.doc,s.flows).flows.map(flow=>
+      flow.id===id?{...flow,enabled}:flow)}));
+    return true;
   },
   duplicateFlow:()=>{
     const s=get();
@@ -56,7 +64,7 @@ export const useFlowStore=create<FlowState>((set,get)=>({
     const id=crypto.randomUUID();
     const doc=structuredClone(s.doc);
     doc.name=s.doc.name+" (نسخة)";
-    set({doc,activeFlowId:id,flows:[...snapshotLibrary(s.activeFlowId,s.doc,s.flows).flows,{id,doc}],selectedId:null,past:[],future:[]});
+    set({doc,activeFlowId:id,flows:[...snapshotLibrary(s.activeFlowId,s.doc,s.flows).flows,{id,doc,enabled:false}],selectedId:null,past:[],future:[]});
     return id;
   },
   switchFlow:(id)=>{
