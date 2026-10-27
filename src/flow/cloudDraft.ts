@@ -66,7 +66,7 @@ export function decodeCloudDraftRows(rows:unknown):DecodeResult{
 
 function classifyPostgrest(error:{code?:string}|null):SaveResult{
  if(error?.code==="23505")return {status:"conflict"};
- if(["42P01","PGRST205","PGRST116"].includes(error?.code||""))return {status:"not_provisioned"};
+ if(["42P01","PGRST205"].includes(error?.code||""))return {status:"not_provisioned"};
  if(["42501","PGRST301"].includes(error?.code||""))return {status:"permission_denied"};
  return {status:"error",code:error?.code||"unknown"};
 }
