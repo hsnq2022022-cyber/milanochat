@@ -363,8 +363,8 @@ test("audit: typed question modes expose two working routes and remove stale but
   await expect(routes.getByRole("combobox",{name:"وجهة الإجابة غير الصحيحة"})).toBeVisible();
   await expect(page.locator(".react-flow__edge")).toHaveCount(2);
  }
- await panel.getByRole("combobox",{name:"وجهة الإجابة الصحيحة"}).selectOption({index:1});
- await panel.getByRole("combobox",{name:"وجهة الإجابة غير الصحيحة"}).selectOption({index:2});
+ await panel.getByRole("combobox",{name:"وجهة الإجابة الصحيحة"}).selectOption({index:2});
+ await panel.getByRole("combobox",{name:"وجهة الإجابة غير الصحيحة"}).selectOption({index:3});
  await expect(page.locator(".react-flow__edge")).toHaveCount(4);
  await mode.selectOption("buttons");
  await expect(page.locator(".react-flow__edge")).toHaveCount(2);
@@ -376,8 +376,8 @@ test("audit: invalid email follows invalid route; valid email follows valid rout
  await page.locator(".react-flow__node").nth(2).click();
  const panel=page.locator("aside");
  await panel.getByRole("combobox",{name:"نوع الإجابة"}).selectOption("email");
- await panel.getByRole("combobox",{name:"وجهة الإجابة الصحيحة"}).selectOption({index:1});
- await panel.getByRole("combobox",{name:"وجهة الإجابة غير الصحيحة"}).selectOption({index:2});
+ await panel.getByRole("combobox",{name:"وجهة الإجابة الصحيحة"}).selectOption({index:2});
+ await panel.getByRole("combobox",{name:"وجهة الإجابة غير الصحيحة"}).selectOption({index:3});
  await page.getByRole("button",{name:"تجربة"}).click();
  const answer=page.getByRole("textbox",{name:"إجابة العميل"});
  await answer.fill("wrong-email");
