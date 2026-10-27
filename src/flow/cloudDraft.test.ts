@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { exampleFlow, makeNode, importFlow } from "./model.ts";
-import { prepareCloudDraft, decodeCloudDraftRows, MAX_CLOUD_DRAFTS, saveCloudDraft } from "./cloudDraft.ts";
+import { prepareCloudDraft, decodeCloudDraftRows, MAX_CLOUD_DRAFTS, saveCloudDraft, compareCloudDrafts, stageCloudDraftCopy } from "./cloudDraft.ts";
 
 test("stage 7 cloud preparation roundtrips all content without changing original or activation",()=>{
  const doc=exampleFlow(),before=JSON.stringify(doc);
@@ -131,4 +131,74 @@ test("cloud read rejects oversized payloads and malformed timestamps without mod
  assert.deepEqual(result.drafts.map(d=>d.flow.id),["valid"]);
  assert.equal(result.skipped,2);
  assert.equal(rows[0].document,before);
+});
+
+ 
+test("cloud differences remain review-only and retain local activation state",()=>{
+ const doc=exampleFlow();
+ const cloud=decodeCloudDraftRows([
+  {flow_key:"same",document:doc,draft_revision:2,updated_at:"2026-10-27T19:00:00Z"},
+  {flow_key:"changed",document:doc,draft_revision:5,updated_at:"2026-10-27T19:00:00Z"},
+  {flow_key:"remote-only",document:doc,draft_revision:1,updated_at:"2026-10-27T19:00:00Z"},
+  {flow_key:"invalid",document:{version:99},draft_revision:1,updated_at:"2026-10-27T19:00:00Z"}
+ ]);
+ const same=cloud.drafts.find(d=>d.flow.id==="same")!.flow.doc;
+ const changed=cloud.drafts.find(d=>d.flow.id==="changed")!.flow.doc;
+ const locals=[
+  {id:"same",doc:same,enabled:true},
+  {id:"changed",doc:{...changed,name:"نسخة محلية مختلفة"},enabled:false},
+  {id:"local-only",doc:exampleFlow(),enabled:true}
+ ];
+ const before=JSON.stringify(locals);
+ const result=compareCloudDrafts(locals,cloud);
+ assert.deepEqual(result.items.map(x=>[x.flowKey,x.status]),[
+  ["same","identical"],["changed","different"],
+  ["local-only","local_only"],["remote-only","cloud_only"]
+ ]);
+ assert.equal(result.items[0].localEnabled,true);
+ assert.equal(result.items[1].cloudRevision,5);
+ assert.equal(result.skippedCloudRows,1);
+ assert.equal(result.requiresReview,true);
+ assert.equal(JSON.stringify(locals),before);
+});
+
+test("opt-in cloud restore stages an inactive copy without replacing any existing flow",()=>{
+ const doc=exampleFlow();
+ const remote=decodeCloudDraftRows([{
+  flow_key:"remote",document:doc,draft_revision:3,
+  updated_at:"2026-10-27T19:00:00Z"
+ }]).drafts[0];
+ const original={id:"local",doc:exampleFlow(),enabled:true};
+ const library={activeFlowId:"local",flows:[original]};
+ const snapshot=JSON.stringify(library);
+ const staged=stageCloudDraftCopy(library,remote,"cloud-copy");
+ assert.equal(staged.activeFlowId,"local");
+ assert.equal(staged.flows.length,2);
+ assert.equal(staged.flows[0],original);
+ assert.equal(staged.flows[1].id,"cloud-copy");
+ assert.equal(staged.flows[1].enabled,false);
+ assert.notEqual(staged.flows[1].doc,remote.flow.doc);
+ assert.deepEqual(staged.flows[1].doc,remote.flow.doc);
+ assert.equal(JSON.stringify(library),snapshot);
+ assert.throws(()=>stageCloudDraftCopy(library,remote,"local"),/already exists/);
+ assert.throws(()=>stageCloudDraftCopy(library,remote,"../bad"),/identifier/);
+ assert.throws(()=>stageCloudDraftCopy({
+  activeFlowId:"local",flows:Array.from({length:MAX_CLOUD_DRAFTS},(_,i)=>({
+   id:"local-"+i,doc,enabled:false
+  }))
+ },remote,"other"),/full/);
+});
+
+test("singular PostgREST response error is not mistaken for an unprovisioned table",async()=>{
+ const fake={from:()=>({update:()=>{
+  const chain={
+   eq:()=>chain,
+   select:()=>({maybeSingle:async()=>({
+    data:null,error:{code:"PGRST116"}
+   })})
+  };
+  return chain;
+ }})} as unknown as Parameters<typeof saveCloudDraft>[0];
+ const result=await saveCloudDraft(fake,"tenant",{id:"flow",doc:exampleFlow()},1);
+ assert.deepEqual(result,{status:"error",code:"PGRST116"});
 });
