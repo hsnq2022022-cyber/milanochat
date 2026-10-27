@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { RotateCcw, Send, X, Smartphone, FileText } from "lucide-react";
 import type { Choice, FlowDocument, FlowNode } from "./model";
 import { PLATFORM_LABELS } from "./model";
-import { chooseWeightedPort, MAX_SIMULATOR_STEPS } from "./simulation";
+import { chooseWeightedPort, MAX_SIMULATOR_STEPS, normalizeArabicDigits, validCustomerInput } from "./simulation";
 import type { SavedFlow } from "./library";
 
 type Bubble = {id:string;side:"bot"|"user"|"system";text:string;image?:string;pdf?:string};
@@ -15,12 +15,6 @@ type SimState = {
 const btn="rounded-xl border border-[#275443] bg-[#0F2E24] px-3 py-2 text-xs hover:bg-[#173D30]";
 const bubble=(side:Bubble["side"],text:string,extra?:Partial<Bubble>):Bubble=>({id:crypto.randomUUID(),side,text,...extra});
 const interpolate=(s:string,vars:Record<string,string>)=>s.replace(/\{\{(\w+)\}\}/g,(_,key:string)=>vars[key]||"");
-function validInput(mode:string,value:string){
-  if(mode==="email")return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
-  if(mode==="phone")return /^\+?[\d\s-]{7,18}$/.test(value);
-  if(mode==="number")return value.trim()!==""&&Number.isFinite(Number(value));
-  return !!value.trim();
-}
 function evaluate(n:FlowNode,vars:Record<string,string>){
   const value=vars[n.data.conditionField]||"",test=n.data.conditionValue;
   if(n.data.operator==="exists")return !!value;
@@ -171,14 +165,20 @@ export default function FlowSimulator({
     const answer=input.trim();if(!answer){setNote("أدخل إجابة أولًا.");return;}
     if(sim.pendingBlockIndex!==undefined){
       const block=current.data.contentBlocks[sim.pendingBlockIndex];
-      if(!validInput(block.inputMode||"text",answer)){setNote("الإجابة غير صالحة لنوع البيانات المطلوب.");return;}
-      const vars={...sim.variables,[block.field||"response"]:answer,message:answer};
+      if(!validCustomerInput(block.inputMode||"text",answer)){setNote("الإجابة غير صالحة لنوع البيانات المطلوب.");return;}
+      const stored=["number","phone"].includes(block.inputMode||"")?normalizeArabicDigits(answer):answer;
+      const vars={...sim.variables,[block.field||"response"]:stored,message:stored};
       setInput("");setNote("");
       walk(current.id,{...sim,history:[...sim.history,bubble("user",answer)],variables:vars},sim.activeFlowId,sim.pendingBlockIndex+1);
       return;
     }
-    const valid=validInput(current.data.inputMode,answer);
-    const vars={...sim.variables,[current.data.inputField]:answer,message:answer};
+    const valid=validCustomerInput(current.data.inputMode,answer);
+    if(!valid&&!nextFor(currentDoc,current.id,"invalid")){
+      setNote("الإجابة غير صالحة؛ تحقق من البريد أو رقم الهاتف أو الرقم وأعد المحاولة.");
+      return;
+    }
+    const stored=["number","phone"].includes(current.data.inputMode)?normalizeArabicDigits(answer):answer;
+    const vars={...sim.variables,message:stored,...(valid?{[current.data.inputField]:stored}:{})};
     const dest=nextFor(currentDoc,current.id,valid?"valid":"invalid");
     const history=[...sim.history,bubble("user",answer)];
     setInput("");setNote("");
@@ -206,7 +206,8 @@ export default function FlowSimulator({
         {!collection&&(current.data.kind==="message"||current.data.kind==="question"&&current.data.inputMode==="buttons")&&
           <div className="flex flex-wrap gap-2">{current.data.options.map(option=><button className={btn} key={option.id} onClick={()=>respondChoice(option)}>{option.label}</button>)}</div>}
         {showTextInput&&<div className="flex gap-2"><input className="min-w-0 flex-1 rounded-xl border border-[#275443] bg-[#0F2E24] px-3 py-2 text-sm"
-          aria-label="إجابة العميل" placeholder={collection?"اكتب البيانات المطلوبة...":"اكتب الإجابة..."} value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")submit();}}/>
+          aria-label="إجابة العميل" inputMode={(collection?.inputMode||current.data.inputMode)==="email"?"email":(collection?.inputMode||current.data.inputMode)==="phone"?"tel":(collection?.inputMode||current.data.inputMode)==="number"?"decimal":"text"}
+          placeholder={collection?"اكتب البيانات المطلوبة...":"اكتب الإجابة..."} value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")submit();}}/>
           <button className={btn} onClick={submit}><Send size={16}/></button></div>}
         {!collection&&current.data.kind==="message"&&nextFor(currentDoc,current.id,"next")&&<button className={btn+" w-full"} onClick={next}>الخطوة التالية</button>}
         {!!note&&<p role="alert" className="text-xs text-[#E5B54B]">{note}</p>}
