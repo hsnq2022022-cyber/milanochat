@@ -156,12 +156,12 @@ function Editor(){
 
   return <div dir={language==="ar"?"rtl":"ltr"} className="flex h-[100dvh] flex-col bg-[#061A14] text-white" style={{fontFamily:"system-ui, sans-serif"}}>
     <header className="z-30 flex shrink-0 flex-col gap-2 border-b border-[#173D30] bg-[#0B241C] px-2 py-2 md:flex-row md:flex-wrap md:items-center md:justify-between md:px-5">
-      <div className="flex min-w-0 w-full items-center gap-2 md:w-auto"><a className={btn} href="#/dashboard" aria-label={t("back")}><ArrowRight size={17}/></a>
+      <div className="flex w-full min-w-0 flex-wrap items-center gap-2 md:w-auto md:flex-nowrap"><a className={btn} href="#/dashboard" aria-label={t("back")}><ArrowRight size={17}/></a>
         <div className="min-w-0"><p className="text-[11px] text-[#8B9E96]">{t("designer")}</p>
           <input className="max-w-36 bg-transparent text-sm font-bold outline-none md:max-w-64" aria-label={t("name")} maxLength={100} value={doc.name} onChange={e=>store().rename(e.target.value)}/></div>
         <span className="hidden rounded-lg border border-[#E5B54B]/40 px-2 py-1 text-[11px] text-[#E5B54B] sm:block">{t("draft")}</span>
         {<span data-testid="flow-preview-version" className="rounded-lg border border-[#3DD189]/60 bg-[#173D30] px-2 py-1 text-[11px] text-[#3DD189]">معاينة 5.3 — سؤال بخانة واحدة</span>}
-        <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto pb-1 md:flex-none md:overflow-visible" data-testid="flow-toolbar-actions">
+        <div className="flex w-full min-w-0 shrink-0 items-center gap-1.5 overflow-x-auto pb-1 md:w-auto md:flex-none md:shrink md:overflow-visible" data-testid="flow-toolbar-actions">
           <select className="max-w-36 rounded-lg border border-[#275443] bg-[#0F2E24] px-2 py-2 text-xs text-white md:max-w-52" aria-label={t("select")} value={activeFlowId} onChange={e=>{
             store().switchFlow(e.target.value);closeAdd();setNotice("تم فتح التدفق المحدد.");
             window.setTimeout(()=>instance.fitView({padding:.2,duration:200}),90);
