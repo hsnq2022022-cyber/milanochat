@@ -59,6 +59,14 @@ const messages={
   menuClose:["إغلاق قائمة الإضافة","Close step picker"],
   language:["لغة الواجهة","Interface language"],
 } as const;
+const kindLabels={
+ trigger:"Trigger",message:"Send message",question:"Question / collect data",
+ condition:"Condition",delay:"Delay",action:"Action",randomizer:"Randomizer",
+ goto:"Go to step",request:"External request",end:"End"
+} as const;
+export function flowKindLabel(kind:keyof typeof kindLabels,language:FlowLanguage,arabic:string):string{
+ return language==="en"?kindLabels[kind]:arabic;
+}
 export type FlowUIText=keyof typeof messages;
 export function flowText(key:FlowUIText,language:FlowLanguage):string{
   const phrase=messages[key];
