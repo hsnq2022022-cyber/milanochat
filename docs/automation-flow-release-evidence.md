@@ -1,6 +1,6 @@
 # إدارة سوشيال — Flow Builder release evidence and production blockers
 
-Status: **NOT RELEASED / not approved for live customer traffic**, 2026-10-28.
+Status: **Flow editor and opt-in cloud drafts released**; **real customer automation NOT RELEASED**, 2026-10-28.
 
 ## Single canonical implementation
 
@@ -16,14 +16,14 @@ Status: **NOT RELEASED / not approved for live customer traffic**, 2026-10-28.
 - Actual social inbox auto-responses currently go through Supabase Edge Function supabase/functions/milan-api/index.ts.
 - The existing webhook handler calls answerFromKnowledge and sends a provider response when agent_enabled/auto_reply allow it; a new flow handler that also sends would cause duplicate replies.
 - The existing webhook path respects human transfer and low-credit states. The flow engine must preserve those checks and own the exclusive responder decision before sending.
-- New Stage 7 drafts table and Stage 8–11 runtime tables are proposals ONLY; not applied to live database. Tests use a disposable PostgreSQL service and synthetic owners.
+- Stage 7 drafts table is deployed with owner RLS in production, checked using two real tenant owners and ROLLBACK. Stage 8–11 runtime SQL remains review-only.
 - Default VITE_ENABLE_CLOUD_FLOW_DRAFTS unset: cloud draft controls are not exposed in the ordinary site build. Runtime has no activation flag or outgoing sender connected.
 
 ## Mandatory release blockers: all must be independently verified
 
 | Gate | Status | Evidence required |
 | --- | --- | --- |
-| Stage 7: real cloud schema | BLOCKED | Reviewed migration, backup, reproducible restore, RLS in real Supabase with two different signed-in owner users |
+| Stage 7: real cloud schema | PROVISIONED | Real owner impersonation RLS verified; full end-to-end browser sessions still pending |
 | Stage 7: client sync | PREVIEW ONLY | Offline/local conflicts, mobile testing, account switching and sign-out, invalid cloud data never destroys local drafts |
 | Stage 8: publish and rollback | BLOCKED | Authenticated server-side create immutable revision, validate doc, confirm channel permissions, activate/disable/rollback safely |
 | Stage 9: verified inbound routing | BLOCKED | Signed raw Meta payload, server-resolved tenant/account, supported subscribed fields, replay protection, one matching flow or no send |
