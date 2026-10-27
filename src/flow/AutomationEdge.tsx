@@ -4,6 +4,7 @@ import { Plus, X } from "lucide-react";
 import { makeNode } from "./model";
 import type { FlowEdge } from "./model";
 import { useFlowStore } from "./store";
+import { findOpenPosition } from "./layout";
 
 export default function AutomationEdge(props:EdgeProps<FlowEdge>){
   const {id,sourceX,sourceY,targetX,targetY,sourcePosition,targetPosition,selected,markerEnd}=props;
@@ -12,7 +13,9 @@ export default function AutomationEdge(props:EdgeProps<FlowEdge>){
   const insert=()=>{
     const store=useFlowStore.getState(),doc=store.doc,old=doc.edges.find(e=>e.id===id);
     if(!old)return;
-    const fresh=makeNode("message",{x:(sourceX+targetX)/2-130,y:(sourceY+targetY)/2-45},{title:"خطوة جديدة",text:"اكتب رسالتك هنا"});
+    const preferred={x:(sourceX+targetX)/2-130,y:(sourceY+targetY)/2-45};
+    const draft=makeNode("message",preferred,{title:"خطوة جديدة",text:"اكتب رسالتك هنا"});
+    const fresh={...draft,position:findOpenPosition(doc.nodes,draft,preferred)};
     const edges=doc.edges.filter(e=>e.id!==id);
     edges.push({...old,id:crypto.randomUUID(),target:fresh.id,targetHandle:"in"},
       {id:crypto.randomUUID(),source:fresh.id,sourceHandle:"next",target:old.target,targetHandle:old.targetHandle,type:"flowEdge",data:{label:"التالي"}});
