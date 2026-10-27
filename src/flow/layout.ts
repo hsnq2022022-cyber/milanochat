@@ -20,7 +20,7 @@ export function cardSize(node:FlowNode):{width:number;height:number}{
   const width=node.measured?.width;
   const height=node.measured?.height;
   return {width:width&&width>0?Math.max(280,width):estimate.width,
-    height:height&&height>0?Math.max(height,estimate.height):estimate.height};
+    height:height&&height>0?height:estimate.height};
 }
 
 function collides(a:XYPosition,as:{width:number;height:number},b:XYPosition,bs:{width:number;height:number},gap:number){
