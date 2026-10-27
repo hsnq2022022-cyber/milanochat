@@ -75,7 +75,7 @@ jobs:
       - name: Prepare synthetic user and owner relation
         run: |
           psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-drafts-bootstrap.sql
-          psql -X -v ON_ERROR_STOP=1 -c 'create role service_role nologin'
+          psql -X -v ON_ERROR_STOP=1 -c 'create role service_role nologin bypassrls'
       - name: Apply stage 7 review-only drafts schema in CI
         run: psql -X -v ON_ERROR_STOP=1 -f supabase/proposals/automation_flow_drafts.review.sql
       - name: Check stage 7 RLS again
