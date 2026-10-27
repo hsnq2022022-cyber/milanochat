@@ -187,7 +187,7 @@ export default function FlowSimulator({
   };
   const collection=current&&sim.pendingBlockIndex!==undefined?current.data.contentBlocks[sim.pendingBlockIndex]:null;
   const showTextInput=!!collection||current?.data.kind==="question"&&current.data.inputMode!=="buttons";
-  return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-3" dir="rtl" onClick={onClose}>
+  return <div data-testid="flow-simulator" className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-3" dir="rtl" onClick={onClose}>
     <div className="flex h-[min(770px,95vh)] w-full max-w-md flex-col overflow-hidden rounded-[28px] border border-[#305D49] bg-[#0B241C] text-white shadow-2xl" onClick={e=>e.stopPropagation()}>
       <header className="flex items-center justify-between border-b border-[#275443] px-4 py-4">
         <div className="flex items-center gap-2"><Smartphone size={20} className="text-[#3DD189]"/>
