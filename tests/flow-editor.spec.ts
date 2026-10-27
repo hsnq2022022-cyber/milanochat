@@ -351,68 +351,46 @@ test("audit: toolbar and step settings collapse and expand without erasing text"
  await expect(field).toHaveValue("اختبار الطي والحفظ");
 });
 
-test("audit: typed question modes expose two working routes and remove stale button edges",async({page})=>{
+test("typed questions expose a single optional next destination; old button routes are removed on mode switch",async({page})=>{
  await page.goto("/milanochat/#/flows");
  await page.locator(".react-flow__node").nth(2).click();
- const panel=page.locator("aside");
+ const panel=page.getByTestId("step-settings-panel");
  const mode=panel.getByRole("combobox",{name:"نوع الإجابة"});
  for(const value of ["text","email","phone","number"]){
   await mode.selectOption(value);
-  const routes=panel.getByTestId("question-text-routes");
-  await expect(routes.getByRole("combobox",{name:"وجهة الإجابة الصحيحة"})).toBeVisible();
-  await expect(routes.getByRole("combobox",{name:"وجهة الإجابة غير الصحيحة"})).toBeVisible();
+  await expect(panel.getByRole("combobox",{name:"الخطوة التالية بعد الإجابة"})).toBeVisible();
+  await expect(panel.getByText("وجهة الإجابة غير الصحيحة")).toHaveCount(0);
   await expect(page.locator(".react-flow__edge")).toHaveCount(2);
  }
- await panel.getByRole("combobox",{name:"وجهة الإجابة الصحيحة"}).selectOption({index:2});
- await panel.getByRole("combobox",{name:"وجهة الإجابة غير الصحيحة"}).selectOption({index:3});
- await expect(page.locator(".react-flow__edge")).toHaveCount(4);
+ await panel.getByRole("combobox",{name:"الخطوة التالية بعد الإجابة"}).selectOption({index:2});
+ await expect(page.locator(".react-flow__edge")).toHaveCount(3);
  await mode.selectOption("buttons");
  await expect(page.locator(".react-flow__edge")).toHaveCount(2);
  await expect(panel.getByTestId("question-text-routes")).toHaveCount(0);
 });
 
-test("audit: invalid email follows invalid route; valid email follows valid route",async({page})=>{
- await page.goto("/milanochat/#/flows");
- await page.locator(".react-flow__node").nth(2).click();
- const panel=page.locator("aside");
- await panel.getByRole("combobox",{name:"نوع الإجابة"}).selectOption("email");
- await panel.getByRole("combobox",{name:"وجهة الإجابة الصحيحة"}).selectOption({index:2});
- await panel.getByRole("combobox",{name:"وجهة الإجابة غير الصحيحة"}).selectOption({index:3});
- await page.getByRole("button",{name:"تجربة"}).click();
- const answer=page.getByRole("textbox",{name:"إجابة العميل"});
- await answer.fill("wrong-email");
- await answer.press("Enter");
- await expect(page.getByTestId("flow-simulator").getByText("تواصل ويانا لمعرفة الأسعار الحالية لخدمتك في عمان.")).toBeVisible();
- await page.getByRole("button",{name:"إعادة",exact:true}).click();
- await answer.fill("client@example.com");
- await answer.press("Enter");
- await expect(page.getByTestId("flow-simulator").getByText("تواصل ويانا لمعرفة الأسعار الحالية لخدمتك في العراق.")).toBeVisible();
-});
-
 for(const sample of [
+ {mode:"email",bad:"invalid-email",good:"client@example.com"},
  {mode:"phone",bad:"123",good:"٠٧٧٠١٢٣٤٥٦٧"},
  {mode:"number",bad:"not-a-number",good:"۱۲۳"},
  {mode:"text",bad:"",good:"مرحبا"}
 ]){
- test("audit: customer input "+sample.mode+" correctly routes to valid/invalid messages",async({page})=>{
+ test("typed "+sample.mode+" rejects invalid input and continues on valid response",async({page})=>{
   await page.goto("/milanochat/#/flows");
   await page.locator(".react-flow__node").nth(2).click();
-  const panel=page.locator("aside");
+  const panel=page.getByTestId("step-settings-panel");
   await panel.getByRole("combobox",{name:"نوع الإجابة"}).selectOption(sample.mode);
-  await panel.getByRole("combobox",{name:"وجهة الإجابة الصحيحة"}).selectOption({index:2});
-  await panel.getByRole("combobox",{name:"وجهة الإجابة غير الصحيحة"}).selectOption({index:3});
+  await panel.getByRole("combobox",{name:"الخطوة التالية بعد الإجابة"}).selectOption({index:2});
   await page.getByRole("button",{name:"تجربة"}).click();
-  const modal=page.getByTestId("flow-simulator");
-  const answer=modal.getByRole("textbox",{name:"إجابة العميل"});
-  if(sample.bad){
-   await answer.fill(sample.bad);
-   await answer.press("Enter");
-   await expect(modal.getByText("تواصل ويانا لمعرفة الأسعار الحالية لخدمتك في عمان.")).toBeVisible();
-   await modal.getByRole("button",{name:"إعادة",exact:true}).click();
-  }
+  const sim=page.getByTestId("flow-simulator");
+  const answer=sim.getByRole("textbox",{name:"إجابة العميل"});
+  await answer.fill(sample.bad);
+  await answer.press("Enter");
+  await expect(answer).toBeVisible();
+  await expect(sim.getByRole("alert")).toBeVisible();
   await answer.fill(sample.good);
   await answer.press("Enter");
-  await expect(modal.getByText("تواصل ويانا لمعرفة الأسعار الحالية لخدمتك في العراق.")).toBeVisible();
+  await expect(sim.getByText("تواصل ويانا لمعرفة الأسعار الحالية لخدمتك في العراق.")).toBeVisible();
  });
 }
 
@@ -495,15 +473,15 @@ test("batch 5 typed email and phone use input previews, never quick-reply button
    await mode.selectOption(value);
    const question=page.locator(".react-flow__node").nth(2);
    await expect(question.getByTestId("typed-question-preview")).toBeVisible();
-   await expect(question.getByTestId("typed-question-routes")).toContainText("إجابة صحيحة");
-   await expect(question.getByTestId("typed-question-routes")).toContainText("إجابة غير صحيحة");
+   await expect(question.getByTestId("typed-question-next")).toContainText("التالي");
+   await expect(question.getByText("إجابة غير صحيحة")).toHaveCount(0);
    await expect(question.locator(".react-flow__handle.source")).toHaveCount(2);
    await expect(question.getByText("العراق", {exact:true})).toHaveCount(0);
  }
  await mode.selectOption("buttons");
  const question=page.locator(".react-flow__node").nth(2);
  await expect(question.getByTestId("typed-question-preview")).toHaveCount(0);
- await expect(question.getByTestId("typed-question-routes")).toHaveCount(0);
+ await expect(question.getByTestId("typed-question-next")).toHaveCount(0);
  await expect(question.getByText("العراق",{exact:true})).toBeVisible();
 });
 test("batch 5 deleting selected edge then undo redo restores the exact count",async({page})=>{
