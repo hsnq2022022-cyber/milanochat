@@ -7,6 +7,7 @@ on:
       - "src/flow/**"
       - "src/pages/FlowBuilder.tsx"
       - "tests/flow-editor.spec.ts"
+      - "tests/flow-runtime-audit.spec.ts"
       - ".github/workflows/flow-deep-audit-ci.yml"
   workflow_dispatch:
 
