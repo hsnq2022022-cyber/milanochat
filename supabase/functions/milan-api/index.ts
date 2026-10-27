@@ -1832,9 +1832,10 @@ async function handleIncomingWebhookMessage(
   }
 
   /**
-   * تسجيل الرد الصادر.
+   * احتساب الرد بعد نجاح الإرسال: لا يُخصم رصيد دون معرّف رسالة
+   * مسجلة ومملوكة لنفس المتجر. الرسالة الواحدة تُحصّل مرة واحدة.
    */
-  await sb
+  const { data: sentMessage, error: sentInsertError } = await sb
     .from("messages")
     .insert({
       conversation_id: conv.id,
@@ -1844,23 +1845,39 @@ async function handleIncomingWebhookMessage(
         await encryptField(replyText),
       kind: "answer",
       is_auto: true,
-    });
+    })
+    .select("id")
+    .single();
 
-  /**
-   * خصم credit بعد إرسال الرد.
-   */
+  if (sentInsertError || !sentMessage?.id) {
+    // أُرسلت الرسالة إلى Meta بالفعل؛ نبلّغ بخلل التسجيل ولا نخترع معرّفًا.
+    console.error(
+      `[${channel}_webhook] outgoing message delivered but could not persist for accounting`,
+      sentInsertError
+    );
+    return;
+  }
+
   try {
-    await sb.rpc(
+    const { data: balanceAfter, error: debitError } = await sb.rpc(
       "consume_reply",
       {
         p_tenant_id: tenantId,
+        p_message_id: sentMessage.id,
       }
     );
+    if (debitError || typeof balanceAfter !== "number" || balanceAfter < -2) {
+      console.error(
+        `[${channel}_webhook] credit accounting failed after provider send`,
+        debitError ?? "unexpected ledger result"
+      );
+    } else if (balanceAfter === -1) {
+      console.warn(`[${channel}_webhook] credits depleted before ledger charge`);
+    } else if (balanceAfter === -2) {
+      console.log(`[${channel}_webhook] already charged for outgoing message`);
+    }
   } catch (e) {
-    console.error(
-      `[${channel}_webhook] consume_reply failed`,
-      e
-    );
+    console.error(`[${channel}_webhook] consume_reply RPC failed`, e);
   }
 }
 
