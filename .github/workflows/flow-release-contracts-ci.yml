@@ -2,7 +2,7 @@ name: Flow Stages 8-10 - Unified Runtime Contracts
 
 on:
   push:
-    branches: [feature/flows-release-runtime-contracts]
+    branches: [feature/flows-release-runtime-contracts, feature/flows-phase7-editor-release]
   workflow_dispatch:
 
 permissions:
@@ -32,7 +32,9 @@ jobs:
           node --experimental-strip-types --test src/flow/runtimePlan.test.ts
           node --experimental-strip-types --test src/flow/aiMetricsGate.test.ts
           node --experimental-strip-types --test tests/flow-main-compat.test.ts
-      - name: Production build with feature flags off
+      - name: Production build with cloud panel enabled for release
+        env:
+          VITE_ENABLE_CLOUD_FLOW_DRAFTS: "true"
         run: npm run build
       - name: Chromium
         run: npx playwright install chromium
