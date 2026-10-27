@@ -85,7 +85,7 @@ export default function AutomationNode({id,data,selected}:NodeProps<FlowNodeType
       <button type="button"
         aria-label={"إضافة خطوة بعد "+label}
         title="أضف خطوة واربطها بهذا المسار"
-        className={"nodrag nopan absolute -bottom-10 left-1/2 z-30 flex h-8 w-8 -translate-x-1/2 items-center justify-center rounded-full border-2 border-[#3DD189] bg-[#0B241C] text-[#3DD189] shadow-lg transition-opacity hover:scale-110 hover:bg-[#173D30] "+(selected?"opacity-100":"opacity-0 group-hover:opacity-100 group-focus-within:opacity-100")}
+        className={"nodrag nopan absolute -bottom-12 left-1/2 z-30 flex h-11 w-11 -translate-x-1/2 items-center justify-center rounded-full border-2 border-[#3DD189] bg-[#0B241C] text-[#3DD189] shadow-lg transition-opacity hover:scale-110 hover:bg-[#173D30] "+(selected?"opacity-100":"opacity-100 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100")}
         onClick={e=>{e.stopPropagation();openMenu({source:id,port:ports.length===1?ports[0].id:undefined,x:e.clientX,y:e.clientY});}}>
         <Plus size={18}/>
       </button>
