@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {makeNode} from "./model.ts";
 import type {FlowDocument,Platform,TriggerMode} from "./model";
-import {matchInboundEvent,normalizeTriggerText,parseTriggerKeywords} from "./eventRouting.ts";
+import {matchInboundEvent,resolveExclusiveEventRoute,normalizeTriggerText,parseTriggerKeywords} from "./eventRouting.ts";
 import type {EnabledFlow,NormalizedInboundEvent} from "./eventRouting";
 
 const makeFlow=(mode:TriggerMode,keywords="",platform:Platform="instagram",id="f1"):EnabledFlow=>{
@@ -68,4 +68,13 @@ test("same event has stable distinct idempotency keys per flow and account",()=>
   assert.notEqual(first[0].idempotencyKey,first[1].idempotencyKey);
   assert.deepEqual(first,matchInboundEvent(event("message"),flows));
   assert.notEqual(first[0].idempotencyKey,matchInboundEvent({...event("message"),eventId:"evt-2"},flows)[0].idempotencyKey);
+});
+
+test("exclusive router refuses ambiguous matches rather than sending duplicate customer replies",()=>{
+ const one=makeFlow("message","","instagram","one");
+ const two=makeFlow("message","","instagram","two");
+ const ambiguous=resolveExclusiveEventRoute(event("message"),[one,two]);
+ assert.deepEqual(ambiguous,{status:"ambiguous",match:null,candidateCount:2});
+ assert.equal(resolveExclusiveEventRoute(event("message"),[one]).status,"match");
+ assert.equal(resolveExclusiveEventRoute(event("comment"),[one]).status,"none");
 });
