@@ -4,7 +4,7 @@ import { canConnect, exampleFlow, importFlow, makeNode, outputs, upsertConnectio
 
 test("example keeps three pricing messages as natural terminal branches",()=>{
   const doc=exampleFlow();
-  assert.deepEqual(validateDocument(doc),[]);
+  assert.equal(validateDocument(doc).filter(issue=>issue.message.includes("العقدة بلا مخرج")).length,3);
   assert.equal(doc.nodes.filter(n=>n.data.kind==="message").length,4);
 });
 test("reject self-loop and edges into trigger",()=>{
@@ -52,4 +52,26 @@ test("v2 importer preserves original IDs and existing edge ports",()=>{
   assert.deepEqual(restored.nodes.map(n=>n.id),["trigger-one","reply-one"]);
   assert.equal(restored.edges[0].id,"edge-one");
   assert.equal(restored.edges[0].sourceHandle,"next");
+});
+
+test("reports distinct orphan nodes with clickable identities",()=>{
+  const doc=exampleFlow();
+  const a=makeNode("message",{x:100,y:140},{title:"منعزلة",text:"X"});
+  const b=makeNode("message",{x:150,y:190},{title:"منعزلة",text:"Y"});
+  doc.nodes.push(a,b);
+  const issues=validateDocument(doc);
+  assert.ok(issues.some(issue=>issue.nodeId===a.id&&issue.message.includes("غير قابلة للوصول")));
+  assert.ok(issues.some(issue=>issue.nodeId===b.id&&issue.message.includes("غير قابلة للوصول")));
+  assert.notEqual(a.id,b.id);
+});
+test("detects missing question exits and closed cycles",()=>{
+  const doc=exampleFlow();
+  const question=doc.nodes.find(n=>n.data.kind==="question")!;
+  const selected=question.data.options[0];
+  doc.edges=doc.edges.filter(e=>!(e.source===question.id&&e.sourceHandle===selected.id));
+  assert.ok(validateDocument(doc).some(issue=>issue.nodeId===question.id&&issue.message.includes("بلا وجهة")));
+  const start=doc.nodes[0],reply=doc.nodes[1];
+  doc.edges=doc.edges.filter(e=>e.source!==reply.id);
+  doc.edges.push({id:crypto.randomUUID(),type:"flowEdge",source:reply.id,sourceHandle:"next",target:reply.id,targetHandle:"in",data:{}});
+  assert.ok(validateDocument(doc).some(issue=>issue.message.includes("دورة مغلقة")));
 });
