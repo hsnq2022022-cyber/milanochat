@@ -3,6 +3,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import confetti from "canvas-confetti";
+import SafeAvatar from "../components/SafeAvatar";
 import { apiAuthFetch, apiBase, backendMode, type WaSnapshot } from "../lib/api";
 import { getSupabase, getStoredClaim, clearStoredClaim } from "../lib/supabase";
 import { CHANNELS, ChannelBadge, detectChannel, type ChannelId } from "../lib/channels";
@@ -1392,13 +1393,9 @@ export default function Dashboard() {
                         }`}
                       >
                         <div className="flex items-start gap-3">
-                          {c.customerAvatar ? (
-                            <img src={c.customerAvatar} alt="" className="w-11 h-11 rounded-full object-cover border border-verde/25 shrink-0 bg-moss" referrerPolicy="no-referrer" loading="lazy" />
-                          ) : (
-                            <span className="w-11 h-11 rounded-full bg-moss border border-verde/25 text-verde flex items-center justify-center shrink-0">
+                          <SafeAvatar src={c.customerAvatar} className="w-11 h-11 rounded-full object-cover border border-verde/25 shrink-0 bg-moss" fallback={<span className="w-11 h-11 rounded-full bg-moss border border-verde/25 text-verde flex items-center justify-center shrink-0">
                               <ChannelIcon channel={ch} className="w-5 h-5" />
-                            </span>
-                          )}
+                            </span>} />
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center justify-between gap-2 mb-0.5">
                               <span className="text-[13px] font-bold text-bone truncate"><span className="notranslate">{displayName}</span></span>
@@ -1441,13 +1438,9 @@ export default function Dashboard() {
                     <button onClick={() => setMobileThread(false)} className="lg:hidden text-sage hover:text-bone" aria-label="عودة">
                       <IconChevronDown className="w-4 h-4 rotate-90" />
                     </button>
-                    {active.customerAvatar ? (
-                      <img src={active.customerAvatar} alt="" className="w-9 h-9 rounded-full object-cover border border-verde/30 shrink-0 bg-moss" referrerPolicy="no-referrer" />
-                    ) : (
-                      <span className="w-9 h-9 rounded-full bg-moss border border-verde/30 text-verde flex items-center justify-center shrink-0">
+                    <SafeAvatar src={active.customerAvatar} className="w-9 h-9 rounded-full object-cover border border-verde/30 shrink-0 bg-moss" fallback={<span className="w-9 h-9 rounded-full bg-moss border border-verde/30 text-verde flex items-center justify-center shrink-0">
                         <ChannelIcon channel={(active.channel ?? "whatsapp") as ChannelId} className="w-4.5 h-4.5" />
-                      </span>
-                    )}
+                      </span>} />
                     <div className="flex-1 min-w-0">
                       <p className="text-[13px] font-bold text-bone truncate"><span className="notranslate">{active.customerName || active.phone || "—"}</span></p>
                       <p className="text-[10.5px] text-sage mt-0.5">
@@ -1766,11 +1759,7 @@ export default function Dashboard() {
                   <ul className="space-y-1.5 mb-3">
                     {fbAccounts.map((a) => (
                       <li key={a.id} className="flex items-center gap-2 bg-night/50 border border-verde/10 rounded-xl px-3 py-2">
-                        {a.avatar_url ? (
-                          <img src={a.avatar_url} alt="" className="w-6 h-6 rounded-full object-cover" referrerPolicy="no-referrer" />
-                        ) : (
-                          <span className="w-6 h-6 rounded-full bg-[#1877F2]/15 text-[#6ea3f5] flex items-center justify-center"><IconFacebook className="w-3.5 h-3.5" /></span>
-                        )}
+                        <SafeAvatar src={a.avatar_url} className="w-6 h-6 rounded-full object-cover" fallback={<span className="w-6 h-6 rounded-full bg-[#1877F2]/15 text-[#6ea3f5] flex items-center justify-center"><IconFacebook className="w-3.5 h-3.5" /></span>} />
                         <span className="text-[11.5px] text-bone font-semibold truncate flex-1">{a.display_name ?? a.external_id}</span>
                         <button onClick={() => openManageAccount(a)} className="text-[10px] font-bold text-oro hover:text-bone shrink-0">إدارة</button>
                       </li>
@@ -1803,18 +1792,9 @@ export default function Dashboard() {
                   <div className="space-y-2 mb-3">
                     {igAccounts.map((a) => (
                       <div key={a.id} className="flex items-center gap-3 bg-night/50 border border-verde/15 rounded-xl px-3 py-2.5">
-                        {a.avatar_url ? (
-                          <img
-                            src={a.avatar_url}
-                            alt=""
-                            className="w-10 h-10 rounded-full object-cover border border-verde/25"
-                            referrerPolicy="no-referrer"
-                          />
-                        ) : (
-                          <span className="w-10 h-10 rounded-full bg-gradient-to-tr from-[#F58529] via-[#DD2A7B] to-[#8134AF] flex items-center justify-center">
+                        <SafeAvatar src={a.avatar_url} className="w-10 h-10 rounded-full object-cover border border-verde/25" fallback={<span className="w-10 h-10 rounded-full bg-gradient-to-tr from-[#F58529] via-[#DD2A7B] to-[#8134AF] flex items-center justify-center">
                             <IconInstagram className="w-5 h-5 text-white" />
-                          </span>
-                        )}
+                          </span>} />
                         <div className="flex-1 min-w-0">
                           <p className="text-[13px] font-bold text-bone truncate" dir="ltr">
                             {a.display_name ?? `@${a.external_id}`}
@@ -1865,13 +1845,9 @@ export default function Dashboard() {
 
               <div className={`${cls.card} p-4 space-y-2`}>
                 <div className="flex items-center gap-3">
-                  {manageAcc.avatar_url ? (
-                    <img src={manageAcc.avatar_url} alt="" className="w-12 h-12 rounded-full object-cover border border-verde/25" referrerPolicy="no-referrer" />
-                  ) : (
-                    <span className="w-12 h-12 rounded-full bg-moss flex items-center justify-center text-verde">
+                  <SafeAvatar src={manageAcc.avatar_url} className="w-12 h-12 rounded-full object-cover border border-verde/25" fallback={<span className="w-12 h-12 rounded-full bg-moss flex items-center justify-center text-verde">
                       {manageAcc.channel === "instagram" ? <IconInstagram className="w-6 h-6" /> : <IconFacebook className="w-6 h-6" />}
-                    </span>
-                  )}
+                    </span>} />
                   <div className="min-w-0">
                     <p className="text-sm font-bold text-bone truncate" dir="ltr">{manageAcc.display_name ?? manageAcc.external_id ?? "—"}</p>
                     <p className="text-[11px] text-sage">
