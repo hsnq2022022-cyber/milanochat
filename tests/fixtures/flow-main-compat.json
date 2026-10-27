@@ -1,0 +1,1248 @@
+{
+  "source": "origin/main:src/flow/model.ts",
+  "cases": [
+    {
+      "name": "v2-simple",
+      "input": {
+        "version": 2,
+        "name": "legacy",
+        "nodes": [
+          {
+            "id": "old-start",
+            "type": "trigger",
+            "x": 0,
+            "y": 0,
+            "title": "بداية",
+            "text": "",
+            "keyword": "hi",
+            "image": "",
+            "choices": []
+          },
+          {
+            "id": "old-message",
+            "type": "message",
+            "x": 400,
+            "y": 300,
+            "title": "رسالة",
+            "text": "مرحباً",
+            "image": "",
+            "choices": []
+          }
+        ],
+        "edges": [
+          {
+            "id": "legacy-edge",
+            "from": "old-start",
+            "port": "next",
+            "to": "old-message"
+          }
+        ]
+      },
+      "expected": {
+        "version": 3,
+        "name": "legacy",
+        "nodes": [
+          {
+            "id": "old-start",
+            "position": {
+              "x": 0,
+              "y": 0
+            },
+            "type": "flowNode",
+            "data": {
+              "kind": "trigger",
+              "title": "بداية",
+              "text": "",
+              "image": "",
+              "options": [],
+              "contentBlocks": [],
+              "platform": "instagram",
+              "keywords": "hi",
+              "triggerMode": "keyword",
+              "inputMode": "buttons",
+              "inputField": "response",
+              "conditionField": "message",
+              "operator": "contains",
+              "conditionValue": "",
+              "delayValue": 1,
+              "delayUnit": "seconds",
+              "actionType": "tag",
+              "actionValue": "",
+              "gotoNode": "",
+              "requestMethod": "GET",
+              "requestUrl": ""
+            }
+          },
+          {
+            "id": "old-message",
+            "position": {
+              "x": 400,
+              "y": 300
+            },
+            "type": "flowNode",
+            "data": {
+              "kind": "message",
+              "title": "رسالة",
+              "text": "مرحباً",
+              "image": "",
+              "options": [],
+              "contentBlocks": [],
+              "platform": "instagram",
+              "keywords": "",
+              "triggerMode": "keyword",
+              "inputMode": "buttons",
+              "inputField": "response",
+              "conditionField": "message",
+              "operator": "contains",
+              "conditionValue": "",
+              "delayValue": 1,
+              "delayUnit": "seconds",
+              "actionType": "tag",
+              "actionValue": "",
+              "gotoNode": "",
+              "requestMethod": "GET",
+              "requestUrl": ""
+            }
+          }
+        ],
+        "edges": [
+          {
+            "id": "legacy-edge",
+            "source": "old-start",
+            "sourceHandle": "next",
+            "target": "old-message",
+            "targetHandle": "in",
+            "type": "flowEdge",
+            "data": {}
+          }
+        ]
+      }
+    },
+    {
+      "name": "v3-simple",
+      "input": {
+        "version": 3,
+        "name": "basic",
+        "nodes": [
+          {
+            "id": "s",
+            "position": {
+              "x": 10,
+              "y": 15
+            },
+            "type": "flowNode",
+            "data": {
+              "kind": "trigger",
+              "title": "s",
+              "text": "",
+              "image": "",
+              "options": [],
+              "contentBlocks": [],
+              "platform": "instagram",
+              "triggerMode": "message",
+              "keywords": "",
+              "inputMode": "buttons",
+              "inputField": "response",
+              "conditionField": "message",
+              "operator": "contains",
+              "conditionValue": "",
+              "delayValue": 1,
+              "delayUnit": "minutes",
+              "actionType": "tag",
+              "actionValue": "",
+              "gotoNode": "",
+              "requestMethod": "GET",
+              "requestUrl": ""
+            }
+          },
+          {
+            "id": "m",
+            "position": {
+              "x": 10,
+              "y": 15
+            },
+            "type": "flowNode",
+            "data": {
+              "kind": "message",
+              "title": "m",
+              "text": "رسالة اختبار",
+              "image": "",
+              "options": [],
+              "contentBlocks": [],
+              "platform": "instagram",
+              "triggerMode": "message",
+              "keywords": "",
+              "inputMode": "buttons",
+              "inputField": "response",
+              "conditionField": "message",
+              "operator": "contains",
+              "conditionValue": "",
+              "delayValue": 1,
+              "delayUnit": "minutes",
+              "actionType": "tag",
+              "actionValue": "",
+              "gotoNode": "",
+              "requestMethod": "GET",
+              "requestUrl": ""
+            }
+          }
+        ],
+        "edges": [
+          {
+            "id": "e1",
+            "type": "flowEdge",
+            "source": "s",
+            "sourceHandle": "next",
+            "target": "m",
+            "targetHandle": "in",
+            "data": {
+              "label": "التالي"
+            }
+          }
+        ]
+      },
+      "expected": {
+        "version": 3,
+        "name": "basic",
+        "nodes": [
+          {
+            "id": "s",
+            "position": {
+              "x": 10,
+              "y": 15
+            },
+            "type": "flowNode",
+            "data": {
+              "kind": "trigger",
+              "title": "s",
+              "text": "",
+              "image": "",
+              "options": [],
+              "contentBlocks": [],
+              "platform": "instagram",
+              "keywords": "",
+              "triggerMode": "message",
+              "inputMode": "buttons",
+              "inputField": "response",
+              "conditionField": "message",
+              "operator": "contains",
+              "conditionValue": "",
+              "delayValue": 1,
+              "delayUnit": "minutes",
+              "actionType": "tag",
+              "actionValue": "",
+              "gotoNode": "",
+              "requestMethod": "GET",
+              "requestUrl": ""
+            }
+          },
+          {
+            "id": "m",
+            "position": {
+              "x": 10,
+              "y": 15
+            },
+            "type": "flowNode",
+            "data": {
+              "kind": "message",
+              "title": "m",
+              "text": "رسالة اختبار",
+              "image": "",
+              "options": [],
+              "contentBlocks": [],
+              "platform": "instagram",
+              "keywords": "",
+              "triggerMode": "message",
+              "inputMode": "buttons",
+              "inputField": "response",
+              "conditionField": "message",
+              "operator": "contains",
+              "conditionValue": "",
+              "delayValue": 1,
+              "delayUnit": "minutes",
+              "actionType": "tag",
+              "actionValue": "",
+              "gotoNode": "",
+              "requestMethod": "GET",
+              "requestUrl": ""
+            }
+          }
+        ],
+        "edges": [
+          {
+            "id": "e1",
+            "source": "s",
+            "target": "m",
+            "sourceHandle": "next",
+            "targetHandle": "in",
+            "type": "flowEdge",
+            "data": {
+              "label": "التالي"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "v3-buttons-actions",
+      "input": {
+        "version": 3,
+        "name": "buttons",
+        "nodes": [
+          {
+            "id": "s",
+            "position": {
+              "x": 10,
+              "y": 15
+            },
+            "type": "flowNode",
+            "data": {
+              "kind": "trigger",
+              "title": "s",
+              "text": "",
+              "image": "",
+              "options": [],
+              "contentBlocks": [],
+              "platform": "instagram",
+              "triggerMode": "message",
+              "keywords": "",
+              "inputMode": "buttons",
+              "inputField": "response",
+              "conditionField": "message",
+              "operator": "contains",
+              "conditionValue": "",
+              "delayValue": 1,
+              "delayUnit": "minutes",
+              "actionType": "tag",
+              "actionValue": "",
+              "gotoNode": "",
+              "requestMethod": "GET",
+              "requestUrl": ""
+            }
+          },
+          {
+            "id": "m",
+            "position": {
+              "x": 10,
+              "y": 15
+            },
+            "type": "flowNode",
+            "data": {
+              "kind": "message",
+              "title": "m",
+              "text": "رسالة اختبار",
+              "image": "",
+              "options": [
+                {
+                  "id": "plain",
+                  "label": "التالي"
+                },
+                {
+                  "id": "website",
+                  "label": "افتح موقع",
+                  "action": "website",
+                  "url": "https://example.com"
+                },
+                {
+                  "id": "quick",
+                  "label": "رد سريع",
+                  "buttonType": "quick_reply",
+                  "action": "step"
+                }
+              ],
+              "contentBlocks": [],
+              "platform": "instagram",
+              "triggerMode": "message",
+              "keywords": "",
+              "inputMode": "buttons",
+              "inputField": "response",
+              "conditionField": "message",
+              "operator": "contains",
+              "conditionValue": "",
+              "delayValue": 1,
+              "delayUnit": "minutes",
+              "actionType": "tag",
+              "actionValue": "",
+              "gotoNode": "",
+              "requestMethod": "GET",
+              "requestUrl": ""
+            }
+          }
+        ],
+        "edges": [
+          {
+            "id": "e1",
+            "type": "flowEdge",
+            "source": "s",
+            "sourceHandle": "next",
+            "target": "m",
+            "targetHandle": "in",
+            "data": {
+              "label": "التالي"
+            }
+          }
+        ]
+      },
+      "expected": {
+        "version": 3,
+        "name": "buttons",
+        "nodes": [
+          {
+            "id": "s",
+            "position": {
+              "x": 10,
+              "y": 15
+            },
+            "type": "flowNode",
+            "data": {
+              "kind": "trigger",
+              "title": "s",
+              "text": "",
+              "image": "",
+              "options": [],
+              "contentBlocks": [],
+              "platform": "instagram",
+              "keywords": "",
+              "triggerMode": "message",
+              "inputMode": "buttons",
+              "inputField": "response",
+              "conditionField": "message",
+              "operator": "contains",
+              "conditionValue": "",
+              "delayValue": 1,
+              "delayUnit": "minutes",
+              "actionType": "tag",
+              "actionValue": "",
+              "gotoNode": "",
+              "requestMethod": "GET",
+              "requestUrl": ""
+            }
+          },
+          {
+            "id": "m",
+            "position": {
+              "x": 10,
+              "y": 15
+            },
+            "type": "flowNode",
+            "data": {
+              "kind": "message",
+              "title": "m",
+              "text": "رسالة اختبار",
+              "image": "",
+              "options": [
+                {
+                  "id": "plain",
+                  "label": "التالي",
+                  "buttonType": "button",
+                  "action": "step",
+                  "targetFlowId": "",
+                  "url": ""
+                },
+                {
+                  "id": "website",
+                  "label": "افتح موقع",
+                  "buttonType": "button",
+                  "action": "website",
+                  "targetFlowId": "",
+                  "url": "https://example.com"
+                },
+                {
+                  "id": "quick",
+                  "label": "رد سريع",
+                  "buttonType": "quick_reply",
+                  "action": "step",
+                  "targetFlowId": "",
+                  "url": ""
+                }
+              ],
+              "contentBlocks": [],
+              "platform": "instagram",
+              "keywords": "",
+              "triggerMode": "message",
+              "inputMode": "buttons",
+              "inputField": "response",
+              "conditionField": "message",
+              "operator": "contains",
+              "conditionValue": "",
+              "delayValue": 1,
+              "delayUnit": "minutes",
+              "actionType": "tag",
+              "actionValue": "",
+              "gotoNode": "",
+              "requestMethod": "GET",
+              "requestUrl": ""
+            }
+          }
+        ],
+        "edges": [
+          {
+            "id": "e1",
+            "source": "s",
+            "target": "m",
+            "sourceHandle": "next",
+            "targetHandle": "in",
+            "type": "flowEdge",
+            "data": {
+              "label": "التالي"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "v3-image-pdf",
+      "input": {
+        "version": 3,
+        "name": "media",
+        "nodes": [
+          {
+            "id": "s",
+            "position": {
+              "x": 10,
+              "y": 15
+            },
+            "type": "flowNode",
+            "data": {
+              "kind": "trigger",
+              "title": "s",
+              "text": "",
+              "image": "",
+              "options": [],
+              "contentBlocks": [],
+              "platform": "instagram",
+              "triggerMode": "message",
+              "keywords": "",
+              "inputMode": "buttons",
+              "inputField": "response",
+              "conditionField": "message",
+              "operator": "contains",
+              "conditionValue": "",
+              "delayValue": 1,
+              "delayUnit": "minutes",
+              "actionType": "tag",
+              "actionValue": "",
+              "gotoNode": "",
+              "requestMethod": "GET",
+              "requestUrl": ""
+            }
+          },
+          {
+            "id": "m",
+            "position": {
+              "x": 10,
+              "y": 15
+            },
+            "type": "flowNode",
+            "data": {
+              "kind": "message",
+              "title": "m",
+              "text": "رسالة اختبار",
+              "image": "https://example.com/photo.jpg",
+              "options": [],
+              "contentBlocks": [
+                {
+                  "id": "b1",
+                  "type": "image",
+                  "url": "https://example.com/img.png"
+                },
+                {
+                  "id": "b2",
+                  "type": "pdf",
+                  "url": "https://example.com/file.pdf"
+                }
+              ],
+              "platform": "instagram",
+              "triggerMode": "message",
+              "keywords": "",
+              "inputMode": "buttons",
+              "inputField": "response",
+              "conditionField": "message",
+              "operator": "contains",
+              "conditionValue": "",
+              "delayValue": 1,
+              "delayUnit": "minutes",
+              "actionType": "tag",
+              "actionValue": "",
+              "gotoNode": "",
+              "requestMethod": "GET",
+              "requestUrl": ""
+            }
+          }
+        ],
+        "edges": [
+          {
+            "id": "e1",
+            "type": "flowEdge",
+            "source": "s",
+            "sourceHandle": "next",
+            "target": "m",
+            "targetHandle": "in",
+            "data": {
+              "label": "التالي"
+            }
+          }
+        ]
+      },
+      "expected": {
+        "version": 3,
+        "name": "media",
+        "nodes": [
+          {
+            "id": "s",
+            "position": {
+              "x": 10,
+              "y": 15
+            },
+            "type": "flowNode",
+            "data": {
+              "kind": "trigger",
+              "title": "s",
+              "text": "",
+              "image": "",
+              "options": [],
+              "contentBlocks": [],
+              "platform": "instagram",
+              "keywords": "",
+              "triggerMode": "message",
+              "inputMode": "buttons",
+              "inputField": "response",
+              "conditionField": "message",
+              "operator": "contains",
+              "conditionValue": "",
+              "delayValue": 1,
+              "delayUnit": "minutes",
+              "actionType": "tag",
+              "actionValue": "",
+              "gotoNode": "",
+              "requestMethod": "GET",
+              "requestUrl": ""
+            }
+          },
+          {
+            "id": "m",
+            "position": {
+              "x": 10,
+              "y": 15
+            },
+            "type": "flowNode",
+            "data": {
+              "kind": "message",
+              "title": "m",
+              "text": "رسالة اختبار",
+              "image": "https://example.com/photo.jpg",
+              "options": [],
+              "contentBlocks": [
+                {
+                  "id": "b1",
+                  "type": "image",
+                  "text": "",
+                  "url": "https://example.com/img.png",
+                  "seconds": 3,
+                  "field": "response",
+                  "inputMode": "text"
+                },
+                {
+                  "id": "b2",
+                  "type": "pdf",
+                  "text": "",
+                  "url": "https://example.com/file.pdf",
+                  "seconds": 3,
+                  "field": "response",
+                  "inputMode": "text"
+                }
+              ],
+              "platform": "instagram",
+              "keywords": "",
+              "triggerMode": "message",
+              "inputMode": "buttons",
+              "inputField": "response",
+              "conditionField": "message",
+              "operator": "contains",
+              "conditionValue": "",
+              "delayValue": 1,
+              "delayUnit": "minutes",
+              "actionType": "tag",
+              "actionValue": "",
+              "gotoNode": "",
+              "requestMethod": "GET",
+              "requestUrl": ""
+            }
+          }
+        ],
+        "edges": [
+          {
+            "id": "e1",
+            "source": "s",
+            "target": "m",
+            "sourceHandle": "next",
+            "targetHandle": "in",
+            "type": "flowEdge",
+            "data": {
+              "label": "التالي"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "v3-randomizer",
+      "input": {
+        "version": 3,
+        "name": "randomizer",
+        "nodes": [
+          {
+            "id": "s",
+            "position": {
+              "x": 10,
+              "y": 15
+            },
+            "type": "flowNode",
+            "data": {
+              "kind": "trigger",
+              "title": "s",
+              "text": "",
+              "image": "",
+              "options": [],
+              "contentBlocks": [],
+              "platform": "instagram",
+              "triggerMode": "message",
+              "keywords": "",
+              "inputMode": "buttons",
+              "inputField": "response",
+              "conditionField": "message",
+              "operator": "contains",
+              "conditionValue": "",
+              "delayValue": 1,
+              "delayUnit": "minutes",
+              "actionType": "tag",
+              "actionValue": "",
+              "gotoNode": "",
+              "requestMethod": "GET",
+              "requestUrl": ""
+            }
+          },
+          {
+            "id": "r",
+            "position": {
+              "x": 10,
+              "y": 15
+            },
+            "type": "flowNode",
+            "data": {
+              "kind": "randomizer",
+              "title": "r",
+              "text": "",
+              "image": "",
+              "options": [
+                {
+                  "id": "half",
+                  "label": "A",
+                  "weight": 50
+                },
+                {
+                  "id": "second",
+                  "label": "B",
+                  "weight": 50
+                }
+              ],
+              "contentBlocks": [],
+              "platform": "instagram",
+              "triggerMode": "message",
+              "keywords": "",
+              "inputMode": "buttons",
+              "inputField": "response",
+              "conditionField": "message",
+              "operator": "contains",
+              "conditionValue": "",
+              "delayValue": 1,
+              "delayUnit": "minutes",
+              "actionType": "tag",
+              "actionValue": "",
+              "gotoNode": "",
+              "requestMethod": "GET",
+              "requestUrl": ""
+            }
+          }
+        ],
+        "edges": [
+          {
+            "id": "e1",
+            "type": "flowEdge",
+            "source": "s",
+            "sourceHandle": "next",
+            "target": "r",
+            "targetHandle": "in",
+            "data": {
+              "label": "التالي"
+            }
+          }
+        ]
+      },
+      "expected": {
+        "version": 3,
+        "name": "randomizer",
+        "nodes": [
+          {
+            "id": "s",
+            "position": {
+              "x": 10,
+              "y": 15
+            },
+            "type": "flowNode",
+            "data": {
+              "kind": "trigger",
+              "title": "s",
+              "text": "",
+              "image": "",
+              "options": [],
+              "contentBlocks": [],
+              "platform": "instagram",
+              "keywords": "",
+              "triggerMode": "message",
+              "inputMode": "buttons",
+              "inputField": "response",
+              "conditionField": "message",
+              "operator": "contains",
+              "conditionValue": "",
+              "delayValue": 1,
+              "delayUnit": "minutes",
+              "actionType": "tag",
+              "actionValue": "",
+              "gotoNode": "",
+              "requestMethod": "GET",
+              "requestUrl": ""
+            }
+          },
+          {
+            "id": "r",
+            "position": {
+              "x": 10,
+              "y": 15
+            },
+            "type": "flowNode",
+            "data": {
+              "kind": "randomizer",
+              "title": "r",
+              "text": "",
+              "image": "",
+              "options": [
+                {
+                  "id": "half",
+                  "label": "A",
+                  "weight": 50,
+                  "buttonType": "button",
+                  "action": "step",
+                  "targetFlowId": "",
+                  "url": ""
+                },
+                {
+                  "id": "second",
+                  "label": "B",
+                  "weight": 50,
+                  "buttonType": "button",
+                  "action": "step",
+                  "targetFlowId": "",
+                  "url": ""
+                }
+              ],
+              "contentBlocks": [],
+              "platform": "instagram",
+              "keywords": "",
+              "triggerMode": "message",
+              "inputMode": "buttons",
+              "inputField": "response",
+              "conditionField": "message",
+              "operator": "contains",
+              "conditionValue": "",
+              "delayValue": 1,
+              "delayUnit": "minutes",
+              "actionType": "tag",
+              "actionValue": "",
+              "gotoNode": "",
+              "requestMethod": "GET",
+              "requestUrl": ""
+            }
+          }
+        ],
+        "edges": [
+          {
+            "id": "e1",
+            "source": "s",
+            "target": "r",
+            "sourceHandle": "next",
+            "targetHandle": "in",
+            "type": "flowEdge",
+            "data": {
+              "label": "التالي"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "v3-multiple-flows-primary",
+      "input": {
+        "version": 3,
+        "name": "primary",
+        "nodes": [
+          {
+            "id": "s",
+            "position": {
+              "x": 10,
+              "y": 15
+            },
+            "type": "flowNode",
+            "data": {
+              "kind": "trigger",
+              "title": "s",
+              "text": "",
+              "image": "",
+              "options": [],
+              "contentBlocks": [],
+              "platform": "instagram",
+              "triggerMode": "message",
+              "keywords": "",
+              "inputMode": "buttons",
+              "inputField": "response",
+              "conditionField": "message",
+              "operator": "contains",
+              "conditionValue": "",
+              "delayValue": 1,
+              "delayUnit": "minutes",
+              "actionType": "tag",
+              "actionValue": "",
+              "gotoNode": "",
+              "requestMethod": "GET",
+              "requestUrl": ""
+            }
+          },
+          {
+            "id": "m",
+            "position": {
+              "x": 10,
+              "y": 15
+            },
+            "type": "flowNode",
+            "data": {
+              "kind": "message",
+              "title": "m",
+              "text": "رسالة اختبار",
+              "image": "",
+              "options": [
+                {
+                  "id": "jump",
+                  "label": "تدفق آخر",
+                  "action": "flow",
+                  "targetFlowId": "second-flow"
+                }
+              ],
+              "contentBlocks": [],
+              "platform": "instagram",
+              "triggerMode": "message",
+              "keywords": "",
+              "inputMode": "buttons",
+              "inputField": "response",
+              "conditionField": "message",
+              "operator": "contains",
+              "conditionValue": "",
+              "delayValue": 1,
+              "delayUnit": "minutes",
+              "actionType": "tag",
+              "actionValue": "",
+              "gotoNode": "",
+              "requestMethod": "GET",
+              "requestUrl": ""
+            }
+          }
+        ],
+        "edges": [
+          {
+            "id": "e1",
+            "type": "flowEdge",
+            "source": "s",
+            "sourceHandle": "next",
+            "target": "m",
+            "targetHandle": "in",
+            "data": {
+              "label": "التالي"
+            }
+          }
+        ]
+      },
+      "expected": {
+        "version": 3,
+        "name": "primary",
+        "nodes": [
+          {
+            "id": "s",
+            "position": {
+              "x": 10,
+              "y": 15
+            },
+            "type": "flowNode",
+            "data": {
+              "kind": "trigger",
+              "title": "s",
+              "text": "",
+              "image": "",
+              "options": [],
+              "contentBlocks": [],
+              "platform": "instagram",
+              "keywords": "",
+              "triggerMode": "message",
+              "inputMode": "buttons",
+              "inputField": "response",
+              "conditionField": "message",
+              "operator": "contains",
+              "conditionValue": "",
+              "delayValue": 1,
+              "delayUnit": "minutes",
+              "actionType": "tag",
+              "actionValue": "",
+              "gotoNode": "",
+              "requestMethod": "GET",
+              "requestUrl": ""
+            }
+          },
+          {
+            "id": "m",
+            "position": {
+              "x": 10,
+              "y": 15
+            },
+            "type": "flowNode",
+            "data": {
+              "kind": "message",
+              "title": "m",
+              "text": "رسالة اختبار",
+              "image": "",
+              "options": [
+                {
+                  "id": "jump",
+                  "label": "تدفق آخر",
+                  "buttonType": "button",
+                  "action": "flow",
+                  "targetFlowId": "second-flow",
+                  "url": ""
+                }
+              ],
+              "contentBlocks": [],
+              "platform": "instagram",
+              "keywords": "",
+              "triggerMode": "message",
+              "inputMode": "buttons",
+              "inputField": "response",
+              "conditionField": "message",
+              "operator": "contains",
+              "conditionValue": "",
+              "delayValue": 1,
+              "delayUnit": "minutes",
+              "actionType": "tag",
+              "actionValue": "",
+              "gotoNode": "",
+              "requestMethod": "GET",
+              "requestUrl": ""
+            }
+          }
+        ],
+        "edges": [
+          {
+            "id": "e1",
+            "source": "s",
+            "target": "m",
+            "sourceHandle": "next",
+            "targetHandle": "in",
+            "type": "flowEdge",
+            "data": {
+              "label": "التالي"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "v3-multiple-flows-secondary",
+      "input": {
+        "version": 3,
+        "name": "secondary",
+        "nodes": [
+          {
+            "id": "s",
+            "position": {
+              "x": 10,
+              "y": 15
+            },
+            "type": "flowNode",
+            "data": {
+              "kind": "trigger",
+              "title": "s",
+              "text": "",
+              "image": "",
+              "options": [],
+              "contentBlocks": [],
+              "platform": "instagram",
+              "triggerMode": "message",
+              "keywords": "",
+              "inputMode": "buttons",
+              "inputField": "response",
+              "conditionField": "message",
+              "operator": "contains",
+              "conditionValue": "",
+              "delayValue": 1,
+              "delayUnit": "minutes",
+              "actionType": "tag",
+              "actionValue": "",
+              "gotoNode": "",
+              "requestMethod": "GET",
+              "requestUrl": ""
+            }
+          },
+          {
+            "id": "m",
+            "position": {
+              "x": 10,
+              "y": 15
+            },
+            "type": "flowNode",
+            "data": {
+              "kind": "message",
+              "title": "m",
+              "text": "رسالة اختبار",
+              "image": "",
+              "options": [],
+              "contentBlocks": [
+                {
+                  "id": "c",
+                  "type": "collection",
+                  "field": "email",
+                  "inputMode": "email",
+                  "text": "بريدك؟"
+                }
+              ],
+              "platform": "instagram",
+              "triggerMode": "message",
+              "keywords": "",
+              "inputMode": "buttons",
+              "inputField": "response",
+              "conditionField": "message",
+              "operator": "contains",
+              "conditionValue": "",
+              "delayValue": 1,
+              "delayUnit": "minutes",
+              "actionType": "tag",
+              "actionValue": "",
+              "gotoNode": "",
+              "requestMethod": "GET",
+              "requestUrl": ""
+            }
+          }
+        ],
+        "edges": [
+          {
+            "id": "e1",
+            "type": "flowEdge",
+            "source": "s",
+            "sourceHandle": "next",
+            "target": "m",
+            "targetHandle": "in",
+            "data": {
+              "label": "التالي"
+            }
+          }
+        ]
+      },
+      "expected": {
+        "version": 3,
+        "name": "secondary",
+        "nodes": [
+          {
+            "id": "s",
+            "position": {
+              "x": 10,
+              "y": 15
+            },
+            "type": "flowNode",
+            "data": {
+              "kind": "trigger",
+              "title": "s",
+              "text": "",
+              "image": "",
+              "options": [],
+              "contentBlocks": [],
+              "platform": "instagram",
+              "keywords": "",
+              "triggerMode": "message",
+              "inputMode": "buttons",
+              "inputField": "response",
+              "conditionField": "message",
+              "operator": "contains",
+              "conditionValue": "",
+              "delayValue": 1,
+              "delayUnit": "minutes",
+              "actionType": "tag",
+              "actionValue": "",
+              "gotoNode": "",
+              "requestMethod": "GET",
+              "requestUrl": ""
+            }
+          },
+          {
+            "id": "m",
+            "position": {
+              "x": 10,
+              "y": 15
+            },
+            "type": "flowNode",
+            "data": {
+              "kind": "message",
+              "title": "m",
+              "text": "رسالة اختبار",
+              "image": "",
+              "options": [],
+              "contentBlocks": [
+                {
+                  "id": "c",
+                  "type": "collection",
+                  "text": "بريدك؟",
+                  "url": "",
+                  "seconds": 3,
+                  "field": "email",
+                  "inputMode": "email"
+                }
+              ],
+              "platform": "instagram",
+              "keywords": "",
+              "triggerMode": "message",
+              "inputMode": "buttons",
+              "inputField": "response",
+              "conditionField": "message",
+              "operator": "contains",
+              "conditionValue": "",
+              "delayValue": 1,
+              "delayUnit": "minutes",
+              "actionType": "tag",
+              "actionValue": "",
+              "gotoNode": "",
+              "requestMethod": "GET",
+              "requestUrl": ""
+            }
+          }
+        ],
+        "edges": [
+          {
+            "id": "e1",
+            "source": "s",
+            "target": "m",
+            "sourceHandle": "next",
+            "targetHandle": "in",
+            "type": "flowEdge",
+            "data": {
+              "label": "التالي"
+            }
+          }
+        ]
+      }
+    }
+  ]
+}
