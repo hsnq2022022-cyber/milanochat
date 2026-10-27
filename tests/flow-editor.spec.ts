@@ -445,3 +445,43 @@ test("audit: randomizer equal distribution performs an actual value update",asyn
  await expect(panel.getByRole("spinbutton",{name:"النسبة 1"})).toHaveValue("50");
  await expect(panel.getByRole("spinbutton",{name:"النسبة 2"})).toHaveValue("50");
 });
+
+test("audit: website button opens its HTTPS link in local preview",async({page})=>{
+ await page.goto("/milanochat/#/flows");
+ await page.locator(".react-flow__node").nth(1).click();
+ const panel=page.getByTestId("step-settings-panel");
+ await panel.getByRole("button",{name:"إضافة زر"}).click();
+ const editor=panel.getByTestId("button-action-editor");
+ await editor.getByRole("textbox",{name:"عنوان الزر"}).fill("موقع المتجر");
+ await editor.getByRole("button",{name:"فتح موقع"}).click();
+ await editor.getByRole("textbox",{name:"رابط الموقع"}).fill("https://example.com/shop");
+ await page.getByRole("button",{name:"تجربة"}).click();
+ const sim=page.getByTestId("flow-simulator");
+ await sim.getByRole("button",{name:"موقع المتجر"}).click();
+ await expect(sim.getByRole("link",{name:"فتح الرابط"})).toHaveAttribute("href","https://example.com/shop");
+});
+
+test("audit: quick reply connects to a real step and preview follows the connection",async({page})=>{
+ await page.goto("/milanochat/#/flows");
+ await page.locator(".react-flow__node").nth(1).click();
+ const panel=page.getByTestId("step-settings-panel");
+ await panel.getByRole("button",{name:"إضافة رد سريع"}).click();
+ const editor=panel.getByTestId("button-action-editor");
+ await editor.getByRole("textbox",{name:"عنوان الزر"}).fill("أسعار الإمارات");
+ await editor.getByRole("combobox",{name:"ربط الزر بخطوة"}).selectOption({index:5});
+ await page.getByRole("button",{name:"تجربة"}).click();
+ const sim=page.getByTestId("flow-simulator");
+ await sim.getByRole("button",{name:"أسعار الإمارات"}).click();
+ await expect(sim.getByText("تواصل ويانا لمعرفة الأسعار الحالية لخدمتك في الإمارات.")).toBeVisible();
+});
+
+test("audit: AI Step and action buttons create editable nodes rather than inert buttons",async({page})=>{
+ await page.goto("/milanochat/#/flows");
+ await page.locator(".react-flow__node").nth(1).click();
+ const panel=page.getByTestId("step-settings-panel");
+ await panel.getByRole("button",{name:"إضافة زر"}).click();
+ await panel.getByTestId("button-action-editor").getByRole("button",{name:"AI Step",exact:true}).click();
+ await expect(page.locator(".react-flow__node")).toHaveCount(7);
+ await expect(panel.getByText("نوع الإجراء")).toBeVisible();
+ await expect(panel.getByText("هذه إعدادات تصميمية، وليست أوامر مفعّلة في النظام الحقيقي.")).toBeVisible();
+});
