@@ -24,7 +24,7 @@ export type RecoveryApplyResult =
 export function previewCloudRecovery(local:FlowLibrary,cloud:DecodeResult):RecoveryPreview {
   const byId=new Map(local.flows.map(flow=>[flow.id,flow]));
   const entries:RecoveryEntry[]=[];
-  let remaining=Math.max(0,MAX_CLOUD_DRAFTS-local.flows.length);
+  const remaining=Math.max(0,MAX_CLOUD_DRAFTS-local.flows.length);
   for(const candidate of cloud.drafts){
     const existing=byId.get(candidate.flow.id);
     let decision:RecoveryDecision;
@@ -32,7 +32,6 @@ export function previewCloudRecovery(local:FlowLibrary,cloud:DecodeResult):Recov
       decision=JSON.stringify(existing.doc)===JSON.stringify(candidate.flow.doc)?"already_local":"conflict";
     }else if(remaining>0){
       decision="new";
-      remaining--;
     }else decision="capacity_exceeded";
     entries.push({id:candidate.flow.id,decision,cloud:candidate});
   }
@@ -51,7 +50,7 @@ export function prepareSelectedCloudRecovery(
   if(cloud.skipped>0)return {status:"blocked",reason:"invalid_cloud_rows"};
   const preview=previewCloudRecovery(local,cloud);
   const selected=new Set(selectedIds);
-  if(selected.size!==selectedIds.length||selected.size===0&&selectedIds.length!==0)
+  if(selected.size!==selectedIds.length)
     return {status:"blocked",reason:"unknown_selection"};
   const lookup=new Map(preview.entries.map(entry=>[entry.id,entry]));
   for(const id of selected){
