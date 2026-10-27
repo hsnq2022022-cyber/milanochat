@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Plus, Trash2, Check, Copy, AlertTriangle, ChevronDown, ChevronUp } from "lucide-react";
 import { ACCENT, LABELS, makeNode, outputs, canConnect, edgeFor, PLATFORM_LABELS, TRIGGER_OPTIONS } from "./model";
 import ButtonActionEditor from "./ButtonActionEditor";
@@ -11,7 +11,7 @@ import { flowText, flowKindLabel } from "./uiLocale";
 import type { FlowLanguage } from "./uiLocale";
 
 const input="w-full rounded-xl border border-[#275443] bg-[#0F2E24] px-3 py-2.5 text-sm text-white outline-none focus:border-[#3DD189]";
-const btn="inline-flex items-center gap-1.5 rounded-xl border border-[#275443] px-3 py-2 text-xs hover:bg-[#173D30]";
+const btn="inline-flex min-h-10 items-center gap-1.5 rounded-xl border border-[#275443] px-3 py-2 text-xs hover:bg-[#173D30]";
 const section="mb-2 mt-4 block text-xs font-semibold text-[#B8D0C3]";
 const units={seconds:"ثانية",minutes:"دقيقة",hours:"ساعة",days:"يوم"};
 const operators={contains:"يحتوي",equals:"يساوي",not_equals:"لا يساوي",exists:"موجود"};
@@ -23,6 +23,7 @@ export default function NodeEditor({node,onClose,language="ar"}:{node:FlowNode|n
   const [status,setStatus]=useState("");
   const [collapsed,setCollapsed]=useState(false);
   const t=(key:Parameters<typeof flowText>[0])=>flowText(key,language);
+  useEffect(()=>{if(!node)return;const dismiss=(e:KeyboardEvent)=>{if(e.key==="Escape"){e.stopPropagation();onClose();}};window.addEventListener("keydown",dismiss);return()=>window.removeEventListener("keydown",dismiss);},[node?.id,onClose]);
   if(!node)return <aside dir={language==="ar"?"rtl":"ltr"} className="flex w-[min(40vw,370px)] min-w-[210px] shrink-0 flex-col border-r border-[#173D30] bg-[#0B241C] p-5 text-[#8B9E96]"><h2 className="font-semibold text-white">{t("panel")}</h2><p className="mt-3 text-sm">{t("noNode")}</p></aside>;
   const d=node.data;
   const edit=(part:Partial<FlowData>)=>store.changeNode(node.id,part);
