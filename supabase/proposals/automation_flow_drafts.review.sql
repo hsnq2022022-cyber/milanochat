@@ -1,5 +1,6 @@
--- REVIEW PROPOSAL ONLY — NOT APPLIED TO LIVE DATABASE.
--- Deploy only after approval, tenant-RLS allow/deny tests, and backup verification.
+-- DEPLOYMENT RECORD: Applied to project nmhefwvhoholcjrbbila on 2026-10-28.
+-- Tested owner A/owner B authenticated RLS and anonymous denial via ROLLBACK.
+-- Retained as schema record; never re-run CREATE TABLE on production.
 -- Existing confirmed parent table: public.tenants(id uuid, user_id uuid).
 -- No changes to Meta, existing channel accounts, payments or milan-api.
 begin;
