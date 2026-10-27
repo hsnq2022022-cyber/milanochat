@@ -12,7 +12,7 @@ export default function AutomationEdge(props:EdgeProps<FlowEdge>){
   const remove=useFlowStore(s=>s.deleteEdge);
   const sourceNode=useFlowStore(s=>s.doc.nodes.find(n=>n.id===props.source));
   const isTypedQuestion=sourceNode?.data.kind==="question"&&sourceNode.data.inputMode!=="buttons";
-  const displayLabel=isTypedQuestion?(props.sourceHandle==="valid"?"التالي":""):String(props.data?.label||"");
+  const displayLabel=isTypedQuestion?(props.sourceHandleId==="valid"?"التالي":""):String(props.data?.label||"");
   const insert=()=>{
     const store=useFlowStore.getState(),doc=store.doc,old=doc.edges.find(e=>e.id===id);
     if(!old)return;
