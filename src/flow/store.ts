@@ -4,6 +4,8 @@ import type { NodeChange, EdgeChange, Connection } from "@xyflow/react";
 import { canConnect, edgeFor, outputs } from "./model";
 import { blankFlow, loadLibrary, snapshotLibrary } from "./library";
 import { stageCloudDraftCopy } from "./cloudDraft";
+import { pasteSelection as cloneIntoDocument } from "./clipboard";
+import type { SelectionClipboard } from "./clipboard";
 import type { CloudDraft } from "./cloudDraft";
 import type { SavedFlow } from "./library";
 import type { FlowDocument, FlowData, FlowEdge, FlowNode } from "./model";
@@ -29,6 +31,7 @@ export type FlowState = {
   replace: (doc: FlowDocument) => void;
   rename: (name:string) => void;
   addNode: (node:FlowNode) => "added" | "duplicate_trigger" | "limit_reached";
+  pasteSelection: (clipboard:SelectionClipboard)=>"added"|"no_copyable_nodes"|"node_limit";
   changeNode: (id:string, data:Partial<FlowData>) => void;
   nodesChanged: (changes:NodeChange<FlowNode>[])=>void;
   edgesChanged: (changes:EdgeChange<FlowEdge>[])=>void;
@@ -129,6 +132,18 @@ export const useFlowStore=create<FlowState>((set,get)=>({
     if(node.data.kind==="trigger"&&previous.doc.nodes.some(n=>n.data.kind==="trigger"))
       return "duplicate_trigger";
     set(s=>({doc:{...s.doc,nodes:[...s.doc.nodes,node]},selectedId:node.id,...savePast(s)}));
+    return "added";
+  },
+  pasteSelection:(clipboard)=>{
+    const source=get();
+    const result=cloneIntoDocument(source.doc,clipboard);
+    if(!result.ok)return result.reason;
+    set(s=>({
+      doc:{...s.doc,
+        nodes:[...s.doc.nodes.map(n=>({...n,selected:false})),...result.nodes],
+        edges:[...s.doc.edges,...result.edges]},
+      selectedId:result.nodes.at(-1)?.id??null,...savePast(s)
+    }));
     return "added";
   },
   changeNode:(id,data)=>set(s=>{
