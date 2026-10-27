@@ -1,0 +1,33 @@
+name: Flow Stage 12 - Signed Meta Webhook and Replay Protection
+
+on:
+  push:
+    branches: [feature/flows-stage12-webhook-safety]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  webhook-security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Assert signed Meta webhook and Supabase replay logic
+        run: node --experimental-strip-types --test tests/webhook-safety.test.ts
+      - name: Run all current runtime safety unit tests
+        run: |
+          node --experimental-strip-types --test src/flow/eventRouting.test.ts
+          node --experimental-strip-types --test src/flow/runtimePlan.test.ts
+          node --experimental-strip-types --test src/flow/aiMetricsGate.test.ts
+      - name: Typecheck flow builder and production build
+        run: |
+          npx tsc --noEmit -p tsconfig.flows.json
+          npm run build
