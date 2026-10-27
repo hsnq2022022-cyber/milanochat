@@ -29,6 +29,8 @@ jobs:
       - name: Install Chromium
         run: npx playwright install chromium
       - name: Browser acceptance tests
+        env:
+          VITE_ENABLE_CLOUD_FLOW_DRAFTS: "true"
         run: npm run test:browser
       - name: Upload screenshots and traces on failure
         if: failure()
