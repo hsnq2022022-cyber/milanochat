@@ -334,3 +334,57 @@ test("batch 3 mobile step action stays visible and preview counts execution step
  await page.getByRole("button",{name:"إعادة",exact:true}).click();
  await expect(page.getByTestId("simulator-step-counter")).toContainText("/ 150");
 });
+
+test("audit: toolbar and step settings collapse and expand without erasing text",async({page})=>{
+ await page.goto("/milanochat/#/flows");
+ await page.getByRole("button",{name:"طي شريط أدوات التدفقات"}).click();
+ await expect(page.getByTestId("flow-toolbar-secondary")).toHaveCount(0);
+ await page.getByRole("button",{name:"إظهار شريط أدوات التدفقات"}).click();
+ await expect(page.getByTestId("flow-toolbar-secondary")).toBeVisible();
+ await page.locator(".react-flow__node").nth(1).click();
+ const panel=page.locator("aside");
+ const field=panel.getByRole("textbox",{name:"نص الرسالة"});
+ await field.fill("اختبار الطي والحفظ");
+ await panel.getByRole("button",{name:"طي إعدادات الخطوة"}).click();
+ await expect(field).toHaveCount(0);
+ await panel.getByRole("button",{name:"إظهار إعدادات الخطوة"}).click();
+ await expect(field).toHaveValue("اختبار الطي والحفظ");
+});
+
+test("audit: typed question modes expose two working routes and remove stale button edges",async({page})=>{
+ await page.goto("/milanochat/#/flows");
+ await page.locator(".react-flow__node").nth(2).click();
+ const panel=page.locator("aside");
+ const mode=panel.getByRole("combobox",{name:"نوع الإجابة"});
+ for(const value of ["text","email","phone","number"]){
+  await mode.selectOption(value);
+  const routes=panel.getByTestId("question-text-routes");
+  await expect(routes.getByRole("combobox",{name:"وجهة الإجابة الصحيحة"})).toBeVisible();
+  await expect(routes.getByRole("combobox",{name:"وجهة الإجابة غير الصحيحة"})).toBeVisible();
+  await expect(page.locator(".react-flow__edge")).toHaveCount(2);
+ }
+ await panel.getByRole("combobox",{name:"وجهة الإجابة الصحيحة"}).selectOption({index:1});
+ await panel.getByRole("combobox",{name:"وجهة الإجابة غير الصحيحة"}).selectOption({index:2});
+ await expect(page.locator(".react-flow__edge")).toHaveCount(4);
+ await mode.selectOption("buttons");
+ await expect(page.locator(".react-flow__edge")).toHaveCount(2);
+ await expect(panel.getByTestId("question-text-routes")).toHaveCount(0);
+});
+
+test("audit: invalid email follows invalid route; valid email follows valid route",async({page})=>{
+ await page.goto("/milanochat/#/flows");
+ await page.locator(".react-flow__node").nth(2).click();
+ const panel=page.locator("aside");
+ await panel.getByRole("combobox",{name:"نوع الإجابة"}).selectOption("email");
+ await panel.getByRole("combobox",{name:"وجهة الإجابة الصحيحة"}).selectOption({index:1});
+ await panel.getByRole("combobox",{name:"وجهة الإجابة غير الصحيحة"}).selectOption({index:2});
+ await page.getByRole("button",{name:"تجربة"}).click();
+ const answer=page.getByRole("textbox",{name:"إجابة العميل"});
+ await answer.fill("wrong-email");
+ await answer.press("Enter");
+ await expect(page.getByText("wrong-email")).toBeVisible();
+ await page.getByRole("button",{name:"إعادة",exact:true}).click();
+ await answer.fill("client@example.com");
+ await answer.press("Enter");
+ await expect(page.getByText("client@example.com")).toBeVisible();
+});
