@@ -76,6 +76,57 @@ begin
   end;
 end
 $checks$;
+
+-- هذه الاختبارات تفشل إذا حاول خادم مرتفع الصلاحيات خلط متاجر مختلفة.
+do $tenant_checks$
+declare
+  tenant uuid := 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+begin
+  begin
+    insert into public.automation_flow_activations
+    (tenant_id,channel_account_id,platform,flow_key,revision)
+    values(tenant,'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+      'facebook','welcome',1);
+    raise exception 'CROSS_TENANT_ACTIVATION_ALLOWED';
+  exception when foreign_key_violation then null;
+  end;
+  begin
+    insert into public.automation_flow_activations
+    (tenant_id,channel_account_id,platform,flow_key,revision)
+    values(tenant,'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      'facebook','welcome',1);
+    raise exception 'WRONG_PLATFORM_ACTIVATION_ALLOWED';
+  exception when foreign_key_violation then null;
+  end;
+  begin
+    insert into public.automation_flow_event_receipts
+    (tenant_id,channel_account_id,platform,provider_event_id)
+    values(tenant,'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+      'facebook','cross-tenant-receipt');
+    raise exception 'CROSS_TENANT_EVENT_ALLOWED';
+  exception when foreign_key_violation then null;
+  end;
+  begin
+    insert into public.automation_flow_runs
+    (tenant_id,flow_key,publication_revision,channel_account_id,
+     conversation_id,current_node_id,run_status)
+    values(tenant,'welcome',1,'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+      'dddddddd-dddd-4ddd-8ddd-dddddddddddd','start','ready');
+    raise exception 'CROSS_TENANT_ACCOUNT_RUN_ALLOWED';
+  exception when foreign_key_violation then null;
+  end;
+  begin
+    insert into public.automation_flow_runs
+    (tenant_id,flow_key,publication_revision,channel_account_id,
+     conversation_id,current_node_id,run_status)
+    values(tenant,'welcome',1,'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      'ffffffff-ffff-4fff-8fff-ffffffffffff','start','ready');
+    raise exception 'CROSS_TENANT_CONVERSATION_RUN_ALLOWED';
+  exception when foreign_key_violation then null;
+  end;
+end
+$tenant_checks$;
+
 reset role;
 
 -- No implicit grants to user browsers or anonymous clients.
