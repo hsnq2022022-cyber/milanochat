@@ -1,7 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { importFlow } from "./model.ts";
 import type { FlowDocument } from "./model";
-import type { SavedFlow } from "./library.ts";
+import type { FlowLibrary, SavedFlow } from "./library.ts";
 
 export const MAX_CLOUD_DRAFT_BYTES=4*1024*1024;
 export const MAX_CLOUD_DRAFTS=30;
@@ -53,7 +53,7 @@ export function decodeCloudDraftRows(rows:unknown):DecodeResult{
 
 function classifyPostgrest(error:{code?:string}|null):SaveResult{
  if(error?.code==="23505")return {status:"conflict"};
- if(["42P01","PGRST205","PGRST116"].includes(error?.code||""))return {status:"not_provisioned"};
+ if(["42P01","PGRST205"].includes(error?.code||""))return {status:"not_provisioned"};
  if(["42501","PGRST301"].includes(error?.code||""))return {status:"permission_denied"};
  return {status:"error",code:error?.code||"unknown"};
 }
@@ -95,4 +95,74 @@ export async function saveCloudDraft(
  if(error)return classifyPostgrest(error);
  if(!data)return {status:"conflict"}; // Never overwrite edits made on another device.
  return {status:"saved",revision:data.draft_revision};
+}
+
+ 
+export type DraftDifference={
+  flowKey:string;
+  status:"identical"|"different"|"local_only"|"cloud_only";
+  cloudRevision:number|null;
+  localEnabled:boolean;
+};
+export type DraftComparison={
+  items:DraftDifference[];
+  skippedCloudRows:number;
+  requiresReview:boolean;
+};
+
+/**
+ * مقارنة للعرض فقط: لا تكتب في localStorage ولا في Supabase.
+ * اختلاف المستندات يحتاج قراراً صريحاً، ولا يشمل تفعيل التدفق محلياً.
+ */
+export function compareCloudDrafts(
+  localFlows:readonly SavedFlow[], cloud:DecodeResult
+):DraftComparison{
+  const cloudById=new Map(cloud.drafts.map(draft=>[draft.flow.id,draft]));
+  const localIds=new Set<string>();
+  const items:DraftDifference[]=[];
+  for(const local of localFlows){
+    localIds.add(local.id);
+    const remote=cloudById.get(local.id);
+    items.push({
+      flowKey:local.id,
+      status:!remote?"local_only":
+        JSON.stringify(local.doc)===JSON.stringify(remote.flow.doc)?"identical":"different",
+      cloudRevision:remote?.revision??null,
+      localEnabled:local.enabled===true
+    });
+  }
+  for(const remote of cloud.drafts){
+    if(localIds.has(remote.flow.id))continue;
+    items.push({
+      flowKey:remote.flow.id,status:"cloud_only",
+      cloudRevision:remote.revision,localEnabled:false
+    });
+  }
+  return {
+    items,
+    skippedCloudRows:cloud.skipped,
+    requiresReview:cloud.skipped>0||items.some(item=>item.status==="different"||item.status==="cloud_only")
+  };
+}
+
+/**
+ * استرجاع اختياري كنسخة مستقلة فقط، بلا استبدال التدفق الأصلي أو تفعيله.
+ * المتصل بالواجهة يطلب تأكيد المستخدم ويولّد copyId فريداً أولاً.
+ */
+export function stageCloudDraftCopy(
+  local:FlowLibrary,source:CloudDraft,copyId:string
+):FlowLibrary{
+  if(!/^[a-zA-Z0-9_-]{1,128}$/.test(copyId))
+    throw new Error("invalid copy identifier");
+  if(local.flows.length>=MAX_CLOUD_DRAFTS)
+    throw new Error("local flow library is full");
+  if(local.flows.some(flow=>flow.id===copyId))
+    throw new Error("copy identifier already exists");
+  const prepared=prepareCloudDraft({id:copyId,doc:source.flow.doc,enabled:false});
+  return {
+    activeFlowId:local.activeFlowId,
+    flows:[...local.flows,{
+      id:copyId,doc:prepared.document,enabled:false
+    }]
+  };
 }

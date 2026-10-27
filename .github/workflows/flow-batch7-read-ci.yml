@@ -2,7 +2,7 @@ name: Flow Builder Batch 7 - Cloud Read Hardening
 
 on:
   push:
-    branches: [feature/flows-batch7-cloud-read-hardening]
+    branches: [feature/flows-batch7-cloud-read-hardening, feature/flows-batch7-explicit-cloud-restore]
     paths:
       - "src/flow/**"
       - "src/pages/FlowBuilder.tsx"
