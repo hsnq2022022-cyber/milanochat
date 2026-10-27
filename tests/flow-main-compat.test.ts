@@ -16,6 +16,6 @@ test("golden fixtures were generated from main importer and cover all six scenar
 });
 for(const {name,input,expected} of gold.cases){
   test("no import output regression against main: "+name,()=>{
-    assert.deepEqual(importFlow(input),expected);
+    assert.deepEqual(JSON.parse(JSON.stringify(importFlow(input))),expected);
   });
 }
