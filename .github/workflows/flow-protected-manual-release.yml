@@ -1,0 +1,60 @@
+name: PROTECTED MANUAL — milan-api v101 rollback + flow-publication A/B
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_release:
+        description: "Type exactly deploy-two-test-only AFTER owner GO and Environment approval"
+        type: string
+        required: true
+        default: "NOT_AUTHORIZED"
+permissions:
+  contents: read
+concurrency:
+  group: protected-supabase-nmhefwvhoholcjrbbila
+  cancel-in-progress: false
+
+jobs:
+  protected-release:
+    if: ${{ inputs.confirm_release == 'deploy-two-test-only' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    environment:
+      name: protected-supabase-flow-release
+    env:
+      FLOW_RELEASE_CONFIRM: ${{ inputs.confirm_release }}
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+      SUPABASE_JWT_SECRET: ${{ secrets.SUPABASE_JWT_SECRET }}
+      SUPABASE_PROJECT_REF: nmhefwvhoholcjrbbila
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+      - name: Confirm project and explicit authorization
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "$FLOW_RELEASE_CONFIRM" = deploy-two-test-only
+          test "$SUPABASE_PROJECT_REF" = nmhefwvhoholcjrbbila
+          test "$GITHUB_REPOSITORY" = hsnq2022022-cyber/milanochat
+      - name: Protected release, real Auth and Widget HTTP tests, rollback
+        shell: bash
+        run: bash scripts/flow-protected-release.sh
+      - name: Preserve one-day v101 source recovery artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: milan-api-v101-backup-${{ github.run_id }}
+          path: ${{ runner.temp }}/flow-protected/complete-v101-source.tar.gz
+          if-no-files-found: warn
+          retention-days: 1

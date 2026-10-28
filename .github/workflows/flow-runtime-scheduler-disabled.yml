@@ -1,0 +1,44 @@
+name: DISABLED — durable flow wake and Outbox review scheduler
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: future-flow-runtime-scheduler
+  cancel-in-progress: false
+jobs:
+  tick:
+    # OFF by default. Requires a separate owner GO to create ENABLED repository var
+    # AND deploy both workers and migrations. No other job is allowed to set it.
+    if: ${{ vars.FLOW_WORKER_SCHEDULER_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    environment: protected-flow-worker
+    env:
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+    steps:
+      - name: Fail closed without explicit operator secret
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$SUPABASE_SERVICE_ROLE_KEY"
+      - name: Advance due runs (never sends provider messages)
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          curl --fail --silent --show-error --max-time 25 \
+            -X POST "https://nmhefwvhoholcjrbbila.supabase.co/functions/v1/flow-runtime-worker" \
+            -H "authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+            -H "content-type: application/json" \
+            --data '{"mode":"tick"}'
+      - name: Send only explicitly canaried effects after separately approved gates
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          curl --fail --silent --show-error --max-time 25 \
+            -X POST "https://nmhefwvhoholcjrbbila.supabase.co/functions/v1/flow-outbox-worker" \
+            -H "authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+            -H "content-type: application/json" \
+            --data '{"mode":"tick"}'
