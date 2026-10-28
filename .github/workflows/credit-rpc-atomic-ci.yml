@@ -1,0 +1,73 @@
+name: Credit RPC transactional integrity (disposable PostgreSQL)
+
+on:
+  push:
+    branches: [fix/consume-reply-transactional-ledger]
+  pull_request:
+    paths:
+      - "supabase/migrations/20261028150000_consume_reply_atomic.sql"
+      - "supabase/rollbacks/20261028150000_consume_reply_atomic.rollback.sql"
+      - "supabase/verification/20261028150000_consume_reply_atomic.readonly.sql"
+      - "tests/sql/credit-rpc-*.sql"
+      - ".github/workflows/credit-rpc-atomic-ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  credit-rpc:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: disposable_credit_ci
+          POSTGRES_DB: credit_integrity_ci
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d credit_integrity_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: disposable_credit_ci
+      PGDATABASE: credit_integrity_ci
+    steps:
+      - uses: actions/checkout@v4
+      - name: Bootstrap live-shaped synthetic credit schema
+        run: psql -X -v ON_ERROR_STOP=1 -f tests/sql/credit-rpc-live-shape-bootstrap.sql
+      - name: Install exact previously-live RPC (rollback fixture)
+        run: psql -X -v ON_ERROR_STOP=1 -f supabase/rollbacks/20261028150000_consume_reply_atomic.rollback.sql
+      - name: Reproduce original ghost-ledger bug before fixing
+        run: psql -X -v ON_ERROR_STOP=1 -f tests/sql/credit-rpc-original-bug.test.sql
+      - name: Apply reviewed forward-only patch to disposable database
+        run: psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028150000_consume_reply_atomic.sql
+      - name: Rerun patch for idempotence
+        run: psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028150000_consume_reply_atomic.sql
+      - name: Validate ownership, no-credits, retries, top-up and privilege locks
+        run: |
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/credit-rpc-atomic.test.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/verification/20261028150000_consume_reply_atomic.readonly.sql
+      - name: Concurrent debit race leaves one ledger row and one charge
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql -X -v ON_ERROR_STOP=1 -c "UPDATE public.tenants SET credits_remaining=1 WHERE id='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';"
+          psql -XAtq -v ON_ERROR_STOP=1 -c "SET ROLE service_role; SELECT public.consume_reply('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb','20000000-0000-4000-8000-000000000002');" > /tmp/debit1.out &
+          a=$!
+          psql -XAtq -v ON_ERROR_STOP=1 -c "SET ROLE service_role; SELECT public.consume_reply('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb','20000000-0000-4000-8000-000000000003');" > /tmp/debit2.out &
+          b=$!
+          wait "$a"
+          wait "$b"
+          echo "Concurrent RPC return values:"
+          cat /tmp/debit1.out /tmp/debit2.out
+          test "$(cat /tmp/debit1.out /tmp/debit2.out | grep -cx '0')" -eq 1
+          test "$(cat /tmp/debit1.out /tmp/debit2.out | grep -cx -- '-1')" -eq 1
+          count="$(psql -XAtq -v ON_ERROR_STOP=1 -c "SELECT count(*)||'|'||(SELECT credits_remaining FROM public.tenants WHERE id='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb') FROM public.reply_ledger WHERE tenant_id='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';")"
+          echo "Tenant B ledger|remaining: $count"
+          test "$count" = "1|0"
