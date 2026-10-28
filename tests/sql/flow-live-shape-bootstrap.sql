@@ -2,17 +2,22 @@
 CREATE ROLE anon NOLOGIN;
 CREATE ROLE authenticated NOLOGIN;
 CREATE ROLE service_role NOLOGIN BYPASSRLS;
-CREATE TABLE public.tenants(id uuid PRIMARY KEY);
+CREATE TABLE public.tenants(id uuid PRIMARY KEY,
+ user_id uuid,
+ is_active boolean NOT NULL DEFAULT true);
 CREATE TABLE public.channel_accounts(
  id uuid PRIMARY KEY,tenant_id uuid NOT NULL REFERENCES public.tenants(id),
- platform text,channel text);
+ platform text,channel text,
+ is_active boolean DEFAULT true,
+ agent_enabled boolean DEFAULT true,
+ auto_reply boolean DEFAULT true);
 CREATE TABLE public.conversations(
  id uuid PRIMARY KEY,tenant_id uuid NOT NULL REFERENCES public.tenants(id),
  account_id uuid REFERENCES public.channel_accounts(id),wa_chat_id text NOT NULL);
-INSERT INTO public.tenants VALUES
- ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'),
- ('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb');
-INSERT INTO public.channel_accounts VALUES
+INSERT INTO public.tenants(id,user_id) VALUES
+ ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','99999999-9999-4999-8999-999999999999'),
+ ('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb','88888888-8888-4888-8888-888888888888');
+INSERT INTO public.channel_accounts(id,tenant_id,platform,channel) VALUES
  ('11111111-1111-4111-8111-111111111111','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','instagram','instagram'),
  ('22222222-2222-4222-8222-222222222222','bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb','facebook','facebook'),
  ('33333333-3333-4333-8333-333333333333','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','whatsapp','salla');
