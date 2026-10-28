@@ -1,5 +1,6 @@
 import {test} from "node:test";
 import assert from "node:assert/strict";
+import {readFileSync} from "node:fs";
 import {verifyMetaWebhookSignature} from "../supabase/functions/milan-api/metaSignature.ts";
 
 const raw='{"object":"page","entry":[{"id":"123","messaging":[]}]}';
@@ -40,4 +41,12 @@ test("wrong app secret always fails; uppercase digest remains accepted",async()=
  assert.equal(await verifyMetaWebhookSignature(raw,validMeta,["wrong-secret"]),false);
  assert.equal(await verifyMetaWebhookSignature(raw,
   "sha256="+validMeta.slice(7).toUpperCase(),["meta-stage-secret"]),true);
+});
+
+test("milan-api fails closed with 503 on missing Meta signing configuration",()=>{
+ const source=readFileSync("supabase/functions/milan-api/index.ts","utf8");
+ assert.match(source,/\[instagram_webhook\] missing signing secret/);
+ assert.match(source,/Webhook signing secret unavailable" }, 503/);
+ assert.match(source,/return verifyMetaWebhookSignature\(raw,sigHeader/);
+ assert.doesNotMatch(source,/if \(secrets.length === 0\) return true/);
 });
