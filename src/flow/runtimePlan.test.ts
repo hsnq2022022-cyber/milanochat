@@ -72,8 +72,8 @@ test("unsupported external HTTP request fails closed without an effect",()=>{
   const t=trigger(),n=makeNode("request",{x:0,y:100},{
     requestUrl:"https://example.com"
   });
-  const plan=planRuntimeTransition(doc([t,n],[[t,"next",n]]),
-    createRuntimeState(doc([t,n],[[t,"next",n]]),"f",1),input);
+  const flow=doc([t,n],[[t,"next",n]]);
+  const plan=planRuntimeTransition(flow,createRuntimeState(flow,"f",1),input);
   assert.equal(plan.state.status,"blocked");
   assert.equal(plan.effects.length,0);
 });
