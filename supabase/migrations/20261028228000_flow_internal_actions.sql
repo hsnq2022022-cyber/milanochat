@@ -16,7 +16,7 @@ END $guard$;
 CREATE TABLE public.flow_conversation_tags(
  tenant_id uuid NOT NULL,
  conversation_id uuid NOT NULL,
- tag text NOT NULL CHECK(length(tag) BETWEEN 1 AND 64 AND tag ~ '^[[:alnum:]_ -]+$'),
+ tag text NOT NULL CHECK(length(btrim(tag)) BETWEEN 1 AND 64 AND tag !~ '[<>[:cntrl:]]'),
  created_by_outbox uuid NOT NULL,
  created_at timestamptz NOT NULL DEFAULT now(),
  PRIMARY KEY(tenant_id,conversation_id,tag),
@@ -81,8 +81,8 @@ BEGIN
  THEN RETURN false;END IF;
  IF row_data.effect_kind IN('tag','untag') THEN
   tag_value:=row_data.payload->>'tag';
-  IF tag_value IS NULL OR length(tag_value) NOT BETWEEN 1 AND 64 OR
-     tag_value !~ '^[[:alnum:]_ -]+$' THEN RETURN false;END IF;
+  IF tag_value IS NULL OR length(btrim(tag_value)) NOT BETWEEN 1 AND 64 OR
+     tag_value ~ '[<>[:cntrl:]]' THEN RETURN false;END IF;
   IF row_data.effect_kind='tag' THEN
    INSERT INTO public.flow_conversation_tags(
     tenant_id,conversation_id,tag,created_by_outbox)
