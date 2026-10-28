@@ -33,8 +33,13 @@ export function simpleMessageFromDocument(raw:unknown,platform:Platform):string|
  const doc=raw as Record<string,unknown>;
  if(doc.version!==3||!Array.isArray(doc.nodes)||!Array.isArray(doc.edges)||
     doc.nodes.length!==2||doc.edges.length!==1)return null;
- const [start,message]=doc.nodes as Record<string,unknown>[];
- const s=start?.data as Record<string,unknown>|undefined;
+ // Node storage order has no semantic meaning in FlowDocument v3.
+ // Locate the only trigger and message by kind; malformed/extra nodes fail closed.
+ const nodes=doc.nodes as Record<string,unknown>[];
+ const start=nodes.find(n=>(n?.data as Record<string,unknown>|undefined)?.kind==="trigger");
+ const message=nodes.find(n=>(n?.data as Record<string,unknown>|undefined)?.kind==="message");
+ if(!start||!message)return null;
+ const s=start.data as Record<string,unknown>|undefined;
  const m=message?.data as Record<string,unknown>|undefined;
  const requestedPlatform=platform==="facebook"?"messenger":platform;
  if(s?.kind!=="trigger"||s.platform!==requestedPlatform||

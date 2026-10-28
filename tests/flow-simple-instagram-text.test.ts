@@ -12,6 +12,16 @@ test("one Instagram trigger and one Arabic text node produce exactly one reply",
  assert.equal(simpleMessageFromDocument(example(),"instagram"),"أهلاً بك في متجرنا");
  assert.equal(simpleMessageFromDocument(example("messenger"),"facebook"),"أهلاً بك في متجرنا");
 });
+test("valid text flow runs regardless of node array order",()=>{
+ const original=example();
+ const reordered={...original,nodes:[...original.nodes].reverse()};
+ assert.equal(simpleMessageFromDocument(reordered,"instagram"),"أهلاً بك في متجرنا");
+ assert.equal(simpleMessageFromDocument({...reordered,edges:[{...original.edges[0],target:"missing"}]},"instagram"),null);
+ assert.equal(simpleMessageFromDocument({...reordered,nodes:[
+  {id:"other",data:{kind:"action"}},...reordered.nodes
+ ]},"instagram"),null);
+});
+
 test("unsupported platform, trigger and extra nodes fail closed",()=>{
  assert.equal(simpleMessageFromDocument(example("messenger"),"instagram"),null);
  const d=example();d.nodes[0].data.triggerMode="keyword";
