@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import confetti from "canvas-confetti";
 import SafeAvatar from "../components/SafeAvatar";
-import { api, apiAuthFetch, apiBase, apiEnabled, backendMode, type WaSnapshot } from "../lib/api";
+import { api, apiAuthFetch, apiBase, apiEnabled, backendMode, paymentCheckoutEnabled, type WaSnapshot } from "../lib/api";
 import { getSupabase, getStoredClaim, clearStoredClaim } from "../lib/supabase";
 import { CHANNELS, ChannelBadge, detectChannel, type ChannelId } from "../lib/channels";
 import {
@@ -976,13 +976,20 @@ export default function Dashboard() {
   };
 
   const recharge = async (pkgId: string) => {
+    if (!paymentCheckoutEnabled) {
+      showToast("بوابة الدفع غير مربوطة بعد؛ الشحن الإلكتروني غير متاح حاليًا");
+      return;
+    }
     try {
       const res = await api.createPayment(st?.tenantId ?? "", pkgId, token);
-      if (res.paymentUrl) window.open(res.paymentUrl, "_blank", "noopener");
-      showToast("فُتحت صفحة الدفع");
-      setPayOpen(false);
-    } catch (e: any) {
-      showToast(e?.message ?? "تعذر إنشاء الفاتورة");
+      if (!res.paymentUrl) throw new Error("لم تُرجع بوابة الدفع رابطًا صالحًا");
+      const checkout = new URL(res.paymentUrl);
+      if (checkout.protocol !== "https:" || checkout.hostname !== "checkout.thewayl.com") {
+        throw new Error("تم رفض رابط دفع غير معروف");
+      }
+      window.location.assign(checkout.href);
+    } catch (e: unknown) {
+      showToast(e instanceof Error ? e.message : "تعذر إنشاء الفاتورة");
     }
   };
 
@@ -1946,6 +1953,11 @@ export default function Dashboard() {
               <IconX className="w-5 h-5" />
             </button>
             <h3 className="font-display font-bold text-xl text-bone mb-1">اشحن رصيد الردود</h3>
+            {!paymentCheckoutEnabled && (
+              <p role="status" className="mb-3 rounded-xl border border-amber-400/50 bg-amber-400/10 px-4 py-3 text-sm text-amber-100">
+                بوابة الدفع الإلكتروني قيد الإعداد. يمكنك معاينة الباقات، لكن لا يمكن الدفع أو شحن الرصيد حاليًا.
+              </p>
+            )}
             <div className="space-y-3">
               {[
                 { id: "starter", name: "البداية", credits: 1000, price: 35000 },
@@ -1955,6 +1967,8 @@ export default function Dashboard() {
                 <button
                   key={p.id}
                   onClick={() => recharge(p.id)}
+                  disabled={!paymentCheckoutEnabled}
+                  title={!paymentCheckoutEnabled ? "بوابة الدفع غير مفعّلة" : undefined}
                   className={`w-full flex items-center gap-4 rounded-2xl border p-4 text-start transition-all ${
                     p.hot ? "border-oro/60 bg-oro/5" : "border-verde/20 bg-night/40"
                   }`}
