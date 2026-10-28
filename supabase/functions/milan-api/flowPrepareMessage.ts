@@ -9,8 +9,24 @@ type Platform = "instagram" | "facebook" | "whatsapp";
 export async function prepareSimpleFlowReply(
  sb:SupabaseClient, tenantId:string, accountId:string, platform:Platform,
 ):Promise<string|null>{
- if(Deno.env.get("FLOW_RUNTIME_MODE")!=="message_only")return null;
+ const mode=Deno.env.get("FLOW_RUNTIME_MODE")??"";
+ // An explicit emergency OFF always overrides database approvals.
+ if(mode==="off")return null;
  try{
+  if(mode!=="message_only"){
+   // No environment flag is required for an approved production account,
+   // but BOTH independent database switches and operator approval are.
+   if(platform!=="instagram")return null;
+   const [global,tenant]=await Promise.all([
+    sb.from("automation_flow_global_switch").select("enabled")
+      .eq("singleton",true).maybeSingle(),
+    sb.from("automation_flow_tenant_switches")
+      .select("enabled,production_approved").eq("tenant_id",tenantId).maybeSingle()
+   ]);
+   if(global.error||tenant.error||global.data?.enabled!==true||
+      tenant.data?.enabled!==true||tenant.data?.production_approved!==true)
+    return null;
+  }
   const {data:active,error}=await sb.from("automation_flow_activations")
    .select("flow_key,revision")
    .eq("tenant_id",tenantId).eq("channel_account_id",accountId)
