@@ -15,7 +15,7 @@ export type RuntimeState = {
   wakeAt: number | null;
 };
 export type PlannedEffect =
-  | { kind: "message"; idempotencyKey: string; nodeId: string; text: string }
+  | { kind: "message"; idempotencyKey: string; nodeId: string; text: string; websiteButtons?: {label:string;url:string}[] }
   | { kind: "question"; idempotencyKey: string; nodeId: string; text: string; inputMode: string; choices: string[]; choiceIds: string[] }
   | { kind: "delay"; idempotencyKey: string; nodeId: string; wakeAt: number }
   | { kind: "handoff"; idempotencyKey: string; nodeId: string }
@@ -155,11 +155,24 @@ export function planRuntimeTransition(
         // الصور والأزرار وما شابهها تتطلب مرسلاً يدعمها؛ لا نتظاهر بأنها نُفذت.
         if (data.image || data.contentBlocks.length)
           return fail(state, "rich message requires a verified sender");
-        if (data.options.some(o => (o.action && o.action!=="step") || !o.label.trim() || o.label.length>20 || o.id.length>128) ||
+        const webButtons=data.options.length>0 && data.options.every(o=>o.action==="website" && o.buttonType==="button");
+        if(webButtons){
+          if(data.platform!=="messenger" || data.options.length>3 ||
+             data.options.some(o=>!o.label.trim() || o.label.length>20 ||
+               typeof o.url!=="string" || o.url.length>2048 ||
+               !/^https:\/\/[^/@?#]+/.test(o.url)))
+            return fail(state,"invalid Messenger website buttons");
+        }else if (data.options.some(o => (o.action && o.action!=="step") || !o.label.trim() || o.label.length>20 || o.id.length>128) ||
             data.options.length>13 || new Set(data.options.map(o=>o.id)).size!==data.options.length)
           return fail(state, "unsupported button action or blank label");
         const text = safeValue(data.text).trim();
         if (!text) return fail(state, "empty message");
+        if(webButtons){
+          if(text.length>80)return fail(state,"website card title too long");
+          const effect:PlannedEffect={kind:"message",idempotencyKey:key(state,input,node.id),
+            nodeId:node.id,text,websiteButtons:data.options.map(o=>({label:o.label,url:o.url!}))};
+          return {state:proceed(state,nextNode(doc,node,"next")),effects:[effect]};
+        }
         if(data.options.length>0){
           const effect: PlannedEffect = {kind:"question",
             idempotencyKey:key(state,input,node.id),nodeId:node.id,text,
