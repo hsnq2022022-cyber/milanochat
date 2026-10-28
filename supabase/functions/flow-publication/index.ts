@@ -118,7 +118,7 @@ export async function handleFlowPublication(req:Request,
    if(accounts.error||globalSwitch.error||tenantSwitch.error)
     return error("Account list unavailable",503);
    const visible=(accounts.data??[]).filter((a:{platform:unknown})=>hasPlatform(a.platform))
-    .map((a:{platform:ProviderPlatform;is_active:boolean;agent_enabled:boolean;auto_reply:boolean})=>({
+    .map((a:{id:string;platform:ProviderPlatform;is_active:boolean;agent_enabled:boolean;auto_reply:boolean})=>({
       id:a.id,platform:a.platform,is_active:a.is_active,
       canActivate:tenant.is_active===true&&a.is_active===true&&
        a.agent_enabled===true&&a.auto_reply===true&&
