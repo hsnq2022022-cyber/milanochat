@@ -1,0 +1,91 @@
+name: Tenant-bound flow runtime schema — disposable PostgreSQL
+
+on:
+  push:
+    branches: [db/flow-runtime-live-tenant-boundary]
+  pull_request:
+    paths:
+      - "supabase/migrations/20261028180000_flow_runtime_tenant_bound.sql"
+      - "supabase/rollbacks/20261028180000_flow_runtime_tenant_bound.rollback.sql"
+      - "supabase/verification/20261028180000_flow_runtime_tenant_bound.readonly.sql"
+      - "tests/sql/flow-live-*.sql"
+      - ".github/workflows/flow-live-tenant-schema-ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  tenant-ownership:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: synthetic_only_pg
+          POSTGRES_DB: tenant_flow_ci
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d tenant_flow_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: synthetic_only_pg
+      PGDATABASE: tenant_flow_ci
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create synthetic old tenant/channel/conversation shapes
+        run: psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-live-shape-bootstrap.sql
+      - name: Install default-OFF server switches into disposable database
+        run: psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028170000_automation_flow_switches.sql
+      - name: Install tenant-bound runtime and prove migration is re-runnable
+        run: |
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028180000_flow_runtime_tenant_bound.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028180000_flow_runtime_tenant_bound.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/verification/20261028180000_flow_runtime_tenant_bound.readonly.sql
+      - name: Test wrong tenant/account/conversation platform, replay and owner RLS
+        run: psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-live-tenant-bound.test.sql
+      - name: Refuse rollback when flow data exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          if psql -X -v ON_ERROR_STOP=1 -f supabase/rollbacks/20261028180000_flow_runtime_tenant_bound.rollback.sql; then
+            echo 'ERROR: erased non-empty flow tables'
+            exit 1
+          fi
+          test "$(psql -XAtq -c "SELECT count(*) FROM public.automation_flow_outbox")" = "1"
+          echo 'PASS: nonempty flow outbox preserved'
+      - name: Empty test-only flow schema and rollback without touching old tables
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql -X -v ON_ERROR_STOP=1 -c "TRUNCATE public.automation_flow_metrics,public.automation_flow_outbox,public.automation_flow_runs,public.automation_flow_event_receipts,public.automation_flow_activations,public.automation_flow_publications"
+          psql -X -v ON_ERROR_STOP=1 -f supabase/rollbacks/20261028180000_flow_runtime_tenant_bound.rollback.sql
+          test "$(psql -XAtq -c "SELECT to_regclass('public.automation_flow_runs') IS NULL")" = "t"
+          test "$(psql -XAtq -c "SELECT count(*) FROM public.channel_accounts")" = "3"
+          test "$(psql -XAtq -c "SELECT count(*) FROM public.conversations")" = "3"
+          echo 'PASS: rollback removed only empty newly created flow tables'
+      - name: Reject an unrecognized trigger function before touching existing tables
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql -X -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE FUNCTION public.reject_automation_flow_revision_mutation()
+            RETURNS trigger LANGUAGE plpgsql AS $fn$
+          BEGIN
+            RAISE EXCEPTION 'owned_by_another_feature';
+          END
+          $fn$;
+          SQL
+          if psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028180000_flow_runtime_tenant_bound.sql; then
+            echo 'ERROR: migration replaced unrelated function' >&2
+            exit 1
+          fi
+          test "$(psql -XAtq -c "SELECT to_regclass('public.automation_flow_publications') IS NULL")" = "t"
+          test "$(psql -XAtq -c "SELECT COUNT(*) FROM public.channel_accounts")" = "3"
+          echo "PASS: unrelated trigger function and old channel rows preserved"
