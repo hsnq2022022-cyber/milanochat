@@ -38,7 +38,7 @@ Deno.serve(async req=>{
  if(ge||g?.enabled!==true)return blocked();
  const {data:items,error:listError}=await sb.from("automation_flow_outbox")
   .select("id,tenant_id,run_id,delivery_status,effect_kind,payload,outgoing_message_id")
-  .eq("delivery_status","pending").eq("effect_kind","message")
+  .eq("delivery_status","pending").in("effect_kind",["message","question"])
   .order("created_at",{ascending:true}).limit(10);
  if(listError)return json({error:"Outbox lookup failed"},503);
  const outcomes:Record<string,number>={};
@@ -76,8 +76,14 @@ Deno.serve(async req=>{
    const recipient=recipientRaw.slice(expectedPrefix.length+1);
    // Do not allow the AI prompt to dictate recipient, account, URL or tenant.
    const payload=effect.payload;
-   if(!payload||typeof payload!=="object"||payload.kind!=="message"){
+   if(!payload||typeof payload!=="object"||payload.kind!==effect.effect_kind){
     report("invalid");continue;
+   }
+   if(effect.effect_kind==="question" &&
+      (env("FLOW_RICH_BUTTONS_ENABLED")!=="true" ||
+       !["instagram","facebook"].includes(account.platform) ||
+       payload.inputMode!=="buttons")){
+    report("blocked");continue;
    }
    let messageText=typeof payload.text==="string"?payload.text.trim():"";
    if(payload.source==="knowledge_ai"){
@@ -91,6 +97,11 @@ Deno.serve(async req=>{
     },question,openAIKnowledgeDependencies())??"";
    }
    if(!messageText||messageText.length>4000){report("invalid");continue;}
+   const quickReplies=effect.effect_kind==="question" &&
+     Array.isArray(payload.choices)&&Array.isArray(payload.choiceIds)&&
+     payload.choiceIds.length===payload.choices.length?
+     payload.choices.map((label:unknown,i:number)=>({id:payload.choiceIds[i],label})):undefined;
+   if(effect.effect_kind==="question" && !quickReplies){report("invalid");continue;}
    const token=account.platform==="whatsapp"?
     (env("WA_ACCESS_TOKEN")||env("WHATSAPP_ACCESS_TOKEN")):
     await decryptAccountToken(String(account.access_token_encrypted??""),fieldKey);
@@ -105,7 +116,7 @@ Deno.serve(async req=>{
     },
     send:()=>sendProviderMessage({
      platform:account.platform,externalId:String(account.external_id??""),
-     token,recipient,text:messageText
+     token,recipient,text:messageText,quickReplies
     }),
     confirm:async(status,providerId)=>{
      const {data,error}=await sb.rpc("flow_finish_outbox_delivery",{
