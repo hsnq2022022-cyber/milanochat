@@ -27,17 +27,22 @@ Current production is intentionally unchanged: `milan-api` v101, global flow OFF
 
 ## Critical: NEVER merge this candidate directly into main in one step
 
-Current `.github/workflows/deploy-functions.yml` runs on ALL
-`supabase/functions/**` pushes to main and deploys several Edge Functions,
-including `milan-api`. A direct merge would AUTOMATICALLY deploy the new
-webhook code before GO-D in-flight drain/rollback testing and could alter
-billing/live messages. Merging `src/**` also triggers GitHub Pages.
+The CURRENT main workflow `.github/workflows/deploy-functions.yml` runs on
+`supabase/functions/**` pushes and automatically redeploys multiple Edge
+Functions. This candidate **stages a replacement of that workflow** that is
+manual-only, requires an explicit string input and a protected GitHub
+Environment; it is NOT on main. Before any merge, verify GitHub will use the
+protected candidate YAML and no legacy bulk deploy will start. Do not rely
+on a [skip ci] message as the sole deployment guard. Merging `src/**`
+also triggers GitHub Pages (frontend UI remains gated by env).
 
 **Safe approval sequence**:
 1. Review this candidate + isolated CI. Confirm backup and exact GitHub
    Environment protection (Required reviewers, selected branch `main`).
-2. Separate GO to protect/disable legacy bulk Edge push deployment BEFORE
-   any `supabase/functions/**` commit reaches main.
+2. Separate GO to review and move the manual-only legacy Edge deploy
+   guard in `.github/workflows/deploy-functions.yml` BEFORE allowing any
+   `supabase/functions/**` source into main. Verify on GitHub that no
+   automatic bulk Edge deployment is triggered.
 3. Separate GO-R for protected manual deployment of `milan-api` with flags
    OFF, from pinned source, and verified 101 restoration on failure. Validate
    real Auth + HTTP with test-only fixtures and exact cleanup.
