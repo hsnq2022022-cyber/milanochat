@@ -56,6 +56,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # The synthetic fixture omits production's existing service_role grants.
+          psql -X -v ON_ERROR_STOP=1 -c "GRANT SELECT ON public.tenants TO service_role"
           psql -XAtq -v ON_ERROR_STOP=1 -f tests/sql/flow-publication-rate-parallel.sql > /tmp/rate-left.out &
           left=$!
           psql -XAtq -v ON_ERROR_STOP=1 -f tests/sql/flow-publication-rate-parallel.sql > /tmp/rate-right.out &
