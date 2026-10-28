@@ -46,3 +46,12 @@
 3. Deploy separate authenticated, test-only publication endpoint after a third GO, with server-computed permissions.
 4. Integrate signed inbound -> one responder -> atomic receipt/outbox behind OFF flags; test with fake provider and test-owned accounts.
 5. Fix real Meta/widget billing and retry, test rollback, then separately approve production activation/website deployment.
+
+## 2026-10-28 release-gate recheck against actual production
+
+- Stage 1 was applied with prior explicit owner GO: Supabase recorded version `20261028155425` (`automation_flow_switches`). Live read-only query confirms both switches exist, RLS is ON, `anon` and `authenticated` cannot update either table, global OFF, **0** configured/enabled tenants.
+- Stage-2 runtime tables remain **absent** in production; this exact migration has NOT been run and needs a separate GO.
+- Live preflight found no existing conflicting `channel_accounts_flow_owner_uq`, `conversations_flow_owner_uq` or `reject_automation_flow_revision_mutation()`.
+- The migration now rejects any unrelated existing index/function with the same names, with explicit creation markers. Rollback checks the immutable-trigger function marker before removing it; preserves existing-table composite indexes even after safely removing empty new flow tables.
+- Latest tested branch commit `e63990197c45d64fb2ad320674019b6b7dddf2c9`: [GitHub Actions #40724819573](https://github.com/hsnq2022022-cyber/milanochat/actions/runs/40724819573) **SUCCESS**. Tests exercised tenant/account/conversation FK denials, provider replay and outbox uniqueness, revision immutability, RLS, full transaction rollback with no data loss, repeat migration, and refusal to overwrite an unrelated pre-existing trigger function.
+- PR #138 (separate future management RPCs + new Edge Function) passed [CI #40723475333](https://github.com/hsnq2022022-cyber/milanochat/actions/runs/40723475333) on its latest head, but is NOT deployed and requires a different approval; this PR's GO does not authorize #138.
