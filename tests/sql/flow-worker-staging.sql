@@ -7,6 +7,7 @@ alter table flow_ci.outbox
  add column lease_token uuid,
  add column lease_expires_at timestamptz,
  add column retry_at timestamptz,
+ add column messaging_window_closes_at timestamptz,
  add column provider_message_id text,
  add column charged_at timestamptz;
 
@@ -34,6 +35,7 @@ begin
      lease_token=p_token,lease_expires_at=clock_timestamp()+interval '30 seconds'
  where o.tenant_id=p_tenant and o.id=p_outbox
    and o.state='pending' and o.attempts=0
+   and o.messaging_window_closes_at>clock_timestamp()
    and exists(
      select 1 from flow_ci.runs r
      join flow_ci.tenants t on t.id=r.tenant_id
@@ -77,6 +79,7 @@ as $$
    where o.tenant_id=p_tenant and o.id=p_outbox
      and o.state='leased' and o.lease_token=p_token
      and o.lease_expires_at>clock_timestamp()
+     and o.messaging_window_closes_at>clock_timestamp()
      and t.flows_enabled and g.flows_enabled and t.credits>0
      and a.agent_enabled and a.auto_reply and a.token_valid
      and not c.human_takeover and act.active
@@ -91,7 +94,8 @@ create function flow_ci.record_provider(
 as $$
 declare changed uuid;
 begin
- if p_result not in ('accepted','unknown','definitely_rejected') then return false;end if;
+ if p_result is null or p_result not in ('accepted','unknown','definitely_rejected')
+ then return false;end if;
  if p_result='accepted' and
    (p_provider_id is null or length(p_provider_id) not between 1 and 256)
    then return false;end if;
