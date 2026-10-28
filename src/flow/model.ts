@@ -322,6 +322,7 @@ export function importFlow(raw:unknown):FlowDocument|null {
       if(!item||typeof item!=="object")return null;const n=item as Record<string,unknown>,kind=kindOf(n.type);
       const options:Array<Choice>=Array.isArray(n.choices)?n.choices.map((c:unknown)=>{const t=c as Record<string,unknown>;return {id:safeString(t.id,id()),label:safeString(t.text),weight:kind==="randomizer"?Number(t.text)||0:undefined};}):[];
       const node=makeNode(kind,{x:Number(n.x)||0,y:Number(n.y)||0},{title:safeString(n.title,LABELS[kind]),text:safeString(n.text),image:safeString(n.image),keywords:safeString(n.keyword),
+        conditionValue:kind==="condition"?safeString(n.keyword).slice(0,250):"",
         options,delayValue:typeof n.delay==="number"?n.delay:1,delayUnit:"seconds"});
       node.id=safeString(n.id,id());nodes.push(node);
     }
@@ -330,9 +331,31 @@ export function importFlow(raw:unknown):FlowDocument|null {
   }
   return null;
 }
+type DraftBackup = {key:string;sourceKey:string;raw:string};
+let invalidDraftBackups:DraftBackup[]=[];
+export function getInvalidDraftBackups():DraftBackup[]{
+  return invalidDraftBackups.map(b=>({...b}));
+}
+function protectInvalidDraft(sourceKey:string,raw:string):void{
+  const key="social_flow_backup_"+new Date().toISOString()+"_"+sourceKey;
+  invalidDraftBackups.push({key,sourceKey,raw});
+  try{localStorage.setItem(key,raw);}catch{
+    // Original stays untouched; the UI can still download the in-memory raw copy.
+  }
+}
 export function loadFlow():FlowDocument {
-  try{const modern=localStorage.getItem(SAVE_KEY);if(modern){const d=importFlow(JSON.parse(modern));if(d)return d;}
-    const old=localStorage.getItem(LEGACY_KEY);if(old){const d=importFlow(JSON.parse(old));if(d)return d;}
-  }catch{/* Browser storage may be blocked or malformed. */}
+  invalidDraftBackups=[];
+  for(const key of [SAVE_KEY,LEGACY_KEY]){
+    let raw:string|null=null;
+    try{raw=localStorage.getItem(key);}catch{continue;}
+    if(!raw)continue;
+    try {
+      const document=importFlow(JSON.parse(raw));
+      if(document)return document;
+    }catch{
+      // Malformed JSON: preserve its exact raw bytes before fallback.
+    }
+    protectInvalidDraft(key,raw);
+  }
   return exampleFlow();
 }
