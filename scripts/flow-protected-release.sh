@@ -50,7 +50,8 @@ restore(){
  if [[ "$DEPLOYED_MILAN" == true ]];then
   echo "Restoring saved v101 SOURCE as new deployment version"
   supabase secrets set WIDGET_BILLING_V2_ENABLED=false DELIVERY_TRACKING_V1_ENABLED=false \
-    FLOW_PUBLICATION_CANARY_READY=false --project-ref "$PROJECT" >/dev/null
+    FLOW_PUBLICATION_CANARY_READY=false --project-ref "$PROJECT" >/dev/null ||
+    { echo "CRITICAL: could not verify recovery feature flags OFF";failed=1; }
   (cd "$WORK/backup" && supabase functions deploy milan-api --no-verify-jwt --project-ref "$PROJECT") ||
    { echo "CRITICAL: restoring saved v101 source failed";return 1;}
   (cd "$WORK/verify" && supabase functions download milan-api --project-ref "$PROJECT") ||
@@ -117,7 +118,7 @@ if [[ "$MODE" == "dry-run" ]];then
  BASELINED=true
  node scripts/flow-protected-live-smoke.mjs setup
  node scripts/flow-protected-live-smoke.mjs before
- echo "PASS PREDEPLOY DRY-RUN: fixture operations succeeded; no deployment made"
+ echo "DRY-RUN: fixture HTTP/SQL succeeded; awaiting EXIT cleanup and count comparison"
  exit 0  # EXIT trap verifies and prints before/after counts
 fi
 
