@@ -81,6 +81,10 @@ BEGIN
       'member_invite','publish_flow','credit_manage'
     )
  THEN RETURN false; END IF;
+ -- Owner/admin are never exempt from a tenant/conversation mismatch.
+ IF p_conversation IS NOT NULL AND NOT EXISTS(
+   SELECT 1 FROM public.conversations c WHERE c.id=p_conversation
+     AND c.tenant_id=p_tenant) THEN RETURN false; END IF;
  IF EXISTS(SELECT 1 FROM public.tenants t
    WHERE t.id=p_tenant AND t.user_id=p_actor)
  THEN RETURN true; END IF;
