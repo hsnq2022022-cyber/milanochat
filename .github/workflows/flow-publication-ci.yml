@@ -52,6 +52,23 @@ jobs:
         run: |
           psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-publication-live.test.sql
           psql -X -v ON_ERROR_STOP=1 -f supabase/verification/20261028190000_flow_publication_server_rpcs.readonly.sql
+      - name: Parallel publishers cannot allocate duplicate revision numbers
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql -X -v ON_ERROR_STOP=1 -c "UPDATE public.channel_accounts SET is_active=true WHERE id='11111111-1111-4111-8111-111111111111'"
+          psql -XAtq -v ON_ERROR_STOP=1 -f tests/sql/flow-publication-concurrent.sql > /tmp/publish-one.out &
+          one=$!
+          psql -XAtq -v ON_ERROR_STOP=1 -f tests/sql/flow-publication-concurrent.sql > /tmp/publish-two.out &
+          two=$!
+          wait "$one"
+          wait "$two"
+          cat /tmp/publish-one.out /tmp/publish-two.out
+          test "$(cat /tmp/publish-one.out /tmp/publish-two.out | grep -cx '1')" = "1"
+          test "$(cat /tmp/publish-one.out /tmp/publish-two.out | grep -cx '2')" = "1"
+          result="$(psql -XAtq -c "SELECT count(*)||'|'||min(revision)||'|'||max(revision) FROM public.automation_flow_publications WHERE flow_key='concurrent'")"
+          test "$result" = "2|1|2"
+          echo "PASS: two concurrent publishers produced distinct immutable revisions"
       - name: Rollback disables only the management RPCs, retaining versions
         run: |
           psql -X -v ON_ERROR_STOP=1 -f supabase/rollbacks/20261028190000_flow_publication_server_rpcs.rollback.sql
