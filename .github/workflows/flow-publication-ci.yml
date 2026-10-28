@@ -1,0 +1,79 @@
+name: Flow publishing API and atomic revision tests
+
+on:
+  push:
+    branches: [feature/flows-live-publication-api]
+  pull_request:
+    paths:
+      - "src/flow/serverPublicationValidation*"
+      - "supabase/functions/flow-publication/**"
+      - "supabase/migrations/20261028190000_flow_publication_server_rpcs.sql"
+      - "supabase/rollbacks/20261028190000_flow_publication_server_rpcs.rollback.sql"
+      - "tests/sql/flow-publication-live.test.sql"
+      - ".github/workflows/flow-publication-ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  publication-postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: synthetic_publishing_only
+          POSTGRES_DB: flow_pub_ci
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d flow_pub_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: synthetic_publishing_only
+      PGDATABASE: flow_pub_ci
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create synthetic real-shaped tenants and channels
+        run: psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-live-shape-bootstrap.sql
+      - name: Install OFF switches and tenant-bound runtime only in PostgreSQL CI
+        run: |
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028170000_automation_flow_switches.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028180000_flow_runtime_tenant_bound.sql
+      - name: Create atomic publication, activation and rollback RPCs
+        run: psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028190000_flow_publication_server_rpcs.sql
+      - name: Verify owner isolation, immutable revisions, canary, deactivation and privileges
+        run: |
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-publication-live.test.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/verification/20261028190000_flow_publication_server_rpcs.readonly.sql
+      - name: Rollback disables only the management RPCs, retaining versions
+        run: |
+          psql -X -v ON_ERROR_STOP=1 -f supabase/rollbacks/20261028190000_flow_publication_server_rpcs.rollback.sql
+          test "$(psql -XAtq -c "SELECT to_regprocedure('public.flow_publish_revision(uuid,uuid,text,text,uuid,jsonb)') IS NULL")" = "t"
+          test "$(psql -XAtq -c "SELECT count(*) FROM public.automation_flow_publications")" = "2"
+          echo 'PASS: RPC-only rollback preserved historical published revisions'
+
+  publication-edge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: "22", cache: npm}
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Test graph, channel and server-only activation guard
+        run: node --experimental-strip-types --test src/flow/serverPublicationValidation.test.ts
+      - name: Typecheck flow modules
+        run: npx tsc --noEmit -p tsconfig.flows.json
+      - name: Build frontend
+        run: npm run build
+      - uses: denoland/setup-deno@v2
+        with: {deno-version: v2.x}
+      - name: Deno check real (not deployed) publication Edge Function
+        run: deno check --node-modules-dir=auto supabase/functions/flow-publication/index.ts
