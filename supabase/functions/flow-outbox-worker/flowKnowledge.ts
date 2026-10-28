@@ -45,8 +45,19 @@ export async function answerWithVerifiedKnowledge(
   .select("id,tenant_id,content,source_id").eq("tenant_id",scope.tenantId)
   .in("id",ids).limit(5);
  if(ownershipError)throw Error("RAG ownership lookup failed");
- const known=new Map((owned??[]).filter((r:{tenant_id:string})=>
-  r.tenant_id===scope.tenantId).map((r:{id:string;content:string})=>[r.id,r.content]));
+ const verifiedRows=(owned??[]).filter((r:{tenant_id:string;source_id:string|null})=>
+  r.tenant_id===scope.tenantId && typeof r.source_id==="string");
+ const sourceIds=[...new Set(verifiedRows.map((r:{source_id:string})=>r.source_id))];
+ if(!sourceIds.length)return null;
+ const {data:sources,error:sourceError}=await sb.from("knowledge_sources")
+  .select("id,tenant_id,status").eq("tenant_id",scope.tenantId)
+  .eq("status","indexed").in("id",sourceIds).limit(5);
+ if(sourceError)throw Error("RAG source approval lookup failed");
+ const validSources=new Set((sources??[]).filter((r:{tenant_id:string;status:string})=>
+  r.tenant_id===scope.tenantId&&r.status==="indexed")
+  .map((r:{id:string})=>r.id));
+ const known=new Map(verifiedRows.filter((r:{source_id:string})=>
+   validSources.has(r.source_id)).map((r:{id:string;content:string})=>[r.id,r.content]));
  const evidence=candidates.filter(x=>known.get(x.id)===x.content);
  const auth=authorizeFlowAI({
   verifiedTenantId:scope.tenantId,publishedFlowTenantId:scope.publishedTenantId,
