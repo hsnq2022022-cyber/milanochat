@@ -1,0 +1,210 @@
+name: Full prelaunch integration — disposable CI ONLY
+# This workflow uses NO production credentials or deploy commands.
+on:
+  push:
+    branches: [quality/prelaunch-full-integration-gate-20261029]
+  pull_request:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "supabase/functions/**"
+      - "supabase/migrations/**"
+      - "tests/**"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/prelaunch-full-integration-ci.yml"
+permissions:
+  contents: read
+jobs:
+  instagram-claim-pg:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: ig_prelaunch
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: disposable_ci_only
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d ig_prelaunch"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGDATABASE: ig_prelaunch
+      PGUSER: postgres
+      PGPASSWORD: disposable_ci_only
+    steps:
+      - uses: actions/checkout@v4
+      - name: Isolated database and exclusive sender claim
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/fixtures/flow-live-shape-bootstrap.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/fixtures/installed-flow-switches.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/fixtures/installed-flow-runtime.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-exclusive-claim-bootstrap.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028220000_webhook_exclusive_claim.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028221000_consume_reply_atomic.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-exclusive-claim.test.sql
+      - name: Two writers, exactly one durable claim
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql -X -v ON_ERROR_STOP=1 -c "INSERT INTO public.messages(id,tenant_id,conversation_id,direction,wa_message_id) VALUES('77777777-7777-4777-8777-777777777774','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','44444444-4444-4444-8444-444444444444','in','meta-concurrent')"
+          psql -XAtq -v ON_ERROR_STOP=1 -f tests/sql/flow-exclusive-concurrent.sql > /tmp/c1 &
+          first=$!
+          psql -XAtq -v ON_ERROR_STOP=1 -f tests/sql/flow-exclusive-concurrent.sql > /tmp/c2 &
+          second=$!
+          wait "$first"
+          wait "$second"
+          test "$(cat /tmp/c1 /tmp/c2 | grep -cx 'won')" = 1
+          test "$(cat /tmp/c1 /tmp/c2 | grep -cx 'lost')" = 1
+          test "$(psql -XAtq -c "SELECT count(*) FROM public.automation_message_claims WHERE provider_event_id='meta-concurrent'")" = 1
+  staff-delivery-pg:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: staff_review
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: disposable_ci_only
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d staff_review"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: disposable_ci_only
+    steps:
+      - uses: actions/checkout@v4
+      - name: Staff RLS and cross-store isolation
+        shell: bash
+        env:
+          PGDATABASE: staff_review
+        run: |
+          set -euo pipefail
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/fixtures/flow-live-shape-bootstrap.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-staff-membership-bootstrap.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028227000_tenant_staff_memberships.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-staff-membership.test.sql
+      - name: Outbox, tags, and provider message receipts
+        shell: bash
+        run: |
+          set -euo pipefail
+          createdb flow_internal_review
+          export PGDATABASE=flow_internal_review
+          sed '/^CREATE ROLE /d' tests/sql/fixtures/flow-live-shape-bootstrap.sql | psql -X -v ON_ERROR_STOP=1
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-staff-membership-bootstrap.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/fixtures/installed-flow-switches.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/fixtures/installed-flow-runtime.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-exclusive-claim-bootstrap.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028220000_webhook_exclusive_claim.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028224000_delivery_attempts.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028225000_flow_runtime_advance.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-phase4-runtime-bootstrap.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-outbox-delivery-bootstrap.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028226000_flow_outbox_delivery_attempts.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028227000_tenant_staff_memberships.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028228000_flow_internal_actions.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028229000_flow_meta_delivery_receipts.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-internal-actions.test.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-meta-receipts.test.sql
+  wayl-ledger-pg:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: payment_review
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: disposable_ci_only
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d payment_review"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: disposable_ci_only
+      PGDATABASE: payment_review
+    steps:
+      - uses: actions/checkout@v4
+      - name: Atomic grants, duplicates, refunds and privilege ACLs
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/wayl-atomic-bootstrap.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028230000_wayl_atomic_topup.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/wayl-atomic.test.sql
+  node-deno-browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Signature, responder, runtimes, Outbox, Wayl contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --experimental-strip-types --test tests/flow-exclusive-claim.test.ts
+          node --experimental-strip-types --test tests/meta-signature.test.ts
+          node --experimental-strip-types --test tests/whatsapp-signature.test.ts
+          node --experimental-strip-types --test tests/legacy-inbound-insert.test.ts
+          node --experimental-strip-types --test tests/flow-shadow-gate.test.ts
+          node --experimental-strip-types --test tests/flow-shadow-integration.test.ts
+          node --experimental-strip-types --test tests/flow-simple-instagram-text.test.ts
+          node --experimental-strip-types --test src/flow/serverPublicationValidation.test.ts
+          node --experimental-strip-types --test tests/flow-outbox-worker.test.ts
+          node --experimental-strip-types --test tests/flow-rich-actions-meta.test.ts
+          node --experimental-strip-types --test src/flow/runtimeExtra.test.ts
+          node --experimental-strip-types --test tests/wayl-contract.test.ts
+      - name: Build and typecheck real frontend
+        run: |
+          npm run typecheck
+          npm run build
+      - name: Check release script syntax but NEVER execute it
+        run: |
+          bash -n scripts/flow-protected-release.sh
+          node --check scripts/flow-protected-live-smoke.mjs
+      - name: Browser dependencies
+        run: npx playwright install --with-deps chromium
+      - name: Phone width and RTL/English UI
+        run: npx playwright test -c playwright.config.ts tests/flow-mobile-locale.spec.ts
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Edge source compile (no Edge deploy)
+        run: |
+          deno check --node-modules-dir=auto supabase/functions/milan-api/index.ts
+          deno check --node-modules-dir=auto supabase/functions/flow-publication/index.ts
+          deno check --node-modules-dir=auto supabase/functions/flow-runtime-worker/index.ts
+          deno check --node-modules-dir=auto supabase/functions/flow-outbox-worker/index.ts
+          deno check --node-modules-dir=auto supabase/functions/flow-internal-worker/index.ts
+          deno check --node-modules-dir=auto supabase/functions/flow-staff-inbox/index.ts
+          deno check --node-modules-dir=auto supabase/functions/flow-delivery-review/index.ts
+          deno check --node-modules-dir=auto supabase/functions/topup-create/index.ts
+          deno check --node-modules-dir=auto supabase/functions/wayl-topup-webhook/index.ts
+      - name: Edge mock tests (no external provider or production DB)
+        run: |
+          deno test --allow-env --node-modules-dir=auto tests/flow-delivery-review.test.ts
+          deno test --allow-env --node-modules-dir=auto tests/flow-staff-inbox-http.test.ts
+          deno test --allow-env --node-modules-dir=auto tests/wayl-signature.test.ts
