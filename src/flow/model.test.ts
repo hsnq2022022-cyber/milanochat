@@ -32,6 +32,31 @@ test("imports previous version two drafts safely",()=>{
   assert.equal(result.nodes.length,2);
   assert.equal(result.edges[0].target,"b");
 });
+test("v2 condition import preserves its comparison value without losing the original node id",()=>{
+  const old={version:2,name:"legacy-condition",nodes:[
+    {id:"start",type:"trigger",x:0,y:0,keyword:"hello",choices:[]},
+    {id:"condition",type:"condition",x:0,y:120,keyword:"premium",choices:[]}
+  ],edges:[{id:"route",from:"start",port:"next",to:"condition"}]};
+  const restored=importFlow(old);
+  assert.ok(restored);
+  const condition=restored.nodes.find(n=>n.id==="condition");
+  assert.ok(condition);
+  assert.equal(condition.data.conditionValue,"premium");
+  assert.equal(restored.edges[0].id,"route");
+  assert.equal(restored.edges[0].target,"condition");
+});
+
+test("v2 condition import prefers an explicit comparison value and leaves non-condition nodes unchanged",()=>{
+  const old={version:2,name:"legacy",nodes:[
+    {id:"c",type:"condition",x:0,y:0,keyword:"old",conditionValue:"new",choices:[]},
+    {id:"m",type:"message",x:0,y:100,text:"Hi",keyword:"unrelated",choices:[]}
+  ],edges:[]};
+  const restored=importFlow(old);
+  assert.ok(restored);
+  assert.equal(restored.nodes.find(n=>n.id==="c")?.data.conditionValue,"new");
+  assert.equal(restored.nodes.find(n=>n.id==="m")?.data.conditionValue,"");
+});
+
 test("rejects invalid oversized and dangling imports",()=>{
   assert.equal(importFlow({version:3,name:"evil",nodes:[],edges:[]}),null);
   assert.equal(importFlow({version:3,name:"evil",nodes:exampleFlow().nodes,edges:[{source:"missing",target:"absent"}]}),null);
