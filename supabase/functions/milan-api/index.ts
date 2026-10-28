@@ -46,6 +46,7 @@ import { processExclusiveEvent } from "./exclusiveMessageClaim.ts";
 import { prepareSimpleFlowReply } from "./flowPrepareMessage.ts";
 import { chargeWidgetReply } from "./widgetCredit.ts";
 import { verifyMetaWebhookSignature } from "./metaSignature.ts";
+import { recordVerifiedMetaReceipts } from "./metaDeliveryReceipts.ts";
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
@@ -2474,6 +2475,20 @@ Deno.serve(async (req) => {
           return json({
             received: true,
           });
+        }
+
+        // Already passed X-Hub-Signature-256 verification above.
+        // New delivery receipts are entirely dormant until an independent GO.
+        if (env("FLOW_META_RECEIPTS_ENABLED")==="true") {
+          try {
+            await recordVerifiedMetaReceipts(sb, body);
+          } catch (e) {
+            console.error("[flow-meta-receipts] verified receipt persistence failed",
+              e instanceof Error ? e.name : "unknown");
+            // Do not acknowledge a signed batch whose receipt failed storage.
+            // Existing inbound idempotency protects later Meta redelivery.
+            return json({error:"Delivery receipt temporarily unavailable"},503);
+          }
         }
 
         for (const entry of body.entry ?? []) {
