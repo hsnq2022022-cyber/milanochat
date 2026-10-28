@@ -73,7 +73,7 @@ jobs:
         run: |
           psql -X -v ON_ERROR_STOP=1 -f supabase/rollbacks/20261028190000_flow_publication_server_rpcs.rollback.sql
           test "$(psql -XAtq -c "SELECT to_regprocedure('public.flow_publish_revision(uuid,uuid,text,text,uuid,jsonb)') IS NULL")" = "t"
-          test "$(psql -XAtq -c "SELECT count(*) FROM public.automation_flow_publications")" = "2"
+          test "$(psql -XAtq -c "SELECT count(*) FROM public.automation_flow_publications")" = "4"
           echo 'PASS: RPC-only rollback preserved historical published revisions'
 
   publication-edge:
