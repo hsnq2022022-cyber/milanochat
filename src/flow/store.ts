@@ -59,7 +59,7 @@ export const useFlowStore=create<FlowState>((set,get)=>({
       if(s.flows.length>=30)return s;
       const current=snapshotLibrary(s.activeFlowId,s.doc,s.flows);
       const doc=blankFlow(name||"تدفق جديد "+(current.flows.length+1),fromScratch);
-      return {doc,activeFlowId:id,flows:[...current.flows,{id,doc,enabled:false}],selectedId:null,past:[],future:[],pastEnabled:[],futureEnabled:[]};
+      return {doc,activeFlowId:id,flows:[...current.flows,{id,doc,enabled:false}],selectedId:null,past:[],future:[],pastEnabled:[],futureEnabled:[],lastEdit:null};
     });
     return id;
   },
@@ -80,7 +80,7 @@ export const useFlowStore=create<FlowState>((set,get)=>({
     const id=crypto.randomUUID();
     const doc=structuredClone(s.doc);
     doc.name=s.doc.name+" (نسخة)";
-    set({doc,activeFlowId:id,flows:[...snapshotLibrary(s.activeFlowId,s.doc,s.flows).flows,{id,doc,enabled:false}],selectedId:null,past:[],future:[],pastEnabled:[],futureEnabled:[]});
+    set({doc,activeFlowId:id,flows:[...snapshotLibrary(s.activeFlowId,s.doc,s.flows).flows,{id,doc,enabled:false}],selectedId:null,past:[],future:[],pastEnabled:[],futureEnabled:[],lastEdit:null});
     return id;
   },
   switchFlow:(id)=>{
@@ -89,7 +89,7 @@ export const useFlowStore=create<FlowState>((set,get)=>({
     const target=s.flows.find(flow=>flow.id===id);
     if(!target)return false;
     const current=snapshotLibrary(s.activeFlowId,s.doc,s.flows);
-    set({activeFlowId:id,flows:current.flows,doc:target.doc,selectedId:null,past:[],future:[],pastEnabled:[],futureEnabled:[]});
+    set({activeFlowId:id,flows:current.flows,doc:target.doc,selectedId:null,past:[],future:[],pastEnabled:[],futureEnabled:[],lastEdit:null});
     return true;
   },
   deleteFlow:(id)=>{
@@ -98,7 +98,7 @@ export const useFlowStore=create<FlowState>((set,get)=>({
     const flows=snapshotLibrary(s.activeFlowId,s.doc,s.flows).flows.filter(flow=>flow.id!==id);
     const activeFlowId=s.activeFlowId===id?flows[0].id:s.activeFlowId;
     const doc=s.activeFlowId===id?flows[0].doc:s.doc;
-    set({flows,activeFlowId,doc,selectedId:null,past:[],future:[],pastEnabled:[],futureEnabled:[]});
+    set({flows,activeFlowId,doc,selectedId:null,past:[],future:[],pastEnabled:[],futureEnabled:[],lastEdit:null});
     return true;
   },
   restoreCloudCopy:(source,copyId)=>{
