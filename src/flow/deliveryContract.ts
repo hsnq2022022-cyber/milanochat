@@ -97,6 +97,7 @@ export function claimDelivery(
   record:DeliveryRecord, gate:TrustedDeliveryGate, nowMs:number, leaseToken:string
 ):ClaimResult {
   if(!Number.isSafeInteger(nowMs)||nowMs<0 ||
+     !Number.isSafeInteger(nowMs+SEND_LEASE_MS) ||
      !validId(leaseToken,128))return {decision:"denied",record,reason:"invalid_record"};
 
   // An expired lease may have already been accepted by Meta. Do not resend.
@@ -108,8 +109,13 @@ export function claimDelivery(
   }
   if(record.status!=="pending"&&record.status!=="retry_wait")
     return {decision:"skipped",reason:"terminal",record};
-  if(record.status==="retry_wait" && (record.retryAt===null||nowMs<record.retryAt))
+  if(record.status==="retry_wait" && (record.retryAt===null||!Number.isSafeInteger(record.retryAt)||nowMs<record.retryAt))
     return {decision:"skipped",reason:"not_due",record};
+  // A pending record may be sent exactly once; subsequent attempts must carry
+  // an explicit definitely-rejected retry_wait state.
+  if((record.status==="pending"&&record.attempts!==0) ||
+     (record.status==="retry_wait"&&record.attempts===0))
+    return {decision:"denied",reason:"invalid_record",record};
 
   const denial=deliveryGate(record,gate);
   if(denial)return {decision:"denied",reason:denial,record};
