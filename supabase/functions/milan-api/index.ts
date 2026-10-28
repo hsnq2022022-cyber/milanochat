@@ -587,11 +587,26 @@ class WaAuthError extends Error {
   }
 }
 
+/** Provider-success body only; never persist tokens or full response. */
+async function providerIdFromResponse(res:Response,channel:"whatsapp"|"instagram"|"facebook")
+ :Promise<string|null>{
+ try{
+  const raw:unknown=await res.json();
+  if(!raw||typeof raw!=="object")return null;
+  const body=raw as Record<string,unknown>;
+  const messages=body.messages;
+  const item=Array.isArray(messages)?messages[0]:null;
+  const id=channel==="whatsapp"&&item&&typeof item==="object"?
+    (item as Record<string,unknown>).id:(body.message_id??body.id);
+  return typeof id==="string"&&id.length>0&&id.length<=255?id:null;
+ }catch{return null;}
+}
+
 async function sendWa(
   phoneId: string,
   to: string,
   text: string
-) {
+): Promise<string|null> {
   const token = waToken();
 
   if (!token) {
@@ -653,6 +668,7 @@ async function sendWa(
 
     throw new Error(`wa send ${res.status}: ${raw}`);
   }
+  return providerIdFromResponse(res,"whatsapp");
 }
 
 async function boundPhone(
@@ -1330,7 +1346,7 @@ async function sendMetaDirectMessage(opts: {
   token: string;
   recipientId: string;
   text: string;
-}): Promise<void> {
+}): Promise<string|null> {
   const {
     channel,
     externalId,
@@ -1400,6 +1416,7 @@ async function sendMetaDirectMessage(opts: {
       `${channel} send ${res.status}: ${await res.text()}`
     );
   }
+  return providerIdFromResponse(res,channel);
 }
 
 /**
@@ -1759,6 +1776,7 @@ async function handleIncomingWebhookMessage(
   // The exclusive DB claim is ALWAYS required for webhook auto-replies.
   // The flow engine is an optional prepared message-only subset; any engine
   // error or OFF switch resolves to legacy AI BEFORE choosing the route.
+  const deliveryTracking=env("DELIVERY_TRACKING_V1_ENABLED")==="true";
   const outcome = await processExclusiveEvent({
     prepareFlow: () => prepareSimpleFlowReply(
       sb, tenantId, String(account.id), channel
@@ -1800,20 +1818,51 @@ async function handleIncomingWebhookMessage(
     send: async (text) => {
       if (channel === "whatsapp") {
         if (!phoneId) throw new Error("missing WhatsApp phone ID");
-        await sendWa(phoneId, chatId.replace(/^whatsapp:/, ""), text);
-        return;
+        const providerMessageId=await sendWa(phoneId, chatId.replace(/^whatsapp:/, ""), text);
+        return {providerMessageId};
       }
       if (!account.access_token_encrypted) throw new Error("missing account token");
       const token = await decryptField(account.access_token_encrypted);
       if (!token) throw new Error("empty account token");
-      await sendMetaDirectMessage({
+      const providerMessageId=await sendMetaDirectMessage({
         channel,
         externalId: String(account.external_id),
         token,
         recipientId: chatId.split(":").slice(1).join(":"),
         text,
       });
+      return {providerMessageId};
     },
+    ...(deliveryTracking?{delivery:{
+      begin:async (claimId:string,outgoingId:string,text:string)=>{
+        const hashBytes=await crypto.subtle.digest("SHA-256",
+          new TextEncoder().encode(outgoingId+":"+text));
+        const fingerprint=Array.from(new Uint8Array(hashBytes))
+          .map(b=>b.toString(16).padStart(2,"0")).join("");
+        const {data,error}=await sb.rpc("flow_begin_delivery",{
+          p_claim_id:claimId,p_request_fingerprint:fingerprint
+        });
+        if(error||data!==true){
+          console.error("[delivery] reservation refused",{
+            claimId,messageId:outgoingId,code:error?.code??"duplicate_or_invalid"
+          });
+          return false;
+        }
+        return true;
+      },
+      finish:async (claimId:string,status:"confirmed"|"uncertain",providerId:string|null)=>{
+        const {data,error}=await sb.rpc("flow_finish_delivery",{
+          p_claim_id:claimId,p_status:status,p_provider_message_id:providerId
+        });
+        if(error||data!==true){
+          console.error("[delivery] state update failed",{
+            claimId,status,code:error?.code??"invalid_transition"
+          });
+          return false;
+        }
+        return true;
+      }
+    }}:{}),
     persistSent: async (outgoingId, text) => {
       const { error } = await sb.from("messages").insert({
         id: outgoingId,
