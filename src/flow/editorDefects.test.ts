@@ -91,3 +91,38 @@ test("corrupt library/draft is preserved under an ISO-stamped backup key",()=>{
   }
  }finally{(globalThis as any).window=oldWindow;(globalThis as any).localStorage=oldStorage;}
 });
+
+test("switching flows resets text coalescing so first rename is undoable",t=>{
+ const a=fresh(),s=useFlowStore.getState();let clock=1000;
+ t.mock.method(Date,"now",()=>clock);
+ s.rename("A edited");
+ assert.equal(useFlowStore.getState().past.length,1);
+ const id=s.createFlow("B");
+ assert.ok(id);
+ assert.equal(useFlowStore.getState().lastEdit,null);
+ clock+=50;
+ useFlowStore.getState().rename("B edited");
+ assert.equal(useFlowStore.getState().past.length,1);
+ useFlowStore.getState().undo();
+ assert.equal(useFlowStore.getState().doc.name,"B");
+ const ok=useFlowStore.getState().switchFlow("test");
+ assert.equal(ok,true);
+ assert.equal(useFlowStore.getState().doc.name,"A edited");
+ clock+=50;
+ useFlowStore.getState().rename("A renamed again");
+ assert.equal(useFlowStore.getState().past.length,1);
+ useFlowStore.getState().undo();
+ assert.equal(useFlowStore.getState().doc.name,"A edited");
+});
+test("history edit streak is reset on duplication and deletion of flows",()=>{
+ fresh();
+ const state=useFlowStore.getState();
+ state.rename("changed");
+ assert.ok(useFlowStore.getState().lastEdit);
+ assert.ok(state.duplicateFlow());
+ assert.equal(useFlowStore.getState().lastEdit,null);
+ useFlowStore.getState().rename("new copy");
+ assert.ok(useFlowStore.getState().lastEdit);
+ assert.ok(useFlowStore.getState().deleteFlow(useFlowStore.getState().activeFlowId));
+ assert.equal(useFlowStore.getState().lastEdit,null);
+});
