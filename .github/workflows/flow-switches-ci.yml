@@ -66,3 +66,17 @@ jobs:
           psql -X -v ON_ERROR_STOP=1 -f supabase/rollbacks/20261028170000_automation_flow_switches.rollback.sql
           test "$(psql -XAtq -c "SELECT to_regclass('public.automation_flow_global_switch') IS NULL")" = "t"
           echo 'PASS: empty switch tables safely removed'
+      - name: Existing same-name table must be preserved, not reconfigured
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql -X -v ON_ERROR_STOP=1 -c "CREATE TABLE public.automation_flow_tenant_switches(legacy_value text NOT NULL)"
+          psql -X -v ON_ERROR_STOP=1 -c "INSERT INTO public.automation_flow_tenant_switches VALUES ('keep-me')"
+          psql -X -v ON_ERROR_STOP=1 -f supabase/verification/20261028170000_automation_flow_switches.preflight.readonly.sql
+          if psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028170000_automation_flow_switches.sql; then
+            echo 'ERROR: migration modified unrelated existing table' >&2
+            exit 1
+          fi
+          test "$(psql -XAtq -c 'SELECT legacy_value FROM public.automation_flow_tenant_switches')" = 'keep-me'
+          test "$(psql -XAtq -c \"SELECT to_regclass('public.automation_flow_global_switch') IS NULL\")" = 't'
+          echo 'PASS: colliding legacy table and contents left unchanged'
