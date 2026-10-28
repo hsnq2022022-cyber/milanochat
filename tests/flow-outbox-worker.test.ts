@@ -81,11 +81,18 @@ function knowledgeClient(tenant="A",content="Price is 1000 IQD for the item."){
    return {data:[{id:rowId,content,similarity:0.9}],error:null};
   },
   from:(table:string)=>{
-   assert.equal(table,"knowledge_chunks");
+   assert(["knowledge_chunks","knowledge_sources"].includes(table));
    const q={
-    select:()=>q,eq:(_field:string,id:string)=>{assert.equal(id,"A");return q;},
+    select:()=>q,
+    eq:(field:string,id:string)=>{
+     if(field==="tenant_id")assert.equal(id,"A");
+     if(field==="status")assert.equal(id,"indexed");
+     return q;
+    },
     in:()=>q,
-    limit:async()=>({data:[{id:rowId,tenant_id:tenant,content}],error:null})
+    limit:async()=>({data:table==="knowledge_chunks"?
+     [{id:rowId,tenant_id:tenant,content,source_id:"source-A"}]:
+     [{id:"source-A",tenant_id:tenant,status:"indexed"}],error:null})
    };return q;
   }
  };
