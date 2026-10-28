@@ -5,7 +5,24 @@
 BEGIN;
 
 DO $create$
+DECLARE
+  v_name text;
+  v_relation regclass;
 BEGIN
+  -- Reject unrelated/pre-existing tables before any DDL or GRANT. Names
+  -- alone never authorize this migration to take ownership of a table.
+  FOREACH v_name IN ARRAY ARRAY[
+    'automation_flow_global_switch','automation_flow_tenant_switches'
+  ] LOOP
+    v_relation := to_regclass('public.' || v_name);
+    IF v_relation IS NOT NULL AND obj_description(v_relation) IS DISTINCT FROM
+        'CREATED_BY_20261028170000_automation_flow_switches' THEN
+      RAISE EXCEPTION
+        'Unrecognized existing table %; refusing to modify grants or data',
+        v_name;
+    END IF;
+  END LOOP;
+
   IF to_regclass('public.automation_flow_global_switch') IS NULL THEN
     CREATE TABLE public.automation_flow_global_switch (
       singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
@@ -45,6 +62,8 @@ BEGIN
 END
 $check$;
 
+-- In a fresh installation the switches must be write-protected by RLS,
+-- and the single global row is OFF. Re-application never flips user settings.
 -- An existing, deliberately configured switch is NEVER reset by a re-run.
 INSERT INTO public.automation_flow_global_switch(singleton,enabled)
 VALUES(true,false)
