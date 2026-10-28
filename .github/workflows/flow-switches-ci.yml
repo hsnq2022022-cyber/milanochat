@@ -41,6 +41,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Create disposable tenant/role fixture
         run: psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-switch-bootstrap.sql
+      - name: Safe read-only preflight before tables exist
+        run: psql -X -v ON_ERROR_STOP=1 -f supabase/verification/20261028170000_automation_flow_switches.preflight.readonly.sql
       - name: Apply then reapply exactly the same migration
         run: |
           psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028170000_automation_flow_switches.sql
