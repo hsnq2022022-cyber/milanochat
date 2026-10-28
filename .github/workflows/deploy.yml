@@ -9,6 +9,9 @@ on:
     # Deliberately exclude workflow-only, SQL-only and Edge-only commits.
     paths:
       - "src/**"
+      # Test-only changes do not affect the deployed Vite bundle.
+      - "!src/**/*.test.ts"
+      - "!src/**/*.spec.ts"
       - "public/**"
       - "*.html"
       - "package.json"
