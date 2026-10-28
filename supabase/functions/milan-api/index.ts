@@ -1878,7 +1878,7 @@ async function handleIncomingWebhookMessage(
       return !error;
     },
     debit: async (outgoingId) => {
-      const { data, error } = await sb.rpc("consume_reply", {
+      const { data, error } = await sb.rpc("consume_flow_reply", {
         p_tenant_id: tenantId,
         p_message_id: outgoingId,
       });

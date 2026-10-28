@@ -19,7 +19,7 @@ test("flow shadow is inserted after all legacy safety gates and before RAG",()=>
   // Legacy provider sends and billing remain in the same code path.
   assert.match(handler,/await sendWa\(/);
   assert.match(handler,/await sendMetaDirectMessage\(/);
-  assert.match(handler,/\.rpc\(\s*"consume_reply"/);
+  assert.match(handler,/\.rpc\(\s*"consume_flow_reply"/);
 });
 test("flow shadow is explicitly read-only with no activation or send APIs",()=>{
   const source=readFileSync("supabase/functions/milan-api/flowShadowGate.ts","utf8");
