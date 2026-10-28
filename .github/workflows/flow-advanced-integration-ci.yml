@@ -77,6 +77,7 @@ jobs:
       - name: Pure Node tests for rich buttons and Meta receipts
         run: |
           node --experimental-strip-types --test tests/flow-rich-actions-meta.test.ts
+          node --experimental-strip-types --test tests/flow-outbox-worker.test.ts
           node --experimental-strip-types --test src/flow/runtimeExtra.test.ts
       - name: TypeScript and Vite
         run: |
@@ -90,5 +91,7 @@ jobs:
           deno check --node-modules-dir=auto supabase/functions/flow-outbox-worker/index.ts
           deno check --node-modules-dir=auto supabase/functions/flow-internal-worker/index.ts
           deno check --node-modules-dir=auto supabase/functions/milan-api/index.ts
+          deno check --node-modules-dir=auto supabase/functions/flow-staff-inbox/index.ts
+          deno test --allow-env --node-modules-dir=auto tests/flow-staff-inbox-http.test.ts
           deno check --node-modules-dir=auto supabase/functions/flow-staff-inbox/index.ts
           deno test --allow-env --node-modules-dir=auto tests/flow-staff-inbox-http.test.ts
