@@ -1,6 +1,7 @@
 -- Disposable PostgreSQL 17 test; no customer data or real sends.
 \set ON_ERROR_STOP on
-GRANT SELECT ON public.tenants,public.channel_accounts TO service_role;
+GRANT SELECT,UPDATE ON public.tenants TO service_role;
+GRANT SELECT ON public.channel_accounts TO service_role;
 GRANT UPDATE(is_active) ON public.channel_accounts TO service_role;
 
 SET ROLE service_role;
