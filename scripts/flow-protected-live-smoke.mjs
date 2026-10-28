@@ -45,7 +45,7 @@ const printSnapshot=(label,values)=>{
  console.log("COUNTS "+label+" "+JSON.stringify(values));
 };
 async function snapshot(){
- const [tenants,accounts,conversations,widgetMessages,ledger,widgetLedger,delivery,outbox,flows,windows]=await Promise.all([
+ const [tenants,accounts,conversations,widgetMessages,ledger,widgetLedger,delivery,outbox,flows,windows,claims,publications]=await Promise.all([
   count("tenants"),count("channel_accounts"),count("conversations"),count("widget_messages"),
   count("reply_ledger"),count("widget_reply_ledger"),count("automation_delivery_attempts"),
   count("automation_flow_outbox"),count("automation_flow_activations",{is_active:true}),
@@ -54,7 +54,7 @@ async function snapshot(){
  const historicalAnswers=await count("widget_messages",{direction:"out",kind:"answer"});
  const global=hard(await admin.from("automation_flow_global_switch").select("enabled").eq("singleton",true).single(),"global");
  const enabledTenant=await count("automation_flow_tenant_switches",{enabled:true});
- return {tenants,accounts,conversations,widgetMessages,ledger,widgetLedger,delivery,outbox,flows,windows,historicalAnswers,globalOff:global.enabled===false,enabledTenant};
+ return {tenants,accounts,conversations,widgetMessages,ledger,widgetLedger,delivery,outbox,flows,windows,claims,publications,historicalAnswers,globalOff:global.enabled===false,enabledTenant};
 }
 const coreMatches=assertReleaseSafe;
 async function newUser(letter){
