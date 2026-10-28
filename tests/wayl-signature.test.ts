@@ -52,3 +52,41 @@ Deno.test("Signed Paid event remains unacknowledged pending verified Wayl status
   }
  }
 });
+
+
+Deno.test("Wayl callback rejects oversized and invalid UTF-8 before signature or database access",async()=>{
+ const keys=["PAYMENTS_ENABLED","WAYL_TOPUP_WEBHOOK_ENABLED",
+  "WAYL_WEBHOOK_SECRET","SUPABASE_URL","SUPABASE_SERVICE_ROLE_KEY"] as const;
+ const previous=Object.fromEntries(keys.map(k=>[k,Deno.env.get(k)]));
+ try{
+  Deno.env.set("PAYMENTS_ENABLED","true");
+  Deno.env.set("WAYL_TOPUP_WEBHOOK_ENABLED","true");
+  Deno.env.set("WAYL_WEBHOOK_SECRET","unit-test-merchant-webhook-secret-123456");
+  Deno.env.set("SUPABASE_URL","https://example.supabase.co");
+  Deno.env.set("SUPABASE_SERVICE_ROLE_KEY","disposable-test-only");
+  const endpoint="https://example.com/wayl-topup-webhook";
+  const oversized=await handle(new Request(endpoint,{
+   method:"POST",body:"x".repeat(32769)
+  }));
+  assertEquals(oversized.status,413);
+  const declared=await handle(new Request(endpoint,{
+   method:"POST",body:"{}",headers:{"content-length":"32769"}
+  }));
+  assertEquals(declared.status,413);
+  const boundary=await handle(new Request(endpoint,{
+   method:"POST",body:"x".repeat(32768)
+  }));
+  assertEquals(boundary.status,401);
+  const malformed=await handle(new Request(endpoint,{
+   method:"POST",body:new Uint8Array([0xc3,0x28])
+  }));
+  assertEquals(malformed.status,400);
+  assertEquals(await malformed.text(),"invalid UTF-8");
+ }finally{
+  for(const k of keys){
+   const value=previous[k];
+   if(value===undefined)Deno.env.delete(k);
+   else Deno.env.set(k,value);
+  }
+ }
+});
