@@ -1,0 +1,22 @@
+name: Production HTTP read-only smoke (NO SEND / NO AUTH)
+on:
+  pull_request:
+    paths:
+      - "scripts/flow-live-readonly-http-smoke.mjs"
+      - ".github/workflows/flow-live-readonly-http-smoke.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  readonly-health:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Test real public Edge gateway without secret or provider send
+        run: node scripts/flow-live-readonly-http-smoke.mjs
