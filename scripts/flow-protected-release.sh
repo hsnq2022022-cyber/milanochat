@@ -5,16 +5,24 @@ umask 077
 PROJECT="nmhefwvhoholcjrbbila"
 PIN_MILAN="fd4f3cb3f252e9e367b0963ef37d1c8e84daee85"
 PIN_PUB="f37a8be7800e1c47d7e3c0db4ab69e612e3f4cc9"
+MODE="$1"
+if [[ "$MODE" != "dry-run" && "$MODE" != "release" ]];then
+ echo "ERROR: expected dry-run or release";exit 2
+fi
 WORK="$RUNNER_TEMP/flow-protected"
 mkdir -p "$WORK/backup/supabase/functions" "$WORK/verify/supabase/functions"
-export FLOW_TEST_STATE="$WORK/test-state.json"
+export FLOW_TEST_STATE="$WORK/$MODE-state.json"
 export SUPABASE_URL="https://$PROJECT.supabase.co"
 DEPLOYED_MILAN=false
 DEPLOYED_PUB=false
 BASELINED=false
 cleanup(){
- if [[ "$BASELINED" == true ]];then
+ # A fixture can be partially created before setup completes. The fixture
+ # journal is written before any Auth/DB insert; cleanup MUST inspect it.
+ if [[ -f "$FLOW_TEST_STATE" ]];then
   node scripts/flow-protected-live-smoke.mjs cleanup || { echo "CRITICAL: fixture cleanup failed"; return 1; }
+ else
+  echo "CLEANUP: no fixture journal; no fixture creation was attempted"
  fi
 }
 get_functions(){ supabase functions list --project-ref "$PROJECT" --output json > "$WORK/functions.json"; }
@@ -82,7 +90,7 @@ finish(){
   restore || code=1
   cleanup || code=1
  fi
- if [[ "$code" == 0 ]];then echo "PASS: deploy tests, cleanup, exact database counts";fi
+ if [[ "$code" == 0 ]];then echo "PASS: $MODE, cleanup and exact database counts verified";fi
  exit "$code"
 }
 trap finish EXIT
@@ -93,6 +101,7 @@ done
 [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]
 [[ "$GITHUB_REPOSITORY" == "hsnq2022022-cyber/milanochat" ]]
 [[ "$FLOW_RELEASE_CONFIRM" == deploy-two-test-only ]]
+[[ "$GITHUB_REF" == "refs/heads/main" ]] || { echo "BLOCKED: only main dispatch";exit 1; }
 npm ci --ignore-scripts --no-audit --no-fund
 git fetch --no-tags origin "$PIN_MILAN" "$PIN_PUB"
 git cat-file -e "$PIN_MILAN^{commit}"
@@ -100,6 +109,18 @@ git cat-file -e "$PIN_PUB^{commit}"
 get_functions
 check_remote milan-api 101 false
 check_remote flow-publication absent false
+# STEP ONE: production dry-run does not deploy, publish or alter secrets.
+# It creates disposable Auth/tenant/Widget fixtures and guarantees teardown.
+# This mode is executed as its own protected GitHub Actions step.
+if [[ "$MODE" == "dry-run" ]];then
+ node scripts/flow-protected-live-smoke.mjs preflight
+ BASELINED=true
+ node scripts/flow-protected-live-smoke.mjs setup
+ node scripts/flow-protected-live-smoke.mjs before
+ echo "PASS PREDEPLOY DRY-RUN: fixture operations succeeded; no deployment made"
+ exit 0  # EXIT trap verifies and prints before/after counts
+fi
+
 # CLI downloads code to current working directory. Use private runner temp.
 (cd "$WORK/backup" && supabase functions download milan-api --project-ref "$PROJECT")
 test -s "$WORK/backup/supabase/functions/milan-api/index.ts"
