@@ -88,9 +88,16 @@ test("detaching a selected edge's target to empty canvas removes only that conne
   await page.setViewportSize({width:1366,height:768});
   await page.goto("/milanochat/#/flows");
   await expect(page.locator(".react-flow__edge")).toHaveCount(5);
+  // fitView runs 470ms after mount. Without waiting, the updater can move
+  // between mouse-down and mouse-up and onReconnectEnd may never fire.
+  await page.waitForTimeout(900);
   await page.locator(".react-flow__edge").first().click();
   const updater=page.locator(".react-flow__edgeupdater-target").first();
   await expect(updater).toBeAttached();
+  await expect.poll(async()=>{
+    const rect=await updater.boundingBox();
+    return Boolean(rect&&rect.y>=120&&rect.y+rect.height<768);
+  }).toBe(true);
   await dragFrom(page,updater,await freeCanvasPoint(page));
   await expect(page.locator(".react-flow__edge")).toHaveCount(4);
   await page.getByTitle("تراجع Ctrl+Z").click();
