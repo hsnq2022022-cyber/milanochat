@@ -75,14 +75,20 @@ test("outbox quick reply stores stable option IDs for authenticated customer cho
  const start=trigger(),q=makeNode("question",{x:0,y:40},{
   inputMode:"buttons",text:"شنو تحتاج؟",options:[
    {id:"prices",label:"الأسعار"},{id:"agent",label:"موظف"}]});
- const d=graph([start,q],[connect(start,q)]);
+ const prices=makeNode("message",{x:0,y:90},{text:"قائمة الأسعار",options:[]});
+ const agent=makeNode("message",{x:200,y:90},{text:"سيتابع الموظف",options:[]});
+ const d=graph([start,q,prices,agent],[
+  connect(start,q),connect(q,prices,"prices"),connect(q,agent,"agent")
+ ]);
  const plan=planRuntimeTransition(d,createRuntimeState(d,"choice",1),context);
  assert.equal(plan.state.status,"awaiting_input");
  assert.deepEqual((plan.effects[0] as {choiceIds:string[]}).choiceIds,["prices","agent"]);
  assert.deepEqual((plan.effects[0] as {choices:string[]}).choices,["الأسعار","موظف"]);
  const selected=planRuntimeTransition(d,plan.state,{...context,eventKey:"tap",
   answer:"prices"});
- assert.notEqual(selected.state.status,"blocked");
+ assert.equal(selected.state.status,"completed");
+ assert.deepEqual(selected.effects.map(x=>x.kind),["message"]);
+ assert.equal((selected.effects[0] as {text:string}).text,"قائمة الأسعار");
 });
 test("Messenger HTTPS website buttons are a declared outbound effect, not a fake quick reply",()=>{
  const start=trigger(),card=makeNode("message",{x:0,y:40},{
