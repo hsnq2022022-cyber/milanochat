@@ -1,0 +1,91 @@
+name: Post-canary Advanced Flow — Staff/Meta isolated
+# Isolated CI only: no Supabase production credentials or deployment
+on:
+  push:
+    branches: [integration/flow-full-features-post-canary]
+permissions:
+  contents: read
+jobs:
+  postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: isolated_test_only
+          POSTGRES_DB: staff_review
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d staff_review"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: isolated_test_only
+    steps:
+      - uses: actions/checkout@v4
+      - name: Role, suspended member, owner and cross-tenant RLS
+        shell: bash
+        env:
+          PGDATABASE: staff_review
+        run: |
+          set -euo pipefail
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/fixtures/flow-live-shape-bootstrap.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-staff-membership-bootstrap.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028227000_tenant_staff_memberships.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-staff-membership.test.sql
+      - name: Disposable provider deliveries and internal actions
+        shell: bash
+        run: |
+          set -euo pipefail
+          createdb flow_internal_review
+          export PGDATABASE=flow_internal_review
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/fixtures/flow-live-shape-bootstrap.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-staff-membership-bootstrap.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/fixtures/installed-flow-switches.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/fixtures/installed-flow-runtime.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-exclusive-claim-bootstrap.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028220000_webhook_exclusive_claim.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028224000_delivery_attempts.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028225000_flow_runtime_advance.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-phase4-runtime-bootstrap.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-outbox-delivery-bootstrap.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028226000_flow_outbox_delivery_attempts.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028227000_tenant_staff_memberships.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028228000_flow_internal_actions.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028229000_flow_meta_delivery_receipts.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-internal-actions.test.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-meta-receipts.test.sql
+  node-and-deno:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Pure Node tests for rich buttons and Meta receipts
+        run: |
+          node --experimental-strip-types --test tests/flow-rich-actions-meta.test.ts
+          node --experimental-strip-types --test src/flow/runtimeExtra.test.ts
+      - name: TypeScript and Vite
+        run: |
+          npm run typecheck
+          npm run build
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Deno check un-deployed sources
+        run: |
+          deno check --node-modules-dir=auto supabase/functions/flow-outbox-worker/index.ts
+          deno check --node-modules-dir=auto supabase/functions/flow-internal-worker/index.ts
+          deno check --node-modules-dir=auto supabase/functions/milan-api/index.ts
+          deno check --node-modules-dir=auto supabase/functions/flow-staff-inbox/index.ts
+          deno test --allow-env --node-modules-dir=auto tests/flow-staff-inbox-http.test.ts
