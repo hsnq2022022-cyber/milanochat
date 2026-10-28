@@ -49,7 +49,8 @@ async function snapshot(){
   count("tenants"),count("channel_accounts"),count("conversations"),count("widget_messages"),
   count("reply_ledger"),count("widget_reply_ledger"),count("automation_delivery_attempts"),
   count("automation_flow_outbox"),count("automation_flow_activations",{is_active:true}),
-  count("flow_publication_rate_windows")
+  count("flow_publication_rate_windows"),count("automation_message_claims"),
+  count("automation_flow_publications")
  ]);
  const historicalAnswers=await count("widget_messages",{direction:"out",kind:"answer"});
  const global=hard(await admin.from("automation_flow_global_switch").select("enabled").eq("singleton",true).single(),"global");
