@@ -360,7 +360,7 @@ export const api = {
     eventsUrl: (sessionId: string, token?: string | null) =>
       backendMode === "supabase"
         ? ""
-        : `${API}/api/whatsapp/session/${sessionId}/events?token=${encodeURIComponent(token ?? "")}`,
+        : "" /* legacy Railway server and SSE endpoint removed */,
   },
 
   extractQA: (tenantId: string, url: string) =>
