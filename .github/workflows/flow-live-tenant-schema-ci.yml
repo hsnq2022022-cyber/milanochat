@@ -74,7 +74,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          psql -X -v ON_ERROR_STOP=1 -c "CREATE FUNCTION public.reject_automation_flow_revision_mutation() RETURNS trigger LANGUAGE plpgsql AS \'\$\$ BEGIN RAISE EXCEPTION 'owned_by_another_feature'; END \$\$\';"
+          psql -X -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE FUNCTION public.reject_automation_flow_revision_mutation()
+            RETURNS trigger LANGUAGE plpgsql AS $fn$
+          BEGIN
+            RAISE EXCEPTION 'owned_by_another_feature';
+          END
+          $fn$;
+          SQL
           if psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028180000_flow_runtime_tenant_bound.sql; then
             echo 'ERROR: migration replaced unrelated function' >&2
             exit 1
