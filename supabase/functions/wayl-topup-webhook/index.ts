@@ -42,6 +42,14 @@ export async function handle(req:Request){
  if(typeof data.referenceId!=="string"||!uuid.test(data.referenceId))
   return reply(200,"ignored invalid reference");
  const state=String(data.paymentStatus??"").trim().toLowerCase();
+ // Wayl's link API reports "Complete". Webhook schemas may use a
+ // different paymentStatus enum. Never silently acknowledge a signed
+ // "Paid" event as non-payment: preserve retry/manual reconciliation
+ // until sandbox confirmation and an authenticated status lookup exist.
+ if(state==="paid"){
+  console.warn("[wayl-topup-webhook] paid webhook status requires provider reconciliation");
+  return reply(503,"signed paid status requires provider verification");
+ }
  // Delivered is NOT sufficient payment evidence; require completed status.
  if(state!=="complete"&&state!=="completed"){
   return reply(200,"non-payment event ignored");
