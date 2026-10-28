@@ -16,7 +16,7 @@ export type RuntimeState = {
 };
 export type PlannedEffect =
   | { kind: "message"; idempotencyKey: string; nodeId: string; text: string }
-  | { kind: "question"; idempotencyKey: string; nodeId: string; text: string; inputMode: string; choices: string[] }
+  | { kind: "question"; idempotencyKey: string; nodeId: string; text: string; inputMode: string; choices: string[]; choiceIds: string[] }
   | { kind: "delay"; idempotencyKey: string; nodeId: string; wakeAt: number }
   | { kind: "handoff"; idempotencyKey: string; nodeId: string }
   | { kind: "tag" | "untag"; idempotencyKey: string; nodeId: string; tag: string }
@@ -155,14 +155,15 @@ export function planRuntimeTransition(
         // الصور والأزرار وما شابهها تتطلب مرسلاً يدعمها؛ لا نتظاهر بأنها نُفذت.
         if (data.image || data.contentBlocks.length)
           return fail(state, "rich message requires a verified sender");
-        if (data.options.some(o => (o.action && o.action!=="step") || !o.label.trim()))
+        if (data.options.some(o => (o.action && o.action!=="step") || !o.label.trim() || o.label.length>20 || o.id.length>128) ||
+            data.options.length>13 || new Set(data.options.map(o=>o.id)).size!==data.options.length)
           return fail(state, "unsupported button action or blank label");
         const text = safeValue(data.text).trim();
         if (!text) return fail(state, "empty message");
         if(data.options.length>0){
           const effect: PlannedEffect = {kind:"question",
             idempotencyKey:key(state,input,node.id),nodeId:node.id,text,
-            inputMode:"buttons",choices:data.options.map(o=>o.label)};
+            inputMode:"buttons",choices:data.options.map(o=>o.label),choiceIds:data.options.map(o=>o.id)};
           return {state:{...state,status:"awaiting_input"},effects:[effect]};
         }
         const effect: PlannedEffect = { kind: "message",
@@ -173,13 +174,16 @@ export function planRuntimeTransition(
         if (data.image || data.contentBlocks.length)
           return fail(state, "rich question is not supported");
         if (data.inputMode === "buttons" &&
-            data.options.some(o => o.action && o.action !== "step"))
+            (data.options.length>13 || data.options.length<1 ||
+             new Set(data.options.map(o=>o.id)).size!==data.options.length ||
+             data.options.some(o => (o.action && o.action !== "step") || !o.label.trim() || o.label.length>20 || o.id.length>128)))
           return fail(state, "external button actions not yet supported");
         const effect: PlannedEffect = {
           kind: "question", idempotencyKey: key(state, input, node.id),
           nodeId: node.id, text: data.text,
           inputMode: data.inputMode,
-          choices: data.inputMode === "buttons" ? data.options.map(o => o.label) : []
+          choices: data.inputMode === "buttons" ? data.options.map(o => o.label) : [],
+          choiceIds: data.inputMode === "buttons" ? data.options.map(o => o.id) : []
         };
         return { state: { ...state, status: "awaiting_input" }, effects: [effect] };
       }
