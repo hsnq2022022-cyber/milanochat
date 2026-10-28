@@ -3,7 +3,7 @@
 set -Eeuo pipefail
 umask 077
 PROJECT="nmhefwvhoholcjrbbila"
-PIN_MILAN="fd4f3cb3f252e9e367b0963ef37d1c8e84daee85"
+PIN_MILAN="da3275e968d62f628043dcabe407f2e1eaf89287"
 PIN_PUB="f37a8be7800e1c47d7e3c0db4ab69e612e3f4cc9"
 MODE="$1"
 if [[ "$MODE" != "dry-run" && "$MODE" != "release" ]];then
