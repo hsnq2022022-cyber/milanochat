@@ -26,3 +26,10 @@ This tracker lives in [PR #117](https://github.com/hsnq2022022-cyber/milanochat/
 - [PR #126](https://github.com/hsnq2022022-cyber/milanochat/pull/126) combines the reviewed CI/editor/flow modules from #117, #119, #122, #123, #124 and #125 and adds `src/flow/flowPipeline.ts` with unit tests.
 - Integrated CI runs full typecheck, every Node test, Vite, Chromium UI tests, two PostgreSQL RLS suites and concurrent inbound reservation. A passing run is **integration evidence only**; no actual Meta sender or billing ledger is connected.
 - All Step 1–7 production release gates remain blocked by owner-approved staging, live schema verification, signed E2E and per-action GO. **Do not merge this PR to main just because CI is green.**
+
+## Stage 8 staging-only publisher (no production GO)
+
+- New `src/flow/stagingPublisher.ts` service contracts require trusted server-authenticated owner and server-computed Meta capabilities; immutable version publishing and canary-gated activation/rollback (OFF by default).
+- `tests/sql/flow-publisher-staging.sql` and `tests/sql/flow-publisher-staging.test.sql` validate immutable revisions, tenant/account binding, private RLS grants and lossless rollback on disposable PostgreSQL 17.
+- [CI #40683116186](https://github.com/hsnq2022022-cyber/milanochat/actions/runs/40683116186): 7 new + 4 prior publication unit tests, TypeScript, build and SQL passing.
+- **Blocked:** actual authenticated milan-api endpoints, staging project designation, live schema verification, timestamped migration/rollback, signed real Meta canary, financial idempotency and owner GO.
