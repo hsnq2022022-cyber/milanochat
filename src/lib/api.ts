@@ -358,7 +358,7 @@ export const api = {
     eventsUrl: (sessionId: string, token?: string | null) =>
       backendMode === "supabase"
         ? ""
-        : `${API}/api/whatsapp/session/${sessionId}/events?token=${encodeURIComponent(token ?? "")}`,
+        : "", // Legacy Railway SSE removed; Supabase mode has no SSE URL.
   },
 
   extractQA: (tenantId: string, url: string) =>
