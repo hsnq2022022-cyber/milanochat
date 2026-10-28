@@ -38,7 +38,8 @@ export function simpleMessageFromDocument(raw:unknown,platform:Platform):string|
  const nodes=doc.nodes as Record<string,unknown>[];
  const start=nodes.find(n=>(n?.data as Record<string,unknown>|undefined)?.kind==="trigger");
  const message=nodes.find(n=>(n?.data as Record<string,unknown>|undefined)?.kind==="message");
- const s=start?.data as Record<string,unknown>|undefined;
+ if(!start||!message)return null;
+ const s=start.data as Record<string,unknown>|undefined;
  const m=message?.data as Record<string,unknown>|undefined;
  const requestedPlatform=platform==="facebook"?"messenger":platform;
  if(s?.kind!=="trigger"||s.platform!==requestedPlatform||
