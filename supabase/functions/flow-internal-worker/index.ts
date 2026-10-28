@@ -24,7 +24,7 @@ Deno.serve(async req=>{
  const {data:global,error:ge}=await sb.from("automation_flow_global_switch")
   .select("enabled").eq("singleton",true).single();
  if(ge||global?.enabled!==true)return reply(423,{enabled:false});
- const {data,eRror}=await sb.from("automation_flow_outbox")
+ const {data,error:eRror}=await sb.from("automation_flow_outbox")
   .select("tenant_id,id,effect_kind")
   .eq("delivery_status","pending")
   .in("effect_kind",["tag","untag","staff_notification"])
