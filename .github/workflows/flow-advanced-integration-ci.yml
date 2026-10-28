@@ -2,7 +2,7 @@ name: Advanced flows — disposable PostgreSQL Node Deno review
 # MANUAL ONLY, not dispatched. Does not touch Supabase production.
 on:
   push:
-    branches: [integration/advanced-flows-after-text-pilot]
+    branches: [integration/main-advanced-payment-consolidation]
   workflow_dispatch:
 permissions:
   contents: read
