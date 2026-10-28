@@ -65,3 +65,15 @@ The last three are proposal-only defaults; not set or activated by this workflow
 - Round 3: 30 minutes (or configured approved window) observe 0 unknown/outbox uncertain, no unbilled delivered messages and no customer impact. Stop, no ramp unless manually approved.
 - Fallback: global/tenant switches OFF, outbox worker OFF, no retries for uncertain, preserve ledgers, claims, review records.
 - RAG only after tenant-owned source approval and quote validation. Staff roles must be reviewed separately under docs/flow-employee-permissions-proposal.md.
+
+
+## Additional release blockers found in final code review
+
+- GitHub default-branch deploy.yml listens on every main push and deploys GitHub Pages. A future main-only dispatcher bootstrap would itself trigger that workflow unless the owner ALSO authorizes/controls this deployment. No main push is authorized in this session.
+- A protected Environment name in YAML is NOT proof that required reviewers are actually configured; the repository owner must manually verify the protection rule and reviewer eligibility.
+- The signed expired-JWT HTTP test currently requires the legacy HS256 SUPABASE_JWT_SECRET. If Auth uses asymmetric keys, do not invent a signing secret; replace this test with a supported short-lifetime test token flow on a separate auth environment before GO.
+- The live Widget smoke deliberately uses an inactive test tenant. It verifies the historical safe refusal and unchanged zero debit with flags OFF, NOT an active RAG answer or a successful paid Widget debit. The latter requires a separate test after enabling approved billing and an authorized test-only LLM source.
+- The protected A/B smoke never creates an immutable publication; B returns 200 for its own accounts/list, while synthetic HTTP tests cover a successful publish. Full real B publishing needs a disposable project or separately approved publication cleanup mechanism.
+- New Outbox message dispatcher only supports plain text, and the RAG adapter currently requires an OpenAI-compatible embedding/chat endpoint. Existing custom Gemini setup and rich platform buttons require explicit compatibility tests. Staff notification/tag executors and delivered receipts are NOT complete. Do not enable any sender merely because source CI passes.
+- An ambiguous provider 2xx where persistence or charging fails is NOT auto retried, and remains a billing/manual-review exception. Production monitoring and ownership required.
+- Scheduler exists on the feature branch with its repository gate default OFF; even after an eventual main merge it must never run until separate, explicit owner approval, supported Edge worker deployments, and reviewer/secret validation.
