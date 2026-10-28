@@ -142,7 +142,7 @@ Deno.serve(async req=>{
       console.error("[outbox] outgoing persisted failed",{code:insertError.code});
       return false;
      }
-     const {data:charge,error:chargeError}=await sb.rpc("consume_reply",{
+     const {data:charge,error:chargeError}=await sb.rpc("consume_flow_reply",{
       p_tenant_id:tenant.id,p_message_id:effect.outgoing_message_id
      });
      if(chargeError||typeof charge!=="number"||!(charge>=0||charge===-2)){
