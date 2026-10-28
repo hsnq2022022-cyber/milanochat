@@ -145,12 +145,18 @@ async function smoke(a,b){
  let rateLimit=false;
  for(let i=0;i<33;i++){
   const r=await invoke(a.token,{action:'accounts'});
-  if(r.status===429){requireOk(r.headers.has('retry-after'),'429 missing Retry-After');
+  if(r.status===429){
+   requireOk(i===27,'429 must occur on A request #31 (after 3 denied + 27 accepted)');
+   requireOk(r.headers.has('retry-after'),'429 missing Retry-After');
    rateLimit=true;break;}
   requireOk(r.status===200,'A request before rate limit: HTTP '+r.status);
  }
  requireOk(rateLimit,'A never received HTTP 429');
- console.log('PASS: A rate-limit => HTTP 429');
+ const counter=await rest('flow_publication_rate_windows','GET',
+  '?select=request_count&tenant_id=eq.'+a.tid);
+ requireOk(counter.status===200&&counter.data?.length===1&&counter.data[0].request_count===30,
+  'A atomic rate counter must be exactly 30');
+ console.log('PASS: A request #31 => HTTP 429; atomic counter=30');
  expect(await invoke(b.token,{action:'accounts'}),200,'B unaffected by A limit');
  const pub=await rest('automation_flow_publications','GET','?select=revision&tenant_id=eq.'+b.tid);
  requireOk(pub.status===200&&pub.data.length===0,'Unexpected B publications');
