@@ -1,0 +1,31 @@
+name: Stage 12 - Credit Accounting Integrity
+
+on:
+  push:
+    branches: [feature/flows-stage12-credit-accounting]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  billing:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Verify correct Supabase billable message ledger contract
+        run: |
+          node --experimental-strip-types --test tests/credit-accounting.test.ts
+          node --experimental-strip-types --test tests/credit-guard-order.test.ts
+          node --experimental-strip-types --test tests/webhook-safety.test.ts
+      - name: Validate website unaffected
+        run: |
+          npx tsc --noEmit -p tsconfig.flows.json
+          npm run build
