@@ -3,7 +3,7 @@ import {strict as assert} from "node:assert";
 import {processExclusiveEvent} from "../supabase/functions/milan-api/exclusiveMessageClaim.ts";
 import {simpleMessageFromDocument} from "../supabase/functions/milan-api/flowPrepareMessage.ts";
 
-const owner = (route="legacy_ai") => ({acquired:true,route,outgoing_message_id:"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"});
+const owner = (route="legacy_ai") => ({acquired:true,route,claim_id:"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",outgoing_message_id:"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"});
 function fixture({switchOn=false,engineBroken=false}={}){
  let sent=0,billed=0,oldAI=0,prepared=0,stored=0;
  let held=false;
@@ -15,7 +15,7 @@ function fixture({switchOn=false,engineBroken=false}={}){
    held=true;return owner(ready&&switchOn?"flow":"legacy_ai");
   },
   async legacyAnswer(){oldAI++;return "Legacy answer";},
-  async send(){sent++;},
+  async send(){sent++;return {providerMessageId:"mid-verified"};},
   async persistSent(){stored++;return true;},
   async debit(){billed++;return 4}
  };
@@ -64,6 +64,34 @@ test("network send error: at most one attempt; no double billing",async()=>{
  f.deps.send=async()=>{throw Error("ambiguous provider delivery");};
  assert.equal(await processExclusiveEvent(f.deps),"send_failed");
  assert.equal(await processExclusiveEvent(f.deps),"duplicate");
+ assert.equal(f.snapshot().billed,0);
+});
+test("provider 2xx without stable message ID is uncertain, never persisted or billed",async()=>{
+ const f=fixture({switchOn:true});
+ let attempts=0;
+ const result=await processExclusiveEvent({...f.deps,
+  send:async()=>{attempts++;return {providerMessageId:null};}
+ });
+ assert.equal(result,"sent_unconfirmed");
+ assert.deepEqual(f.snapshot(),{sent:0,billed:0,oldAI:0,prepared:1,stored:0});
+ assert.equal(attempts,1);
+ assert.equal(await processExclusiveEvent(f.deps),"duplicate");
+ assert.equal(attempts,1);
+ assert.equal(f.snapshot().billed,0);
+});
+test("blank MID is marked uncertain in delivery journal and never charged",async()=>{
+ const f=fixture();
+ const events:string[]=[];
+ const result=await processExclusiveEvent({...f.deps,
+  send:async()=>({providerMessageId:"  "}),
+  delivery:{
+   begin:async()=>{events.push("reserved");return true;},
+   finish:async(_claimId,status,id)=>{events.push(status+":"+id);return true;}
+  }
+ });
+ assert.equal(result,"sent_unconfirmed");
+ assert.deepEqual(events,["reserved","uncertain:null"]);
+ assert.equal(f.snapshot().stored,0);
  assert.equal(f.snapshot().billed,0);
 });
 test("safe flow subset accepts one trigger->message only",()=>{
