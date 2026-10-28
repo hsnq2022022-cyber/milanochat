@@ -11,6 +11,7 @@ import AutomationEdge from "../flow/AutomationEdge";
 import NodeEditor from "../flow/NodeEditor";
 import FlowSimulator from "../flow/FlowSimulator";
 import CloudDraftPanel from "../flow/CloudDraftPanel";
+import FlowPublicationPanel from "../flow/FlowPublicationPanel";
 import { ACCENT, KIND_LIST, LABELS, SAVE_KEY, canConnect, edgeFor, importFlow, makeNode, outputs, validateDocument } from "../flow/model";
 import { arrangeFlow, cardSize, findOpenPosition } from "../flow/layout";
 import { useAddStepMenu } from "../flow/addMenu";
@@ -22,6 +23,7 @@ import type { FlowLanguage } from "../flow/uiLocale";
 
 // لا تعرض أدوات الحفظ السحابي في الإنتاج قبل تجهيز الجدول والموافقة على النشر.
 const CLOUD_DRAFT_UI_ENABLED=(import.meta as ImportMeta & {env?:Record<string,string|undefined>}).env?.VITE_ENABLE_CLOUD_FLOW_DRAFTS==="true";
+const PUBLICATION_UI_ENABLED=(import.meta as ImportMeta & {env?:Record<string,string|undefined>}).env?.VITE_ENABLE_FLOW_PUBLICATION_PREVIEW==="true";
 const nodeTypes={flowNode:AutomationNode};
 const edgeTypes={flowEdge:AutomationEdge};
 const btn="inline-flex min-h-11 items-center justify-center gap-1.5 rounded-xl border border-[#275443] bg-[#0B241C] px-3 py-2.5 text-xs font-semibold hover:border-[#3DD189] hover:bg-[#173D30]";
@@ -36,6 +38,7 @@ function Editor(){
   const selected=doc.nodes.find(n=>n.id===selectedId)||null;
   const [showSimulator,setShowSimulator]=useState(false),[trail,setTrail]=useState<string[]>([]);
   const [showCloudDrafts,setShowCloudDrafts]=useState(false);
+  const [showPublications,setShowPublications]=useState(false);
   const [toolbarCollapsed,setToolbarCollapsed]=useState(false);
   const [language,setLanguage]=useState<FlowLanguage>("ar");
   const t=(key:Parameters<typeof flowText>[0])=>flowText(key,language);
@@ -226,6 +229,7 @@ function Editor(){
         </button>
         <button className={btn} onClick={()=>setShowSimulator(true)}><Play size={16}/> {t("preview")}</button>
         {CLOUD_DRAFT_UI_ENABLED&&<button data-testid="flow-cloud-drafts" className={btn} onClick={()=>setShowCloudDrafts(true)}>{language==="en"?"Cloud drafts":"مسودات سحابية"}</button>}
+        {PUBLICATION_UI_ENABLED&&<button type="button" data-testid="flow-publications" className={btn} onClick={()=>setShowPublications(true)}>{language==="en"?"Published revisions":"الإصدارات المنشورة"}</button>}
         <button className={btn} onClick={exportFile}><Download size={16}/> {t("export")}</button>
         <button className={btn} onClick={()=>input.current?.click()}><Upload size={16}/> {t("import")}</button>
         <input ref={input} className="hidden" type="file" accept=".json,application/json" onChange={e=>{void importFile(e.target.files?.[0]);e.target.value="";}}/>
@@ -240,6 +244,7 @@ function Editor(){
       </div>}
     </header>
     {CLOUD_DRAFT_UI_ENABLED&&showCloudDrafts&&<CloudDraftPanel language={language} onClose={()=>setShowCloudDrafts(false)}/>}
+    {PUBLICATION_UI_ENABLED&&showPublications&&<FlowPublicationPanel key={activeFlowId} flowKey={activeFlowId} document={doc} language={language} onClose={()=>setShowPublications(false)}/>}
     {recovery.messages.length>0&&<div role="alert" className="border-b border-[#E5B54B] bg-[#2C2414] px-4 py-3 text-xs text-[#F9E3A2]">
       <strong>تقرير استعادة التدفقات: </strong>{recovery.messages.join(" ")} تم استرجاع {recovery.recovered} وتجاهل {recovery.skipped}.
       {protectStoredLibrary&&<span className="mr-2 font-bold">الحفظ التلقائي متوقف لحماية بيانات المكتبة الأصلية؛ استخدم «تصدير» قبل تأكيد الحفظ اليدوي.</span>}
