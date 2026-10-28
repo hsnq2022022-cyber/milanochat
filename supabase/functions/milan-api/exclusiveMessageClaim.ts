@@ -57,6 +57,16 @@ export async function processExclusiveEvent(d:Dependencies):Promise<Result>{
   }
   return "send_failed";
  }
+ // An HTTP 2xx with no stable provider MID is ambiguous: it might have
+ // reached the recipient. Do not persist a delivered reply or charge it.
+ // The committed inbound claim prevents automatic replay.
+ if(typeof providerMessageId!=="string"||!providerMessageId.trim()){
+  if(d.delivery&&c.claim_id){
+   try{await d.delivery.finish(c.claim_id,"uncertain",null);}
+   catch{/* preserve claim and manual reconciliation */ }
+  }
+  return "sent_unconfirmed";
+ }
  if(d.delivery&&c.claim_id){
   try{
    const acknowledged=await d.delivery.finish(c.claim_id,"confirmed",providerMessageId);
