@@ -27,3 +27,23 @@ INSERT INTO public.messages(id,tenant_id,conversation_id,direction,wa_message_id
   'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','44444444-4444-4444-8444-444444444444','in','meta-a2'),
  ('77777777-7777-4777-8777-777777777773',
   'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb','55555555-5555-4555-8555-555555555555','in','meta-b1');
+
+-- Recreate the currently deployed pre-fix RPC solely in disposable PG17.
+CREATE FUNCTION public.consume_reply(p_tenant_id uuid,p_message_id uuid)
+RETURNS integer LANGUAGE plpgsql SECURITY DEFINER SET search_path=public
+AS $original$
+DECLARE v_remaining integer;
+BEGIN
+ INSERT INTO public.reply_ledger(tenant_id,message_id)
+ VALUES(p_tenant_id,p_message_id) ON CONFLICT(message_id) DO NOTHING;
+ IF NOT FOUND THEN RETURN -2; END IF;
+ UPDATE public.tenants SET credits_remaining=credits_remaining-1
+ WHERE id=p_tenant_id AND credits_remaining>0
+ RETURNING credits_remaining INTO v_remaining;
+ IF NOT FOUND THEN RETURN -1; END IF;
+ RETURN v_remaining;
+END
+$original$;
+REVOKE ALL ON FUNCTION public.consume_reply(uuid,uuid)
+ FROM PUBLIC,anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.consume_reply(uuid,uuid) TO service_role;
