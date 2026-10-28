@@ -46,6 +46,7 @@ import { processExclusiveEvent } from "./exclusiveMessageClaim.ts";
 import { prepareSimpleFlowReply } from "./flowPrepareMessage.ts";
 import { chargeWidgetReply } from "./widgetCredit.ts";
 import { verifyMetaWebhookSignature } from "./metaSignature.ts";
+import { recordVerifiedMetaReceipts } from "./metaDeliveryReceipts.ts";
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
@@ -2474,6 +2475,21 @@ Deno.serve(async (req) => {
           return json({
             received: true,
           });
+        }
+
+        // Delivery/read receipts are OPTIONAL and OFF by default.
+        // The raw payload has passed X-Hub-Signature-256 above.
+        if (env("FLOW_META_RECEIPTS_ENABLED") === "true") {
+          try {
+            await recordVerifiedMetaReceipts(sb, body);
+          } catch (error) {
+            console.error("[meta_delivery_receipts] persistence failed", {
+              errorType: error instanceof Error ? error.name : "unknown"
+            });
+            // No automatic provider resend. Request signed Meta retry when
+            // receipt persistence is temporarily unavailable.
+            return json({ error: "Meta receipt unavailable" }, 503);
+          }
         }
 
         for (const entry of body.entry ?? []) {
