@@ -1,0 +1,35 @@
+name: Staging delivery worker safety
+
+on:
+  push:
+    branches: [feature/flows-staging-durable-worker]
+  pull_request:
+    paths:
+      - "src/flow/stagingDeliveryWorker.ts"
+      - "src/flow/stagingDeliveryWorker.test.ts"
+      - "src/flow/deliveryContract.ts"
+      - "src/flow/deliveryContract.test.ts"
+      - ".github/workflows/flow-staging-worker-ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  worker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: "22", cache: npm}
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Full app typecheck
+        run: npm run typecheck
+      - name: Worker, delivery contract and exclusive-responder regression tests
+        run: |
+          node --experimental-strip-types --test src/flow/stagingDeliveryWorker.test.ts
+          node --experimental-strip-types --test src/flow/deliveryContract.test.ts
+          node --experimental-strip-types --test src/flow/responderDecision.test.ts
+          node --experimental-strip-types --test src/flow/flowPipeline.test.ts
+      - name: Vite build
+        run: npm run build
