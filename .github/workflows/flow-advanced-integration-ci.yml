@@ -92,6 +92,7 @@ jobs:
           deno check --node-modules-dir=auto supabase/functions/flow-internal-worker/index.ts
           deno check --node-modules-dir=auto supabase/functions/milan-api/index.ts
           deno check --node-modules-dir=auto supabase/functions/flow-staff-inbox/index.ts
+          deno check --node-modules-dir=auto supabase/functions/flow-delivery-review/index.ts
           deno test --allow-env --node-modules-dir=auto tests/flow-staff-inbox-http.test.ts
           deno check --node-modules-dir=auto supabase/functions/flow-staff-inbox/index.ts
           deno test --allow-env --node-modules-dir=auto tests/flow-staff-inbox-http.test.ts
