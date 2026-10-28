@@ -1,0 +1,32 @@
+name: WhatsApp signed-webhook hardening
+
+on:
+  push:
+    branches: [security/whatsapp-webhook-signature]
+  pull_request:
+    paths:
+      - "supabase/functions/milan-api/**"
+      - "tests/whatsapp-signature.test.ts"
+      - "tests/meta-signature.test.ts"
+      - ".github/workflows/whatsapp-signature-ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  webhook:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: "22", cache: npm}
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: WhatsApp and Instagram/Facebook signature tests
+        run: |
+          node --experimental-strip-types --test tests/whatsapp-signature.test.ts
+          node --experimental-strip-types --test tests/meta-signature.test.ts
+      - name: Typecheck raw HMAC module
+        run: npx tsc --noEmit --target es2022 --module nodenext --moduleResolution nodenext --lib es2022,dom supabase/functions/milan-api/metaSignature.ts
+      - name: Vite unaffected
+        run: npm run build

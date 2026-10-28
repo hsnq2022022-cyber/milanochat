@@ -40,6 +40,9 @@
 
 import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2";
 import * as cheerio from "npm:cheerio@1";
+import { flowShadowMayObserve } from "./flowShadowGate.ts";
+import { persistInboundOnce } from "./persistInboundOnce.ts";
+import { verifyMetaWebhookSignature } from "./metaSignature.ts";
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
@@ -1166,51 +1169,15 @@ ${history ? `\nسياق المحادثة السابق:\n${history}\n` : ""}`
 
 /**
  * التحقق من توقيع Meta عبر x-hub-signature-256.
- * إذا لم يكن السر مضبوطًا نتجاهل التحقق (سلوك خادم Node السابق).
+ * إذا لم يكن سر التطبيق مضبوطًا نرفض الحدث، ولا نتجاوز التحقق أبدًا.
  */
-async function verifyMetaSignature(
-  raw: string,
-  sigHeader: string
-): Promise<boolean> {
-  /**
-   * قد يوقّع Meta الـ webhook بسر تطبيق إنستغرام أو بسر تطبيق Meta الرئيسي
-   * حسب نوع الربط، لذلك نقبل التوقيع إن طابق أيًّا منهما.
-   */
-  const secrets = [
+async function verifyMetaSignature(raw: string, sigHeader: string): Promise<boolean> {
+  // Missing secrets are a configuration error and now fail closed.
+  // Keep both configured app-secret candidates for existing IG/FB connections.
+  return verifyMetaWebhookSignature(raw,sigHeader,[
     env("INSTAGRAM_APP_SECRET"),
     env("META_APP_SECRET"),
-  ]
-    .map((v) => v.trim())
-    .filter(Boolean);
-
-  if (secrets.length === 0) return true;
-
-  if (!sigHeader) return false;
-
-  for (const secret of secrets) {
-    const expected =
-      "sha256=" +
-      hex(
-        await crypto.subtle.sign(
-          "HMAC",
-          await crypto.subtle.importKey(
-            "raw",
-            enc.encode(secret),
-            {
-              name: "HMAC",
-              hash: "SHA-256",
-            },
-            false,
-            ["sign"]
-          ),
-          enc.encode(raw)
-        )
-      );
-
-    if (sigHeader === expected) return true;
-  }
-
-  return false;
+  ]);
 }
 
 /**
@@ -1642,8 +1609,8 @@ async function handleIncomingWebhookMessage(
   /**
    * حفظ رسالة العميل الواردة.
    */
-  try {
-    await sb
+  const incomingResult = await persistInboundOnce(async () =>
+    sb
       .from("messages")
       .insert({
         conversation_id: conv.id,
@@ -1654,17 +1621,14 @@ async function handleIncomingWebhookMessage(
         kind: "customer",
         is_auto: false,
         wa_message_id: externalMsgId,
-      });
-  } catch (e: any) {
-    if (e?.code === "23505") {
-      console.log(
-        `[${channel}_webhook] duplicate message skipped: ${externalMsgId}`
-      );
+      })
+  );
+
+  if (incomingResult !== "saved") {
+    if (incomingResult === "duplicate") {
+      console.log(`[${channel}_webhook] duplicate inbound message skipped`);
     } else {
-      console.error(
-        `[${channel}_webhook] incoming insert failed`,
-        e
-      );
+      console.error(`[${channel}_webhook] inbound insert did not commit`);
     }
     return;
   }
@@ -1743,6 +1707,41 @@ async function handleIncomingWebhookMessage(
       `[${channel}_webhook] no credits: ${tenantId}`
     );
     return;
+  }
+
+  /**
+   * تدفق آمن للمراقبة فقط: بدون إرسال أو تغيير على مسار AI.
+   * No extra DB reads unless explicitly enabled by server environment.
+   */
+  if (env("FLOW_SHADOW_MODE") === "observe") {
+    const observe = await flowShadowMayObserve(
+      env("FLOW_SHADOW_MODE"),
+      String(tenantId),
+      String(account?.id ?? ""),
+      {
+        readGlobal: async () => {
+          const { data, error } = await sb
+            .from("automation_flow_global_switch")
+            .select("enabled")
+            .eq("singleton", true)
+            .maybeSingle();
+          if (error) throw error;
+          return data;
+        },
+        readTenant: async (verifiedId: string) => {
+          const { data, error } = await sb
+            .from("automation_flow_tenant_switches")
+            .select("enabled,test_only")
+            .eq("tenant_id", verifiedId)
+            .maybeSingle();
+          if (error) throw error;
+          return data;
+        },
+      }
+    );
+    if (observe) {
+      console.info("[flow-shadow] test account eligible; legacy AI remains owner");
+    }
   }
 
   /**
@@ -2214,6 +2213,31 @@ Deno.serve(async (req) => {
           });
         }
 
+        // WhatsApp Cloud API signs every event POST with the Meta App
+        // Secret. WHATSAPP_VERIFY_TOKEN is ONLY for the GET handshake.
+        // Missing signing configuration is a recoverable 503, never an
+        // implicit authorization to accept unsigned customer messages.
+        const whatsappSecrets = [
+          env("WHATSAPP_APP_SECRET"),
+          env("META_APP_SECRET"),
+        ].map((secret) => secret.trim()).filter(Boolean);
+
+        if (whatsappSecrets.length === 0) {
+          console.error("[whatsapp_webhook] missing signing secret");
+          return json({ error: "WhatsApp signing secret unavailable" }, 503);
+        }
+
+        const whatsappSignatureValid = await verifyMetaWebhookSignature(
+          raw,
+          req.headers.get("x-hub-signature-256") ?? "",
+          whatsappSecrets
+        );
+
+        if (!whatsappSignatureValid) {
+          console.error("[whatsapp_webhook] invalid signature");
+          return json({ error: "Invalid WhatsApp signature" }, 401);
+        }
+
         for (const entry of body.entry ?? []) {
           for (const change of entry?.changes ?? []) {
             if (change?.field !== "messages") {
@@ -2406,6 +2430,15 @@ Deno.serve(async (req) => {
           return json({
             received: true,
           });
+        }
+
+        // Missing signing-secret configuration is a server outage, not a
+        // verified invalid event. Do not ACK and lose legitimate messages.
+        // Meta should retry while operators restore the proper app secret.
+        if (!env("INSTAGRAM_APP_SECRET").trim() &&
+            !env("META_APP_SECRET").trim()) {
+          console.error("[instagram_webhook] missing signing secret");
+          return json({ error: "Webhook signing secret unavailable" }, 503);
         }
 
         const sigOk = await verifyMetaSignature(
