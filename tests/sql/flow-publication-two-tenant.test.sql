@@ -16,6 +16,9 @@ DECLARE
   user_b uuid := '88888888-8888-4888-8888-888888888888';
   document jsonb := '{"version":3,"nodes":[],"edges":[]}'::jsonb;
 BEGIN
+  -- The preceding CI test deliberately disables account A; restore it only
+  -- inside this rolled-back transaction to keep this regression independent.
+  UPDATE public.channel_accounts SET is_active=true WHERE id IN (account_a,account_b);
   IF public.flow_publish_revision(tenant_a,account_a,'instagram','a_flow',user_a,document) IS DISTINCT FROM 1
     OR public.flow_publish_revision(tenant_b,account_b,'facebook','b_flow',user_b,document) IS DISTINCT FROM 1
   THEN RAISE EXCEPTION 'VALID_OWNER_PUBLISH_FAILED'; END IF;
