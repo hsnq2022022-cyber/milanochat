@@ -65,6 +65,16 @@ Deno.serve(async(req:Request):Promise<Response>=>{
   if(tenantError||!tenant||tenant.user_id!==auth.user.id||
      !UUID_REGEX.test(tenant.id))return error("Tenant not authorized",403);
 
+  // Only the authenticated tenant's accounts are ever returned.
+  if(request.action==="accounts"){
+   const {data,error:accountsError}=await client
+    .from("channel_accounts")
+    .select("id,platform,is_active")
+    .eq("tenant_id",tenant.id).limit(100);
+   if(accountsError)return error("Account list unavailable",503);
+   return respond({ok:true,accounts:(accounts??[]).filter(a=>hasPlatform(a.platform))});
+  }
+
   const accountId=request.accountId;
   const flowKey=request.flowKey;
   if(typeof accountId!=="string"||!UUID_REGEX.test(accountId)||
@@ -96,7 +106,7 @@ Deno.serve(async(req:Request):Promise<Response>=>{
     return error("Flow publish is unavailable",503);}
    if(!Number.isSafeInteger(data)||data<1)
     return error("Publishing was rejected",403);
-   return respond({ok:true,revision:data,active:false});
+   return respond({ok:true,revision:data,activationChanged:false});
   }
 
   if(action==="list"){
