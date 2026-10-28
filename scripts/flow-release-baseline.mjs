@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
  */
 const numericFields=[
  "tenants","accounts","conversations","widgetMessages","ledger",
- "widgetLedger","delivery","outbox","flows","windows",
+ "widgetLedger","delivery","outbox","flows","windows","claims","publications",
  "historicalAnswers","enabledTenant"
 ];
 
