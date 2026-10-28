@@ -1,0 +1,73 @@
+name: Flow Builder CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  types-unit-build-browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Typecheck all application and tests
+        run: npm run typecheck
+      - name: All Node unit tests
+        run: npm run test:unit
+      - name: Vite production build
+        run: npm run build
+      - name: Install Chromium
+        run: npx playwright install chromium
+      - name: Browser acceptance tests
+        env:
+          VITE_ENABLE_CLOUD_FLOW_DRAFTS: "true"
+        run: npm run test:browser
+      - name: Upload screenshots and traces on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flows-browser-evidence
+          path: test-results/
+          if-no-files-found: ignore
+
+  flow-schema-rls:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: isolated_flow_ci_only
+          POSTGRES_DB: flow_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d flow_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: isolated_flow_ci_only
+      PGDATABASE: flow_ci
+    steps:
+      - uses: actions/checkout@v4
+      - name: Bootstrap two synthetic tenant owners
+        run: psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-drafts-bootstrap.sql
+      - name: Apply draft schema to disposable Postgres
+        run: psql -X -v ON_ERROR_STOP=1 -f supabase/proposals/automation_flow_drafts.review.sql
+      - name: Verify tenant A/B, anonymous, revisions and limits
+        run: psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-drafts-rls.test.sql
