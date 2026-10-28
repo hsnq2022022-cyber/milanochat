@@ -85,6 +85,12 @@ jobs:
         run: |
           node --experimental-strip-types --test src/flow/serverPublicationValidation.test.ts
           node --experimental-strip-types --test tests/flow-simple-instagram-text.test.ts
+      - name: Protected release script static syntax (NEVER run deploy/dry-run in CI)
+        run: |
+          bash -n scripts/flow-protected-release.sh
+          node --check scripts/flow-protected-live-smoke.mjs
+          grep -q 'scripts/flow-protected-release.sh dry-run' .github/workflows/flow-protected-manual-release.yml
+          grep -q 'scripts/flow-protected-release.sh release' .github/workflows/flow-protected-manual-release.yml
       - name: TypeScript and website build
         run: |
           npm run typecheck
