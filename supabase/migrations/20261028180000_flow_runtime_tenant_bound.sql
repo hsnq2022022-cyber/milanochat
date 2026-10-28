@@ -7,7 +7,23 @@ BEGIN;
 
 DO $preflight$
 DECLARE name text;
+        r regclass;
 BEGIN
+  -- Never replace an existing unrelated trigger function or composite index.
+  IF to_regprocedure('public.reject_automation_flow_revision_mutation()') IS NOT NULL
+    AND obj_description(to_regprocedure('public.reject_automation_flow_revision_mutation()'),'pg_proc')
+      IS DISTINCT FROM 'CREATED_BY_20261028180000_FLOW_RUNTIME' THEN
+    RAISE EXCEPTION 'Unknown existing publication immutability function';
+  END IF;
+  FOREACH name IN ARRAY ARRAY[
+    'channel_accounts_flow_owner_uq','conversations_flow_owner_uq'
+  ] LOOP
+    r := to_regclass('public.'||name);
+    IF r IS NOT NULL AND obj_description(r)
+        IS DISTINCT FROM 'CREATED_BY_20261028180000_FLOW_RUNTIME' THEN
+      RAISE EXCEPTION 'Unknown existing flow owner index: %',name;
+    END IF;
+  END LOOP;
   FOREACH name IN ARRAY ARRAY[
     'automation_flow_publications','automation_flow_activations',
     'automation_flow_event_receipts','automation_flow_runs',
@@ -32,6 +48,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS channel_accounts_flow_owner_uq
   ON public.channel_accounts(tenant_id,id,platform);
 CREATE UNIQUE INDEX IF NOT EXISTS conversations_flow_owner_uq
   ON public.conversations(tenant_id,id,account_id);
+COMMENT ON INDEX public.channel_accounts_flow_owner_uq
+  IS 'CREATED_BY_20261028180000_FLOW_RUNTIME';
+COMMENT ON INDEX public.conversations_flow_owner_uq
+  IS 'CREATED_BY_20261028180000_FLOW_RUNTIME';
 
 CREATE TABLE IF NOT EXISTS public.automation_flow_publications (
   tenant_id uuid NOT NULL REFERENCES public.tenants(id) ON DELETE CASCADE,
@@ -61,7 +81,9 @@ AS $$
 BEGIN
   RAISE EXCEPTION 'Published revision is immutable' USING ERRCODE='23514';
 END
-$$;
+$;
+COMMENT ON FUNCTION public.reject_automation_flow_revision_mutation()
+  IS 'CREATED_BY_20261028180000_FLOW_RUNTIME';
 REVOKE ALL ON FUNCTION public.reject_automation_flow_revision_mutation()
   FROM PUBLIC,anon,authenticated;
 
