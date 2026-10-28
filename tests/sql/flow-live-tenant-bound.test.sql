@@ -62,11 +62,19 @@ BEGIN
     platform,conversation_id,provider_event_id,current_node_id)
   VALUES(ta,run,'welcome',1,aa,'instagram',ca,'meta-event-1','trigger');
 
+  -- Distinct provider IDs keep the uniqueness test from masking tenant FK.
+  INSERT INTO public.automation_flow_event_receipts
+   (tenant_id,channel_account_id,platform,provider_event_id)
+  VALUES(ta,aa,'instagram','meta-event-cross');
+  INSERT INTO public.automation_flow_event_receipts
+   (tenant_id,channel_account_id,platform,provider_event_id)
+  VALUES(ta,aa,'instagram','meta-event-unbound');
+
   BEGIN
     INSERT INTO public.automation_flow_runs
      (tenant_id,flow_key,publication_revision,channel_account_id,
       platform,conversation_id,provider_event_id,current_node_id)
-    VALUES(ta,'welcome',1,aa,'instagram',cb,'meta-event-1','trigger');
+    VALUES(ta,'welcome',1,aa,'instagram',cb,'meta-event-cross','trigger');
     RAISE EXCEPTION 'CROSS-TENANT CONVERSATION ALLOWED';
   EXCEPTION WHEN foreign_key_violation THEN NULL;
   END;
@@ -75,7 +83,7 @@ BEGIN
     INSERT INTO public.automation_flow_runs
      (tenant_id,flow_key,publication_revision,channel_account_id,
       platform,conversation_id,provider_event_id,current_node_id)
-    VALUES(ta,'welcome',1,aa,'instagram',noacc,'meta-event-1','trigger');
+    VALUES(ta,'welcome',1,aa,'instagram',noacc,'meta-event-unbound','trigger');
     RAISE EXCEPTION 'NULL ACCOUNT CONVERSATION ALLOWED';
   EXCEPTION WHEN foreign_key_violation THEN NULL;
   END;
