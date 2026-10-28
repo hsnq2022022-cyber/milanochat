@@ -1,0 +1,64 @@
+name: Flow staging publisher contract
+
+on:
+  push:
+    branches: [feature/flows-staging-publisher]
+  pull_request:
+    paths:
+      - "src/flow/stagingPublisher.ts"
+      - "src/flow/stagingPublisher.test.ts"
+      - ".github/workflows/flow-staging-publisher-ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  publisher:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: "22", cache: npm}
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Full TypeScript check
+        run: npm run typecheck
+      - name: Publishing gate and revision tests
+        run: |
+          node --experimental-strip-types --test src/flow/stagingPublisher.test.ts
+          node --experimental-strip-types --test src/flow/publicationGate.test.ts
+      - name: Vite build
+        run: npm run build
+
+  postgres-publications:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: synthetic_publish_ci
+          POSTGRES_DB: flow_publish_ci
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d flow_publish_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: synthetic_publish_ci
+      PGDATABASE: flow_publish_ci
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create isolated tenant and account fixtures
+        run: |
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-atomic-staging-bootstrap.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-atomic-staging.test.sql
+      - name: Install isolated revision and activation rules
+        run: psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-publisher-staging.sql
+      - name: Verify immutable revisions, canary defaults, RLS, rollback and deactivate
+        run: psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-publisher-staging.test.sql
