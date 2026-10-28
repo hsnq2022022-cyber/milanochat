@@ -3848,6 +3848,39 @@ ${text}`
       );
     }
 
+    // Read-only, owner-verified review inbox. No user-supplied tenant ID:
+    // ownedTenant() resolved the JWT identity above.
+    if(action==="delivery_review_list"){
+      const {data,error}=await sb.from("automation_delivery_attempts")
+        .select("claim_id,platform,status,provider_message_id,attempted_at,uncertain_at,review_status,review_requested_at")
+        .eq("tenant_id",tenant.id).eq("review_status","queued")
+        .order("review_requested_at",{ascending:false}).limit(50);
+      if(error){
+        console.error("[delivery_review] read failed",{
+          tenantId:tenant.id,code:error.code??"unknown",message:error.message??"unknown"
+        });
+        return err("تعذر تحميل قائمة المراجعة",500);
+      }
+      return json({items:data??[],readOnly:true});
+    }
+    if(action==="flow_metrics_summary"){
+      const since=new Date(Date.now()-30*24*60*60*1000).toISOString();
+      const {data,error}=await sb.from("automation_flow_metrics")
+        .select("event_key").eq("tenant_id",tenant.id)
+        .gte("occurred_at",since).limit(1000);
+      if(error){
+        console.error("[flow_metrics] read failed",{tenantId:tenant.id,code:error.code??"unknown"});
+        return err("تعذر تحميل إحصائيات التدفقات",500);
+      }
+      const result:Record<string,number>={started:0,transition:0,button:0,
+        delivered:0,completed:0,handoff:0,failed:0};
+      for(const entry of data??[]){
+        if(Object.prototype.hasOwnProperty.call(result,entry.event_key))
+          result[entry.event_key]++;
+      }
+      return json({events:result,periodDays:30,truncated:(data??[]).length===1000});
+    }
+
     /* ═══════════════════════════════════════════════════════════════════
        DASHBOARD WIDGET ACTIONS
     ═══════════════════════════════════════════════════════════════════ */

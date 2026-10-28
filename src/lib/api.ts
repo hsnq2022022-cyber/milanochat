@@ -173,6 +173,8 @@ async function dashSupabase<T>(token: string, path: string, init?: RequestInit):
   else if (sub === "summary") action = "summary";
   else if (sub === "conversations") action = "conversations";
   else if (sub === "unresolved") action = "unresolved";
+  else if (sub === "delivery-review") action = "delivery_review_list";
+  else if (sub === "flow-metrics") action = "flow_metrics_summary";
   else if (sub === "products" && method === "GET") action = "salla_products_list";
   else if (sub === "products/sync" && method === "POST") action = "salla_products_sync";
   else if (sub === "knowledge" && method === "GET") action = "knowledge";
@@ -358,7 +360,7 @@ export const api = {
     eventsUrl: (sessionId: string, token?: string | null) =>
       backendMode === "supabase"
         ? ""
-        : `${API}/api/whatsapp/session/${sessionId}/events?token=${encodeURIComponent(token ?? "")}`,
+        : "" /* legacy Railway server and SSE endpoint removed */,
   },
 
   extractQA: (tenantId: string, url: string) =>

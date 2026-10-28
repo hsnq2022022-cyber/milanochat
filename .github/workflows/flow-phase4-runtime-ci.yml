@@ -1,0 +1,75 @@
+name: Phase 4 durable runtime and metrics — review only
+on:
+  push:
+    branches: [feature/flow-runtime-phase4-metrics-review]
+  pull_request:
+    paths:
+      - "src/flow/runtimePlan.ts"
+      - "src/flow/runtimeExtra.test.ts"
+      - "supabase/migrations/20261028225000_flow_runtime_advance.sql"
+      - "tests/sql/flow-phase4-runtime*"
+      - ".github/workflows/flow-phase4-runtime-ci.yml"
+permissions:
+  contents: read
+jobs:
+  durable-run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: flow_phase4
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: phase4_test_only
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d flow_phase4"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: phase4_test_only
+      PGDATABASE: flow_phase4
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install production-shaped schema in disposable database
+        run: |
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/fixtures/flow-live-shape-bootstrap.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/fixtures/installed-flow-switches.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/fixtures/installed-flow-runtime.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028225000_flow_runtime_advance.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-phase4-runtime-bootstrap.sql
+      - name: Atomic effect/outbox/metrics and durable delay with lease
+        run: psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-phase4-runtime.test.sql
+  node-and-mobile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Phase 4 runtime Node tests
+        run: |
+          node --experimental-strip-types --test src/flow/runtimePlan.test.ts
+          node --experimental-strip-types --test src/flow/runtimeExtra.test.ts
+          node --experimental-strip-types --test src/flow/aiMetricsGate.test.ts
+      - name: TypeScript
+        run: npm run typecheck
+      - name: Vite build
+        run: npm run build
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Typecheck un-deployed service-only wake worker
+        run: deno check --node-modules-dir=auto supabase/functions/flow-runtime-worker/index.ts
+      - name: Install Chromium for phone 360/390 RTL checks
+        run: npx playwright install --with-deps chromium
+      - name: Playwright real browser mobile checks
+        run: npx playwright test -c playwright.config.ts tests/flow-mobile-locale.spec.ts

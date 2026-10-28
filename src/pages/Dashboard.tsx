@@ -4,7 +4,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import confetti from "canvas-confetti";
 import SafeAvatar from "../components/SafeAvatar";
-import { apiAuthFetch, apiBase, backendMode, type WaSnapshot } from "../lib/api";
+import { api, apiAuthFetch, apiBase, backendMode, type WaSnapshot } from "../lib/api";
+import DeliveryReviewPanel from "./DeliveryReviewPanel";
 import { getSupabase, getStoredClaim, clearStoredClaim } from "../lib/supabase";
 import { CHANNELS, ChannelBadge, detectChannel, type ChannelId } from "../lib/channels";
 import {
@@ -198,7 +199,7 @@ export default function Dashboard() {
   const [claimErr, setClaimErr] = useState("");
   const [claimBusy, setClaimBusy] = useState(false);
 
-  const [tab, setTab] = useState<"convs" | "unresolved" | "knowledge" | "widgets" | "channels">("convs");
+  const [tab, setTab] = useState<"convs" | "unresolved" | "knowledge" | "widgets" | "channels" | "delivery">("convs");
   const [socialChannels, setSocialChannels] = useState<any[]>([]);
   const [activeConv, setActiveConv] = useState<string | null>(null);
   const [mobileThread, setMobileThread] = useState(false);
@@ -1055,7 +1056,7 @@ export default function Dashboard() {
   };
 
   const copyEmbedCode = (token: string) => {
-    const code = `<script src="${apiEnabled ? API : "https://your-server.com"}/widget.js" data-token="${token}"></script>`;
+    const code = `<script src="${apiBase ? `${apiBase}/milan-api?action=widget.js` : ""}" data-token="${token}"></script>`;
     navigator.clipboard.writeText(code);
     setCopiedCode(token);
     setTimeout(() => setCopiedCode(null), 2000);
@@ -1198,6 +1199,7 @@ export default function Dashboard() {
     { id: "knowledge" as const, label: "المعرفة", icon: <IconDatabase className="w-4 h-4" /> },
     { id: "widgets" as const, label: "Widgets", icon: <span className="text-sm">💬</span> },
     { id: "channels" as const, label: "القنوات", icon: <IconGlobe className="w-4 h-4" /> },
+    { id: "delivery" as const, label: "مراجعة الإرسال", icon: <IconQuestion className="w-4 h-4" /> },
   ];
 
   const waLive = st.waStatus === "connected" || !!st.phone;
@@ -1322,7 +1324,7 @@ export default function Dashboard() {
           </section>
         </div>
 
-        <div className="relative bg-pine/50 border border-verde/12 rounded-2xl p-1.5 grid grid-cols-5 mb-6 max-w-2xl">
+        <div className="relative bg-pine/50 border border-verde/12 rounded-2xl p-1.5 grid grid-cols-3 sm:grid-cols-6 gap-1 mb-6 max-w-4xl">
           {TABS.map((t) => (
             <button
               key={t.id}
@@ -1340,6 +1342,8 @@ export default function Dashboard() {
             </button>
           ))}
         </div>
+
+        {tab === "delivery" && <DeliveryReviewPanel token={token} />}
 
         {tab === "convs" && (
           <div className="grid lg:grid-cols-[320px_1fr] gap-4 items-start">
