@@ -45,7 +45,7 @@ BEGIN
   t:=NULL;
   INSERT INTO public.automation_flow_run_leases(tenant_id,run_id,token,expires_at)
   VALUES(r.tenant_id,r.id,gen_random_uuid(),now()+interval '2 minutes')
-  ON CONFLICT(tenant_id,run_id) DO UPDATE
+  ON CONFLICT ON CONSTRAINT automation_flow_run_leases_pkey DO UPDATE
   SET token=EXCLUDED.token,expires_at=EXCLUDED.expires_at
   WHERE public.automation_flow_run_leases.expires_at<=now()
   RETURNING token INTO t;
