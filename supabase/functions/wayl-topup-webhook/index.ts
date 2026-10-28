@@ -29,9 +29,40 @@ export async function handle(req:Request){
  const secret=env("WAYL_WEBHOOK_SECRET"),base=env("SUPABASE_URL"),
   key=env("SUPABASE_SERVICE_ROLE_KEY");
  if(!secret||secret.length<32||!base||!key)return reply(503,"configuration unavailable");
- const bytes=new Uint8Array(await req.arrayBuffer());
- if(bytes.byteLength===0||bytes.byteLength>32768)return reply(413,"invalid payload size");
- const raw=new TextDecoder().decode(bytes);
+ // Enforce the limit while consuming the stream; arrayBuffer() would buffer
+ // the entire untrusted request before checking its size.
+ const limit=32768;
+ const declared=req.headers.get("content-length");
+ if(declared!==null&&/^\d+$/.test(declared)&&Number(declared)>limit)
+  return reply(413,"invalid payload size");
+ if(!req.body)return reply(413,"invalid payload size");
+ const reader=req.body.getReader();
+ const chunks:Uint8Array[]=[];
+ let size=0;
+ try{
+  while(true){
+   const {value,done}=await reader.read();
+   if(done)break;
+   if(!value)continue;
+   size+=value.byteLength;
+   if(size>limit){
+    await reader.cancel();
+    return reply(413,"invalid payload size");
+   }
+   chunks.push(value);
+  }
+ }catch{
+  return reply(400,"invalid request body");
+ }finally{
+  reader.releaseLock();
+ }
+ if(size===0)return reply(413,"invalid payload size");
+ const bytes=new Uint8Array(size);
+ let offset=0;
+ for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.byteLength;}
+ let raw:string;
+ try{raw=new TextDecoder("utf-8",{fatal:true}).decode(bytes);}
+ catch{return reply(400,"invalid UTF-8");}
  if(!await verifyWaylSignature(raw,req.headers.get("x-wayl-signature-256")??"",secret))
   return reply(401,"invalid signature");
  let payload:unknown;
