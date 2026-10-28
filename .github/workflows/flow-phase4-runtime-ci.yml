@@ -64,6 +64,11 @@ jobs:
         run: npm run typecheck
       - name: Vite build
         run: npm run build
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Typecheck un-deployed service-only wake worker
+        run: deno check --node-modules-dir=auto supabase/functions/flow-runtime-worker/index.ts
       - name: Install Chromium for phone 360/390 RTL checks
         run: npx playwright install --with-deps chromium
       - name: Playwright real browser mobile checks
