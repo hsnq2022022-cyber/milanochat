@@ -60,7 +60,7 @@ test("only one worker can persist a claimed lease in an atomic fake compare-and-
  function casClaim(worker:string){
   const old=saved;
   const claim=claimDelivery(old,gate(),1000,worker);
-  if(claim.decision!=="leased")return claim.decision;
+  if(claim.decision!=="leased")return claim.decision==="skipped"?claim.reason:claim.decision;
   // A production adapter MUST enforce this predicate inside PostgreSQL.
   if(saved.status!==old.status||saved.attempts!==old.attempts)return "lost_race";
   saved=claim.record;
