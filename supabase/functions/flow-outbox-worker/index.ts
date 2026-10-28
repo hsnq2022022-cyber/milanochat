@@ -136,10 +136,14 @@ Deno.serve(async req=>{
       });
       return false;
      }
-     const {error:finalizeError}=await sb.from("automation_flow_outbox")
+     const {data:settled,error:finalizeError}=await sb.from("automation_flow_outbox")
       .update({delivery_status:"settled"}).eq("tenant_id",tenant.id)
-      .eq("id",effect.id).eq("delivery_status","charge_pending");
-     if(finalizeError){console.error("[outbox] settlement failed",{code:finalizeError.code});return false;}
+      .eq("id",effect.id).eq("delivery_status","charge_pending")
+      .select("id").maybeSingle();
+     if(finalizeError||!settled){
+      console.error("[outbox] settlement failed",{code:finalizeError?.code??"missing_transition"});
+      return false;
+     }
      return true;
     }
    });
