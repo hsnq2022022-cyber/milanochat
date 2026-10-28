@@ -44,6 +44,7 @@ import { flowShadowMayObserve } from "./flowShadowGate.ts";
 import { persistInboundOnce } from "./persistInboundOnce.ts";
 import { processExclusiveEvent } from "./exclusiveMessageClaim.ts";
 import { prepareSimpleFlowReply } from "./flowPrepareMessage.ts";
+import { chargeWidgetReply } from "./widgetCredit.ts";
 import { verifyMetaWebhookSignature } from "./metaSignature.ts";
 
 const enc = new TextEncoder();
@@ -1831,7 +1832,24 @@ async function handleIncomingWebhookMessage(
         p_tenant_id: tenantId,
         p_message_id: outgoingId,
       });
-      if (error || typeof data !== "number") throw new Error("credit RPC failure");
+      if(error){
+        console.error("[webhook_billing] consume_reply PostgREST error",{
+          tenantId,messageId:outgoingId,code:error.code??"unknown",
+          message:error.message??"unknown"
+        });
+        throw new Error("credit RPC error");
+      }
+      if(typeof data!=="number"||!Number.isInteger(data)){
+        console.error("[webhook_billing] invalid consume_reply return",{
+          tenantId,messageId:outgoingId
+        });
+        throw new Error("invalid credit RPC result");
+      }
+      if(data===-1||data===-3){
+        console.error("[webhook_billing] sent message not billed",{
+          tenantId,messageId:outgoingId,result:data
+        });
+      }
       return data;
     },
   });
@@ -3036,49 +3054,47 @@ Deno.serve(async (req) => {
       }
 
       /*
-       * حفظ رد AI
+       * حفظ إجابة Widget والحصول على معرّفها الحقيقي.
+       * لا تستخدم public.messages أو consume_reply هنا.
        */
-      await sb
-        .from(
-          "widget_messages"
-        )
+      const {data:savedWidgetReply,error:widgetSaveError}=await sb
+        .from("widget_messages")
         .insert({
-          session_id:
-            session.id,
+          session_id:session.id,
+          widget_id:found.widget.id,
+          tenant_id:found.tenant.id,
+          direction:"out",
+          body:result.answer,
+          kind:"answer"
+        }).select("id").single();
 
-          widget_id:
-            found.widget.id,
-
-          tenant_id:
-            found.tenant.id,
-
-          direction: "out",
-
-          body:
-            result.answer,
-
-          kind: "answer",
+      if(widgetSaveError||!savedWidgetReply?.id){
+        console.error("[widget_message] answer insert failed",{
+          tenantId:found.tenant.id,code:widgetSaveError?.code??"unknown",
+          message:widgetSaveError?.message??"missing id"
         });
+        return err("تعذر حفظ رد المساعد",500);
+      }
 
-      /*
-       * استهلاك رصيد الرد.
-       *
-       * إذا كانت دالة consume_reply موجودة في مشروعك
-       * نستعملها.
-       */
-      try {
-        await sb.rpc(
-          "consume_reply",
-          {
-            p_tenant_id:
-              found.tenant.id,
-          }
-        );
-      } catch (e) {
-        console.error(
-          "[widget_message] consume_reply failed",
-          e
-        );
+      // Two-phase deployment: additive SQL first, then activate separately.
+      // Disabled by default, preserving old (currently uncharged) Widget path.
+      let billingStatus:"deferred"|"charged"|"already_charged"|"pending"="deferred";
+      if(env("WIDGET_BILLING_V2_ENABLED")==="true"){
+        const charge=await chargeWidgetReply(
+          sb,found.tenant.id,savedWidgetReply.id);
+        billingStatus=charge.status==="charged"||charge.status==="already_charged"
+          ? charge.status:"pending";
+        if(billingStatus==="pending"){
+          console.error("[widget_message] reply saved but credit pending",{
+            tenantId:found.tenant.id,
+            messageId:savedWidgetReply.id,
+            reason:charge.status
+          });
+        }
+      }else{
+        console.info("[widget_message] Widget billing v2 disabled; no charge",{
+          tenantId:found.tenant.id,messageId:savedWidgetReply.id
+        });
       }
 
       await sb
@@ -3103,6 +3119,7 @@ Deno.serve(async (req) => {
 
         similarity:
           result.similarity,
+        billingStatus,
       });
     }
 
