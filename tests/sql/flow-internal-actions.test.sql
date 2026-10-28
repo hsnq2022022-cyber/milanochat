@@ -38,8 +38,11 @@ BEGIN
  THEN RAISE EXCEPTION 'Duplicate tag action executed'; END IF;
  IF (SELECT count(*) FROM public.flow_conversation_tags WHERE tenant_id=t AND tag='VIP')<>1
  THEN RAISE EXCEPTION 'Tag not stored exactly once';END IF;
- IF NOT public.flow_apply_internal_effect(t,untag_id) OR
-    EXISTS(SELECT 1 FROM public.flow_conversation_tags WHERE tenant_id=t)
+ IF NOT public.flow_apply_internal_effect(t,untag_id)
+ THEN RAISE EXCEPTION 'Untag effect not committed'; END IF;
+ -- Separate SPI statement: avoid reading the pre-call MVCC snapshot inside
+ -- the same SQL expression that invoked the VOLATILE mutation.
+ IF EXISTS(SELECT 1 FROM public.flow_conversation_tags WHERE tenant_id=t)
  THEN RAISE EXCEPTION 'Untag not applied'; END IF;
  IF NOT public.flow_apply_internal_effect(t,notify_id)
  OR public.flow_apply_internal_effect(t,notify_id)
