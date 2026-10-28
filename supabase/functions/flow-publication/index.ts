@@ -30,7 +30,8 @@ const hasPlatform=(v:unknown):v is ProviderPlatform=>
 const MAX_BODY_BYTES=4*1024*1024+4096;
 const MAX_BEARER_BYTES=8192;
 
-export async function handleFlowPublication(req:Request):Promise<Response>{
+export async function handleFlowPublication(req:Request,
+ clientFactory:typeof createClient=createClient):Promise<Response>{
  // Same-origin policy is explicit; anonymous clients and foreign browser
  // origins cannot use this privileged publishing endpoint.
  if(req.headers.get("origin")!==APPROVED_ORIGIN)
@@ -80,7 +81,7 @@ export async function handleFlowPublication(req:Request):Promise<Response>{
   request=decoded as Record<string,unknown>;
  }catch{return error("Invalid JSON payload",400);}
 
- const client=createClient(supabaseUrl,serviceKey,{
+ const client=clientFactory(supabaseUrl,serviceKey,{
   auth:{persistSession:false,autoRefreshToken:false}
  });
  try{
@@ -218,4 +219,4 @@ export async function handleFlowPublication(req:Request):Promise<Response>{
  }
 }
 
-if(import.meta.main)Deno.serve(handleFlowPublication);
+if(import.meta.main)Deno.serve((req)=>handleFlowPublication(req));
