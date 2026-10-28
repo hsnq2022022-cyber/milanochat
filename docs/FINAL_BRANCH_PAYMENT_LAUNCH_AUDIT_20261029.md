@@ -53,3 +53,7 @@ A green isolated GitHub CI and code merged into main do **NOT** prove a live Met
 ## Current action status
 
 This document is a branch audit, not an authorization request to take production action. No deployment, SQL, approval gate, payment, real customer message, or credit change occurred in this audit.
+
+## Targeted remediation staged
+
+Signed Wayl webhook events with `paymentStatus=Paid` now return 503 (retry/reconcile) rather than an incorrect successful 200 ignored status; no credit is granted or merchant linked. Dedicated Deno test signs a genuine test payload and verifies 503 before any Supabase interaction. This policy is intentionally conservative until a sandbox status lookup can distinguish Paid from final Complete.
