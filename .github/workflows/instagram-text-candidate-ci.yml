@@ -81,8 +81,10 @@ jobs:
           node --experimental-strip-types --test tests/legacy-inbound-insert.test.ts
           node --experimental-strip-types --test tests/flow-shadow-gate.test.ts
           node --experimental-strip-types --test tests/flow-shadow-integration.test.ts
-      - name: Publication policy and minimum 2-node text flow validation
-        run: node --experimental-strip-types --test src/flow/serverPublicationValidation.test.ts
+      - name: Publication policy and exact 2-node Instagram text parser
+        run: |
+          node --experimental-strip-types --test src/flow/serverPublicationValidation.test.ts
+          node --experimental-strip-types --test tests/flow-simple-instagram-text.test.ts
       - name: TypeScript and website build
         run: |
           npm run typecheck
