@@ -42,6 +42,8 @@ import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2";
 import * as cheerio from "npm:cheerio@1";
 import { flowShadowMayObserve } from "./flowShadowGate.ts";
 import { persistInboundOnce } from "./persistInboundOnce.ts";
+import { processExclusiveEvent } from "./exclusiveMessageClaim.ts";
+import { prepareSimpleFlowReply } from "./flowPrepareMessage.ts";
 import { verifyMetaWebhookSignature } from "./metaSignature.ts";
 
 const enc = new TextEncoder();
@@ -1609,20 +1611,22 @@ async function handleIncomingWebhookMessage(
   /**
    * حفظ رسالة العميل الواردة.
    */
-  const incomingResult = await persistInboundOnce(async () =>
-    sb
-      .from("messages")
-      .insert({
-        conversation_id: conv.id,
-        tenant_id: tenantId,
-        direction: "in",
-        body_encrypted:
-          await encryptField(customerText),
-        kind: "customer",
-        is_auto: false,
-        wa_message_id: externalMsgId,
-      })
-  );
+  let inboundMessageId: string | null = null;
+  const incomingResult = await persistInboundOnce(async () => {
+    const response = await sb.from("messages").insert({
+      conversation_id: conv.id,
+      tenant_id: tenantId,
+      direction: "in",
+      body_encrypted: await encryptField(customerText),
+      kind: "customer",
+      is_auto: false,
+      wa_message_id: externalMsgId,
+    }).select("id").single();
+    if (!response.error && typeof response.data?.id === "string") {
+      inboundMessageId = response.data.id;
+    }
+    return response;
+  });
 
   if (incomingResult !== "saved") {
     if (incomingResult === "duplicate") {
@@ -1744,148 +1748,97 @@ async function handleIncomingWebhookMessage(
     }
   }
 
-  /**
-   * RAG + LLM مع ذاكرة المحادثة.
-   */
-  const history =
-    await conversationHistory(sb, conv.id, 8);
-
-  let result;
-
-  try {
-    result =
-      await answerFromKnowledge(
-        sb,
-        tenant,
-        customerText,
-        history
-      );
-  } catch (e) {
-    console.error(
-      `[${channel}_webhook] AI error`,
-      e
-    );
+  // Events without a stable provider ID cannot be deduplicated reliably.
+  // Do not send an automated reply to an unclaimable event.
+  if (!externalMsgId || externalMsgId.length > 256 || !inboundMessageId) {
+    console.warn("[webhook-claim] missing persisted inbound/provider ID; no auto-send");
     return;
   }
 
-  const replyText =
-    result.answer?.trim() ?? "";
-
-  if (!replyText) {
-    /*
-     * سؤال غير مؤهل — نسجله في unresolved_questions
-     * دون إرسال رد.
-     */
-    try {
-      await sb
-        .from("unresolved_questions")
-        .insert({
-          tenant_id: tenantId,
-          question_encrypted:
-            await encryptField(customerText),
-          status: "open",
-          conversation_id: conv.id,
-          best_similarity: result.similarity,
-        });
-    } catch (e) {
-      console.error(
-        `[${channel}_webhook] unresolved insert failed`,
-        e
-      );
-    }
-    return;
-  }
-
-  /**
-   * إرسال الرد إلى القناة.
-   */
-  try {
-    if (channel === "whatsapp") {
-      if (!phoneId) {
-        console.error(
-          "[whatsapp_webhook] missing phone_number_id for reply"
-        );
-        return;
+  // The exclusive DB claim is ALWAYS required for webhook auto-replies.
+  // The flow engine is an optional prepared message-only subset; any engine
+  // error or OFF switch resolves to legacy AI BEFORE choosing the route.
+  const outcome = await processExclusiveEvent({
+    prepareFlow: () => prepareSimpleFlowReply(
+      sb, tenantId, String(account.id), channel
+    ),
+    claim: async (engineReady) => {
+      const { data, error } = await sb.rpc("flow_claim_inbound", {
+        p_tenant_id: tenantId,
+        p_account_id: account.id,
+        p_platform: channel,
+        p_provider_event_id: externalMsgId,
+        p_conversation_id: conv.id,
+        p_inbound_message_id: inboundMessageId,
+        p_engine_ready: engineReady,
+      });
+      if (error || !Array.isArray(data) || data.length !== 1) {
+        throw new Error("exclusive message claim unavailable");
       }
-
-      await sendWa(
-        phoneId,
-        chatId.replace(/^whatsapp:/, ""),
-        replyText
-      );
-    } else {
-      let token: string | null = null;
-
-      try {
-        if (account.access_token_encrypted) {
-          token = await decryptField(
-            account.access_token_encrypted
-          );
+      return data[0];
+    },
+    legacyAnswer: async () => {
+      const history = await conversationHistory(sb, conv.id, 8);
+      const result = await answerFromKnowledge(sb, tenant, customerText, history);
+      const text = result.answer?.trim() ?? "";
+      if (!text) {
+        try {
+          await sb.from("unresolved_questions").insert({
+            tenant_id: tenantId,
+            question_encrypted: await encryptField(customerText),
+            status: "open",
+            conversation_id: conv.id,
+            best_similarity: result.similarity,
+          });
+        } catch {
+          console.warn("[webhook-claim] unresolved insert failed");
         }
-      } catch (e) {
-        console.warn(
-          `[${channel}_webhook] token decrypt failed`,
-          e
-        );
       }
-
-      if (!token) {
-        console.error(
-          `[${channel}_webhook] no access token for account ${account?.id}`
-        );
+      return text || null;
+    },
+    send: async (text) => {
+      if (channel === "whatsapp") {
+        if (!phoneId) throw new Error("missing WhatsApp phone ID");
+        await sendWa(phoneId, chatId.replace(/^whatsapp:/, ""), text);
         return;
       }
-
+      if (!account.access_token_encrypted) throw new Error("missing account token");
+      const token = await decryptField(account.access_token_encrypted);
+      if (!token) throw new Error("empty account token");
       await sendMetaDirectMessage({
-        channel:
-          channel === "facebook"
-            ? "facebook"
-            : "instagram",
+        channel,
         externalId: String(account.external_id),
         token,
         recipientId: chatId.split(":").slice(1).join(":"),
-        text: replyText,
+        text,
       });
-    }
-  } catch (e) {
-    console.error(
-      `[${channel}_webhook] send failed`,
-      e
-    );
-    return;
-  }
-
-  /**
-   * تسجيل الرد الصادر.
-   */
-  await sb
-    .from("messages")
-    .insert({
-      conversation_id: conv.id,
-      tenant_id: tenantId,
-      direction: "out",
-      body_encrypted:
-        await encryptField(replyText),
-      kind: "answer",
-      is_auto: true,
-    });
-
-  /**
-   * خصم credit بعد إرسال الرد.
-   */
-  try {
-    await sb.rpc(
-      "consume_reply",
-      {
+    },
+    persistSent: async (outgoingId, text) => {
+      const { error } = await sb.from("messages").insert({
+        id: outgoingId,
+        conversation_id: conv.id,
+        tenant_id: tenantId,
+        direction: "out",
+        body_encrypted: await encryptField(text),
+        kind: "answer",
+        is_auto: true,
+      });
+      // Same deterministic outgoing UUID cannot be persisted twice.
+      return !error;
+    },
+    debit: async (outgoingId) => {
+      const { data, error } = await sb.rpc("consume_reply", {
         p_tenant_id: tenantId,
-      }
-    );
-  } catch (e) {
-    console.error(
-      `[${channel}_webhook] consume_reply failed`,
-      e
-    );
+        p_message_id: outgoingId,
+      });
+      if (error || typeof data !== "number") throw new Error("credit RPC failure");
+      return data;
+    },
+  });
+  if (outcome !== "sent_and_billed" && outcome !== "duplicate") {
+    console.warn("[webhook-claim] auto reply outcome:", outcome);
   }
+
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
