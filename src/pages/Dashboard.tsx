@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import confetti from "canvas-confetti";
 import SafeAvatar from "../components/SafeAvatar";
-import { apiAuthFetch, apiBase, backendMode, type WaSnapshot } from "../lib/api";
+import { api, apiAuthFetch, apiBase, backendMode, type WaSnapshot } from "../lib/api";
 import DeliveryReviewPanel from "./DeliveryReviewPanel";
 import { getSupabase, getStoredClaim, clearStoredClaim } from "../lib/supabase";
 import { CHANNELS, ChannelBadge, detectChannel, type ChannelId } from "../lib/channels";
@@ -1056,7 +1056,7 @@ export default function Dashboard() {
   };
 
   const copyEmbedCode = (token: string) => {
-    const code = `<script src="${apiEnabled ? API : "https://your-server.com"}/widget.js" data-token="${token}"></script>`;
+    const code = `<script src="${apiBase ? `${apiBase}/milan-api?action=widget.js` : ""}" data-token="${token}"></script>`;
     navigator.clipboard.writeText(code);
     setCopiedCode(token);
     setTimeout(() => setCopiedCode(null), 2000);
