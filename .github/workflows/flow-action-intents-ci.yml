@@ -1,0 +1,32 @@
+name: Flow action intents (review only)
+
+on:
+  push:
+    branches: [feature/flows-action-intents]
+  pull_request:
+    paths:
+      - "src/flow/runtimePlan.ts"
+      - "src/flow/actionIntents.test.ts"
+      - ".github/workflows/flow-action-intents-ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  intents:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: "22", cache: npm}
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Typecheck all flow source
+        run: npx tsc --noEmit -p tsconfig.flows.json
+      - name: Action intents and existing runtime regression
+        run: |
+          node --experimental-strip-types --test src/flow/actionIntents.test.ts
+          node --experimental-strip-types --test src/flow/runtimePlan.test.ts
+          node --experimental-strip-types --test src/flow/simulation.test.ts
+      - name: Vite production build unchanged
+        run: npm run build
