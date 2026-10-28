@@ -62,8 +62,10 @@ jobs:
           second=$!
           wait "$first"
           wait "$second"
-          test "$(cat /tmp/claim-first /tmp/claim-second | grep -cx 'true')" = 1
-          test "$(cat /tmp/claim-first /tmp/claim-second | grep -cx 'false')" = 1
+          echo "First claimant:"; cat /tmp/claim-first
+          echo "Second claimant:"; cat /tmp/claim-second
+          test "$(cat /tmp/claim-first /tmp/claim-second | grep -cx 'won')" = 1
+          test "$(cat /tmp/claim-first /tmp/claim-second | grep -cx 'lost')" = 1
           test "$(psql -XAtq -c "SELECT count(*) FROM public.automation_message_claims WHERE provider_event_id='meta-concurrent'")" = 1
           echo "PASS: two clients; 1 acquired; 1 duplicate; 1 durable claim"
       - name: Guarded rollback must reject nonempty durable claims
