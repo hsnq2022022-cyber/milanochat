@@ -174,6 +174,30 @@ async function dashSupabase<T>(token: string, path: string, init?: RequestInit):
     return data as T;
   }
 
+  // Owner-only delivery review: separate service-authenticated Edge endpoint.
+  // Feature flag is OFF until the endpoint and RLS have an independent GO.
+  if (path === "/api/dashboard/delivery-review" || path === "/api/dashboard/flow-metrics") {
+    if (import.meta.env.VITE_ENABLE_DELIVERY_REVIEW !== "true")
+      throw new Error("مراجعة التسليم غير مفعّلة");
+    if (!token || token.split(".").length !== 3)
+      throw new Error("يرجى تسجيل الدخول للمراجعة");
+    const tenantId = String(body.tenantId ?? "");
+    if (!/^[0-9a-f-]{36}$/i.test(tenantId)) throw new Error("معرّف المتجر غير صالح");
+    const mode = path.endsWith("delivery-review") ? "queue" : "metrics";
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/flow-delivery-review`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        apikey: SUPABASE_ANON,
+        authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ tenantId, mode }),
+    });
+    const result = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error((result as any)?.error ?? `HTTP ${res.status}`);
+    return result as T;
+  }
+
   // ─── مسارات dashboard القياسية → milan-api ───
   const m = path.match(/^\/api\/dashboard\/(.*)$/);
   const sub = m?.[1] ?? path;
