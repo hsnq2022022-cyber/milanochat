@@ -78,5 +78,5 @@ jobs:
             exit 1
           fi
           test "$(psql -XAtq -c 'SELECT legacy_value FROM public.automation_flow_tenant_switches')" = 'keep-me'
-          test "$(psql -XAtq -c \"SELECT to_regclass('public.automation_flow_global_switch') IS NULL\")" = 't'
+          test "$(psql -XAtq -c "SELECT to_regclass('public.automation_flow_global_switch') IS NULL")" = 't'
           echo 'PASS: colliding legacy table and contents left unchanged'
