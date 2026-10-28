@@ -34,9 +34,10 @@ else{
 NODE
 }
 restore(){
+ local failed=0
  if [[ "$DEPLOYED_PUB" == true ]];then
   supabase functions delete flow-publication --project-ref "$PROJECT" ||
-    echo "CRITICAL: cleanup new flow-publication failed"
+    { echo "CRITICAL: cleanup new flow-publication failed";failed=1; }
  fi
  if [[ "$DEPLOYED_MILAN" == true ]];then
   echo "Restoring saved v101 SOURCE as new deployment version"
@@ -52,7 +53,20 @@ restore(){
   get_functions
   check_remote milan-api any false
   echo "PASS: rollback source identical to saved v101; version number is new"
+  # Source-byte parity is necessary but NOT sufficient: re-run the same
+  # live Widget behavior test before deleting its isolated fixtures.
+  if [[ "$BASELINED" == true && -f "$FLOW_TEST_STATE" ]] &&
+     node --input-type=module - "$FLOW_TEST_STATE" <<'NODE'
+import fs from "node:fs";
+const s=JSON.parse(fs.readFileSync(process.argv[2],"utf8"));
+process.exit(s.widgets?.length&&s.oldBehavior?0:1);
+NODE
+  then
+   node scripts/flow-protected-live-smoke.mjs after ||
+     { echo "CRITICAL: restored v101 Widget behavior parity FAILED";failed=1; }
+  fi
  fi
+ [[ "$failed" == 0 ]]
 }
 finish(){
  local code=$?
