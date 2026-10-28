@@ -26,3 +26,11 @@ This tracker lives in [PR #117](https://github.com/hsnq2022022-cyber/milanochat/
 - [PR #126](https://github.com/hsnq2022022-cyber/milanochat/pull/126) combines the reviewed CI/editor/flow modules from #117, #119, #122, #123, #124 and #125 and adds `src/flow/flowPipeline.ts` with unit tests.
 - Integrated CI runs full typecheck, every Node test, Vite, Chromium UI tests, two PostgreSQL RLS suites and concurrent inbound reservation. A passing run is **integration evidence only**; no actual Meta sender or billing ledger is connected.
 - All Step 1–7 production release gates remain blocked by owner-approved staging, live schema verification, signed E2E and per-action GO. **Do not merge this PR to main just because CI is green.**
+
+## Staging delivery worker — review evidence, not production activation
+
+- New worker module `src/flow/stagingDeliveryWorker.ts` coordinates durable-lease CAS and fresh kill-switch checks, quarantine on unknown/expired provider responses, and a separate billing-only reconciliation pass.
+- Disposable PostgreSQL 17 functions in `tests/sql/flow-worker-staging.sql` verify atomic lease ownership, provider receipt CAS, owner/tenant checks, role lockdown, credit decrement and unique ledger insertion **without using the real Supabase database**.
+- CI: https://github.com/hsnq2022022-cyber/milanochat/actions/runs/40682268984 — 36 Node regressions plus passing PostgreSQL checks, TypeScript and Vite.
+- **Still blocked:** owner-designated active staging project, live schema definition, real immutable publishing/activation, signed Meta webhook integration, durable queue/dead-letter implementation, provider sandbox tests, real billing RPC repair and per-action production GO.
+- Note: account metadata exposes one inactive project and one active project; neither has been authorized as staging. No SQL or Edge deployment performed.
