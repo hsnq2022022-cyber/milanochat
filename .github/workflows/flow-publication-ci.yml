@@ -116,6 +116,8 @@ jobs:
       - uses: actions/setup-node@v4
         with: {node-version: "22", cache: npm}
       - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Syntax-check protected live smoke script (no credentials, no deployment)
+        run: node --check scripts/flow-publication-live-smoke.mjs
       - name: Test graph, channel and server-only activation guard
         run: node --experimental-strip-types --test src/flow/serverPublicationValidation.test.ts
       - name: Typecheck flow modules
