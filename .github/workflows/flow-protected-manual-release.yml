@@ -30,6 +30,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          # This YAML can be copied to main ONLY under separate owner GO.
+          # Checkout exact reviewed release scripts, never mutable main.
+          ref: bdbddd972928f2ee7649abaf14b3bfae52439633
           fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@v4
