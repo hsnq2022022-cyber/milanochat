@@ -70,3 +70,43 @@ test("AI node plans trusted knowledge placeholder but never invents an answer",(
  assert.equal(planFlowMetric({tenantId:"a",runId:"r",kind:"delivered",
   occurredAt:"2026-10-28T00:00:00Z"}),null);
 });
+
+test("outbox quick reply stores stable option IDs for authenticated customer choice",()=>{
+ const start=trigger(),q=makeNode("question",{x:0,y:40},{
+  inputMode:"buttons",text:"شنو تحتاج؟",options:[
+   {id:"prices",label:"الأسعار"},{id:"agent",label:"موظف"}]});
+ const d=graph([start,q],[connect(start,q)]);
+ const plan=planRuntimeTransition(d,createRuntimeState(d,"choice",1),context);
+ assert.equal(plan.state.status,"awaiting_input");
+ assert.deepEqual((plan.effects[0] as {choiceIds:string[]}).choiceIds,["prices","agent"]);
+ assert.deepEqual((plan.effects[0] as {choices:string[]}).choices,["الأسعار","موظف"]);
+ const selected=planRuntimeTransition(d,plan.state,{...context,eventKey:"tap",
+  answer:"prices"});
+ assert.notEqual(selected.state.status,"blocked");
+});
+test("Messenger HTTPS website buttons are a declared outbound effect, not a fake quick reply",()=>{
+ const start=trigger(),card=makeNode("message",{x:0,y:40},{
+  text:"زوروا موقعنا",platform:"messenger",
+  options:[{id:"go",label:"موقعنا",buttonType:"button",
+   action:"website",url:"https://example.org/shop"}]});
+ const d=graph([start,card],[connect(start,card)]);
+ const output=planRuntimeTransition(d,createRuntimeState(d,"web",1),context);
+ assert.equal(output.state.status,"completed");
+ assert.equal(output.effects[0].kind,"message");
+ assert.deepEqual((output.effects[0] as {websiteButtons:unknown}).websiteButtons,
+  [{label:"موقعنا",url:"https://example.org/shop"}]);
+ card.data.options[0].url="http://example.org";
+ const reject=planRuntimeTransition(d,createRuntimeState(d,"web",1),context);
+ assert.equal(reject.state.status,"blocked");
+ assert.deepEqual(reject.effects,[]);
+});
+test("too many rich choices fail closed before producing Outbox effects",()=>{
+ const start=trigger(),q=makeNode("question",{x:0,y:40},{
+  inputMode:"buttons",options:Array.from({length:14},(_,i)=>({
+   id:"id"+i,label:"option"+i
+  }))});
+ const doc=graph([start,q],[connect(start,q)]);
+ const result=planRuntimeTransition(doc,createRuntimeState(doc,"limit",1),context);
+ assert.equal(result.state.status,"blocked");
+ assert.deepEqual(result.effects,[]);
+});
