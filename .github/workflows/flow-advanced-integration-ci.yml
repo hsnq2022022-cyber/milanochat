@@ -46,7 +46,9 @@ jobs:
           set -euo pipefail
           createdb flow_internal_review
           export PGDATABASE=flow_internal_review
-          psql -X -v ON_ERROR_STOP=1 -f tests/sql/fixtures/flow-live-shape-bootstrap.sql
+          # PostgreSQL roles are cluster-wide and were created by the first test DB.
+          # Reuse them in the independent second database without changing fixtures.
+          sed '/^CREATE ROLE /d' tests/sql/fixtures/flow-live-shape-bootstrap.sql | psql -X -v ON_ERROR_STOP=1
           psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-staff-membership-bootstrap.sql
           psql -X -v ON_ERROR_STOP=1 -f tests/sql/fixtures/installed-flow-switches.sql
           psql -X -v ON_ERROR_STOP=1 -f tests/sql/fixtures/installed-flow-runtime.sql
