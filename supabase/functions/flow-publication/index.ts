@@ -11,8 +11,11 @@ import {
 import type {FlowCapability} from "../../../src/flow/publicationGate.ts";
 
 const env=(k:string)=>Deno.env.get(k)??"";
+// Only the existing production GitHub Pages origin. Never reflect Origin.
+const APPROVED_ORIGIN="https://hsnq2022022-cyber.github.io";
 const origins:Record<string,string>={
- "Access-Control-Allow-Origin":"*",
+ "Access-Control-Allow-Origin":APPROVED_ORIGIN,
+ "Vary":"Origin",
  "Access-Control-Allow-Headers":"authorization, apikey, content-type, x-client-info",
  "Access-Control-Allow-Methods":"OPTIONS, POST",
  "Content-Type":"application/json; charset=utf-8",
@@ -27,7 +30,12 @@ const hasPlatform=(v:unknown):v is ProviderPlatform=>
 const MAX_BODY_BYTES=4*1024*1024+4096;
 const MAX_BEARER_BYTES=8192;
 
-Deno.serve(async(req:Request):Promise<Response>=>{
+export async function handleFlowPublication(req:Request):Promise<Response>{
+ // Same-origin policy is explicit; anonymous clients and foreign browser
+ // origins cannot use this privileged publishing endpoint.
+ if(req.headers.get("origin")!==APPROVED_ORIGIN)
+  return new Response(JSON.stringify({ok:false,error:"Origin not allowed"}),{
+   status:403,headers:{"Content-Type":"application/json; charset=utf-8","Vary":"Origin"}});
  if(req.method==="OPTIONS")return new Response(null,{status:204,headers:origins});
  if(req.method!=="POST")return error("Method not allowed",405);
 
@@ -44,9 +52,28 @@ Deno.serve(async(req:Request):Promise<Response>=>{
   const declared=Number(req.headers.get("content-length")??0);
   if(Number.isFinite(declared)&&declared>MAX_BODY_BYTES)
    return error("Request too large",413);
-  const raw=await req.text();
-  if(new TextEncoder().encode(raw).byteLength>MAX_BODY_BYTES)
-   return error("Request too large",413);
+  if(!req.body)return error("Invalid JSON payload",400);
+  const chunks:Uint8Array[]=[];
+  let byteCount=0;
+  const reader=req.body.getReader();
+  try{
+   while(true){
+    const {value,done}=await reader.read();
+    if(done)break;
+    if(value){
+     byteCount+=value.byteLength;
+     if(byteCount>MAX_BODY_BYTES){
+      await reader.cancel();
+      return error("Request too large",413);
+     }
+     chunks.push(value);
+    }
+   }
+  }finally{reader.releaseLock();}
+  const data=new Uint8Array(byteCount);
+  let offset=0;
+  for(const chunk of chunks){data.set(chunk,offset);offset+=chunk.byteLength;}
+  const raw=new TextDecoder("utf-8",{fatal:true}).decode(data);
   const decoded:unknown=JSON.parse(raw);
   if(!decoded||typeof decoded!=="object"||Array.isArray(decoded))
    return error("Invalid JSON payload",400);
@@ -64,6 +91,16 @@ Deno.serve(async(req:Request):Promise<Response>=>{
    .eq("user_id",auth.user.id).maybeSingle();
   if(tenantError||!tenant||tenant.user_id!==auth.user.id||
      !UUID_REGEX.test(tenant.id))return error("Tenant not authorized",403);
+
+  // Transactional, per-tenant UTC-minute limiter in PostgreSQL, never an
+  // in-memory Deno map: one budget shared by all Edge instances.
+  const {data:rateAllowed,error:rateError}=await client.rpc(
+   "flow_publication_rate_allow",{p_tenant_id:tenant.id});
+  if(rateError)return error("Rate limiter unavailable",503);
+  if(rateAllowed!==true)
+   return new Response(JSON.stringify({ok:false,error:"Rate limit exceeded"}),{
+    status:429,headers:{...origins,
+     "Retry-After":String(60-Math.floor(Date.now()/1000)%60)}});
 
   // Only the authenticated tenant's accounts are ever returned.
   if(request.action==="accounts"){
@@ -179,4 +216,6 @@ Deno.serve(async(req:Request):Promise<Response>=>{
     e instanceof Error?e.name:"unknown");
   return error("Service temporarily unavailable",503);
  }
-});
+}
+
+if(import.meta.main)Deno.serve(handleFlowPublication);
