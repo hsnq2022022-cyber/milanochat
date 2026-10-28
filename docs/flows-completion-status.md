@@ -20,3 +20,9 @@ This tracker lives in [PR #117](https://github.com/hsnq2022022-cyber/milanochat/
 - Never merge a site-changing branch without specific owner GO, even when CI passes.
 - Existing production `milan-api` must continue to own all traffic until a tested, mutually exclusive responder exists.
 - Each future live action requires its own change, risk, verification and rollback plan, with named owner GO and a versioned migration for SQL.
+
+## Integration review candidate (not a production release)
+
+- [PR #126](https://github.com/hsnq2022022-cyber/milanochat/pull/126) combines the reviewed CI/editor/flow modules from #117, #119, #122, #123, #124 and #125 and adds `src/flow/flowPipeline.ts` with unit tests.
+- Integrated CI runs full typecheck, every Node test, Vite, Chromium UI tests, two PostgreSQL RLS suites and concurrent inbound reservation. A passing run is **integration evidence only**; no actual Meta sender or billing ledger is connected.
+- All Step 1–7 production release gates remain blocked by owner-approved staging, live schema verification, signed E2E and per-action GO. **Do not merge this PR to main just because CI is green.**
