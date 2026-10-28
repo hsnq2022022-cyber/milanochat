@@ -76,7 +76,7 @@ jobs:
           test "$(cat /tmp/claim-first /tmp/claim-second | grep -cx 'lost')" = 1
           test "$(psql -XAtq -c "SELECT count(*) FROM public.automation_message_claims WHERE provider_event_id='meta-concurrent'")" = 1
           echo "PASS: two clients; 1 acquired; 1 duplicate; 1 durable claim"
-      - name: Widget credit: ownership, duplicate, zero credit and RLS
+      - name: "Widget credit: ownership, duplicate, zero credit and RLS"
         run: psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-widget-credit.test.sql
       - name: Race same Widget message through two PostgreSQL sessions
         shell: bash
@@ -90,10 +90,10 @@ jobs:
           wait "$a"
           wait "$b"
           test "$(cat /tmp/widget-a /tmp/widget-b | grep -cx '4')" = 1
-          test "$(cat /tmp/widget-a /tmp/widget-b | grep -cx '-2')" = 1
+          test "$(cat /tmp/widget-a /tmp/widget-b | grep -cx -- '-2')" = 1
           test "$(psql -XAtq -c "SELECT count(*) FROM public.widget_reply_ledger WHERE widget_message_id='a0000000-0000-4000-8000-000000000007'")" = 1
           echo "PASS: two PostgreSQL clients; one Widget debit 5->4; one retry -2; one ledger"
-      - name: Delivery attempts: confirmed, uncertain and human review
+      - name: "Delivery attempts: confirmed, uncertain and human review"
         run: psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-delivery-reconciliation.test.sql
       - name: Guarded Widget/delivery rollback refuses existing charges/attempts
         shell: bash
