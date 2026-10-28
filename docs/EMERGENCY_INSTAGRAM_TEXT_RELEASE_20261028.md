@@ -98,3 +98,22 @@ or GO-T. This document does not authorize production actions.
    history. Do not restore the old ghost-charge RPC as an automatic rollback.
 4. Inspect production logs and compare original tenant/account/conversation
    counts. Report actual evidence to owner; resume only after a fresh GO.
+
+## Protected dry-run source integration — current candidate branch ONLY
+
+- Corrected `scripts/flow-protected-release.sh` source blob:
+  `bd878001687ce5d6d241402c69e9642aa988ecb3`.
+- Corrected `scripts/flow-protected-live-smoke.mjs` source blob:
+  `ff1cef51b01ed89bbcff96bc0ad819a0f31df3d3`.
+- Draft protected workflow now first executes `flow-protected-release.sh dry-run`
+  and only on complete fixture cleanup/row-count parity proceeds to
+  `flow-protected-release.sh release`.
+- Dry-run uses **temporary production Auth/DB writes**, not a read-only
+  transaction. It is NOT executed in the isolated code CI.
+- `main` continues to contain the previously approved manual workflow until
+  a separate owner GO covers copying the corrected YAML and release scripts
+  or explicitly approves the candidate merge strategy.
+- Independent verified GitHub Environment Required Reviewers + selected
+  deployment branch main are prerequisites, not proven by workflow YAML.
+- Production release rollback is best-effort; SIGKILL, GitHub outage or
+  Supabase outage can interrupt cleanup. Preserve independent backup.
