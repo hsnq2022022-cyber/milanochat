@@ -32,7 +32,7 @@ jobs:
         with:
           # This YAML can be copied to main ONLY under separate owner GO.
           # Checkout immutable commit with validated claims/publications snapshot counts, both release scripts, and dynamic-baseline helper; never mutable main.
-          ref: f5d36944acb4248f1cdd585cb410254052d42066
+          ref: 3990c48eb5ff3fe24c635ad055b34d76c15e3ef5
           fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@v4
