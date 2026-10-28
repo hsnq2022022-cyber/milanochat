@@ -2373,6 +2373,15 @@ Deno.serve(async (req) => {
           });
         }
 
+        // Missing signing-secret configuration is a server outage, not a
+        // verified invalid event. Do not ACK and lose legitimate messages.
+        // Meta should retry while operators restore the proper app secret.
+        if (!env("INSTAGRAM_APP_SECRET").trim() &&
+            !env("META_APP_SECRET").trim()) {
+          console.error("[instagram_webhook] missing signing secret");
+          return json({ error: "Webhook signing secret unavailable" }, 503);
+        }
+
         const sigOk = await verifyMetaSignature(
           raw,
           req.headers.get(
