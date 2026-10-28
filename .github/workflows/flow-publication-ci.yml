@@ -48,6 +48,10 @@ jobs:
           psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028180000_flow_runtime_tenant_bound.sql
       - name: Create atomic publication, activation and rollback RPCs
         run: psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028190000_flow_publication_server_rpcs.sql
+      - name: Install proposed rate limiter in disposable PostgreSQL
+        run: psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028200000_flow_publication_rate_limit.sql
+      - name: Test atomic tenant budget and protected privileges
+        run: psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-publication-rate-limit.test.sql
       - name: Verify owner isolation, immutable revisions, canary, deactivation and privileges
         run: |
           psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-publication-live.test.sql
@@ -94,5 +98,7 @@ jobs:
         run: npm run build
       - uses: denoland/setup-deno@v2
         with: {deno-version: v2.x}
+      - name: HTTP integration with two users, expired JWT and 429
+        run: deno test --allow-net --allow-env --node-modules-dir=auto tests/flow-publication-http.test.ts
       - name: Deno check real (not deployed) publication Edge Function
         run: deno check --node-modules-dir=auto supabase/functions/flow-publication/index.ts
