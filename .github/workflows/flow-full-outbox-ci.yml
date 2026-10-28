@@ -1,0 +1,87 @@
+name: Post-canary Advanced Flow — Outbox isolated
+on:
+  push:
+    branches: [integration/flow-full-features-post-canary]
+permissions:
+  contents: read
+jobs:
+  outbox-postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: flow_dispatch
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: synthetic_only
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d flow_dispatch"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: synthetic_only
+      PGDATABASE: flow_dispatch
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build disposable PG17 shapes from existing migrations
+        run: |
+          set -euo pipefail
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/fixtures/flow-live-shape-bootstrap.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/fixtures/installed-flow-switches.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/fixtures/installed-flow-runtime.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-exclusive-claim-bootstrap.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028220000_webhook_exclusive_claim.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028224000_delivery_attempts.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028225000_flow_runtime_advance.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-phase4-runtime-bootstrap.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-outbox-delivery-bootstrap.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028226000_flow_outbox_delivery_attempts.sql
+      - name: Test one-send, OFF gates, cross-tenant, provider states and ACLs
+        run: psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-outbox-delivery.test.sql
+      - name: Concurrent duplicate outbox reservation across PostgreSQL sessions
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql -XAtq -v ON_ERROR_STOP=1 -f tests/sql/flow-outbox-delivery-concurrent.sql > /tmp/out1 &
+          first=$!
+          psql -XAtq -v ON_ERROR_STOP=1 -f tests/sql/flow-outbox-delivery-concurrent.sql > /tmp/out2 &
+          second=$!
+          wait "$first"
+          wait "$second"
+          test "$(grep -c '^t$' /tmp/out1 /tmp/out2 | awk -F: '{s+=$2} END{print s}')" = 1
+          test "$(grep -c '^f$' /tmp/out1 /tmp/out2 | awk -F: '{s+=$2} END{print s}')" = 1
+          test "$(psql -XAtq -c "SELECT count(*) FROM public.automation_flow_delivery_attempts WHERE outbox_id='eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee3'")" = 1
+          echo "PASS: one winner, one duplicate, one journal row"
+  build-and-syntax:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Node pure execution and RAG isolation tests
+        run: node --experimental-strip-types --test tests/flow-outbox-worker.test.ts
+      - name: Shell syntax and live harness parse (NO EXECUTION)
+        run: |
+          bash -n scripts/flow-protected-release.sh
+          node --check scripts/flow-protected-live-smoke.mjs
+      - name: TypeScript and Vite UI
+        run: |
+          npm run typecheck
+          npm run build
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Deno source-only typecheck of both undeployed workers
+        run: |
+          deno check --node-modules-dir=auto supabase/functions/flow-outbox-worker/index.ts
+          deno check --node-modules-dir=auto supabase/functions/flow-runtime-worker/index.ts

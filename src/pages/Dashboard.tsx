@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import confetti from "canvas-confetti";
 import SafeAvatar from "../components/SafeAvatar";
+import DeliveryReviewPanel from "./DeliveryReviewPanel";
 import { api, apiAuthFetch, apiBase, apiEnabled, backendMode, type WaSnapshot } from "../lib/api";
 import { getSupabase, getStoredClaim, clearStoredClaim } from "../lib/supabase";
 import { CHANNELS, ChannelBadge, detectChannel, type ChannelId } from "../lib/channels";
@@ -198,7 +199,7 @@ export default function Dashboard() {
   const [claimErr, setClaimErr] = useState("");
   const [claimBusy, setClaimBusy] = useState(false);
 
-  const [tab, setTab] = useState<"convs" | "unresolved" | "knowledge" | "widgets" | "channels">("convs");
+  const [tab, setTab] = useState<"convs" | "unresolved" | "knowledge" | "widgets" | "channels" | "delivery">("convs");
   const [socialChannels, setSocialChannels] = useState<any[]>([]);
   const [activeConv, setActiveConv] = useState<string | null>(null);
   const [mobileThread, setMobileThread] = useState(false);
@@ -1199,6 +1200,9 @@ export default function Dashboard() {
     { id: "knowledge" as const, label: "المعرفة", icon: <IconDatabase className="w-4 h-4" /> },
     { id: "widgets" as const, label: "Widgets", icon: <span className="text-sm">💬</span> },
     { id: "channels" as const, label: "القنوات", icon: <IconGlobe className="w-4 h-4" /> },
+    ...((import.meta.env.VITE_ENABLE_DELIVERY_REVIEW === "true")
+      ? [{ id: "delivery" as const, label: "مراجعة الإرسال", icon: <IconQuestion className="w-4 h-4" /> }]
+      : []),
   ];
 
   const waLive = st.waStatus === "connected" || !!st.phone;
@@ -1341,6 +1345,9 @@ export default function Dashboard() {
             </button>
           ))}
         </div>
+
+        {tab === "delivery" && import.meta.env.VITE_ENABLE_DELIVERY_REVIEW === "true" &&
+          <DeliveryReviewPanel token={token} />}
 
         {tab === "convs" && (
           <div className="grid lg:grid-cols-[320px_1fr] gap-4 items-start">
