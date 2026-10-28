@@ -1,0 +1,32 @@
+name: Legacy Meta inbound persistence regression
+
+on:
+  push:
+    branches: [fix/legacy-webhook-inbound-insert-errors]
+  pull_request:
+    paths:
+      - "supabase/functions/milan-api/persistInboundOnce.ts"
+      - "supabase/functions/milan-api/index.ts"
+      - "tests/legacy-inbound-insert.test.ts"
+      - ".github/workflows/legacy-inbound-insert-ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  no-duplicate-reply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: "22", cache: npm}
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Fake PostgREST errors, unique retries and caller wiring
+        run: node --experimental-strip-types --test tests/legacy-inbound-insert.test.ts
+      - name: Vite build unchanged
+        run: npm run build
+      - uses: denoland/setup-deno@v2
+        with: {deno-version: v2.x}
+      - name: Deno check standalone inbound helper
+        run: deno check supabase/functions/milan-api/persistInboundOnce.ts
