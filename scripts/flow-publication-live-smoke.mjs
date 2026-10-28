@@ -92,6 +92,18 @@ function pinned(){
   'Approved source security guard mismatch');
  console.log('PASS: pinned source + exact Origin + verify_jwt=true + canary guard');
 }
+async function verifyHostedSecretNames(){
+ // This API can return values. Hold the response only in memory and
+ // deliberately inspect/log NAMES, never values or the full response.
+ const response=await request('https://api.supabase.com/v1/projects/'+REF+'/secrets',{
+  headers:{authorization:'Bearer '+cfg.SUPABASE_ACCESS_TOKEN}});
+ requireOk(response.status===200&&Array.isArray(response.data),
+  'Supabase project secrets metadata unavailable: HTTP '+response.status);
+ const names=new Set(response.data.map(x=>x.name));
+ for(const name of ['SUPABASE_SERVICE_ROLE_KEY','SUPABASE_URL'])
+  requireOk(names.has(name),'Required hosted Edge secret name not listed: '+name);
+ console.log('PASS: hosted Edge environment has expected secret names; values never logged');
+}
 async function deployed(){
  const f=await functionInfo(FN);
  requireOk(f?.status==='ACTIVE'&&f?.verify_jwt===true,
@@ -267,7 +279,7 @@ async function main(){
  requireOk(!existsSync(FILE),'Stale test state exists: refuse new run');
  let fault=null;
  try{
-  checkSigning();pinned();await flags();
+  checkSigning();pinned();await flags();await verifyHostedSecretNames();
   requireOk(await functionInfo(FN)===null,'Function already exists; overwrite forbidden');
   const check=await rest('rpc/flow_publication_rate_allow','POST','',
    {p_tenant_id:'00000000-0000-4000-8000-000000000000'});
