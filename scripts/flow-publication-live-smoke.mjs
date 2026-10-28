@@ -175,8 +175,38 @@ async function remove(table,ids){
  requireOk(r.status===200&&Array.isArray(r.data),'Cleanup '+table+': HTTP '+r.status);
  console.log('CLEANUP '+table+': '+r.data.length+' deleted');
 }
+async function reconcileFixtureIds(){
+ if(!state.runId)return;
+ // Recover committed rows even if a create request timed out before its ID
+ // reached the runner. Exact run-scoped names prevent deleting customer rows.
+ for(const label of ['a','b']){
+  const name='flowtest-'+label+'-'+state.runId;
+  for(const [table,column,field] of [
+   ['tenants','business_name','tenants'],
+   ['channel_accounts','account_name','accounts']
+  ]){
+   const res=await rest(table,'GET','?select=id&'+column+'=eq.'+encodeURIComponent(name));
+   requireOk(res.status===200&&Array.isArray(res.data),'Cannot reconcile '+table);
+   for(const row of res.data)if(!state[field].includes(row.id)){state[field].push(row.id);save();}
+  }
+ }
+ let page=1;
+ for(;page<=50;page++){
+  const res=await auth('admin/users?page='+page+'&per_page=100','GET');
+  requireOk(res.status===200&&Array.isArray(res.data?.users),'Cannot enumerate test Auth users for cleanup');
+  for(const user of res.data.users){
+   if(user.app_metadata?.flow_test_run===state.runId &&
+      ['a','b'].includes(user.app_metadata.flow_test_label) &&
+      !state.users.includes(user.id)){state.users.push(user.id);save();}
+  }
+  if(res.data.users.length<100)break;
+ }
+ requireOk(page<=50,'Could not exhaust Auth user pages during cleanup');
+}
 async function cleanup(){
  const errors=[];
+ try{await reconcileFixtureIds();}catch(e){errors.push('reconciliation: '+e.message);}
+
  for(const [name,run] of [
   ['accounts',()=>remove('channel_accounts',state.accounts)],
   ['rate windows',async()=>{
@@ -217,7 +247,10 @@ async function recover(){
  const failures=[];
  if(!state.success)try{await deleteFunction()}catch(e){failures.push('stop: '+e.message);}
  try{await cleanup()}catch(e){failures.push(e.message);}
- try{await flags()}catch(e){failures.push('final state: '+e.message);}
+ try{await flags()}catch(e){
+  failures.push('final state: '+e.message);
+  try{await deleteFunction()}catch(stop){failures.push('emergency stop: '+stop.message);}
+ }
  if(!failures.length&&existsSync(FILE))unlinkSync(FILE);
  requireOk(!failures.length,failures.join(' | '));
  console.log('PASS: emergency recovery/cleanup check');
@@ -239,6 +272,7 @@ async function main(){
   requireOk(d.status===0,'One-function deployment failed');
   await deployed();await flags();
   const id=(cfg.GITHUB_RUN_ID||'run')+'-'+Date.now().toString(36)+'-'+randomBytes(3).toString('hex');
+  state.runId=id;save();
   const a=await make('a',id),b=await make('b',id);
   await smoke(a,b);
   await cleanup();await flags();
@@ -251,6 +285,8 @@ async function main(){
   try{await flags()}catch(x){fault=new Error(fault.message+'; flags: '+x.message);}
  }
  if(fault)throw fault;
- if(existsSync(FILE))unlinkSync(FILE);
+ // Keep the success marker until the separate always() recovery step
+ // checks postflight. If that check fails, it must still be able to stop
+ // the function installed by this run.
 }
 try{await main()}catch(e){console.error('FINAL FAILED: '+e.message);process.exitCode=1;}
