@@ -239,7 +239,7 @@ export function planRuntimeTransition(
         }
         if (data.actionType === "tag" || data.actionType === "untag") {
           const tag = data.actionValue.trim();
-          if (!/^[\\p{L}\\p{N}_ -]{1,64}$/u.test(tag)) return fail(state,"invalid tag");
+          if (!/^[\p{L}\p{N}_ -]{1,64}$/u.test(tag)) return fail(state,"invalid tag");
           const effect: PlannedEffect = {kind:data.actionType,
             idempotencyKey:key(state,input,node.id),nodeId:node.id,tag};
           return {state:proceed(state,nextNode(doc,node,"next")),effects:[effect]};
