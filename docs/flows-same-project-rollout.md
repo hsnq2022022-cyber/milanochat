@@ -35,3 +35,22 @@ No customer messages can be sent by a new flow while both switches are OFF.
 4. Repair `consume_reply` along with ALL call sites, including widget billing, and test crashes/429/5xx before seeking a live GO.
 5. Run phone UI screenshot QA, verify Meta permission scopes, monitor credits/ledger and rehearse rollback.
 6. Seek separate GO for each function deploy, Meta webhook subscription, tenant activation and Pages merge. Do not claim launch before evidenced gates.
+
+## Verified preflight immediately before owner GO (2026-10-28)
+
+READ-ONLY SQL executed against the owner-confirmed project `nmhefwvhoholcjrbbila` using
+`supabase/verification/20261028170000_automation_flow_switches.preflight.readonly.sql`:
+
+```text
+automation_flow_global_switch  already_exists=false  safe_to_create
+automation_flow_tenant_switches already_exists=false  safe_to_create
+```
+
+Migration strengthened on [PR #133](https://github.com/hsnq2022022-cyber/milanochat/pull/133): if either table appears before install, only a table bearing this exact migration's creation marker may be reused. Unknown same-name tables are never granted privileges or modified.
+
+[Isolated PostgreSQL 17 CI #40717139691](https://github.com/hsnq2022022-cyber/milanochat/actions/runs/40717139691)
+**SUCCESS** on commit `873a84b4fe5463dd66ea773ef707613ca7e0b3d4`: creates/reapplies OFF switches, enforces browser-role denial, tests tenant opt-in and global OFF, refuses rollback with data, successfully rolls back empty new tables, and rejects an unrelated colliding table while preserving its contents.
+
+**Pending owner GO solely for this exact schema migration.** No production SQL was applied. Do not confuse the preceding read-only preflight with migration installation; any SQL execution that creates these tables needs separate explicit approval.
+
+Change: create two service-role-only OFF switches, no existing records updated/deleted. Risk: 2 additional tables; transaction stops on unexpected schema or permissions; optional extra disk usage. Verify using the committed read-only postflight. Rollback with the committed guarded rollback only while no state exists; otherwise keep global OFF, preserve tables and take a separately approved forward fix.
