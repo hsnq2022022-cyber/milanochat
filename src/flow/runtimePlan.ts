@@ -18,7 +18,10 @@ export type PlannedEffect =
   | { kind: "message"; idempotencyKey: string; nodeId: string; text: string }
   | { kind: "question"; idempotencyKey: string; nodeId: string; text: string; inputMode: string; choices: string[] }
   | { kind: "delay"; idempotencyKey: string; nodeId: string; wakeAt: number }
-  | { kind: "handoff"; idempotencyKey: string; nodeId: string };
+  | { kind: "handoff"; idempotencyKey: string; nodeId: string }
+  | { kind: "tag" | "untag"; idempotencyKey: string; nodeId: string; tag: string }
+  | { kind: "staff_notification"; idempotencyKey: string; nodeId: string; text: string }
+  | { kind: "message"; idempotencyKey: string; nodeId: string; source: "knowledge_ai"; text: "" };
 export type RuntimeInput = {
   eventKey: string;
   nowMs: number;
@@ -105,11 +108,13 @@ export function planRuntimeTransition(
   }
   if (state.status === "awaiting_input") {
     const node = doc.nodes.find(n => n.id === state.nodeId);
-    if (!node || node.data.kind !== "question")
-      return fail(state, "missing question node");
+    if (!node || (node.data.kind !== "question" && node.data.kind !== "message"))
+      return fail(state, "missing interactive node");
+    if (node.data.kind === "message" && node.data.options.length===0)
+      return fail(state, "missing buttons");
     if (typeof input.answer !== "string" || input.answer.length > 4096)
       return { state, effects: [], error: "customer answer required" };
-    const mode = node.data.inputMode;
+    const mode = node.data.kind === "message" ? "buttons" : node.data.inputMode;
     let port: string;
     if (mode === "buttons") {
       const selected = node.data.options.find(o => o.id === input.answer || o.label === input.answer);
@@ -148,10 +153,18 @@ export function planRuntimeTransition(
         return { state: { ...state, status: "completed" }, effects: [] };
       case "message": {
         // الصور والأزرار وما شابهها تتطلب مرسلاً يدعمها؛ لا نتظاهر بأنها نُفذت.
-        if (data.image || data.contentBlocks.length || data.options.length)
+        if (data.image || data.contentBlocks.length)
           return fail(state, "rich message requires a verified sender");
+        if (data.options.some(o => (o.action && o.action!=="step") || !o.label.trim()))
+          return fail(state, "unsupported button action or blank label");
         const text = safeValue(data.text).trim();
         if (!text) return fail(state, "empty message");
+        if(data.options.length>0){
+          const effect: PlannedEffect = {kind:"question",
+            idempotencyKey:key(state,input,node.id),nodeId:node.id,text,
+            inputMode:"buttons",choices:data.options.map(o=>o.label)};
+          return {state:{...state,status:"awaiting_input"},effects:[effect]};
+        }
         const effect: PlannedEffect = { kind: "message",
           idempotencyKey: key(state, input, node.id), nodeId: node.id, text };
         return { state: proceed(state, nextNode(doc, node, "next")), effects: [effect] };
@@ -223,6 +236,27 @@ export function planRuntimeTransition(
           state = proceed({ ...state, variables }, nextNode(doc, node, "next"));
           if (state.status === "completed") return { state, effects: [] };
           break;
+        }
+        if (data.actionType === "tag" || data.actionType === "untag") {
+          const tag = data.actionValue.trim();
+          if (!/^[\\p{L}\\p{N}_ -]{1,64}$/u.test(tag)) return fail(state,"invalid tag");
+          const effect: PlannedEffect = {kind:data.actionType,
+            idempotencyKey:key(state,input,node.id),nodeId:node.id,tag};
+          return {state:proceed(state,nextNode(doc,node,"next")),effects:[effect]};
+        }
+        if (data.actionType === "notify") {
+          const text = data.actionValue.trim();
+          if (!text || text.length>500) return fail(state,"invalid notification");
+          const effect: PlannedEffect = {kind:"staff_notification",
+            idempotencyKey:key(state,input,node.id),nodeId:node.id,text};
+          return {state:proceed(state,nextNode(doc,node,"next")),effects:[effect]};
+        }
+        if (data.actionType === "ai") {
+          // A trusted server checks tenant, credit and evidence; the planner
+          // does not invent a reply or call a model.
+          const effect: PlannedEffect = {kind:"message",source:"knowledge_ai",text:"",
+            idempotencyKey:key(state,input,node.id),nodeId:node.id};
+          return {state:proceed(state,nextNode(doc,node,"next")),effects:[effect]};
         }
         if (data.actionType !== "handoff")
           return fail(state, "action needs explicit trusted server implementation");
