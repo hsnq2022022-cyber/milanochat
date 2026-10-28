@@ -52,6 +52,23 @@ jobs:
         run: psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028200000_flow_publication_rate_limit.sql
       - name: Test atomic tenant budget and protected privileges
         run: psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-publication-rate-limit.test.sql
+      - name: Two independent PostgreSQL clients race on the same tenant budget
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql -XAtq -v ON_ERROR_STOP=1 -f tests/sql/flow-publication-rate-parallel.sql > /tmp/rate-left.out &
+          left=$!
+          psql -XAtq -v ON_ERROR_STOP=1 -f tests/sql/flow-publication-rate-parallel.sql > /tmp/rate-right.out &
+          right=$!
+          wait "$left"
+          wait "$right"
+          accepted="$(cat /tmp/rate-left.out /tmp/rate-right.out | grep -cx '1' || true)"
+          denied="$(cat /tmp/rate-left.out /tmp/rate-right.out | grep -cx '0' || true)"
+          test "$accepted" = "30"
+          test "$denied" = "10"
+          counter="$(psql -XAtq -c "SELECT request_count FROM public.flow_publication_rate_windows WHERE tenant_id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' AND window_start=date_trunc('minute',now())")"
+          test "$counter" = "30"
+          echo "PASS: two concurrent DB sessions: 30 accepted, 10 denied, counter=30"
       - name: Verify owner isolation, immutable revisions, canary, deactivation and privileges
         run: |
           psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-publication-live.test.sql
