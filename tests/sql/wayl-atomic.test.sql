@@ -1,16 +1,16 @@
 \set ON_ERROR_STOP on
 SET ROLE service_role;
 DO $verify$
-DECLARE id uuid:='11111111-1111-4111-8111-111111111111';
+DECLARE payment_uuid uuid:='11111111-1111-4111-8111-111111111111';
  tid uuid:='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 BEGIN
- IF public.wayl_grant_topup_once(id,35000) <> 'applied'
+ IF public.wayl_grant_topup_once(payment_uuid,35000) <> 'applied'
  THEN RAISE EXCEPTION 'paid event failed to grant';END IF;
- IF public.wayl_grant_topup_once(id,35000) <> 'already_applied'
+ IF public.wayl_grant_topup_once(payment_uuid,35000) <> 'already_applied'
  THEN RAISE EXCEPTION 'duplicate payment was not rejected';END IF;
  IF (SELECT credits_remaining FROM public.tenants WHERE id=tid)<>1010
  THEN RAISE EXCEPTION 'wrong credits after paid event';END IF;
- IF (SELECT credits_granted FROM public.payments WHERE id=id)<>1000
+ IF (SELECT credits_granted FROM public.payments WHERE id=payment_uuid)<>1000
  THEN RAISE EXCEPTION 'payment ledger not persisted';END IF;
  IF public.wayl_grant_topup_once('22222222-2222-4222-8222-222222222222',35000)<>'amount_mismatch'
  THEN RAISE EXCEPTION 'wrong paid amount accepted';END IF;
