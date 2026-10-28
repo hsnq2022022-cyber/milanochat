@@ -46,6 +46,7 @@ export async function apiAuthFetch<T>(token: string, path: string, init?: Reques
 
 /** شحن الرصيد بالدينار العراقي عبر Wayl (دالة topup-create). */
 async function topupSupabase(
+  tenantId: string,
   packageId: string,
   token?: string | null,
 ): Promise<{ invoiceId: string; paymentUrl: string | null }> {
@@ -62,7 +63,7 @@ async function topupSupabase(
       apikey: SUPABASE_ANON,
       authorization: `Bearer ${token ?? ""}`,
     },
-    body: JSON.stringify({ packageId, returnUrl: window.location.href.split("#")[0] }),
+    body: JSON.stringify({ tenantId, packageId }),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error((data as any)?.error ?? `HTTP ${res.status}`);
@@ -399,7 +400,7 @@ export const api = {
 
   createPayment: (tenantId: string, packageId: string, token?: string | null) =>
     backendMode === "supabase"
-      ? topupSupabase(packageId, token)
+      ? topupSupabase(tenantId, packageId, token)
       : apiFetch<{ invoiceId: string; paymentUrl: string | null }>("/api/payments/create", {
           method: "POST",
           body: JSON.stringify({ tenantId, packageId }),
