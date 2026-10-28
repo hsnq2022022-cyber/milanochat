@@ -48,6 +48,7 @@ Status: **Flow editor and opt-in cloud drafts released**; **real customer automa
 ## Current implementation limits
 
 - Stage 10 runtimePlan.ts produces **plans**, not outgoing provider API requests and not committed durable execution.
+- `src/flow/deliveryContract.ts` (review branch only) now models lease, uncertain delivery quarantine, bounded retry, kill switches and stable debit outcomes. This is pure in-memory decision logic **without** PostgreSQL atomicity, Meta provider calls or payment operations; Stage 10 provider-delivery gate remains BLOCKED.
 - The SQL proposal establishes immutable publications, tenant-aware run references and uniqueness keys, but does NOT yet prove channel-account↔tenant/conversation association; check actual live schema before production migrations.
 - AI authorization and metrics are pure checks; they do NOT prove production retrieval quality, provider delivery, billable credits or comprehensive conversational analytics.
 - Feature flag on frontend is visibility only, **not a security control**. Server-side authorization is mandatory.

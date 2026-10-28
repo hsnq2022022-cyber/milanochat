@@ -1,0 +1,38 @@
+name: Stage 7 - Provider Delivery Contract (fake only)
+
+on:
+  push:
+    branches: [feature/flows-stage7-delivery-contract]
+  pull_request:
+    paths:
+      - "src/flow/deliveryContract.ts"
+      - "src/flow/deliveryContract.test.ts"
+      - ".github/workflows/flow-delivery-contract-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fake-delivery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Typecheck stage 7 and all flow modules
+        run: npx tsc --noEmit -p tsconfig.flows.json
+      - name: Run fake provider, crash and duplicate tests
+        run: node --experimental-strip-types --test src/flow/deliveryContract.test.ts
+      - name: Regress existing runtime and routing
+        run: |
+          node --experimental-strip-types --test src/flow/runtimePlan.test.ts
+          node --experimental-strip-types --test src/flow/eventRouting.test.ts
+          node --experimental-strip-types --test src/flow/aiMetricsGate.test.ts
+      - name: Vite build unchanged, no runtime activation
+        run: npm run build
