@@ -55,12 +55,22 @@ function result(status:WorkStatus,deliveryId:string):WorkerResult {
 }
 
 export class StagingDeliveryWorker {
+  private readonly store:DurableDeliveryStore;
+  private readonly provider:DeliveryProvider;
+  private readonly debiter:CreditDebiter;
+  private readonly clock:WorkerClock;
+
   constructor(
-    private readonly store:DurableDeliveryStore,
-    private readonly provider:DeliveryProvider,
-    private readonly debiter:CreditDebiter,
-    private readonly clock:WorkerClock,
-  ) {}
+    store:DurableDeliveryStore,
+    provider:DeliveryProvider,
+    debiter:CreditDebiter,
+    clock:WorkerClock,
+  ) {
+    this.store=store;
+    this.provider=provider;
+    this.debiter=debiter;
+    this.clock=clock;
+  }
 
   /**
    * One bounded tick. Does not retry unknown provider outcomes.
