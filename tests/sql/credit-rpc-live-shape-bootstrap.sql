@@ -28,6 +28,11 @@ ALTER TABLE public.conversations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.messages ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.reply_ledger ENABLE ROW LEVEL SECURITY;
 
+-- The real Supabase service_role owns CRUD privileges on these tables.
+-- BYPASSRLS does not itself grant SELECT/INSERT/UPDATE permissions.
+GRANT SELECT, INSERT, UPDATE ON public.tenants,
+  public.conversations,public.messages,public.reply_ledger TO service_role;
+
 INSERT INTO public.tenants(id,credits_remaining) VALUES
  ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',0),
  ('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',5);
