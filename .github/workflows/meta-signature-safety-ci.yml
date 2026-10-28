@@ -1,0 +1,39 @@
+name: Meta webhook signature fail-closed review
+
+on:
+  push:
+    branches: [security/meta-webhook-signature-required]
+  pull_request:
+    paths:
+      - "supabase/functions/milan-api/**"
+      - "tests/meta-signature.test.ts"
+      - ".github/workflows/meta-signature-safety-ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  signature:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: "22", cache: npm}
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Verify raw Meta signature test vectors and rejection rules
+        run: node --experimental-strip-types --test tests/meta-signature.test.ts
+      - name: Typecheck standalone WebCrypto verifier
+        run: npx tsc --noEmit --target es2022 --module nodenext --moduleResolution nodenext --lib es2022,dom supabase/functions/milan-api/metaSignature.ts
+      - name: Ensure milan-api uses the fail-closed verifier
+        run: |
+          node --input-type=module -e '
+            import {readFileSync} from "node:fs";
+            const code=readFileSync("supabase/functions/milan-api/index.ts","utf8");
+            if(!code.includes("return verifyMetaWebhookSignature(raw,sigHeader"))
+              throw Error("milan-api does not use the strict signature verifier");
+            if(code.includes("if (secrets.length === 0) return true"))
+              throw Error("Legacy fail-open signature bypass remains");
+          '
+      - name: Frontend build unchanged
+        run: npm run build

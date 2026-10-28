@@ -40,6 +40,7 @@
 
 import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2";
 import * as cheerio from "npm:cheerio@1";
+import { verifyMetaWebhookSignature } from "./metaSignature.ts";
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
@@ -1166,51 +1167,15 @@ ${history ? `\nسياق المحادثة السابق:\n${history}\n` : ""}`
 
 /**
  * التحقق من توقيع Meta عبر x-hub-signature-256.
- * إذا لم يكن السر مضبوطًا نتجاهل التحقق (سلوك خادم Node السابق).
+ * إذا لم يكن سر التطبيق مضبوطًا نرفض الحدث، ولا نتجاوز التحقق أبدًا.
  */
-async function verifyMetaSignature(
-  raw: string,
-  sigHeader: string
-): Promise<boolean> {
-  /**
-   * قد يوقّع Meta الـ webhook بسر تطبيق إنستغرام أو بسر تطبيق Meta الرئيسي
-   * حسب نوع الربط، لذلك نقبل التوقيع إن طابق أيًّا منهما.
-   */
-  const secrets = [
+async function verifyMetaSignature(raw: string, sigHeader: string): Promise<boolean> {
+  // Missing secrets are a configuration error and now fail closed.
+  // Keep both configured app-secret candidates for existing IG/FB connections.
+  return verifyMetaWebhookSignature(raw,sigHeader,[
     env("INSTAGRAM_APP_SECRET"),
     env("META_APP_SECRET"),
-  ]
-    .map((v) => v.trim())
-    .filter(Boolean);
-
-  if (secrets.length === 0) return true;
-
-  if (!sigHeader) return false;
-
-  for (const secret of secrets) {
-    const expected =
-      "sha256=" +
-      hex(
-        await crypto.subtle.sign(
-          "HMAC",
-          await crypto.subtle.importKey(
-            "raw",
-            enc.encode(secret),
-            {
-              name: "HMAC",
-              hash: "SHA-256",
-            },
-            false,
-            ["sign"]
-          ),
-          enc.encode(raw)
-        )
-      );
-
-    if (sigHeader === expected) return true;
-  }
-
-  return false;
+  ]);
 }
 
 /**
@@ -2406,6 +2371,15 @@ Deno.serve(async (req) => {
           return json({
             received: true,
           });
+        }
+
+        // Missing signing-secret configuration is a server outage, not a
+        // verified invalid event. Do not ACK and lose legitimate messages.
+        // Meta should retry while operators restore the proper app secret.
+        if (!env("INSTAGRAM_APP_SECRET").trim() &&
+            !env("META_APP_SECRET").trim()) {
+          console.error("[instagram_webhook] missing signing secret");
+          return json({ error: "Webhook signing secret unavailable" }, 503);
         }
 
         const sigOk = await verifyMetaSignature(
