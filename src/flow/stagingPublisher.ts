@@ -69,15 +69,21 @@ function validId(x:unknown):x is string{
 }
 
 export class StagingFlowPublisher {
-  constructor(private readonly auth:PublisherAuth,private readonly store:PublicationStore){}
+  private readonly auth:PublisherAuth;
+  private readonly store:PublicationStore;
+  constructor(auth:PublisherAuth,store:PublicationStore){
+    this.auth=auth;
+    this.store=store;
+  }
 
-  private async verify(bearer:string,accountId:string){
-    if(!validId(bearer)||!validId(accountId))return null;
+  private async verify(bearer:string,accountId:string,allowDisabled=false){
+    if(typeof bearer!=="string"||bearer.length<1||bearer.length>8192||
+      !validId(accountId))return null;
     const caller=await this.auth.identify(bearer);
     if(!caller||!validId(caller.tenantId)||!validId(caller.userId))return null;
     const account=await this.store.account(caller.tenantId,accountId);
     if(!account||account.tenantId!==caller.tenantId||
-       account.id!==accountId||!account.enabled)return null;
+       account.id!==accountId||(!allowDisabled&&!account.enabled))return null;
     return {caller,account};
   }
 
@@ -135,7 +141,7 @@ export class StagingFlowPublisher {
   async deactivate(bearer:string,accountId:string,flowKey:string):
     Promise<Outcome<Activation>>{
     if(!validKey(flowKey))return fail("invalid_request");
-    const scope=await this.verify(bearer,accountId);
+    const scope=await this.verify(bearer,accountId,true);
     if(!scope)return fail("unauthenticated");
     const existing=await this.store.activation(scope.caller.tenantId,accountId,flowKey);
     if(!existing)return fail("not_published");
