@@ -2179,6 +2179,31 @@ Deno.serve(async (req) => {
           });
         }
 
+        // WhatsApp Cloud API signs every event POST with the Meta App
+        // Secret. WHATSAPP_VERIFY_TOKEN is ONLY for the GET handshake.
+        // Missing signing configuration is a recoverable 503, never an
+        // implicit authorization to accept unsigned customer messages.
+        const whatsappSecrets = [
+          env("WHATSAPP_APP_SECRET"),
+          env("META_APP_SECRET"),
+        ].map((secret) => secret.trim()).filter(Boolean);
+
+        if (whatsappSecrets.length === 0) {
+          console.error("[whatsapp_webhook] missing signing secret");
+          return json({ error: "WhatsApp signing secret unavailable" }, 503);
+        }
+
+        const whatsappSignatureValid = await verifyMetaWebhookSignature(
+          raw,
+          req.headers.get("x-hub-signature-256") ?? "",
+          whatsappSecrets
+        );
+
+        if (!whatsappSignatureValid) {
+          console.error("[whatsapp_webhook] invalid signature");
+          return json({ error: "Invalid WhatsApp signature" }, 401);
+        }
+
         for (const entry of body.entry ?? []) {
           for (const change of entry?.changes ?? []) {
             if (change?.field !== "messages") {
