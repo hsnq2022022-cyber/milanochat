@@ -1,0 +1,71 @@
+name: Protected manual flow-publication deployment + live Auth isolation
+
+# REVIEW ONLY. This file is on PR #139's branch and is NEVER triggered by push/PR.
+# Important GitHub restriction: workflow_dispatch requires the workflow file to
+# exist on the DEFAULT branch before its Run workflow button is available.
+# Do not copy/merge this workflow to main without a separate explicit approval.
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: "Type APPROVE_FLOW_PUBLICATION_ONLY to confirm the exact scope"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: flow-publication-single-live-rollout
+  cancel-in-progress: false
+
+jobs:
+  publish-and-test:
+    if: github.ref == 'refs/heads/review/flow-publication-security-gates' && inputs.confirmation == 'APPROVE_FLOW_PUBLICATION_ONLY'
+    name: Deploy one function; live A/B; fail-closed rollback
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment:
+      name: flow-publication-live-manual
+      url: https://nmhefwvhoholcjrbbila.supabase.co/functions/v1/flow-publication
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+      SUPABASE_JWT_SECRET: ${{ secrets.SUPABASE_JWT_SECRET }}
+    steps:
+      - name: Checkout reviewed workflow/scripts (never main)
+        uses: actions/checkout@v4
+        with:
+          ref: review/flow-publication-security-gates
+          persist-credentials: false
+      - name: Checkout exact approved function source (commit pinned)
+        uses: actions/checkout@v4
+        with:
+          ref: f37a8be7800e1c47d7e3c0db4ab69e612e3f4cc9
+          path: pinned-source
+          persist-credentials: false
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Setup Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+      - name: Verify script syntax
+        run: node --check scripts/flow-publication-live-smoke.mjs
+      - name: Deploy ONLY flow-publication and execute real Auth A/B smoke
+        id: smoke
+        run: node scripts/flow-publication-live-smoke.mjs run
+      - name: Emergency recovery and fixture cleanup (also on failure/cancellation)
+        if: always()
+        run: node scripts/flow-publication-live-smoke.mjs recover
+      - name: Summary
+        if: always()
+        run: |
+          echo '## Protected flow-publication live smoke' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Source: f37a8be7800e1c47d7e3c0db4ab69e612e3f4cc9' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Only function targeted: flow-publication' >> "$GITHUB_STEP_SUMMARY"
+          echo '- No Canary enable, no migration, no PR merge, no Meta sends.' >> "$GITHUB_STEP_SUMMARY"
+          echo '- See smoke and emergency cleanup steps for PASS/FAIL and fixture counts.' >> "$GITHUB_STEP_SUMMARY"

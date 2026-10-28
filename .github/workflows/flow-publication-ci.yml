@@ -48,6 +48,29 @@ jobs:
           psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028180000_flow_runtime_tenant_bound.sql
       - name: Create atomic publication, activation and rollback RPCs
         run: psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028190000_flow_publication_server_rpcs.sql
+      - name: Install proposed rate limiter in disposable PostgreSQL
+        run: psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028200000_flow_publication_rate_limit.sql
+      - name: Test atomic tenant budget and protected privileges
+        run: psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-publication-rate-limit.test.sql
+      - name: Two independent PostgreSQL clients race on the same tenant budget
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The synthetic fixture omits production's existing service_role grants.
+          psql -X -v ON_ERROR_STOP=1 -c "GRANT SELECT ON public.tenants TO service_role"
+          psql -XAtq -v ON_ERROR_STOP=1 -f tests/sql/flow-publication-rate-parallel.sql > /tmp/rate-left.out &
+          left=$!
+          psql -XAtq -v ON_ERROR_STOP=1 -f tests/sql/flow-publication-rate-parallel.sql > /tmp/rate-right.out &
+          right=$!
+          wait "$left"
+          wait "$right"
+          accepted="$(cat /tmp/rate-left.out /tmp/rate-right.out | grep -cx '1' || true)"
+          denied="$(cat /tmp/rate-left.out /tmp/rate-right.out | grep -cx '0' || true)"
+          test "$accepted" = "30"
+          test "$denied" = "10"
+          counter="$(psql -XAtq -c "SELECT request_count FROM public.flow_publication_rate_windows WHERE tenant_id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' AND window_start=date_trunc('minute',now())")"
+          test "$counter" = "30"
+          echo "PASS: two concurrent DB sessions: 30 accepted, 10 denied, counter=30"
       - name: Verify owner isolation, immutable revisions, canary, deactivation and privileges
         run: |
           psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-publication-live.test.sql
@@ -71,6 +94,13 @@ jobs:
           result="$(psql -XAtq -c "SELECT count(*)||'|'||min(revision)||'|'||max(revision) FROM public.automation_flow_publications WHERE flow_key='concurrent'")"
           test "$result" = "2|1|2"
           echo "PASS: two concurrent publishers produced distinct immutable revisions"
+      - name: Harden legacy service-only RPCs in synthetic PostgreSQL and test trigger
+        run: |
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/legacy-rpc-security-bootstrap.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028210000_harden_widget_human_rpc_acl.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/legacy-rpc-security.test.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/rollbacks/20261028210000_harden_widget_human_rpc_acl.rollback.sql
+          echo "PASS: legacy ACL hardened then restored on disposable DB only"
       - name: Rollback disables only the management RPCs, retaining versions
         run: |
           psql -X -v ON_ERROR_STOP=1 -f supabase/rollbacks/20261028190000_flow_publication_server_rpcs.rollback.sql
@@ -86,6 +116,8 @@ jobs:
       - uses: actions/setup-node@v4
         with: {node-version: "22", cache: npm}
       - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Syntax-check protected live smoke script (no credentials, no deployment)
+        run: node --check scripts/flow-publication-live-smoke.mjs
       - name: Test graph, channel and server-only activation guard
         run: node --experimental-strip-types --test src/flow/serverPublicationValidation.test.ts
       - name: Typecheck flow modules
@@ -94,5 +126,7 @@ jobs:
         run: npm run build
       - uses: denoland/setup-deno@v2
         with: {deno-version: v2.x}
+      - name: HTTP integration with two users, expired JWT and 429
+        run: deno test --allow-net --allow-env --node-modules-dir=auto tests/flow-publication-http.test.ts
       - name: Deno check real (not deployed) publication Edge Function
         run: deno check --node-modules-dir=auto supabase/functions/flow-publication/index.ts

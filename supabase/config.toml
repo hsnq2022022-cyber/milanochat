@@ -1,0 +1,4 @@
+# Only this unreleased function is configured here.
+# Existing deployed functions retain their current settings.
+[functions.flow-publication]
+verify_jwt = true
