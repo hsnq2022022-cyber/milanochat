@@ -1,7 +1,7 @@
 import {test} from "node:test";
 import assert from "node:assert/strict";
 import {
- claimDelivery, deliveryGate, recordDebitOutcome, recordProviderOutcome,
+ claimDelivery, deliveryGate, authorizeLeasedDispatch, recordDebitOutcome, recordProviderOutcome,
  reconcileUncertain, MAX_SEND_ATTEMPTS, type DeliveryRecord,
  type TrustedDeliveryGate, type ProviderOutcome
 } from "./deliveryContract.ts";
@@ -208,4 +208,27 @@ test("provider-event receipt and outbox keys remain unique in fake atomic reserv
  assert.equal(receipts.size,1);
  assert.equal(outbox.size,1);
  // In production the two inserts plus runtime transition must commit together.
+});
+
+test("kill switch and manual takeover checked again after lease and before provider HTTP",()=>{
+ const claim=claimDelivery(record(),gate(),1000,"owner-lease");
+ assert.equal(claim.decision,"leased");
+ if(claim.decision!=="leased")throw Error("not leased");
+ assert.deepEqual(authorizeLeasedDispatch(claim.record,gate(),1010,"owner-lease"),
+  {authorized:true});
+ for(const [flags,reason] of [
+  [{globalFlowEnabled:false},"disabled"],
+  [{tenantFlowEnabled:false},"disabled"],
+  [{humanTakeover:true},"human_takeover"],
+  [{creditsRemaining:0},"no_credits"],
+  [{accountTenantId:"other-tenant"},"wrong_tenant"],
+  [{messagingWindowVerified:false},"window_unverified"]
+ ] as const){
+  assert.deepEqual(authorizeLeasedDispatch(claim.record,gate(flags),1010,"owner-lease"),
+   {authorized:false,reason});
+ }
+ assert.deepEqual(authorizeLeasedDispatch(claim.record,gate(),1010,"wrong-worker"),
+  {authorized:false,reason:"invalid_lease"});
+ assert.deepEqual(authorizeLeasedDispatch(claim.record,gate(),31000,"owner-lease"),
+  {authorized:false,reason:"invalid_lease"});
 });
