@@ -61,7 +61,13 @@ finish(){
   echo "FAIL release: restoring before teardown"
   restore || code=1
  fi
- cleanup || code=1
+ if ! cleanup;then
+  code=1
+  echo "FAIL release: cleanup is part of the verified release contract"
+  # A cleanup failure is a post-deploy test failure as well.
+  restore || code=1
+  cleanup || code=1
+ fi
  if [[ "$code" == 0 ]];then echo "PASS: deploy tests, cleanup, exact database counts";fi
  exit "$code"
 }
