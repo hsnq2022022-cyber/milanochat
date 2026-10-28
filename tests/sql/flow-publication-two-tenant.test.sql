@@ -34,7 +34,9 @@ BEGIN
   -- Only isolated test DB: arm both switches to verify activation ownership
   -- even when the global kill switch is ON. Entire transaction is rolled back.
   INSERT INTO public.automation_flow_tenant_switches(tenant_id,enabled,test_only)
-    VALUES(tenant_a,true,true),(tenant_b,true,true);
+    VALUES(tenant_a,true,true),(tenant_b,true,true)
+    ON CONFLICT (tenant_id) DO UPDATE
+      SET enabled=EXCLUDED.enabled,test_only=EXCLUDED.test_only;
   UPDATE public.automation_flow_global_switch SET enabled=true WHERE singleton;
 
   IF public.flow_activate_revision(tenant_b,account_b,'facebook','b_flow',1,user_a)
