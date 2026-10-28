@@ -40,6 +40,7 @@
 
 import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2";
 import * as cheerio from "npm:cheerio@1";
+import { persistInboundOnce } from "./persistInboundOnce.ts";
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
@@ -1642,8 +1643,8 @@ async function handleIncomingWebhookMessage(
   /**
    * حفظ رسالة العميل الواردة.
    */
-  try {
-    await sb
+  const incomingResult = await persistInboundOnce(async () =>
+    sb
       .from("messages")
       .insert({
         conversation_id: conv.id,
@@ -1654,17 +1655,15 @@ async function handleIncomingWebhookMessage(
         kind: "customer",
         is_auto: false,
         wa_message_id: externalMsgId,
-      });
-  } catch (e: any) {
-    if (e?.code === "23505") {
-      console.log(
-        `[${channel}_webhook] duplicate message skipped: ${externalMsgId}`
-      );
+      })
+  );
+
+  if (incomingResult !== "saved") {
+    if (incomingResult === "duplicate") {
+      // Never ACK a duplicate by sending an additional AI reply.
+      console.log(`[${channel}_webhook] duplicate inbound message skipped`);
     } else {
-      console.error(
-        `[${channel}_webhook] incoming insert failed`,
-        e
-      );
+      console.error(`[${channel}_webhook] inbound insert did not commit`);
     }
     return;
   }
