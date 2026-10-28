@@ -355,10 +355,8 @@ export const api = {
     bindNumber: (tenantId: string, phoneId: string) =>
       fn<{ ok: true }>("bind_number", { body: { tenantId, phoneId }, claim: storedClaim() ?? tenantId }),
 
-    eventsUrl: (sessionId: string, token?: string | null) =>
-      backendMode === "supabase"
-        ? ""
-        : `${API}/api/whatsapp/session/${sessionId}/events?token=${encodeURIComponent(token ?? "")}`,
+    // Legacy Railway SSE endpoint was removed. Supabase mode has no equivalent route.
+    eventsUrl: (_sessionId: string, _token?: string | null) => "",
   },
 
   extractQA: (tenantId: string, url: string) =>

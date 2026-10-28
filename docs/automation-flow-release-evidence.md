@@ -17,7 +17,22 @@ Status: **Flow editor and opt-in cloud drafts released**; **real customer automa
 - The existing webhook handler calls answerFromKnowledge and sends a provider response when agent_enabled/auto_reply allow it; a new flow handler that also sends would cause duplicate replies.
 - The existing webhook path respects human transfer and low-credit states. The flow engine must preserve those checks and own the exclusive responder decision before sending.
 - Stage 7 drafts table is deployed with owner RLS in production, checked using two real tenant owners and ROLLBACK. Stage 8–11 runtime SQL remains review-only.
-- Default VITE_ENABLE_CLOUD_FLOW_DRAFTS unset: cloud draft controls are not exposed in the ordinary site build. Runtime has no activation flag or outgoing sender connected.
+- The live Pages build has `VITE_ENABLE_CLOUD_FLOW_DRAFTS=true` for opt-in draft visibility; that frontend flag is **not** a sending authorization. Runtime has no server activation flag or outgoing sender connected.
+
+## Unified staging candidate (review only)
+
+- [PR #126](https://github.com/hsnq2022022-cyber/milanochat/pull/126) integrates editor/CI fixes, default-OFF routing, runtime action plans, safe delivery decisions and disposable Postgres atomic reservation tests.
+- `src/flow/flowPipeline.ts` composes selection, capability-based publication audit and initial pure runtime planning, with no provider I/O. It is **not connected to live `milan-api`**.
+- Synthetic concurrency, replay and RLS checks do **not** establish real Meta exactly-once sends, actual credit correctness, authenticated live publishing or production migration compatibility.
+- Detailed evidence and GO dependencies: [flows-integrated-release-candidate.md](./flows-integrated-release-candidate.md). **No release gate is marked passed by these isolated tests.**
+
+## Verified production catalog findings (read-only, 2026-10-28)
+
+- Owner confirmed Supabase project `nmhefwvhoholcjrbbila` is LIVE, PostgreSQL 17; **not staging**. Catalog-only metadata inspected; no credit, tenant, conversation or webhook data was updated.
+- Live `automation_flow_drafts`: seven columns, owner SELECT/INSERT/UPDATE RLS, UPDATE granted only for `name,document,draft_revision,updated_at`, no anon grants. Existing table not reflected in Supabase migration history. [PR #132](https://github.com/hsnq2022022-cyber/milanochat/pull/132) proposes a versioned idempotent baseline, data-preserving rollback and read-only verifier; [disposable PostgreSQL #40686872903](https://github.com/hsnq2022022-cyber/milanochat/actions/runs/40686872903) passed.
+- Live `consume_reply(uuid,uuid)` is service-role-only. Original function inserts the reply ledger BEFORE confirming credits, leaving a ghost ledger on zero balance; [PR #131](https://github.com/hsnq2022022-cyber/milanochat/pull/131) reproduces/fixes it on disposable PG with transaction/concurrency tests [#40686374762](https://github.com/hsnq2022022-cyber/milanochat/actions/runs/40686374762). **Do not deploy alone:** live Meta and Widget handlers call the RPC without the required message UUID; widget responses are outside `public.messages` and require separate billing design.
+- Live account ownership requires careful schema treatment: `conversations.account_id` nullable and only references `channel_accounts(id)`, without a composite tenant/account FK. No runtime migration has been approved or applied. No real staging/Meta canary has passed.
+- **All production GO gates remain blocked**: immutable publish API, signed webhook runtime integration, durable worker, billing caller reconciliation, rollback rehearsal, and explicit per-action authorization.
 
 ## Mandatory release blockers: all must be independently verified
 

@@ -8,6 +8,7 @@ import type { FlowData, FlowNode, Choice, Platform } from "./model";
 import { useFlowStore } from "./store";
 import { cardSize, findOpenPosition } from "./layout";
 import { flowText, flowKindLabel } from "./uiLocale";
+import { delaySafetyWarning } from "./channelLimits";
 import type { FlowLanguage } from "./uiLocale";
 
 const input="w-full rounded-xl border border-[#275443] bg-[#0F2E24] px-3 py-2.5 text-sm text-white outline-none focus:border-[#3DD189]";
@@ -47,7 +48,7 @@ export default function NodeEditor({node,onClose,language="ar"}:{node:FlowNode|n
     if(d.options.length>=10)return;
     saveOptions([...d.options,{id:crypto.randomUUID(),label:d.kind==="randomizer"?"فرع "+(d.options.length+1):"زر جديد",weight:d.kind==="randomizer"?0:undefined}]);
   };
-  const duplicate=()=>{if(store.doc.nodes.length>=100)return;const preferred={x:node.position.x+cardSize(node).width+80,y:node.position.y+80};const n=makeNode(d.kind,preferred,{...d,options:d.options.map(o=>({...o,id:crypto.randomUUID()})),title:d.title+" (نسخة)"});store.addNode({...n,position:findOpenPosition(store.doc.nodes,n,preferred)});};
+  const duplicate=()=>{if(store.doc.nodes.length>=100)return;const preferred={x:node.position.x+cardSize(node).width+80,y:node.position.y+80};const n=makeNode(d.kind,preferred,{...d,options:d.options.map(o=>({...o,id:crypto.randomUUID()})),title:d.title+" (نسخة)"});const result=store.addNode({...n,position:findOpenPosition(store.doc.nodes,n,preferred)});if(result==="duplicate_trigger")setStatus("لا يمكن نسخ نقطة البداية؛ لكل تدفق بداية واحدة.");else if(result==="limit_reached")setStatus("الحد الأقصى 100 خطوة.");else setStatus("تم نسخ الخطوة.");};
   const remove=()=>{if(d.kind==="trigger"&&!window.confirm("حذف البداية سيجعل التدفق دون نقطة تشغيل. هل تريد المتابعة؟"))return;store.deleteNode(node.id);onClose();};
 
   return <aside dir={language==="ar"?"rtl":"ltr"} data-testid="step-settings-panel" role="complementary" aria-label={t("stepProps")} className={"fixed inset-x-0 bottom-0 z-40 flex w-full shrink-0 flex-col overflow-hidden rounded-t-2xl border-t border-[#173D30] bg-[#0B241C] text-white shadow-2xl md:relative md:inset-auto md:z-20 md:max-h-none md:w-[min(40vw,385px)] md:rounded-none md:border-r md:border-t-0 md:shadow-none "+(collapsed?"max-h-20 md:w-[240px]":"max-h-[min(78dvh,730px)]")}>
@@ -117,7 +118,7 @@ export default function NodeEditor({node,onClose,language="ar"}:{node:FlowNode|n
         <label className={section}>مدة الانتظار</label>
         <div className="flex gap-2"><input type="number" min={1} className={input} value={d.delayValue} onChange={e=>edit({delayValue:Math.min(365,Math.max(1,Number(e.target.value)||1))})}/>
           <select className={input} value={d.delayUnit} onChange={e=>edit({delayUnit:e.target.value as FlowData["delayUnit"]})}>{Object.entries(units).map(([v,t])=><option key={v} value={v}>{t}</option>)}</select></div>
-        <p className="mt-3 flex gap-2 rounded-xl border border-[#E5B54B]/40 bg-[#E5B54B]/10 p-3 text-xs text-[#E5B54B]"><AlertTriangle size={18} className="shrink-0"/>الانتظار لا يتجاوز نافذة مراسلة Meta المسموح بها. المحاكاة تتجاوز الوقت، ولا تُرسل أي رسائل فعلية.</p>
+        <p className="mt-3 flex gap-2 rounded-xl border border-[#E5B54B]/40 bg-[#E5B54B]/10 p-3 text-xs text-[#E5B54B]"><AlertTriangle size={18} className="shrink-0"/>{delaySafetyWarning(d.delayValue,d.delayUnit)}</p>
       </>}
       {d.kind==="action"&&<>
         <label className={section}>نوع الإجراء</label><select className={input} value={d.actionType} onChange={e=>edit({actionType:e.target.value as FlowData["actionType"]})}>{Object.entries(actions).map(([v,t])=><option key={v} value={v}>{t}</option>)}</select>

@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import confetti from "canvas-confetti";
 import SafeAvatar from "../components/SafeAvatar";
-import { apiAuthFetch, apiBase, backendMode, type WaSnapshot } from "../lib/api";
+import { api, apiAuthFetch, apiBase, backendMode, type WaSnapshot } from "../lib/api";
 import { getSupabase, getStoredClaim, clearStoredClaim } from "../lib/supabase";
 import { CHANNELS, ChannelBadge, detectChannel, type ChannelId } from "../lib/channels";
 import {
@@ -1054,12 +1054,20 @@ export default function Dashboard() {
     }
   };
 
-  const copyEmbedCode = (token: string) => {
-    const code = `<script src="${apiEnabled ? API : "https://your-server.com"}/widget.js" data-token="${token}"></script>`;
-    navigator.clipboard.writeText(code);
-    setCopiedCode(token);
-    setTimeout(() => setCopiedCode(null), 2000);
-    showToast("تم نسخ كود التضمين");
+  const copyEmbedCode = async (token: string) => {
+    if (!apiBase) {
+      showToast("رابط Supabase غير مضبوط");
+      return;
+    }
+    const code = `<script src="${apiBase}/milan-api?action=widget.js" data-token="${token}"></script>`;
+    try {
+      await navigator.clipboard.writeText(code);
+      setCopiedCode(token);
+      setTimeout(() => setCopiedCode(null), 2000);
+      showToast("تم نسخ كود التضمين");
+    } catch {
+      showToast("تعذر النسخ تلقائيًا، تحقق من أذونات الحافظة");
+    }
   };
 
   /* ═══════════ شاشات ما قبل اللوحة ═══════════ */

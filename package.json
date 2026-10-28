@@ -6,8 +6,9 @@
     "dev": "vite",
     "build": "vite build",
     "typecheck": "tsc --noEmit",
-    "test:flows": "node --experimental-strip-types --test src/flow/model.test.ts src/flow/layout.test.ts src/flow/omnichannel.test.ts",
-    "test:browser": "playwright test -c playwright.config.ts"
+    "test:flows": "node --experimental-strip-types --test src/flow/*.test.ts",
+    "test:browser": "playwright test -c playwright.config.ts",
+    "test:unit": "node --experimental-strip-types --test src/flow/*.test.ts tests/*.test.ts"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.1.0",
@@ -43,6 +44,7 @@
     "tailwindcss": "^4.1.7",
     "typescript": "^5.7.0",
     "vite": "^6.3.5",
-    "@playwright/test": "^1.56.0"
+    "@playwright/test": "^1.56.0",
+    "@types/node": "^22.15.29"
   }
 }

@@ -1,0 +1,64 @@
+# Flow Builder completion status
+
+Baseline: main at `21d232465f4bff89b0509ea0bff83346ebd4a45f` (2026-10-28).
+**No production GO has been given for any action in this work session.**
+This tracker lives in [PR #117](https://github.com/hsnq2022022-cyber/milanochat/pull/117) pending owner GO to merge and deploy; **main does not contain these updates**.
+
+| Step | Status | Evidence | Outstanding risks and owner dependencies |
+| --- | --- | --- | --- |
+| 1. Repo/CI/typecheck | blocked-owner | [PR #117](https://github.com/hsnq2022022-cyber/milanochat/pull/117), [success CI #40593861119](https://github.com/hsnq2022022-cyber/milanochat/actions/runs/40593861119) | CI gate, node typings, all unit tests/build/Playwright/Postgres verified. Authenticated Dashboard recharge and clipboard copy actions **not manually verified**; need test account, payment sandbox, GO to merge/deploy Pages workflow. |
+| 2. Draft schema drift | blocked-owner | [PR #118 read-only catalog query](https://github.com/hsnq2022022-cyber/milanochat/pull/118) | Owner runs read-only catalog SQL and shares definition; only then write exact idempotent migration, safe rollback & migration CI, owner GO for any production SQL. |
+| 3. Editor defects | blocked-owner | [PR #119](https://github.com/hsnq2022022-cyber/milanochat/pull/119), [PASS #40674101775](https://github.com/hsnq2022022-cyber/milanochat/actions/runs/40674101775), [layout screenshot artifacts](https://github.com/hsnq2022022-cyber/milanochat/actions/runs/40596898814/artifacts/12777067003) | 78 Node unit / 73 Chromium browser tests passed. Fixed cross-flow edit coalescing and tested switch/duplicate/delete history. Real Android QA, verified Meta numeric windows and explicit GO to merge/site deploy remain missing. |
+| 4. Billing fix #114 | blocked-owner | [PR #114](https://github.com/hsnq2022022-cyber/milanochat/pull/114), [review PR #121](https://github.com/hsnq2022022-cyber/milanochat/pull/121), `tests/credit-guard-order.test.ts` on PR #114 | Added static guard-order checks for duplicate provider IDs, takeover, low credits and disabled account; **these do not establish runtime behavior**. Post-send insert/RPC can lose charges, provider retries remain non-idempotent, widget caller still broken. Requires durable transactional outbox, fake-provider integration, staging, GO. **DO NOT DEPLOY PR #114**. |
+| 5. Credit RPC lockdown | blocked-owner | [PR #86](https://github.com/hsnq2022022-cyber/milanochat/pull/86), [PASS isolated Postgres #40674168406](https://github.com/hsnq2022022-cyber/milanochat/actions/runs/40674168406), `supabase/verification/20261026_restrict_credit_rpcs.readonly.sql` | Synthetic PostgreSQL verified initial lockdown, idempotent reapply and rollback; **live privilege state NOT inspected**. Owner catalog SQL output/GO needed. Legacy Railway server running status unknown; rollback would restore public EXECUTE (unsafe). |
+| 6. Publishing/routing | blocked-owner | [PR #123 atomic PostgreSQL proof](https://github.com/hsnq2022022-cyber/milanochat/pull/123), [PR #124 exclusive responder policy](https://github.com/hsnq2022022-cyber/milanochat/pull/124) | Tested duplicate-event atomic reservation and default-OFF, unique responder selection as isolated contracts. Still missing production schema review, actual signed webhook adapter, authenticated publishing API, trusted feature flag, staging and per-step GO. Existing `milan-api` unchanged. |
+| 7. Runner/AI/canary | blocked-owner | [PR #120 runbook](https://github.com/hsnq2022022-cyber/milanochat/pull/120), [PR #122 delivery contract](https://github.com/hsnq2022022-cyber/milanochat/pull/122), [PR #123 atomic SQL proof](https://github.com/hsnq2022022-cyber/milanochat/pull/123), [PR #125 action intents](https://github.com/hsnq2022022-cyber/milanochat/pull/125) | Pure action effects (tag/untag/notify), uncertain delivery quarantine and SQL receipt/run/outbox tests are proven only in isolation. No trusted worker, real delivery, credit reconciliation, Meta canary or staging approvals. Real customer sends OFF. |
+
+## Active gates / decision history
+
+- A test suite passing is not proof of authenticated payment UI, live RLS sessions, Meta sends, or SMS/WhatsApp windows.
+- Never merge a site-changing branch without specific owner GO, even when CI passes.
+- Existing production `milan-api` must continue to own all traffic until a tested, mutually exclusive responder exists.
+- Each future live action requires its own change, risk, verification and rollback plan, with named owner GO and a versioned migration for SQL.
+
+## Integration review candidate (not a production release)
+
+- [PR #126](https://github.com/hsnq2022022-cyber/milanochat/pull/126) combines the reviewed CI/editor/flow modules from #117, #119, #122, #123, #124 and #125 and adds `src/flow/flowPipeline.ts` with unit tests.
+- Integrated CI runs full typecheck, every Node test, Vite, Chromium UI tests, two PostgreSQL RLS suites and concurrent inbound reservation. A passing run is **integration evidence only**; no actual Meta sender or billing ledger is connected.
+- All Step 1–7 production release gates remain blocked by owner-approved staging, live schema verification, signed E2E and per-action GO. **Do not merge this PR to main just because CI is green.**
+
+## Work session — staging publisher, worker, signed-webhook audit (2026-10-28)
+
+| Review PR | Verified work | Release status |
+| --- | --- | --- |
+| [#127](https://github.com/hsnq2022022-cyber/milanochat/pull/127) | 36 Node regressions; disposable PostgreSQL lease CAS, kill-switch, provider quarantine, credit debit-once. [CI #40682268984](https://github.com/hsnq2022022-cyber/milanochat/actions/runs/40682268984). | Review-only, no live worker or billing RPC. |
+| [#128](https://github.com/hsnq2022022-cyber/milanochat/pull/128) | 11 Node publishing regressions; disposable PostgreSQL immutable revisions, private RLS grants, canary activation default OFF, rollback. [CI #40683116186](https://github.com/hsnq2022022-cyber/milanochat/actions/runs/40683116186). | Review-only, no authenticated live publish endpoints. |
+| [#129](https://github.com/hsnq2022022-cyber/milanochat/pull/129) | **Confirmed fail-open IG/FB webhook signature bug** when both secrets missing; 6 HMAC tests, configured-secret fail-closed and 503 for missing config. [CI #40683730053](https://github.com/hsnq2022022-cyber/milanochat/actions/runs/40683730053). | Changes `milan-api` and therefore MUST NOT merge/deploy without secure secret review, staging signed E2E, rollback plan and owner GO. |
+| [#130](https://github.com/hsnq2022022-cyber/milanochat/pull/130) | **Confirmed unsigned WhatsApp POST handling** in existing `milan-api`; raw-body HMAC verification before any messages, 503 absent secret, 401 invalid signature, independent Unicode fixture. [CI #40684131072](https://github.com/hsnq2022022-cyber/milanochat/actions/runs/40684131072). | Stacked on #129; both affect live WhatsApp/IG/FB. Never deploy without correct Meta App secrets configured, staging signed tests, prior Edge rollback and explicit GO. |
+
+Supabase connector returned two project metadata entries: an active project and an **inactive** project named `meta`. No project was designated as staging; no production SQL, account data, function deployment or Meta subscription changes were performed. Do not infer inactive `meta` can be used as a testing environment.
+
+**Do not mark Stages 8–12 as released.** Remaining blockers: approved live schema read-only catalog; explicitly designated, active staging; matching server-side Auth/tenant adapter, Meta webhook signing and provider delivery E2E, durable worker scheduler, production credit RPC idempotency, all-channel canary, Android testing, owner-by-owner GO for production steps.
+
+## Read-only production audit on owner-identified Supabase (2026-10-28)
+
+- Owner confirmed `nmhefwvhoholcjrbbila` is the **LIVE** Supabase project, not staging. Connected metadata reports PostgreSQL 17 and `ACTIVE_HEALTHY`. No production data was written or modified.
+- Drafts `public.automation_flow_drafts` exists (7 fields, version-3 JSON, PK `tenant_id/flow_key`, 4 MiB limit, owner RLS); owner UPDATE is granted on **specific columns**, not table-wide. [PR #132](https://github.com/hsnq2022022-cyber/milanochat/pull/132) reconciles the missing migration with safe guard + rollback + read-only verifier. [Fresh/existing PostgreSQL CI #40686872903](https://github.com/hsnq2022022-cyber/milanochat/actions/runs/40686872903) passed; live migration history remains unchanged.
+- Verified credit RPCs `consume_reply(uuid,uuid)` and `grant_credits(uuid,integer)` are executable by `service_role` only; denied to `anon` and `authenticated` on live Supabase. Credit safety defect: current `consume_reply` inserts a ledger BEFORE attempting to decrement balance, leaving ghost ledger on zero balance; current `milan-api` Meta AND Widget callers omit mandatory `p_message_id`. [PR #131](https://github.com/hsnq2022022-cyber/milanochat/pull/131) supplies a function-only migration, unsafe previous-function rollback, readonly verifier and successful synthetic PG17 crash/retry/concurrent tests [#40686374762](https://github.com/hsnq2022022-cyber/milanochat/actions/runs/40686374762). **DO NOT APPLY SQL BY ITSELF**: real Edge caller integration and staging reconciliation are required first.
+- Live relational gaps requiring an explicit migration design: `conversations.account_id` is nullable and has only an ID FK, while `channel_accounts` and `conversations` lack composite tenant+account ownership FKs. Synthetic runtime constraints are NOT live constraints.
+- Production SQL, Edge Functions, Meta subscriptions, tenant activation and GitHub Pages deployment were **not** changed. No generic GO may substitute for explicit per-step owner approval; first obtain a dedicated staging Supabase project and test-owned Meta accounts, then run authenticated webhook/credit E2E and rollback drills.
+
+## Review milestone — existing Supabase Free project, no production writes
+
+- Owner requires **one existing Supabase project only** (`nmhefwvhoholcjrbbila`); no new staging/project or paid plan. Existing counts: 10 tenant rows, 4 channel accounts, 4 conversations, 3 reply-ledger rows, 0 flow drafts. Preserve these records whether test or live.
+- [PR #133](https://github.com/hsnq2022022-cyber/milanochat/pull/133): additive global/per-tenant OFF switches (CI #40688484406 PASS), not installed in Supabase.
+- [PR #134](https://github.com/hsnq2022022-cyber/milanochat/pull/134): pure shadow observation; with environment unset **zero new DB reads and unchanged AI** (CI #40691749672 PASS).
+- [PR #135](https://github.com/hsnq2022022-cyber/milanochat/pull/135): fix confirmed ignored PostgREST `messages.insert` errors/Meta retry; incoming provider id has existing partial UNIQUE index in live DB (CI #40692057267 PASS).
+- [PR #136](https://github.com/hsnq2022022-cyber/milanochat/pull/136): six add-only runtime tables designed against actual platform/channel/nullable-conversation schema, composite tenant ownership, private RLS, immutable publications and safe nonempty-table rollback (CI #40693497141 PASS). Not deployed.
+- [PR #137](https://github.com/hsnq2022022-cyber/milanochat/pull/137): unified actual `milan-api/index.ts` from earlier signature PR #129/#130 and #134/#135; **23/23 targeted tests**, Deno helper checks, Vite build (CI #40693864064 PASS); no site/Edge deployment.
+- Preexisting full `npm run typecheck` on `main` remains broken, tracked by PR #117. Scoped green tests do not fix that.
+- **Release remains blocked:** no merged server-only publication API, no atomic receipt/run/outbox RPC on the real schema, no live safe sender/credit reconciliation, no approved signed Meta canary or rollback evidence. All production SQL/Edge/Pages and per-tenant activation still require separate explicit owner GO. No flows can send customer messages now.
+
+### Next GO candidate (one action only)
+
+Review PR #133's `supabase/migrations/20261028170000_automation_flow_switches.sql` and guarded rollback. This creates two tiny OFF-only tables and does not touch existing rows, but it is still a production schema change and therefore **requires the owner's exact GO** before apply. After approval, verify using `supabase/verification/20261028170000_automation_flow_switches.readonly.sql`. PR #136 and PR #137 have **separate** later GO requirements.
