@@ -68,16 +68,20 @@ test("delay uses persisted wake time and cannot emit twice before due",()=>{
   assert.equal(due.state.status,"completed");
   assert.equal(due.effects[0].kind,"message");
 });
-test("unsupported external requests and AI actions fail closed with zero outbound effects",()=>{
-  for(const kind of ["request","action"] as const) {
-    const t=trigger(),n=makeNode(kind,{x:0,y:100},{
-      ...(kind==="action"?{actionType:"ai"}:{requestUrl:"https://example.com"})
-    });
-    const flow=doc([t,n],[[t,"next",n]]);
-    const plan=planRuntimeTransition(flow,createRuntimeState(flow,"f",1),input);
-    assert.equal(plan.state.status,"blocked");
-    assert.equal(plan.effects.length,0);
-  }
+test("untrusted request stays blocked; AI node creates only a trusted-knowledge placeholder",()=>{
+  const t=trigger(),request=makeNode("request",{x:0,y:100},{requestUrl:"https://example.com"});
+  const first=doc([t,request],[[t,"next",request]]);
+  const unsafe=planRuntimeTransition(first,createRuntimeState(first,"f",1),input);
+  assert.equal(unsafe.state.status,"blocked");
+  assert.equal(unsafe.effects.length,0);
+
+  const ai=makeNode("action",{x:0,y:100},{actionType:"ai"});
+  const second=doc([t,ai],[[t,"next",ai]]);
+  const planned=planRuntimeTransition(second,createRuntimeState(second,"f",1),input);
+  assert.equal(planned.state.status,"completed");
+  assert.equal(planned.effects[0].kind,"message");
+  assert.equal((planned.effects[0] as {source?:string}).source,"knowledge_ai");
+  assert.equal((planned.effects[0] as {text:string}).text,"");
 });
 test("handoff is a single declared effect and stops the AI/automation path",()=>{
   const t=trigger(),n=makeNode("action",{x:0,y:100},{actionType:"handoff"});
