@@ -17,7 +17,7 @@ cleanup(){
   node scripts/flow-protected-live-smoke.mjs cleanup || { echo "CRITICAL: fixture cleanup failed"; return 1; }
  fi
 }
-get_functions(){supabase functions list --project-ref "$PROJECT" --output json > "$WORK/functions.json";}
+get_functions(){ supabase functions list --project-ref "$PROJECT" --output json > "$WORK/functions.json"; }
 check_remote(){
  node --input-type=module - "$1" "$2" "$3" "$WORK/functions.json" <<'NODE'
 import fs from "node:fs";import assert from "node:assert/strict";
