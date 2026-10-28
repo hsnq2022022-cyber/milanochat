@@ -14,7 +14,7 @@ if(!output||process.argv.length!==3){
  process.exit(2);
 }
 const bytes=readFileSync(input);
-const digest=createHash("sha1").update("blob "+bytes.byteLength+"\\0").update(bytes).digest("hex");
+const digest=createHash("sha1").update("blob "+bytes.byteLength+String.fromCharCode(0)).update(bytes).digest("hex");
 assert.equal(digest,"fd2e2a8377a7062a4e7f4641a7eadd92c65fc789","Source .bak blob changed; refuse reconstructed recovery");
 const original=bytes.toString("utf8");
 const originalBlock="  const data = fromHex(dataH);\n  const tag = fromHex(tagH);\n\n  const buf = new Uint8Array(data.length + 16);\n\n  buf.set(data, 0);\n  buf.set(tag, data.length);\n\n  const pt = await crypto.subtle.decrypt(\n    {\n      name: \"AES-GCM\",\n      iv: fromHex(ivH) as BufferSource,\n    },\n    await aesKey(\"decrypt\"),\n    buf as BufferSource\n  );\n\n  return dec.decode(pt);";
