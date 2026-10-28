@@ -98,7 +98,11 @@ export class StagingFlowPublisher {
       raw=JSON.stringify(untrustedDocument);
       if(!raw || new TextEncoder().encode(raw).length>MAX_PUBLISHED_DOCUMENT_BYTES)
         return fail("invalid_document");
-      document=importFlow(JSON.parse(raw));
+      const parsed:unknown=JSON.parse(raw);
+      if(!parsed||typeof parsed!=="object"||
+         (parsed as Record<string,unknown>).version!==3)
+        return fail("invalid_document");
+      document=importFlow(parsed);
       if(!document||document.version!==3)return fail("invalid_document");
     }catch{return fail("invalid_document");}
     // The capabilities are read from a trusted server adapter, not the request.
