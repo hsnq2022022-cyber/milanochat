@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import confetti from "canvas-confetti";
 import SafeAvatar from "../components/SafeAvatar";
+import DeliveryReviewPanel from "./DeliveryReviewPanel";
 import { api, apiAuthFetch, apiBase, apiEnabled, backendMode, paymentCheckoutEnabled, type WaSnapshot } from "../lib/api";
 import { getSupabase, getStoredClaim, clearStoredClaim } from "../lib/supabase";
 import { CHANNELS, ChannelBadge, detectChannel, type ChannelId } from "../lib/channels";
@@ -1242,6 +1243,11 @@ export default function Dashboard() {
       </header>
 
       <main className="max-w-6xl mx-auto px-5 pt-7 pb-24">
+        {import.meta.env.VITE_ENABLE_DELIVERY_REVIEW === "true" && st?.tenantId && (
+          <div className="mb-6">
+            <DeliveryReviewPanel token={token} tenantId={st.tenantId} />
+          </div>
+        )}
         {st.credits <= 0 ? (
           <div className="mb-5 flex flex-wrap items-center gap-3 bg-oro/10 border border-oro/40 rounded-2xl px-5 py-3.5 msg-in">
             <span className="text-oro"><IconCoin className="w-5 h-5" /></span>
