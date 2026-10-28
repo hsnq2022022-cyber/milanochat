@@ -4,7 +4,7 @@ import {assertReleaseSafe,assertReleaseRestored} from "../scripts/flow-release-b
 
 const baseline={
  tenants:10,accounts:4,conversations:4,widgetMessages:12,
- ledger:3,widgetLedger:0,delivery:0,outbox:0,flows:0,windows:0,
+ ledger:3,widgetLedger:0,delivery:0,outbox:0,flows:0,windows:0,claims:0,publications:0,
  historicalAnswers:5,globalOff:true,enabledTenant:0
 };
 test("existing safe production snapshot is allowed",()=>{
@@ -14,7 +14,7 @@ test("existing safe production snapshot is allowed",()=>{
 test("legitimate growth never blocks a new safe dry-run",()=>{
  const grew={...baseline,tenants:142,accounts:75,conversations:9000,
   widgetMessages:100,ledger:560,widgetLedger:10,delivery:22,
-  windows:17,historicalAnswers:29};
+  windows:17,claims:220,publications:18,historicalAnswers:29};
  assert.doesNotThrow(()=>assertReleaseSafe(grew));
  assert.doesNotThrow(()=>assertReleaseRestored(grew,{...grew}));
 });
@@ -34,7 +34,7 @@ test("missing, negative, unsafe or nonnumeric counts fail closed",()=>{
 });
 test("cleanup must restore every counter, including historical messages and ledger",()=>{
  for(const key of ["tenants","accounts","conversations","widgetMessages",
-  "ledger","widgetLedger","delivery","windows","historicalAnswers"]){
+  "ledger","widgetLedger","delivery","windows","historicalAnswers","claims","publications"]){
   assert.throws(()=>assertReleaseRestored(baseline,{
    ...baseline,[key]:baseline[key]+1
   }),/Production counts changed/);
