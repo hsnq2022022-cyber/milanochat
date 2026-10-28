@@ -52,6 +52,8 @@ jobs:
         run: |
           psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-publication-live.test.sql
           psql -X -v ON_ERROR_STOP=1 -f supabase/verification/20261028190000_flow_publication_server_rpcs.readonly.sql
+      - name: Test two-tenant RPC isolation without persisting fixtures
+        run: psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-publication-two-tenant.test.sql
       - name: Parallel publishers cannot allocate duplicate revision numbers
         shell: bash
         run: |
