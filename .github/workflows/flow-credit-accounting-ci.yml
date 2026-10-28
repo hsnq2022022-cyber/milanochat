@@ -23,6 +23,7 @@ jobs:
       - name: Verify correct Supabase billable message ledger contract
         run: |
           node --experimental-strip-types --test tests/credit-accounting.test.ts
+          node --experimental-strip-types --test tests/credit-guard-order.test.ts
           node --experimental-strip-types --test tests/webhook-safety.test.ts
       - name: Validate website unaffected
         run: |
