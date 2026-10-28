@@ -20,6 +20,9 @@ export const FUNCTIONS_BASE =
 const HAS_SUPABASE = FUNCTIONS_BASE.length > 0 && SUPABASE_ANON.length > 0;
 
 export const apiEnabled = false; // لا خادم خارجي بعد اليوم
+// Payment is unavailable until a separately reviewed Wayl sandbox+webhook release.
+// This is a UI gate, NOT a substitute for server-side PAYMENTS_ENABLED.
+export const paymentCheckoutEnabled = import.meta.env.VITE_WAYL_CHECKOUT_ENABLED === "true";
 export const apiBase = FUNCTIONS_BASE;
 
 export type BackendMode = "supabase" | "demo";
@@ -43,9 +46,16 @@ export async function apiAuthFetch<T>(token: string, path: string, init?: Reques
 
 /** شحن الرصيد بالدينار العراقي عبر Wayl (دالة topup-create). */
 async function topupSupabase(
+  tenantId: string,
   packageId: string,
   token?: string | null,
 ): Promise<{ invoiceId: string; paymentUrl: string | null }> {
+  if (!paymentCheckoutEnabled) {
+    throw new Error("بوابة الدفع قيد الإعداد، ولم تُفعّل عمليات الشحن بعد");
+  }
+  if (!token || token.split(".").length !== 3) {
+    throw new Error("يرجى تسجيل الدخول قبل شحن الرصيد");
+  }
   const res = await fetch(`${SUPABASE_URL}/functions/v1/topup-create`, {
     method: "POST",
     headers: {
@@ -53,7 +63,7 @@ async function topupSupabase(
       apikey: SUPABASE_ANON,
       authorization: `Bearer ${token ?? ""}`,
     },
-    body: JSON.stringify({ packageId, returnUrl: window.location.href.split("#")[0] }),
+    body: JSON.stringify({ tenantId, packageId }),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error((data as any)?.error ?? `HTTP ${res.status}`);
@@ -162,6 +172,30 @@ async function dashSupabase<T>(token: string, path: string, init?: RequestInit):
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error((data as any)?.error ?? `HTTP ${res.status}`);
     return data as T;
+  }
+
+  // Owner-only delivery review: separate service-authenticated Edge endpoint.
+  // Feature flag is OFF until the endpoint and RLS have an independent GO.
+  if (path === "/api/dashboard/delivery-review" || path === "/api/dashboard/flow-metrics") {
+    if (import.meta.env.VITE_ENABLE_DELIVERY_REVIEW !== "true")
+      throw new Error("مراجعة التسليم غير مفعّلة");
+    if (!token || token.split(".").length !== 3)
+      throw new Error("يرجى تسجيل الدخول للمراجعة");
+    const tenantId = String(body.tenantId ?? "");
+    if (!/^[0-9a-f-]{36}$/i.test(tenantId)) throw new Error("معرّف المتجر غير صالح");
+    const mode = path.endsWith("delivery-review") ? "queue" : "metrics";
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/flow-delivery-review`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        apikey: SUPABASE_ANON,
+        authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ tenantId, mode }),
+    });
+    const result = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error((result as any)?.error ?? `HTTP ${res.status}`);
+    return result as T;
   }
 
   // ─── مسارات dashboard القياسية → milan-api ───
@@ -390,7 +424,7 @@ export const api = {
 
   createPayment: (tenantId: string, packageId: string, token?: string | null) =>
     backendMode === "supabase"
-      ? topupSupabase(packageId, token)
+      ? topupSupabase(tenantId, packageId, token)
       : apiFetch<{ invoiceId: string; paymentUrl: string | null }>("/api/payments/create", {
           method: "POST",
           body: JSON.stringify({ tenantId, packageId }),

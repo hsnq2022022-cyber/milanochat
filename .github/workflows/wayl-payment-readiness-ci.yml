@@ -1,0 +1,62 @@
+name: Payment readiness — PG17 atomic ledger, Wayl contracts, Deno (NO PRODUCTION)
+on:
+  push:
+    branches: [integration/main-advanced-payment-consolidation]
+permissions:
+  contents: read
+jobs:
+  payment-postgresql:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: disposable_only
+          POSTGRES_DB: payment_review
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d payment_review"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: disposable_only
+      PGDATABASE: payment_review
+    steps:
+      - uses: actions/checkout@v4
+      - name: Isolated Wayl atomic grant SQL and ACL
+        run: |
+          set -euo pipefail
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/wayl-atomic-bootstrap.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028230000_wayl_atomic_topup.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/wayl-atomic.test.sql
+  payment-node-deno-ui:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Wayl package, redirect and checkout tests
+        run: node --experimental-strip-types --test tests/wayl-contract.test.ts
+      - name: TypeScript and Vite
+        run: |
+          npm run typecheck
+          npm run build
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Deno check undeployed Wayl functions
+        run: |
+          deno check --node-modules-dir=auto supabase/functions/topup-create/index.ts
+          deno check --node-modules-dir=auto supabase/functions/wayl-topup-webhook/index.ts
+      - name: Signed webhook and OFF gate unit tests
+        run: deno test --allow-env --node-modules-dir=auto tests/wayl-signature.test.ts

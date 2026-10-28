@@ -1,179 +1,94 @@
-// ═══════════════════════════════════════════════════════════════════
-// Edge Function: topup-create
-// شحن رصيد الردود بالدينار العراقي عبر Wayl (بديل Moyasar/SAR).
-//
-// POST { packageId: "starter"|"growth"|"scale", returnUrl? }  (Bearer: Supabase user JWT)
-// → { invoiceId, paymentUrl }
-//
-// - السعر والرصيد يُحدَّدان هنا فقط (الخادم) ولا يُقبلان من العميل
-// - يُنشئ صفاً في payments (provider=wayl, currency=IQD) ثم رابط دفع في Wayl
-// - منح الرصيد يتم في wayl-webhook عند تأكيد الدفع
-//
-// Secrets: WAYL_TOKEN, WAYL_WEBHOOK_SECRET, WAYL_ENV (test|live، الافتراضي test)
-// ═══════════════════════════════════════════════════════════════════
-
-import { createClient } from "npm:@supabase/supabase-js@2";
-
-const WAYL_API = "https://api.thewayl.com/api/v1/links";
-
-/** الباقات بالدينار العراقي. عدّل الأسعار هنا (وفي src/pages/Dashboard.tsx للعرض). */
-const PACKAGES: Record<string, { name: string; credits: number; amount: number }> = {
-  starter: { name: "باقة البداية", credits: 1000, amount: 35000 },
-  growth: { name: "باقة النمو", credits: 3000, amount: 85000 },
-  scale: { name: "باقة التوسع", credits: 10000, amount: 225000 },
-};
-
-const cors: Record<string, string> = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers":
-    "authorization, x-client-info, apikey, content-type",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
-};
-
-const json = (body: unknown, status = 200) =>
-  new Response(JSON.stringify(body), {
-    status,
-    headers: { ...cors, "Content-Type": "application/json; charset=utf-8" },
+/**
+ * REVIEW ONLY: Wayl top-up link creation. PAYMENTS_ENABLED is OFF by default.
+ * Requires verified merchant credentials, a separate signed webhook and atomic grant RPC.
+ */
+import {createClient} from "npm:@supabase/supabase-js@2";
+import {selectTopupPackage,validWaylCheckoutLink,serverReturnUrl,makeLinkPayload} from "./contract.ts";
+const env=(key:string)=>Deno.env.get(key)??"";
+const ORIGIN="https://hsnq2022022-cyber.github.io";
+const headers={"content-type":"application/json; charset=utf-8","cache-control":"no-store",
+ "access-control-allow-origin":ORIGIN,"access-control-allow-headers":"apikey,authorization,content-type",
+ "access-control-allow-methods":"POST,OPTIONS","vary":"Origin"};
+const json=(data:unknown,status=200)=>new Response(JSON.stringify(data),{status,headers});
+const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export async function handle(req:Request){
+ if(req.headers.get("origin")!==ORIGIN)return json({error:"Origin not permitted"},403);
+ if(req.method==="OPTIONS")return new Response(null,{status:204,headers});
+ if(req.method!=="POST")return json({error:"Method not allowed"},405);
+ if(env("PAYMENTS_ENABLED")!=="true")return json({error:"بوابة الدفع غير مفعّلة"},423);
+ const base=env("SUPABASE_URL"),key=env("SUPABASE_SERVICE_ROLE_KEY"),
+  merchant=env("WAYL_TOKEN"),webhookSecret=env("WAYL_WEBHOOK_SECRET"),
+  redirect=serverReturnUrl(env("SITE_URL")),mode=env("WAYL_ENV");
+ if(!base||!key||!merchant||!webhookSecret||webhookSecret.length<32||!redirect||
+   (mode!=="test"&&mode!=="live"))
+  return json({error:"Merchant configuration unavailable"},503);
+ const auth=req.headers.get("authorization")??"";
+ if(!auth.startsWith("Bearer ")||auth.length>8192)return json({error:"Unauthorized"},401);
+ let input:Record<string,unknown>;
+ try{
+  const raw=await req.text();
+  if(raw.length>1024)return json({error:"Payload too large"},413);
+  const body:unknown=JSON.parse(raw);
+  if(!body||typeof body!=="object"||Array.isArray(body))return json({error:"Invalid JSON"},400);
+  input=body as Record<string,unknown>;
+ }catch{return json({error:"Invalid JSON"},400)}
+ const pkg=selectTopupPackage(input.packageId);
+ if(!pkg||typeof input.tenantId!=="string"||!uuid.test(input.tenantId))
+  return json({error:"Invalid tenant or package"},400);
+ const sb=createClient(base,key,{auth:{persistSession:false,autoRefreshToken:false}});
+ const {data:user,error:userError}=await sb.auth.getUser(auth.slice(7));
+ if(userError||!user.user)return json({error:"Unauthorized"},401);
+ const {data:tenant,error:tenantErr}=await sb.from("tenants")
+  .select("id,user_id").eq("id",input.tenantId).maybeSingle();
+ if(tenantErr)return json({error:"Tenant lookup failed"},503);
+ if(!tenant||tenant.user_id!==user.user.id)return json({error:"Tenant unauthorized"},403);
+ const paymentId=crypto.randomUUID(),packageId=input.packageId as string;
+ const meta={source:"wayl-topup-v2",packageId,credits:pkg.credits,env:mode};
+ const {error:insertError}=await sb.from("payments").insert({
+  id:paymentId,tenant_id:tenant.id,provider:"wayl",amount:pkg.amountIQD,
+  currency:"IQD",status:"creating",credits_granted:0,webhook_event:meta
+ });
+ if(insertError){
+  console.error("[topup-create] create row failed",insertError.code);
+  return json({error:"Payment record unavailable"},503);
+ }
+ const uncertain=async()=>{
+  const {error}=await sb.from("payments").update({status:"creation_uncertain"})
+   .eq("id",paymentId).eq("status","creating");
+  if(error)console.error("[topup-create] status update failed",error.code);
+ };
+ let response:Response;
+ try{
+  response=await fetch("https://api.thewayl.com/api/v1/links",{
+   method:"POST",headers:{"content-type":"application/json",
+    "X-WAYL-AUTHENTICATION":merchant},
+   body:JSON.stringify(makeLinkPayload({
+    id:paymentId,amountIQD:pkg.amountIQD,label:pkg.label,env:mode,
+    webhookUrl:base.replace(/\/+$/,"")+"/functions/v1/wayl-topup-webhook",
+    webhookSecret,redirectUrl:redirect
+   }))
   });
-
-/** رابط العودة: نفس Origin الطلب فقط وبـ HTTPS (يمنع التحويل لمواقع أخرى). */
-function returnUrl(req: Request, requested: unknown): string | null {
-  const origin = (req.headers.get("origin") ?? "").trim().replace(/\/+$/, "");
-  const site = (Deno.env.get("SITE_URL") ?? "").trim().replace(/\/+$/, "");
-
-  if (typeof requested === "string" && /^https:\/\//i.test(origin)) {
-    try {
-      const u = new URL(requested);
-      if (u.origin === origin) return u.origin + u.pathname + u.search;
-    } catch {
-      /* تجاهل */
-    }
-  }
-
-  if (/^https:\/\//i.test(site)) return site + "/";
-  if (/^https:\/\//i.test(origin)) return origin + "/milanochat/";
-
-  return null;
+ }catch{
+  await uncertain();
+  return json({error:"إنشاء رابط الدفع غير مؤكد؛ تواصل مع الدعم قبل المحاولة مجددًا"},503);
+ }
+ let parsed:unknown;
+ try{parsed=await response.json()}catch{parsed=null}
+ const data=parsed&&typeof parsed==="object"?(parsed as Record<string,unknown>).data:null;
+ const d=data&&typeof data==="object"?data as Record<string,unknown>:null;
+ if(!response.ok||d?.referenceId!==paymentId||!validWaylCheckoutLink(d?.url)){
+  await uncertain();
+  return json({error:"تعذر التحقق من رابط الدفع؛ لا تعِد المحاولة تلقائيًا"},502);
+ }
+ const url=d.url;
+ const code=typeof d.code==="string"&&d.code.length<=128?d.code:null;
+ const {data:stored,error:saveError}=await sb.from("payments").update({
+  status:"pending_payment",invoice_id:code,webhook_event:{...meta,checkoutUrl:url}
+ }).eq("id",paymentId).eq("status","creating").select("id");
+ if(saveError||!stored||stored.length!==1){
+  console.error("[topup-create] link not persisted",saveError?.code??"unexpected_payment_status");
+  return json({error:"تتطلب عملية الدفع مراجعة بشرية"},503);
+ }
+ return json({invoiceId:paymentId,paymentUrl:url});
 }
-
-Deno.serve(async (req: Request) => {
-  if (req.method === "OPTIONS") {
-    return new Response("ok", { status: 200, headers: cors });
-  }
-
-  if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
-
-  try {
-    const supaUrl = Deno.env.get("SUPABASE_URL");
-    const srvKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-    const waylToken = Deno.env.get("WAYL_TOKEN");
-    const waylSecret = Deno.env.get("WAYL_WEBHOOK_SECRET");
-
-    if (!supaUrl || !srvKey) return json({ error: "إعدادات الخادم ناقصة" }, 500);
-
-    if (!waylToken || !waylSecret || waylSecret.length < 32) {
-      console.error("[topup-create] WAYL_TOKEN / WAYL_WEBHOOK_SECRET missing or too short");
-      return json({ error: "بوابة الدفع غير مهيأة بعد" }, 500);
-    }
-
-    const sb = createClient(supaUrl, srvKey, {
-      auth: { autoRefreshToken: false, persistSession: false },
-    });
-
-    // ─── المصادقة ───
-    const header = req.headers.get("authorization") ?? "";
-    const jwt = header.startsWith("Bearer ") ? header.slice(7) : "";
-    if (!jwt) return json({ error: "غير مصرح" }, 401);
-
-    const { data: userData, error: userErr } = await sb.auth.getUser(jwt);
-    if (userErr || !userData?.user) return json({ error: "جلسة غير صالحة" }, 401);
-
-    const { data: tenant } = await sb
-      .from("tenants")
-      .select("id, business_name")
-      .eq("user_id", userData.user.id)
-      .maybeSingle();
-
-    if (!tenant) return json({ error: "لا يوجد حساب مرتبط" }, 404);
-
-    // ─── الباقة (من الخادم فقط) ───
-    const body = await req.json().catch(() => ({}));
-    const pkg = PACKAGES[String(body?.packageId ?? "")] ?? PACKAGES.starter;
-    const pkgId = PACKAGES[String(body?.packageId ?? "")] ? String(body.packageId) : "starter";
-
-    const back = returnUrl(req, body?.returnUrl);
-    if (!back) return json({ error: "تعذر تحديد رابط العودة" }, 400);
-
-    // ─── سجل الدفع ───
-    const { data: payment, error: payErr } = await sb
-      .from("payments")
-      .insert({
-        tenant_id: tenant.id,
-        provider: "wayl",
-        amount: pkg.amount,
-        currency: "IQD",
-        status: "created",
-        credits_granted: 0,
-        webhook_event: { package: pkgId, credits: pkg.credits },
-      })
-      .select("id")
-      .single();
-
-    if (payErr || !payment) {
-      console.error("[topup-create] insert payment failed", payErr);
-      return json({ error: "تعذر إنشاء عملية الدفع" }, 500);
-    }
-
-    // ─── رابط Wayl ───
-    const env = (Deno.env.get("WAYL_ENV") ?? "test").toLowerCase() === "live" ? "live" : "test";
-
-    const waylRes = await fetch(WAYL_API, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-WAYL-AUTHENTICATION": waylToken,
-      },
-      body: JSON.stringify({
-        env,
-        referenceId: payment.id,
-        total: pkg.amount,
-        currency: "IQD",
-        customParameter: "",
-        lineItem: [{
-          label: `ميلانو — ${pkg.name} (${pkg.credits} رد)`,
-          amount: pkg.amount,
-          type: "increase",
-        }],
-        webhookUrl: `${supaUrl}/functions/v1/wayl-webhook`,
-        webhookSecret: waylSecret,
-        redirectionUrl: back,
-      }),
-    });
-
-    const waylText = await waylRes.text();
-    let waylJson: any = {};
-    try {
-      waylJson = JSON.parse(waylText);
-    } catch {
-      /* ليس JSON */
-    }
-
-    const paymentUrl: string | undefined = waylJson?.data?.url;
-    const code: string | undefined = waylJson?.data?.code;
-
-    if (!waylRes.ok || !paymentUrl) {
-      console.error(`[topup-create] wayl ${waylRes.status}: ${waylText.slice(0, 500)}`);
-
-      await sb.from("payments").update({ status: "failed" }).eq("id", payment.id);
-
-      return json({ error: "تعذر إنشاء رابط الدفع، حاول لاحقاً" }, 502);
-    }
-
-    await sb.from("payments").update({ invoice_id: code ?? payment.id }).eq("id", payment.id);
-
-    return json({ invoiceId: payment.id, paymentUrl });
-  } catch (e) {
-    console.error("[topup-create]", e);
-    return json({ error: e instanceof Error ? e.message : "خطأ داخلي" }, 500);
-  }
-});
+if(import.meta.main)Deno.serve(handle);
