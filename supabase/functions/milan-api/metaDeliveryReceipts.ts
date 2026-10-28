@@ -21,7 +21,7 @@ export function extractMetaDeliveryReceipts(payload:unknown):MetaReceipt[]{
   const groups:unknown[]=[entry.messaging];
   if(Array.isArray(entry.changes)){
    for(const change of entry.changes.slice(0,100)){
-    if(isRecord(change)&&isRecord(change.value)){
+    if(isRecord(change)&&change.field==="messages"&&isRecord(change.value)){
      if(Array.isArray(change.value.messaging))groups.push(change.value.messaging);
      else groups.push([change.value]);
     }
