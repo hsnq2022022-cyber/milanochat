@@ -181,6 +181,10 @@ jobs:
         run: |
           npm run typecheck
           npm run build
+      - name: Verify release preflight and cleanup invariants (pure isolated unit tests)
+        run: |
+          node --test tests/flow-release-baseline.test.mjs
+          node --check scripts/flow-release-baseline.mjs
       - name: Check release script syntax but NEVER execute it
         run: |
           bash -n scripts/flow-protected-release.sh
