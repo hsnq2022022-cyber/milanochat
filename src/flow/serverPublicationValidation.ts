@@ -58,3 +58,18 @@ export function testCanaryArmed(
   UUID_REGEX.test(verifiedAccount) &&
   configuredTenant===verifiedTenant && configuredAccount===verifiedAccount;
 }
+
+/**
+ * Live tenant approval is a separate, operator-owned database boundary.
+ * Browser arguments, a published document, or a feature flag cannot approve it.
+ * Text-only Instagram is the first supported live sending capability.
+ */
+export function productionActivationAuthorized(
+ platform:ProviderPlatform,
+ globalEnabled:unknown,
+ tenantEnabled:unknown,
+ productionApproved:unknown
+):boolean {
+ return platform==="instagram" && globalEnabled===true &&
+  tenantEnabled===true && productionApproved===true;
+}

@@ -5,10 +5,11 @@
  */
 import {createClient} from "npm:@supabase/supabase-js@2";
 import {
- preparePublishedDocument,publicationCanActivate,testCanaryArmed,
+ preparePublishedDocument,publicationCanActivate,testCanaryArmed,productionActivationAuthorized,
  UUID_REGEX,VALID_FLOW_KEY,type ProviderPlatform
 } from "../../../src/flow/serverPublicationValidation.ts";
 import type {FlowCapability} from "../../../src/flow/publicationGate.ts";
+import {simpleMessageFromDocument} from "../milan-api/flowPrepareMessage.ts";
 
 const env=(k:string)=>Deno.env.get(k)??"";
 // Only the existing production GitHub Pages origin. Never reflect Origin.
@@ -183,12 +184,26 @@ export async function handleFlowPublication(req:Request,
       account.agent_enabled!==true||account.auto_reply!==true)
     return error("Account is paused",403);
 
-   // Three independent controls: exact server environment, server side
-   // capability manifest, and database global/tenant test-only switches.
-   if(!testCanaryArmed(env("FLOW_PUBLICATION_CANARY_READY"),
+   // Production approval requires two OFF-by-default DB switches plus a
+   // separate operator-owned production_approved bit. The RPC re-checks
+   // global/tenant gates transactionally before committing activation.
+   const canary=testCanaryArmed(env("FLOW_PUBLICATION_CANARY_READY"),
      env("FLOW_PUBLICATION_CANARY_TENANT_ID"),
      env("FLOW_PUBLICATION_CANARY_ACCOUNT_ID"),
-     scope.tenantId,scope.accountId))
+     scope.tenantId,scope.accountId);
+   const [globalSwitch,tenantSwitch]=await Promise.all([
+    client.from("automation_flow_global_switch").select("enabled")
+     .eq("singleton",true).maybeSingle(),
+    client.from("automation_flow_tenant_switches")
+     .select("enabled,production_approved").eq("tenant_id",scope.tenantId)
+     .maybeSingle()
+   ]);
+   if(globalSwitch.error||tenantSwitch.error)
+    return error("Automation switches unavailable",503);
+   const production=productionActivationAuthorized(
+    scope.platform,globalSwitch.data?.enabled,
+    tenantSwitch.data?.enabled,tenantSwitch.data?.production_approved);
+   if(!canary&&!production)
     return error("Publication activation is disabled",423);
 
    const {data:publication,error:publicationError}=await client
@@ -198,8 +213,14 @@ export async function handleFlowPublication(req:Request,
     .eq("revision",rev).maybeSingle();
    if(publicationError)return error("Publication lookup unavailable",503);
    if(!publication)return error("Publication revision not found",404);
-   const caps=new Set<FlowCapability>(env("FLOW_ACTIVATION_CAPABILITIES")
-    .split(",").map(s=>s.trim()).filter(Boolean) as FlowCapability[]);
+   // Deployed milan-api currently supports exactly one trigger(message)
+   // followed by one plain text message, no rich actions/side effects.
+   // Refuse every broader graph until its actual sender has passed live CI.
+   if(simpleMessageFromDocument(publication.document,scope.platform)===null)
+    return error("This flow uses unsupported runtime features",422);
+   const caps=new Set<FlowCapability>(canary?
+    (env("FLOW_ACTIVATION_CAPABILITIES").split(",").map(s=>s.trim()).filter(Boolean) as FlowCapability[]):
+    ["execution-engine","instagram","trigger:message","message:text"]);
    if(!publicationCanActivate(publication.document,scope.platform,caps,true))
     return error("This flow uses unsupported runtime features",422);
 

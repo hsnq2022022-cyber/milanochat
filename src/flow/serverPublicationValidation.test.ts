@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {makeNode,edgeFor} from "./model.ts";
 import type {FlowDocument} from "./model.ts";
 import {
- providerPlatform,preparePublishedDocument,publicationCanActivate,testCanaryArmed
+ providerPlatform,preparePublishedDocument,publicationCanActivate,testCanaryArmed,productionActivationAuthorized
 } from "./serverPublicationValidation.ts";
 import type {FlowCapability} from "./publicationGate.ts";
 
@@ -60,4 +60,17 @@ test("only exact server-owned canary tenant and account can arm activation",()=>
  assert.equal(testCanaryArmed("false",tenant,account,tenant,account),false);
  assert.equal(testCanaryArmed("true",tenant,account,tenant,"cccccccc-cccc-4ccc-8ccc-cccccccccccc"),false);
  assert.equal(testCanaryArmed("true","spoofed",account,tenant,account),false);
+});
+
+test("production activation requires operator-approved and enabled tenant plus global ON",()=>{
+ assert.equal(productionActivationAuthorized("instagram",true,true,true),true);
+ for(const flags of [
+  [false,true,true],[true,false,true],[true,true,false],
+  [null,true,true],[true,null,true],[true,true,"true"],
+  [undefined,true,true]
+ ] as const){
+  assert.equal(productionActivationAuthorized("instagram",...flags),false);
+ }
+ assert.equal(productionActivationAuthorized("facebook",true,true,true),false);
+ assert.equal(productionActivationAuthorized("whatsapp",true,true,true),false);
 });
