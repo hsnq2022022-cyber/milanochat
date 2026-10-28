@@ -45,8 +45,11 @@ BEGIN
  IF EXISTS(SELECT 1 FROM public.flow_conversation_tags WHERE tenant_id=t)
  THEN RAISE EXCEPTION 'Untag not applied'; END IF;
  IF NOT public.flow_apply_internal_effect(t,notify_id)
- OR public.flow_apply_internal_effect(t,notify_id)
- OR (SELECT count(*) FROM public.flow_staff_notifications WHERE tenant_id=t)<>1
+ THEN RAISE EXCEPTION 'Notification effect not committed'; END IF;
+ IF public.flow_apply_internal_effect(t,notify_id)
+ THEN RAISE EXCEPTION 'Duplicate notification effect'; END IF;
+ -- Read the queue in a new SPI snapshot after the modifying RPC.
+ IF (SELECT count(*) FROM public.flow_staff_notifications WHERE tenant_id=t)<>1
  OR (SELECT recipient_user_id FROM public.flow_staff_notifications
     WHERE outbox_id=notify_id)<>
       '77777777-7777-4777-8777-777777777777'::uuid
