@@ -33,21 +33,27 @@ BEGIN
  UPDATE public.automation_flow_global_switch SET enabled=true;
  INSERT INTO public.automation_flow_tenant_switches(tenant_id,enabled,test_only)
  VALUES(t,true,true);
- IF NOT public.flow_apply_internal_effect(t,tag_id) OR
-    public.flow_apply_internal_effect(t,tag_id)
- THEN RAISE EXCEPTION 'Duplicate tag action executed'; END IF;
+ -- NEVER combine stateful RPC calls with OR: SQL may evaluate OR terms
+ -- in a different order and inspect the row before the side effect.
+ IF public.flow_apply_internal_effect(t,tag_id) IS DISTINCT FROM true
+ THEN RAISE EXCEPTION 'Tag action failed';END IF;
+ IF public.flow_apply_internal_effect(t,tag_id) IS DISTINCT FROM false
+ THEN RAISE EXCEPTION 'Duplicate tag action executed';END IF;
  IF (SELECT count(*) FROM public.flow_conversation_tags WHERE tenant_id=t AND tag='VIP')<>1
  THEN RAISE EXCEPTION 'Tag not stored exactly once';END IF;
- IF NOT public.flow_apply_internal_effect(t,untag_id) OR
-    EXISTS(SELECT 1 FROM public.flow_conversation_tags WHERE tenant_id=t)
- THEN RAISE EXCEPTION 'Untag not applied'; END IF;
- IF NOT public.flow_apply_internal_effect(t,notify_id)
- OR public.flow_apply_internal_effect(t,notify_id)
- OR (SELECT count(*) FROM public.flow_staff_notifications WHERE tenant_id=t)<>1
+ IF public.flow_apply_internal_effect(t,untag_id) IS DISTINCT FROM true
+ THEN RAISE EXCEPTION 'Untag RPC failed';END IF;
+ IF EXISTS(SELECT 1 FROM public.flow_conversation_tags WHERE tenant_id=t)
+ THEN RAISE EXCEPTION 'Untag left a tag behind';END IF;
+ IF public.flow_apply_internal_effect(t,notify_id) IS DISTINCT FROM true
+ THEN RAISE EXCEPTION 'Notification RPC failed';END IF;
+ IF public.flow_apply_internal_effect(t,notify_id) IS DISTINCT FROM false
+ THEN RAISE EXCEPTION 'Duplicate notification executed';END IF;
+ IF (SELECT count(*) FROM public.flow_staff_notifications WHERE tenant_id=t)<>1
  OR (SELECT recipient_user_id FROM public.flow_staff_notifications
     WHERE outbox_id=notify_id)<>
       '77777777-7777-4777-8777-777777777777'::uuid
- THEN RAISE EXCEPTION 'Staff queue not idempotent or wrong recipient';END IF;
+ THEN RAISE EXCEPTION 'Staff queue recipient or one-time event mismatch';END IF;
  IF public.flow_apply_internal_effect('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',tag_id)
  THEN RAISE EXCEPTION 'Cross tenant internal action';END IF;
 END $check$;
