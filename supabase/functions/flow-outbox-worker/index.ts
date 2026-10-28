@@ -102,6 +102,11 @@ Deno.serve(async req=>{
      payload.choiceIds.length===payload.choices.length?
      payload.choices.map((label:unknown,i:number)=>({id:payload.choiceIds[i],label})):undefined;
    if(effect.effect_kind==="question" && !quickReplies){report("invalid");continue;}
+   const websiteButtons=effect.effect_kind==="message" &&
+     Array.isArray(payload.websiteButtons)?payload.websiteButtons:undefined;
+   if(websiteButtons && (env("FLOW_RICH_BUTTONS_ENABLED")!=="true" || account.platform!=="facebook")){
+     report("blocked");continue;
+   }
    const token=account.platform==="whatsapp"?
     (env("WA_ACCESS_TOKEN")||env("WHATSAPP_ACCESS_TOKEN")):
     await decryptAccountToken(String(account.access_token_encrypted??""),fieldKey);
@@ -116,7 +121,7 @@ Deno.serve(async req=>{
     },
     send:()=>sendProviderMessage({
      platform:account.platform,externalId:String(account.external_id??""),
-     token,recipient,text:messageText,quickReplies
+     token,recipient,text:messageText,quickReplies,websiteButtons
     }),
     confirm:async(status,providerId)=>{
      const {data,error}=await sb.rpc("flow_finish_outbox_delivery",{
