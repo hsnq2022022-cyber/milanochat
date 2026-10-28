@@ -26,3 +26,15 @@ This tracker lives in [PR #117](https://github.com/hsnq2022022-cyber/milanochat/
 - [PR #126](https://github.com/hsnq2022022-cyber/milanochat/pull/126) combines the reviewed CI/editor/flow modules from #117, #119, #122, #123, #124 and #125 and adds `src/flow/flowPipeline.ts` with unit tests.
 - Integrated CI runs full typecheck, every Node test, Vite, Chromium UI tests, two PostgreSQL RLS suites and concurrent inbound reservation. A passing run is **integration evidence only**; no actual Meta sender or billing ledger is connected.
 - All Step 1–7 production release gates remain blocked by owner-approved staging, live schema verification, signed E2E and per-action GO. **Do not merge this PR to main just because CI is green.**
+
+## Work session — staging publisher, worker, signed-webhook audit (2026-10-28)
+
+| Review PR | Verified work | Release status |
+| --- | --- | --- |
+| [#127](https://github.com/hsnq2022022-cyber/milanochat/pull/127) | 36 Node regressions; disposable PostgreSQL lease CAS, kill-switch, provider quarantine, credit debit-once. [CI #40682268984](https://github.com/hsnq2022022-cyber/milanochat/actions/runs/40682268984). | Review-only, no live worker or billing RPC. |
+| [#128](https://github.com/hsnq2022022-cyber/milanochat/pull/128) | 11 Node publishing regressions; disposable PostgreSQL immutable revisions, private RLS grants, canary activation default OFF, rollback. [CI #40683116186](https://github.com/hsnq2022022-cyber/milanochat/actions/runs/40683116186). | Review-only, no authenticated live publish endpoints. |
+| [#129](https://github.com/hsnq2022022-cyber/milanochat/pull/129) | **Confirmed fail-open IG/FB webhook signature bug** when both secrets missing; 6 HMAC tests, configured-secret fail-closed and 503 for missing config. [CI #40683730053](https://github.com/hsnq2022022-cyber/milanochat/actions/runs/40683730053). | Changes `milan-api` and therefore MUST NOT merge/deploy without secure secret review, staging signed E2E, rollback plan and owner GO. |
+
+Supabase connector returned two project metadata entries: an active project and an **inactive** project named `meta`. No project was designated as staging; no production SQL, account data, function deployment or Meta subscription changes were performed. Do not infer inactive `meta` can be used as a testing environment.
+
+**Do not mark Stages 8–12 as released.** Remaining blockers: approved live schema read-only catalog; explicitly designated, active staging; matching server-side Auth/tenant adapter, Meta webhook signing and provider delivery E2E, durable worker scheduler, production credit RPC idempotency, all-channel canary, Android testing, owner-by-owner GO for production steps.
