@@ -40,6 +40,7 @@
 
 import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2";
 import * as cheerio from "npm:cheerio@1";
+import { flowShadowMayObserve } from "./flowShadowGate.ts";
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
@@ -1743,6 +1744,43 @@ async function handleIncomingWebhookMessage(
       `[${channel}_webhook] no credits: ${tenantId}`
     );
     return;
+  }
+
+  /**
+   * التدفقات الجديدة: مراقبة صامتة فقط.
+   * لا تغيّر اختيار المجيب ولا تُنشئ رسائل/سجلات/خصومات.
+   * الوضع الافتراضي بلا FLOW_SHADOW_MODE: صفر استعلامات إضافية.
+   */
+  if (env("FLOW_SHADOW_MODE") === "observe") {
+    const mayObserve = await flowShadowMayObserve(
+      env("FLOW_SHADOW_MODE"),
+      String(tenantId),
+      String(account?.id ?? ""),
+      {
+        readGlobal: async () => {
+          const { data, error } = await sb
+            .from("automation_flow_global_switch")
+            .select("enabled")
+            .eq("singleton", true)
+            .maybeSingle();
+          if (error) throw error;
+          return data;
+        },
+        readTenant: async (verifiedId: string) => {
+          const { data, error } = await sb
+            .from("automation_flow_tenant_switches")
+            .select("enabled,test_only")
+            .eq("tenant_id", verifiedId)
+            .maybeSingle();
+          if (error) throw error;
+          return data;
+        },
+      }
+    );
+    if (mayObserve) {
+      // No names, chat IDs, message contents, tokens or customer text in logs.
+      console.info("[flow-shadow] test account eligible; legacy AI remains owner");
+    }
   }
 
   /**
