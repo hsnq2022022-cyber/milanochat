@@ -120,7 +120,7 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose}
       onClick={()=>void load()}>{en?"Load revisions":"عرض الإصدارات"}</button>
      <button type="button" className={style} disabled={!accountId||busy}
       onClick={()=>void publish()}>{en?"Publish new revision":"نشر إصدار جديد"}</button>
-     {showActivationControls&&activation?.is_active&&<button type="button" className={style}
+     {activation?.is_active&&<button type="button" className={style}
       disabled={busy||!loaded} onClick={()=>void change("deactivate")}>
       {en?"Stop automation":"إيقاف التدفق"}</button>}
     </div>
