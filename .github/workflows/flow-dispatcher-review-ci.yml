@@ -45,6 +45,7 @@ jobs:
           psql -X -v ON_ERROR_STOP=1 -f tests/sql/fixtures/installed-flow-runtime.sql
           psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-exclusive-claim-bootstrap.sql
           psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028220000_webhook_exclusive_claim.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028224000_delivery_attempts.sql
           psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028225000_flow_runtime_advance.sql
           psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-phase4-runtime-bootstrap.sql
           psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-outbox-delivery-bootstrap.sql
