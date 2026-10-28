@@ -19,3 +19,4 @@ UPDATE public.tenants SET user_id=
     '99999999-9999-4999-8999-999999999999'::uuid
    ELSE '88888888-8888-4888-8888-888888888888'::uuid END;
 GRANT SELECT ON public.tenants TO service_role;
+GRANT SELECT ON public.conversations TO service_role;
