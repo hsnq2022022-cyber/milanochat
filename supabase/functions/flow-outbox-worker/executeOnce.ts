@@ -21,6 +21,13 @@ export async function executeOnce(d:OutboxDependencies):Promise<OutboxResult>{
   try{await d.confirm("uncertain",null);}catch{/* abandoned attempt becomes human review */}
   return "uncertain";
  }
+ // HTTP 2xx without a stable provider MID is NOT proof of a traceable send.
+ // Do not persist a charge or retry the recipient: the provider might have
+ // accepted the message. Route this attempt to human reconciliation instead.
+ if(typeof providerId!=="string"||!providerId.trim()){
+  try{await d.confirm("uncertain",null);}catch{/* pending attempt is reviewable */}
+  return "uncertain";
+ }
  try{
   if(!await d.confirm("confirmed",providerId))return "sent_unconfirmed";
  }catch{return "sent_unconfirmed";}
