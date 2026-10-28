@@ -17,7 +17,14 @@ Status: **Flow editor and opt-in cloud drafts released**; **real customer automa
 - The existing webhook handler calls answerFromKnowledge and sends a provider response when agent_enabled/auto_reply allow it; a new flow handler that also sends would cause duplicate replies.
 - The existing webhook path respects human transfer and low-credit states. The flow engine must preserve those checks and own the exclusive responder decision before sending.
 - Stage 7 drafts table is deployed with owner RLS in production, checked using two real tenant owners and ROLLBACK. Stage 8–11 runtime SQL remains review-only.
-- Default VITE_ENABLE_CLOUD_FLOW_DRAFTS unset: cloud draft controls are not exposed in the ordinary site build. Runtime has no activation flag or outgoing sender connected.
+- The live Pages build has `VITE_ENABLE_CLOUD_FLOW_DRAFTS=true` for opt-in draft visibility; that frontend flag is **not** a sending authorization. Runtime has no server activation flag or outgoing sender connected.
+
+## Unified staging candidate (review only)
+
+- [PR #126](https://github.com/hsnq2022022-cyber/milanochat/pull/126) integrates editor/CI fixes, default-OFF routing, runtime action plans, safe delivery decisions and disposable Postgres atomic reservation tests.
+- `src/flow/flowPipeline.ts` composes selection, capability-based publication audit and initial pure runtime planning, with no provider I/O. It is **not connected to live `milan-api`**.
+- Synthetic concurrency, replay and RLS checks do **not** establish real Meta exactly-once sends, actual credit correctness, authenticated live publishing or production migration compatibility.
+- Detailed evidence and GO dependencies: [flows-integrated-release-candidate.md](./flows-integrated-release-candidate.md). **No release gate is marked passed by these isolated tests.**
 
 ## Mandatory release blockers: all must be independently verified
 
