@@ -29,3 +29,36 @@ jobs:
           node --experimental-strip-types --test src/flow/publicationGate.test.ts
       - name: Vite build
         run: npm run build
+
+  postgres-publications:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: synthetic_publish_ci
+          POSTGRES_DB: flow_publish_ci
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d flow_publish_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: synthetic_publish_ci
+      PGDATABASE: flow_publish_ci
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create isolated tenant and account fixtures
+        run: |
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-atomic-staging-bootstrap.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-atomic-staging.test.sql
+      - name: Install isolated revision and activation rules
+        run: psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-publisher-staging.sql
+      - name: Verify immutable revisions, canary defaults, RLS, rollback and deactivate
+        run: psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-publisher-staging.test.sql
