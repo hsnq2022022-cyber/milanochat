@@ -30,6 +30,38 @@ test("timeout is uncertain, no retry, no debit",async()=>{
  assert.equal(await executeOnce(d.args),"uncertain");
  assert.deepEqual(d.get(),{sent:1,events:["reserve","send","uncertain:null"]});
 });
+test("provider HTTP 2xx without message ID remains uncertain and must never debit",async()=>{
+ let sent=0;const events:string[]=[];
+ const input={
+  reserve:async()=>{events.push("reserve");return true;},
+  send:async()=>{sent++;events.push("send");return null;},
+  confirm:async(status:"confirmed"|"uncertain",id:string|null)=>{
+   events.push(status+":"+id);return true;
+  },
+  persistAndBill:async()=>{events.push("BILL_UNEXPECTED");return true;}
+ };
+ assert.equal(await executeOnce(input),"uncertain");
+ assert.equal(sent,1);
+ assert.deepEqual(events,["reserve","send","uncertain:null"]);
+});
+test("blank provider message ID is never considered confirmed",async()=>{
+ const events:string[]=[];
+ const result=await executeOnce({
+  reserve:async()=>true,
+  send:async()=>"   ",
+  confirm:async(status,id)=>{events.push(status+":"+id);return true;},
+  persistAndBill:async()=>{events.push("BILL_UNEXPECTED");return true;}
+ });
+ assert.equal(result,"uncertain");
+ assert.deepEqual(events,["uncertain:null"]);
+});
+test("provider HTTP 2xx lacking message ID yields null (caller marks uncertain)",async()=>{
+ const fake=(async()=>new Response(JSON.stringify({success:true}),{status:200})) as typeof fetch;
+ assert.equal(await sendProviderMessage({
+  platform:"instagram",token:"IG-token",recipient:"123456",externalId:"",text:"مرحبا"
+ },fake),null);
+});
+
 test("ambiguous DB confirmation and billing problems never re-send",async()=>{
  const d=deps({confirm:false});
  assert.equal(await executeOnce(d.args),"sent_unconfirmed");
