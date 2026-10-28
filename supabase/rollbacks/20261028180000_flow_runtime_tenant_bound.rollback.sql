@@ -16,6 +16,11 @@ BEGIN
       RAISE EXCEPTION 'Missing/unrecognized runtime table %: refusing rollback',name;
     END IF;
   END LOOP;
+  IF to_regprocedure('public.reject_automation_flow_revision_mutation()') IS NULL OR
+     obj_description(to_regprocedure('public.reject_automation_flow_revision_mutation()'),'pg_proc')
+       IS DISTINCT FROM 'CREATED_BY_20261028180000_FLOW_RUNTIME'
+  THEN RAISE EXCEPTION 'Unknown immutable publication trigger function; refusing rollback';
+  END IF;
   IF EXISTS(SELECT 1 FROM public.automation_flow_metrics LIMIT 1)
     OR EXISTS(SELECT 1 FROM public.automation_flow_outbox LIMIT 1)
     OR EXISTS(SELECT 1 FROM public.automation_flow_runs LIMIT 1)
