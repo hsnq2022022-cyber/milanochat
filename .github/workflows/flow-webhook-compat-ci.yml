@@ -1,0 +1,59 @@
+name: Consolidated Meta webhook compatibility — review only
+
+on:
+  push:
+    branches: [integration/flows-webhook-safe-candidate]
+  pull_request:
+    paths:
+      - "supabase/functions/milan-api/**"
+      - "tests/meta-signature.test.ts"
+      - "tests/whatsapp-signature.test.ts"
+      - "tests/legacy-inbound-insert.test.ts"
+      - "tests/flow-shadow-*.test.ts"
+      - ".github/workflows/flow-webhook-compat-ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  signed-legacy-ai:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: "22", cache: npm}
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Existing Instagram/Facebook and WhatsApp signature regressions
+        run: |
+          node --experimental-strip-types --test tests/meta-signature.test.ts
+          node --experimental-strip-types --test tests/whatsapp-signature.test.ts
+      - name: Verify PostgREST duplicate prevention and shadow-mode safety
+        run: |
+          node --experimental-strip-types --test tests/legacy-inbound-insert.test.ts
+          node --experimental-strip-types --test tests/flow-shadow-gate.test.ts
+          node --experimental-strip-types --test tests/flow-shadow-integration.test.ts
+      - name: Existing core website build
+        run: npm run build
+      - uses: denoland/setup-deno@v2
+        with: {deno-version: v2.x}
+      - name: Deno check independently imported helpers
+        run: |
+          deno check supabase/functions/milan-api/metaSignature.ts
+          deno check supabase/functions/milan-api/persistInboundOnce.ts
+          deno check supabase/functions/milan-api/flowShadowGate.ts
+      - name: Verify all safety features remain wired to the SAME handler
+        run: |
+          node --input-type=module -e '
+          import {readFileSync} from "node:fs";
+          const s=readFileSync("supabase/functions/milan-api/index.ts","utf8");
+          for (const anchor of [
+            "verifyMetaWebhookSignature(raw,sigHeader",
+            "const whatsappSignatureValid = await verifyMetaWebhookSignature(",
+            "const incomingResult = await persistInboundOnce(",
+            "if (env(\"FLOW_SHADOW_MODE\") === \"observe\")",
+            "await answerFromKnowledge(",
+            "await sendMetaDirectMessage("
+          ]) if (!s.includes(anchor)) throw Error("MISSING_HARDENING: "+anchor);
+          console.log("PASS: signed webhooks, persisted inbound and default-off AI route integrated");
+          '
