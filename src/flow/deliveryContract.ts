@@ -128,6 +128,28 @@ export function claimDelivery(
   }};
 }
 
+export type PreDispatchResult =
+  | {authorized:true}
+  | {authorized:false;reason:GateDenial|"invalid_lease"};
+
+/**
+ * An additional server-side gate immediately BEFORE HTTP dispatch.
+ * It does NOT prove an in-flight HTTP request can be cancelled; real workers
+ * must re-read flags/ownership from DB before every attempted provider send.
+ */
+export function authorizeLeasedDispatch(
+  record:DeliveryRecord,gate:TrustedDeliveryGate,
+  nowMs:number,leaseToken:string
+):PreDispatchResult {
+  if(record.status!=="leased"||!validId(leaseToken,128)||
+    record.leaseToken!==leaseToken||record.leaseExpiresAt===null||
+    !Number.isSafeInteger(nowMs)||nowMs<0||nowMs>=record.leaseExpiresAt)
+    return {authorized:false,reason:"invalid_lease"};
+  const denial=deliveryGate(record,gate);
+  if(denial)return {authorized:false,reason:denial};
+  return {authorized:true};
+}
+
 export type ProviderOutcome =
   | {kind:"accepted";providerMessageId:string}
   | {kind:"definitely_rejected";retryable:boolean}
