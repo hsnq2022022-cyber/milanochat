@@ -1,0 +1,107 @@
+name: Instagram text candidate — isolated integration checks (NO PRODUCTION)
+on:
+  push:
+    branches: [release/instagram-text-integration-20261028]
+  pull_request:
+    paths:
+      - "supabase/functions/milan-api/**"
+      - "supabase/functions/flow-publication/**"
+      - "src/flow/**"
+      - "src/pages/FlowBuilder.tsx"
+      - "tests/flow-exclusive-claim.test.ts"
+      - "tests/sql/flow-exclusive*"
+      - ".github/workflows/instagram-text-candidate-ci.yml"
+permissions:
+  contents: read
+jobs:
+  postgres-claim:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: ig_integration_only
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: disposable_ci_only
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d ig_integration_only"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGDATABASE: ig_integration_only
+      PGUSER: postgres
+      PGPASSWORD: disposable_ci_only
+    steps:
+      - uses: actions/checkout@v4
+      - name: Disposable production-shaped schema and approved claim proposal
+        run: |
+          set -euo pipefail
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/fixtures/flow-live-shape-bootstrap.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/fixtures/installed-flow-switches.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/fixtures/installed-flow-runtime.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-exclusive-claim-bootstrap.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028220000_webhook_exclusive_claim.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028221000_consume_reply_atomic.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-exclusive-claim.test.sql
+      - name: Two PostgreSQL clients must obtain exactly one claim
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql -X -v ON_ERROR_STOP=1 -c "INSERT INTO public.messages(id,tenant_id,conversation_id,direction,wa_message_id) VALUES('77777777-7777-4777-8777-777777777774','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','44444444-4444-4444-8444-444444444444','in','meta-concurrent')"
+          psql -XAtq -v ON_ERROR_STOP=1 -f tests/sql/flow-exclusive-concurrent.sql > /tmp/c1 &
+          first=$!
+          psql -XAtq -v ON_ERROR_STOP=1 -f tests/sql/flow-exclusive-concurrent.sql > /tmp/c2 &
+          second=$!
+          wait "$first"
+          wait "$second"
+          test "$(cat /tmp/c1 /tmp/c2 | grep -cx 'won')" = 1
+          test "$(cat /tmp/c1 /tmp/c2 | grep -cx 'lost')" = 1
+          test "$(psql -XAtq -c "SELECT count(*) FROM public.automation_message_claims WHERE provider_event_id='meta-concurrent'")" = 1
+          echo "PASS: one exclusive claim from two concurrent writers"
+  code-and-ui:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Exclusive Webhook claim and legacy AI fallback
+        run: |
+          node --experimental-strip-types --test tests/flow-exclusive-claim.test.ts
+          node --experimental-strip-types --test tests/meta-signature.test.ts
+          node --experimental-strip-types --test tests/whatsapp-signature.test.ts
+          node --experimental-strip-types --test tests/legacy-inbound-insert.test.ts
+          node --experimental-strip-types --test tests/flow-shadow-gate.test.ts
+          node --experimental-strip-types --test tests/flow-shadow-integration.test.ts
+      - name: Publication policy and exact 2-node Instagram text parser
+        run: |
+          node --experimental-strip-types --test src/flow/serverPublicationValidation.test.ts
+          node --experimental-strip-types --test tests/flow-simple-instagram-text.test.ts
+      - name: Protected release script static syntax (NEVER run deploy/dry-run in CI)
+        run: |
+          bash -n scripts/flow-protected-release.sh
+          node --check scripts/flow-protected-live-smoke.mjs
+          grep -q 'scripts/flow-protected-release.sh dry-run' .github/workflows/flow-protected-manual-release.yml
+          grep -q 'scripts/flow-protected-release.sh release' .github/workflows/flow-protected-manual-release.yml
+      - name: TypeScript and website build
+        run: |
+          npm run typecheck
+          npm run build
+      - name: Chromium browser for 360px/390px phone and RTL regression
+        run: npx playwright install --with-deps chromium
+      - name: Real browser phone layout and Arabic/English flow UI smoke
+        run: npx playwright test -c playwright.config.ts tests/flow-mobile-locale.spec.ts
+      - uses: denoland/setup-deno@v2
+        with: {deno-version: v2.x}
+      - name: Deno check actual production candidate sources (NO deploy)
+        run: |
+          deno check --node-modules-dir=auto supabase/functions/milan-api/index.ts
+          deno check --node-modules-dir=auto supabase/functions/flow-publication/index.ts

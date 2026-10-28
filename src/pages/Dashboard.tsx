@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import confetti from "canvas-confetti";
 import SafeAvatar from "../components/SafeAvatar";
-import { apiAuthFetch, apiBase, backendMode, type WaSnapshot } from "../lib/api";
+import { api, apiAuthFetch, apiBase, apiEnabled, backendMode, type WaSnapshot } from "../lib/api";
 import { getSupabase, getStoredClaim, clearStoredClaim } from "../lib/supabase";
 import { CHANNELS, ChannelBadge, detectChannel, type ChannelId } from "../lib/channels";
 import {
@@ -1055,6 +1055,7 @@ export default function Dashboard() {
   };
 
   const copyEmbedCode = (token: string) => {
+    const API = apiBase; // Keep prior legacy embed behavior; Widget out of launch scope.
     const code = `<script src="${apiEnabled ? API : "https://your-server.com"}/widget.js" data-token="${token}"></script>`;
     navigator.clipboard.writeText(code);
     setCopiedCode(token);
