@@ -41,6 +41,8 @@ for(const viewport of [{width:1366,height:768},{width:390,height:844}]){
         const r=el.getBoundingClientRect();
         return {x:r.x,y:r.y,width:r.width,height:r.height};
       }));
+      if(variety==="20-node"&&viewport.width===390)
+        expect(rectangles[0].width,"Phone should start at a readable zoom, not fit 20 tiny cards").toBeGreaterThan(90);
       for(let i=0;i<rectangles.length;i++)for(let j=i+1;j<rectangles.length;j++)
         expect(intersect(rectangles[i],rectangles[j]),"Nodes "+i+" and "+j+" overlap").toBe(false);
 
