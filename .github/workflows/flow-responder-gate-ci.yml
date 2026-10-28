@@ -1,0 +1,34 @@
+name: Flow exclusive responder (review only)
+
+on:
+  push:
+    branches: [feature/flows-exclusive-responder-gate]
+  pull_request:
+    paths:
+      - "src/flow/responderDecision.ts"
+      - "src/flow/responderDecision.test.ts"
+      - ".github/workflows/flow-responder-gate-ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  pure-policy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Typecheck
+        run: npx tsc --noEmit -p tsconfig.flows.json
+      - name: Test exclusive responder and existing routing
+        run: |
+          node --experimental-strip-types --test src/flow/responderDecision.test.ts
+          node --experimental-strip-types --test src/flow/eventRouting.test.ts
+      - name: Production build unchanged
+        run: npm run build
