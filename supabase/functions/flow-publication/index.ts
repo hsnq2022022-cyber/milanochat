@@ -106,12 +106,26 @@ export async function handleFlowPublication(req:Request,
 
   // Only the authenticated tenant's accounts are ever returned.
   if(request.action==="accounts"){
-   const {data,error:accountsError}=await client
-    .from("channel_accounts")
-    .select("id,platform,is_active")
-    .eq("tenant_id",tenant.id).limit(100);
-   if(accountsError)return error("Account list unavailable",503);
-   return respond({ok:true,accounts:(data??[]).filter((a:{platform:unknown})=>hasPlatform(a.platform))});
+   const [accounts,globalSwitch,tenantSwitch]=await Promise.all([
+    client.from("channel_accounts")
+     .select("id,platform,is_active,agent_enabled,auto_reply")
+     .eq("tenant_id",tenant.id).limit(100),
+    client.from("automation_flow_global_switch").select("enabled")
+     .eq("singleton",true).maybeSingle(),
+    client.from("automation_flow_tenant_switches")
+     .select("enabled,production_approved").eq("tenant_id",tenant.id).maybeSingle()
+   ]);
+   if(accounts.error||globalSwitch.error||tenantSwitch.error)
+    return error("Account list unavailable",503);
+   const visible=(accounts.data??[]).filter((a:{platform:unknown})=>hasPlatform(a.platform))
+    .map((a:{id:string;platform:ProviderPlatform;is_active:boolean;agent_enabled:boolean;auto_reply:boolean})=>({
+      id:a.id,platform:a.platform,is_active:a.is_active,
+      canActivate:tenant.is_active===true&&a.is_active===true&&
+       a.agent_enabled===true&&a.auto_reply===true&&
+       productionActivationAuthorized(a.platform,globalSwitch.data?.enabled,
+        tenantSwitch.data?.enabled,tenantSwitch.data?.production_approved)
+    }));
+   return respond({ok:true,accounts:visible});
   }
 
   const accountId=request.accountId;
