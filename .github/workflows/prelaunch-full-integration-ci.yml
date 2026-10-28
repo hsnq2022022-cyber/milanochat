@@ -65,6 +65,40 @@ jobs:
           test "$(cat /tmp/c1 /tmp/c2 | grep -cx 'won')" = 1
           test "$(cat /tmp/c1 /tmp/c2 | grep -cx 'lost')" = 1
           test "$(psql -XAtq -c "SELECT count(*) FROM public.automation_message_claims WHERE provider_event_id='meta-concurrent'")" = 1
+  runtime-lease-pg:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: runtime_review
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: disposable_ci_only
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d runtime_review"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGDATABASE: runtime_review
+      PGUSER: postgres
+      PGPASSWORD: disposable_ci_only
+    steps:
+      - uses: actions/checkout@v4
+      - name: Durable runtime state, idempotent effects and sleep/lease/resume
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/fixtures/flow-live-shape-bootstrap.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/fixtures/installed-flow-switches.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/fixtures/installed-flow-runtime.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028225000_flow_runtime_advance.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-phase4-runtime-bootstrap.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-phase4-runtime.test.sql
   staff-delivery-pg:
     runs-on: ubuntu-latest
     timeout-minutes: 18
@@ -176,6 +210,8 @@ jobs:
           node --experimental-strip-types --test tests/flow-outbox-worker.test.ts
           node --experimental-strip-types --test tests/flow-rich-actions-meta.test.ts
           node --experimental-strip-types --test src/flow/runtimeExtra.test.ts
+          node --experimental-strip-types --test src/flow/runtimePlan.test.ts
+          node --experimental-strip-types --test src/flow/aiMetricsGate.test.ts
           node --experimental-strip-types --test tests/wayl-contract.test.ts
       - name: Build and typecheck real frontend
         run: |
