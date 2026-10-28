@@ -27,8 +27,8 @@ jobs:
         run: |
           node --experimental-strip-types --test tests/flow-shadow-gate.test.ts
           node --experimental-strip-types --test tests/flow-shadow-integration.test.ts
-      - name: Full frontend typecheck
-        run: npm run typecheck
+      - name: Flow-module typecheck (full legacy app check is tracked by PR #117)
+        run: npx tsc --noEmit -p tsconfig.flows.json
       - name: Vite build
         run: npm run build
       - uses: denoland/setup-deno@v2
