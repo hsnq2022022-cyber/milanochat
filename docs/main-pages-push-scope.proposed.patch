@@ -1,6 +1,8 @@
 --- a/.github/workflows/deploy.yml
 +++ b/.github/workflows/deploy.yml
-@@ -5,6 +5,17 @@ on:
+@@ -3,6 +3,17 @@
+ on:
+   push:
      branches:
        - main
        - master
