@@ -39,7 +39,7 @@ CREATE FUNCTION public.flow_record_meta_delivery(
  p_status text)
 RETURNS boolean LANGUAGE plpgsql SECURITY INVOKER SET search_path=''
 AS $receipt$
-DECLARE item record; first_receipt boolean; changed boolean;
+DECLARE item record; first_receipt boolean; changed_count integer;
 BEGIN
  IF p_tenant IS NULL OR p_account IS NULL OR
   p_platform NOT IN('instagram','facebook') OR
@@ -63,12 +63,12 @@ BEGIN
   tenant_id,outbox_id,provider_message_id,receipt_status)
  VALUES(p_tenant,item.id,p_provider_message_id,p_status)
  ON CONFLICT DO NOTHING;
- GET DIAGNOSTICS changed=ROW_COUNT;
- IF changed AND first_receipt THEN
+ GET DIAGNOSTICS changed_count=ROW_COUNT;
+ IF changed_count=1 AND first_receipt THEN
   INSERT INTO public.automation_flow_metrics(tenant_id,run_id,event_key)
   VALUES(p_tenant,item.run_id,'delivered');
  END IF;
- RETURN changed;
+ RETURN changed_count=1;
 END $receipt$;
 COMMENT ON FUNCTION public.flow_record_meta_delivery(uuid,uuid,text,text,text)
  IS 'CREATED_BY_20261028229000_META_RECEIPTS';
