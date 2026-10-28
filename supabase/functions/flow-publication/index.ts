@@ -160,8 +160,8 @@ Deno.serve(async(req:Request):Promise<Response>=>{
     .eq("revision",rev).maybeSingle();
    if(publicationError)return error("Publication lookup unavailable",503);
    if(!publication)return error("Publication revision not found",404);
-   const caps=new Set((env("FLOW_ACTIVATION_CAPABILITIES")
-    .split(",").map(s=>s.trim()).filter(Boolean)) as Set<FlowCapability>);
+   const caps=new Set<FlowCapability>(env("FLOW_ACTIVATION_CAPABILITIES")
+    .split(",").map(s=>s.trim()).filter(Boolean) as FlowCapability[]);
    if(!publicationCanActivate(publication.document,scope.platform,caps,true))
     return error("This flow uses unsupported runtime features",422);
 
