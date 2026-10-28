@@ -322,7 +322,21 @@ function Editor(){
           deleteKeyCode={["Delete","Backspace"]}
           defaultEdgeOptions={{type:"flowEdge",interactionWidth:24,markerEnd:{type:MarkerType.ArrowClosed,width:17,height:17,color:"#87A39A"}}}
           minZoom={.2} maxZoom={2} fitView fitViewOptions={{padding:.28,maxZoom:.8}}
-          onInit={api=>{window.setTimeout(()=>{void api.fitView({padding:.20,maxZoom:.85,duration:0});},470);}}
+          onInit={api=>{window.setTimeout(()=>{
+            const current=useFlowStore.getState().doc;
+            if(window.matchMedia("(max-width: 767px)").matches&&current.nodes.length>10){
+              // Auto-fitting dozens of vertical cards on a phone makes their
+              // text unreadable. Center a legible starting node; users can pan.
+              const start=current.nodes.find(n=>n.data.kind==="trigger")??current.nodes[0];
+              if(start){
+                const width=start.measured?.width??240,height=start.measured?.height??150;
+                void api.setCenter(start.position.x+width/2,start.position.y+height/2,
+                  {zoom:.8,duration:0});
+                return;
+              }
+            }
+            void api.fitView({padding:.20,maxZoom:.85,duration:0});
+          },470);}}
           snapToGrid snapGrid={[20,20]}
           selectionOnDrag={!isCompact} panOnDrag={isCompact?true:[1,2]} multiSelectionKeyCode={["Shift","Control","Meta"]}
           colorMode="dark" connectionLineStyle={{stroke:"#3DD189",strokeWidth:2}}
