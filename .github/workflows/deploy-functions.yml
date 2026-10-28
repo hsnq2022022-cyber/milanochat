@@ -5,12 +5,15 @@ name: Deploy Supabase Edge Functions
 # (Settings → Secrets and variables → Actions → New repository secret)
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - "supabase/functions/**"
+  # No production Edge deployment from a main push. A source PR must never
+  # silently replace running webhook/billing code.
   workflow_dispatch:
+    inputs:
+      approve_all_functions:
+        description: "Type deploy-all-functions-reviewed after a separate production GO"
+        required: true
+        type: string
+        default: "NOT_APPROVED"
 
 concurrency:
   group: supabase-functions
@@ -18,7 +21,10 @@ concurrency:
 
 jobs:
   deploy:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.approve_all_functions == 'deploy-all-functions-reviewed' }}
     runs-on: ubuntu-latest
+    environment:
+      name: protected-supabase-flow-release
     env:
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
       PROJECT_REF: nmhefwvhoholcjrbbila
