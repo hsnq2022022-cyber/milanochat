@@ -43,7 +43,7 @@ jobs:
           deno check supabase/functions/milan-api/persistInboundOnce.ts
           deno check supabase/functions/milan-api/flowShadowGate.ts
       - name: Deno check the complete existing milan-api function
-        run: deno check supabase/functions/milan-api/index.ts
+        run: deno check --node-modules-dir=auto supabase/functions/milan-api/index.ts
       - name: Verify all safety features remain wired to the SAME handler
         run: |
           node --input-type=module -e '
