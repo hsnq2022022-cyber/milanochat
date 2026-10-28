@@ -81,7 +81,7 @@ AS $$
 BEGIN
   RAISE EXCEPTION 'Published revision is immutable' USING ERRCODE='23514';
 END
-$;
+$$;
 COMMENT ON FUNCTION public.reject_automation_flow_revision_mutation()
   IS 'CREATED_BY_20261028180000_FLOW_RUNTIME';
 REVOKE ALL ON FUNCTION public.reject_automation_flow_revision_mutation()
