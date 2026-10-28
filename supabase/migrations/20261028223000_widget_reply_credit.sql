@@ -14,7 +14,7 @@ END $guard$;
 CREATE TABLE public.widget_reply_ledger(
  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
  tenant_id uuid NOT NULL REFERENCES public.tenants(id) ON DELETE CASCADE,
- widget_message_id uuid NOT NULL UNIQUE REFERENCES public.widget_messages(id) ON DELETE RESTRICT,
+ widget_message_id uuid NOT NULL UNIQUE REFERENCES public.widget_messages(id) ON DELETE CASCADE,
  charged_at timestamptz NOT NULL DEFAULT now()
 );
 COMMENT ON TABLE public.widget_reply_ledger IS 'CREATED_BY_20261028223000_WIDGET_CREDIT_V2';
