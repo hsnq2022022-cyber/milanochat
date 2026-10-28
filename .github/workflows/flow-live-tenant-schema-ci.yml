@@ -70,3 +70,15 @@ jobs:
           test "$(psql -XAtq -c "SELECT count(*) FROM public.channel_accounts")" = "3"
           test "$(psql -XAtq -c "SELECT count(*) FROM public.conversations")" = "3"
           echo 'PASS: rollback removed only empty newly created flow tables'
+      - name: Reject an unrecognized trigger function before touching existing tables
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql -X -v ON_ERROR_STOP=1 -c "CREATE FUNCTION public.reject_automation_flow_revision_mutation() RETURNS trigger LANGUAGE plpgsql AS \'\$\$ BEGIN RAISE EXCEPTION 'owned_by_another_feature'; END \$\$\';"
+          if psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028180000_flow_runtime_tenant_bound.sql; then
+            echo 'ERROR: migration replaced unrelated function' >&2
+            exit 1
+          fi
+          test "$(psql -XAtq -c "SELECT to_regclass('public.automation_flow_publications') IS NULL")" = "t"
+          test "$(psql -XAtq -c "SELECT COUNT(*) FROM public.channel_accounts")" = "3"
+          echo "PASS: unrelated trigger function and old channel rows preserved"
