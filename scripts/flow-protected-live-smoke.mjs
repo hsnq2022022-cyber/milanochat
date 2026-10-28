@@ -8,6 +8,7 @@ import {createClient} from "@supabase/supabase-js";
 import {randomBytes,createHmac,randomUUID} from "node:crypto";
 import {readFile,writeFile,chmod} from "node:fs/promises";
 import assert from "node:assert/strict";
+import {assertReleaseSafe,assertReleaseRestored} from "./flow-release-baseline.mjs";
 
 const PROJECT="nmhefwvhoholcjrbbila";
 const URL="https://"+PROJECT+".supabase.co";
@@ -55,8 +56,7 @@ async function snapshot(){
  const enabledTenant=await count("automation_flow_tenant_switches",{enabled:true});
  return {tenants,accounts,conversations,widgetMessages,ledger,widgetLedger,delivery,outbox,flows,windows,historicalAnswers,globalOff:global.enabled===false,enabledTenant};
 }
-const expected={tenants:10,accounts:4,conversations:4,widgetMessages:12,ledger:3,widgetLedger:0,delivery:0,outbox:0,flows:0,historicalAnswers:5,globalOff:true,enabledTenant:0};
-function coreMatches(s){for(const [key,v] of Object.entries(expected))assert.equal(s[key],v,"Unexpected production baseline drift "+key);}
+const coreMatches=assertReleaseSafe;
 async function newUser(letter){
  const label="flowtest-"+letter+"-"+Date.now().toString(36)+"-"+randomBytes(5).toString("hex");
  const email=label+"@example.test",password=randomBytes(32).toString("base64url");
@@ -237,9 +237,7 @@ async function cleanup(){
  if(!state.baseline)issues.push("Baseline missing, cannot verify fixture cleanup");
  else if(after){
   try{
-   coreMatches(after);
-   assert.deepEqual(after,state.baseline,
-    "Post-cleanup production counts differ from saved pretest counts");
+   assertReleaseRestored(state.baseline,after);
   }catch(e){issues.push("snapshot mismatch: "+String(e));}
  }
  if(issues.length){
@@ -261,7 +259,7 @@ switch(command){
   const base=await snapshot();coreMatches(base);
   printSnapshot("BASELINE_BEFORE",base);
   state.baseline=base;await save();
-  console.log("PASS baseline: 10 tenants, 4 accounts, 4 conversations, 12 Widget messages, 3 ledger, 5 old answers; switches OFF, outbox 0");
+  console.log("PASS baseline: flow OFF, no enabled tenants/active flows/outbox, exact production counts journaled");
   break;
  }
  case "setup":{
