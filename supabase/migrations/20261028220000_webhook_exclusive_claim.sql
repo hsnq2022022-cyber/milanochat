@@ -90,6 +90,7 @@ BEGIN
 
  IF v_id IS NOT NULL THEN
   RETURN QUERY SELECT true,v_route,v_id,v_outgoing;
+  RETURN; -- Winner must never also return a second duplicate result.
  END IF;
  -- Another request won (possibly while this request was blocked waiting).
  -- Never transfer ownership to the loser, even if the winner's path failed.
