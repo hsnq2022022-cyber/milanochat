@@ -32,7 +32,7 @@ jobs:
         with:
           # This YAML can be copied to main ONLY under separate owner GO.
           # Checkout exact reviewed release scripts, never mutable main.
-          ref: bdbddd972928f2ee7649abaf14b3bfae52439633
+          ref: 631efb44958a165d032f7fc508df29534101fd6f
           fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@v4
@@ -50,9 +50,12 @@ jobs:
           test "$FLOW_RELEASE_CONFIRM" = deploy-two-test-only
           test "$SUPABASE_PROJECT_REF" = nmhefwvhoholcjrbbila
           test "$GITHUB_REPOSITORY" = hsnq2022022-cyber/milanochat
-      - name: Protected release, real Auth and Widget HTTP tests, rollback
+      - name: DRY-RUN FIRST — production fixture create, HTTP smoke and guaranteed cleanup (NO DEPLOY)
         shell: bash
-        run: bash scripts/flow-protected-release.sh
+        run: bash scripts/flow-protected-release.sh dry-run
+      - name: Protected deploy — only if dry-run passed complete teardown
+        shell: bash
+        run: bash scripts/flow-protected-release.sh release
       - name: Preserve one-day v101 source recovery artifact
         if: always()
         uses: actions/upload-artifact@v4
