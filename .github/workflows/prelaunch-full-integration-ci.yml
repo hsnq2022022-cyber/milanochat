@@ -51,6 +51,8 @@ jobs:
           psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028220000_webhook_exclusive_claim.sql
           psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028221000_consume_reply_atomic.sql
           psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-exclusive-claim.test.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/proposals/consume_flow_reply_v2.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/consume-flow-reply-v2.test.sql
       - name: Two writers, exactly one durable claim
         shell: bash
         run: |
