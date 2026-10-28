@@ -12,7 +12,7 @@ BEGIN
 END $g$;
 
 CREATE TABLE public.automation_delivery_attempts(
- claim_id uuid PRIMARY KEY REFERENCES public.automation_message_claims(id) ON DELETE RESTRICT,
+ claim_id uuid PRIMARY KEY REFERENCES public.automation_message_claims(id) ON DELETE CASCADE,
  tenant_id uuid NOT NULL REFERENCES public.tenants(id) ON DELETE CASCADE,
  outgoing_message_id uuid NOT NULL UNIQUE,
  platform text NOT NULL CHECK(platform IN ('instagram','facebook','whatsapp')),
