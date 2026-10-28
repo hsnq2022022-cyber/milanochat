@@ -1243,7 +1243,7 @@ export default function Dashboard() {
       </header>
 
       <main className="max-w-6xl mx-auto px-5 pt-7 pb-24">
-        {import.meta.env.VITE_ENABLE_DELIVERY_REVIEW === "true" && st?.tenantId && (
+        {import.meta.env.VITE_ENABLE_DELIVERY_REVIEW !== "false" && st?.tenantId && (
           <div className="mb-6">
             <DeliveryReviewPanel token={token} tenantId={st.tenantId} />
           </div>
