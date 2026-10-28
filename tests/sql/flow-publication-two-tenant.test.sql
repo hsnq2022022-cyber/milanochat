@@ -43,7 +43,7 @@ BEGIN
     OR public.flow_activate_revision(tenant_a,account_b,'facebook','b_flow',1,user_a)
     OR public.flow_activate_revision(tenant_b,account_a,'instagram','a_flow',1,user_a)
   THEN RAISE EXCEPTION 'CROSS_TENANT_ACTIVATION_ALLOWED'; END IF;
-  IF EXISTS(SELECT 1 FROM public.automation_flow_activations)
+  IF EXISTS(SELECT 1 FROM public.automation_flow_activations WHERE tenant_id=tenant_b)
   THEN RAISE EXCEPTION 'UNAUTHORIZED_ACTIVATION_WROTE_ROW'; END IF;
 
   IF NOT public.flow_activate_revision(tenant_b,account_b,'facebook','b_flow',1,user_b)
