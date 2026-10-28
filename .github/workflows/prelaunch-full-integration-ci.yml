@@ -249,5 +249,6 @@ jobs:
       - name: Edge mock tests (no external provider or production DB)
         run: |
           deno test --allow-env --node-modules-dir=auto tests/flow-delivery-review.test.ts
+          deno test --allow-env --node-modules-dir=auto tests/flow-live-production-runtime.test.ts
           deno test --allow-env --node-modules-dir=auto tests/flow-staff-inbox-http.test.ts
           deno test --allow-env --node-modules-dir=auto tests/wayl-signature.test.ts
