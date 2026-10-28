@@ -2076,14 +2076,12 @@ Deno.serve(async (req) => {
           });
         }
 
-        const credits =
-          {
-            9900: 1000,
-            24900: 3000,
-            64900: 10000,
-          }[
-            payment.amount
-          ] ?? 1000;
+        const creditValues: Record<number, number> = {
+          9900: 1000,
+          24900: 3000,
+          64900: 10000,
+        };
+        const credits = creditValues[Number(payment.amount)] ?? 1000;
 
         await sb
           .from("payments")
