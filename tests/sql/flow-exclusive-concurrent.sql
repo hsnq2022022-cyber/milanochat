@@ -1,6 +1,6 @@
 \set ON_ERROR_STOP on
 SET ROLE service_role;
-SELECT acquired::text FROM public.flow_claim_inbound(
+SELECT CASE WHEN acquired THEN 'won' ELSE 'lost' END FROM public.flow_claim_inbound(
  'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'::uuid,
  '11111111-1111-4111-8111-111111111111'::uuid,
  'instagram','meta-concurrent',
