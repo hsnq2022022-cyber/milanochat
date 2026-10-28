@@ -70,7 +70,7 @@ BEGIN
   p_expect_status IS NULL OR p_next_node IS NULL OR
   length(p_next_node) NOT BETWEEN 1 AND 128 OR
   p_next_step IS NULL OR p_next_step NOT BETWEEN 0 AND 150 OR
-  p_next_step<p_expect_step OR p_next_status IS NULL OR
+  p_next_step<=p_expect_step OR p_next_status IS NULL OR
   p_next_status NOT IN('ready','awaiting_input','sleeping','handoff','completed','blocked') OR
   p_variables IS NULL OR jsonb_typeof(p_variables)<>'object' OR
   octet_length(p_variables::text)>32768 OR
