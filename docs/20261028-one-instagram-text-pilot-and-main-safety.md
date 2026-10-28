@@ -53,3 +53,32 @@ Do NOT rely only on a [skip ci] commit message. Separate owner GO-M proposed:
 (d) NO dispatch in GO-M; deploying milan-api and flow-publication needs a different GO with reviewer approval.
 
 GO-M is REQUESTED FOR FUTURE CONSIDERATION, NOT GRANTED OR EXECUTED. Disabling Pages temporarily affects regular frontend deployment, so requires an agreed maintenance window and owner authorization.
+
+
+## Exact per-test-tenant activation knobs (DO NOT SET NOW)
+
+The publication API's activate/rollback action has TWO independent server gates:
+1. Global switch = true AND only the nominated tenant switch = enabled+test_only.
+2. Server environment: FLOW_PUBLICATION_CANARY_READY=true together with
+   FLOW_PUBLICATION_CANARY_TENANT_ID=<approved test tenant UUID> and
+   FLOW_PUBLICATION_CANARY_ACCOUNT_ID=<approved test Instagram channel UUID>.
+   FLOW_ACTIVATION_CAPABILITIES must exactly allow the tested subset:
+   execution-engine, instagram, trigger:message, message:text.
+   FLOW_RUNTIME_MODE=message_only is required by the existing simple-message
+   evaluator, and ALL other advanced worker/button/staff/RAG flags remain OFF.
+
+Turning on the global switch, server Canary and mode requires its own narrowly
+scoped GO, only after protected release GO3 and atomic billing GO(d) tests pass.
+Revert them all to OFF after the one-message pilot. These settings are NOT
+changed in this source-only branch.
+
+## GO-M rollback / prerequisites
+
+Before disabling the Pages workflow, record its current workflow identifier,
+last successful run, and current deployment state; coordinate a main-branch
+freeze so no unrelated push lands during the guard update.
+If Pages guard/dedicated YAML changes cannot be verified, leave Pages disabled
+temporarily, STOP further pushes, request owner review and use a separate
+approved revert commit before re-enabling. Reverting while the old unfiltered
+trigger is active can itself cause a deploy. No automatic release is permitted
+from GO-M.
