@@ -15,14 +15,6 @@ BEGIN
          'CREATED_BY_20261028180000_FLOW_RUNTIME' THEN
       RAISE EXCEPTION 'Missing/unrecognized runtime table %: refusing rollback',name;
     END IF;
-    IF EXISTS (
-      SELECT 1 FROM pg_class c
-      JOIN pg_namespace n ON n.oid=c.relnamespace
-      WHERE n.nspname='public' AND c.relname=name AND c.reltuples > 0
-    ) THEN
-      -- reltuples is only an estimate; final, exact check below.
-      NULL;
-    END IF;
   END LOOP;
   IF EXISTS(SELECT 1 FROM public.automation_flow_metrics LIMIT 1)
     OR EXISTS(SELECT 1 FROM public.automation_flow_outbox LIMIT 1)
@@ -40,6 +32,7 @@ DROP TABLE public.automation_flow_event_receipts;
 DROP TABLE public.automation_flow_activations;
 DROP TABLE public.automation_flow_publications;
 DROP FUNCTION public.reject_automation_flow_revision_mutation();
-DROP INDEX IF EXISTS public.conversations_flow_owner_uq;
-DROP INDEX IF EXISTS public.channel_accounts_flow_owner_uq;
+-- Preserve the two non-destructive composite indexes on existing tables:
+-- other features may already depend on them when this rollback is used.
+-- Removing them would require independent dependency review and owner GO.
 COMMIT;
