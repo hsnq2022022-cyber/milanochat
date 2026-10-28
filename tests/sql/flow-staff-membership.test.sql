@@ -36,6 +36,8 @@ BEGIN
  OR NOT public.flow_staff_can(a,adm,'review_resolve',null)
  OR public.flow_staff_can(a,adm,'publish_flow',null)
  OR public.flow_staff_can(a,adm,'credit_manage',null)
+ OR public.flow_staff_can(a,adm,'reply',bc)
+ OR public.flow_staff_can(a,own,'review_read',bc)
  OR NOT public.flow_staff_can(a,agent,'reply',ac)
  OR public.flow_staff_can(a,agent,'reply',bc)
  OR public.flow_staff_can(b,agent,'review_read',bc)
