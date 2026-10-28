@@ -75,6 +75,13 @@ jobs:
           result="$(psql -XAtq -c "SELECT count(*)||'|'||min(revision)||'|'||max(revision) FROM public.automation_flow_publications WHERE flow_key='concurrent'")"
           test "$result" = "2|1|2"
           echo "PASS: two concurrent publishers produced distinct immutable revisions"
+      - name: Harden legacy service-only RPCs in synthetic PostgreSQL and test trigger
+        run: |
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/legacy-rpc-security-bootstrap.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028210000_harden_widget_human_rpc_acl.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/legacy-rpc-security.test.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/rollbacks/20261028210000_harden_widget_human_rpc_acl.rollback.sql
+          echo "PASS: legacy ACL hardened then restored on disposable DB only"
       - name: Rollback disables only the management RPCs, retaining versions
         run: |
           psql -X -v ON_ERROR_STOP=1 -f supabase/rollbacks/20261028190000_flow_publication_server_rpcs.rollback.sql
