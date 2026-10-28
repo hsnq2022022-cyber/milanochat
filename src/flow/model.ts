@@ -322,7 +322,8 @@ export function importFlow(raw:unknown):FlowDocument|null {
       if(!item||typeof item!=="object")return null;const n=item as Record<string,unknown>,kind=kindOf(n.type);
       const options:Array<Choice>=Array.isArray(n.choices)?n.choices.map((c:unknown)=>{const t=c as Record<string,unknown>;return {id:safeString(t.id,id()),label:safeString(t.text),weight:kind==="randomizer"?Number(t.text)||0:undefined};}):[];
       const node=makeNode(kind,{x:Number(n.x)||0,y:Number(n.y)||0},{title:safeString(n.title,LABELS[kind]),text:safeString(n.text),image:safeString(n.image),keywords:safeString(n.keyword),
-        options,delayValue:typeof n.delay==="number"?n.delay:1,delayUnit:"seconds"});
+        options,conditionValue:kind==="condition"?safeString(n.conditionValue,safeString(n.keyword)).slice(0,250):"",
+        delayValue:typeof n.delay==="number"?n.delay:1,delayUnit:"seconds"});
       node.id=safeString(n.id,id());nodes.push(node);
     }
     const ids=new Set(nodes.map(n=>n.id));const edges:FlowEdge[]=v.edges.filter((e:unknown)=>!!e&&typeof e==="object").map((it:unknown)=>{const e=it as Record<string,unknown>;return {id:safeString(e.id,id()),source:safeString(e.from),sourceHandle:safeString(e.port,"next"),target:safeString(e.to),targetHandle:"in",type:"flowEdge" as const,data:{}};}).filter(e=>ids.has(e.source)&&ids.has(e.target));
