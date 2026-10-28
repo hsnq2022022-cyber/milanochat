@@ -18,7 +18,9 @@ export type PlannedEffect =
   | { kind: "message"; idempotencyKey: string; nodeId: string; text: string }
   | { kind: "question"; idempotencyKey: string; nodeId: string; text: string; inputMode: string; choices: string[] }
   | { kind: "delay"; idempotencyKey: string; nodeId: string; wakeAt: number }
-  | { kind: "handoff"; idempotencyKey: string; nodeId: string };
+  | { kind: "handoff"; idempotencyKey: string; nodeId: string }
+  | { kind: "tag"; idempotencyKey: string; nodeId: string; action: "add" | "remove"; tag: string }
+  | { kind: "staff_notification"; idempotencyKey: string; nodeId: string; message: string };
 export type RuntimeInput = {
   eventKey: string;
   nowMs: number;
@@ -212,9 +214,10 @@ export function planRuntimeTransition(
       case "action": {
         if (data.actionType === "set_field") {
           // تخزين متغير محلي داخل سياق التنفيذ فقط، دون تعديل ملف العميل.
-          const equalsAt = data.actionValue.indexOf("=");
-          const field = data.actionValue.slice(0, equalsAt).trim();
-          const value = data.actionValue.slice(equalsAt + 1).trim();
+          const assignment = safeValue(data.actionValue);
+          const equalsAt = assignment.indexOf("=");
+          const field = assignment.slice(0, equalsAt).trim();
+          const value = assignment.slice(equalsAt + 1).trim();
           if (equalsAt < 1 || !validFieldName(field) || value.length > 500)
             return fail(state, "invalid custom field assignment");
           const variables = { ...state.variables, [field]: value };
@@ -223,6 +226,32 @@ export function planRuntimeTransition(
           state = proceed({ ...state, variables }, nextNode(doc, node, "next"));
           if (state.status === "completed") return { state, effects: [] };
           break;
+        }
+        if (data.actionType === "tag" || data.actionType === "untag") {
+          // Intent only. Trusted server resolves customer/contact and applies
+          // this effect idempotently after an atomic outbox reservation.
+          const tag = safeValue(data.actionValue).trim();
+          if (!/^[\p{L}\p{N}_ .-]{1,64}$/u.test(tag) ||
+              new TextEncoder().encode(tag).length > 128)
+            return fail(state, "invalid tag");
+          const effect: PlannedEffect = {
+            kind: "tag", idempotencyKey: key(state, input, node.id),
+            nodeId: node.id, action: data.actionType === "tag" ? "add" : "remove", tag
+          };
+          return { state: proceed(state, nextNode(doc, node, "next")), effects: [effect] };
+        }
+        if (data.actionType === "notify") {
+          // No untrusted address or recipient. The server must select the
+          // eligible human operator and deliver internally, never to Meta.
+          const message = safeValue(data.actionValue).trim();
+          if (!message || message.length > 500 ||
+              /[\u0000-\u0008\u000B\u000C\u000E-\u001F]/.test(message))
+            return fail(state, "invalid notification");
+          const effect: PlannedEffect = {
+            kind: "staff_notification", idempotencyKey: key(state, input, node.id),
+            nodeId: node.id, message
+          };
+          return { state: proceed(state, nextNode(doc, node, "next")), effects: [effect] };
         }
         if (data.actionType !== "handoff")
           return fail(state, "action needs explicit trusted server implementation");
