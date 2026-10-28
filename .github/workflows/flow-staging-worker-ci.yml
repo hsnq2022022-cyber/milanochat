@@ -33,3 +33,36 @@ jobs:
           node --experimental-strip-types --test src/flow/flowPipeline.test.ts
       - name: Vite build
         run: npm run build
+
+  postgres-worker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: fake_worker_ci
+          POSTGRES_DB: flow_worker_ci
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d flow_worker_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: fake_worker_ci
+      PGDATABASE: flow_worker_ci
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create synthetic tenant fixture and reserve two tenants
+        run: |
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-atomic-staging-bootstrap.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-atomic-staging.test.sql
+      - name: Install staging-only worker claims and billing RPC
+        run: psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-worker-staging.sql
+      - name: Verify atomic claim, default off, unknown sends and credit ledger
+        run: psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-worker-staging.test.sql
