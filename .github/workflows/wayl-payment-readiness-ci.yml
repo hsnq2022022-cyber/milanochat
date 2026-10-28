@@ -1,7 +1,7 @@
 name: Payment readiness — PG17 atomic ledger, Wayl contracts, Deno (NO PRODUCTION)
 on:
   push:
-    branches: [integration/launch-payment-readiness-20261028]
+    branches: [integration/main-advanced-payment-consolidation]
 permissions:
   contents: read
 jobs:
