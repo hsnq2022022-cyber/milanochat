@@ -1,0 +1,18 @@
+--- a/.github/workflows/deploy.yml
++++ b/.github/workflows/deploy.yml
+@@ -5,6 +5,17 @@ on:
+     branches:
+       - main
+       - master
++    # Prevent workflow-only, docs-only and SQL-only commits from publishing Pages.
++    paths:
++      - "src/**"
++      - "public/**"
++      - "index.html"
++      - "package.json"
++      - "package-lock.json"
++      - "vite.config.*"
++      - "tailwind.config.*"
++      - "postcss.config.*"
++      - "tsconfig*.json"
+   workflow_dispatch:
