@@ -63,7 +63,7 @@ BEGIN
   AND a.channel_account_id=r.channel_account_id AND a.platform=r.platform
   AND a.flow_key=r.flow_key AND a.revision=r.publication_revision AND a.is_active
  WHERE o.tenant_id=p_tenant AND o.id=p_outbox
-  AND o.delivery_status='pending' AND o.effect_kind='message'
+  AND o.delivery_status='pending' AND o.effect_kind IN('message','question')
  FOR UPDATE OF o SKIP LOCKED;
  IF NOT FOUND THEN RETURN false;END IF;
  -- Claim is a link to the incoming event, not a single-send lock; this table
