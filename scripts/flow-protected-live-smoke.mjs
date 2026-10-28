@@ -20,15 +20,29 @@ assert.equal(process.env.SUPABASE_URL,URL,"Refuse wrong Supabase project");
 assert(STATE&&anonKey&&service&&jwtSecret,"Required protected secrets/state path missing");
 const admin=createClient(URL,service,{auth:{persistSession:false,autoRefreshToken:false}});
 const publicClient=()=>createClient(URL,anonKey,{auth:{persistSession:false,autoRefreshToken:false}});
-const state=await readFile(STATE,"utf8").then(JSON.parse).catch(()=>({users:[],tenants:[],accounts:[],widgets:[],sessions:[],messages:[],timestamp:new Date().toISOString()}));
+const emptyState=()=>({users:[],tenants:[],accounts:[],widgets:[],sessions:[],messages:[],timestamp:new Date().toISOString()});
+const state=await readFile(STATE,"utf8").then(JSON.parse).catch(error=>{
+ if(error?.code==="ENOENT")return emptyState();
+ throw error; // Invalid/corrupted journal must never become an empty cleanup journal.
+});
+for(const key of ["users","tenants","accounts","widgets","sessions","messages"]){
+ assert(Array.isArray(state[key]),"Invalid persisted fixture journal: "+key);
+}
 async function save(){await writeFile(STATE,JSON.stringify(state),{mode:0o600});await chmod(STATE,0o600);}
 function hard(result,label){if(result.error)throw Error(label+" "+(result.error.code??"db_error")+" "+result.error.message);return result.data;}
 async function count(table,filter=null){
- let q=admin.from(table).select("id",{count:"exact",head:true});
- if(table==="reply_ledger")q=admin.from(table).select("id",{count:"exact",head:true});
+ // Count is not tied to a primary key: flow_publication_rate_windows and
+ // automation_flow_activations have no id column in production.
+ let q=admin.from(table).select("*",{count:"exact",head:true});
  if(filter){for(const [k,v] of Object.entries(filter))q=q.eq(k,v);}
- const r=await q;hard(r,"count "+table);return r.count;
+ const r=await q;hard(r,"count "+table);
+ assert(Number.isSafeInteger(r.count),"Missing count for "+table);
+ return r.count;
 }
+const printSnapshot=(label,values)=>{
+ // Table counts only: never print tokens, emails, session IDs or credentials.
+ console.log("COUNTS "+label+" "+JSON.stringify(values));
+};
 async function snapshot(){
  const [tenants,accounts,conversations,widgetMessages,ledger,widgetLedger,delivery,outbox,flows,windows]=await Promise.all([
   count("tenants"),count("channel_accounts"),count("conversations"),count("widget_messages"),
@@ -46,21 +60,28 @@ function coreMatches(s){for(const [key,v] of Object.entries(expected))assert.equ
 async function newUser(letter){
  const label="flowtest-"+letter+"-"+Date.now().toString(36)+"-"+randomBytes(5).toString("hex");
  const email=label+"@example.test",password=randomBytes(32).toString("base64url");
- const created=hard(await admin.auth.admin.createUser({email,password,email_confirm:true,user_metadata:{purpose:"flow-release-smoke"}}),"createUser");
+ // Write-ahead fixture journal BEFORE the Auth call. If Auth creates a user
+ // but the request times out, cleanup can look up this exact disposable email.
+ const user={id:null,email,password};state.users.push(user);await save();
+ const created=hard(await admin.auth.admin.createUser({
+  email,password,email_confirm:true,user_metadata:{purpose:"flow-release-smoke"}
+ }),"createUser");
  assert(created?.user?.id,"Missing Auth ID");
- const user={id:created.user.id,email,password};state.users.push(user);await save();
- const tenant=hard(await admin.from("tenants").insert({
-  user_id:user.id,business_name:label,source_type:"manual",
+ user.id=created.user.id;await save();
+ const tenantId=randomUUID();
+ state.tenants.push(tenantId);await save();
+ hard(await admin.from("tenants").insert({
+  id:tenantId,user_id:user.id,business_name:label,source_type:"manual",
   is_active:false,credits_remaining:0
  }).select("id").single(),"create tenant");
- state.tenants.push(tenant.id);await save();
- const account=hard(await admin.from("channel_accounts").insert({
-  tenant_id:tenant.id,platform:"instagram",channel:"instagram",
+ const accountId=randomUUID();
+ state.accounts.push(accountId);await save();
+ hard(await admin.from("channel_accounts").insert({
+  id:accountId,tenant_id:tenantId,platform:"instagram",channel:"instagram",
   account_name:label,is_active:false,agent_enabled:false,auto_reply:false,
   platform_account_id:label,external_id:label
  }).select("id").single(),"create channel account");
- state.accounts.push(account.id);await save();
- return {user,tenantId:tenant.id,accountId:account.id};
+ return {user,tenantId,accountId};
 }
 async function request(path,body,token,extra={}){
  const headers={"content-type":"application/json","apikey":anonKey,"origin":origin,...extra};
@@ -83,6 +104,7 @@ async function widgetSmoke(phase){
  if(!state.sessions.includes(session.data.sessionId)){
   state.sessions.push(session.data.sessionId);await save();
  }
+ const beforeMessages=await count("widget_messages",{tenant_id:state.tenants[0]});
  const reply=await request("milan-api?action=widget_message",{
   token,sessionId:session.data.sessionId,message:"flowtest: independent Widget smoke "+phase
  },anonKey);
@@ -90,6 +112,8 @@ async function widgetSmoke(phase){
  assert.equal(typeof reply.data?.reply,"string","Widget response missing");
  assert(reply.data.reply.length>0);
  assert.equal(reply.data.kind,"error","Inactive test store must use legacy safe refusal");
+ assert.equal(await count("widget_messages",{tenant_id:state.tenants[0]}),
+  beforeMessages+2,"Expected one Widget inbound and one Widget refusal");
  // Explicit non-billing parity. Feature flags must remain OFF, and 0 credits.
  assert.equal(await count("widget_reply_ledger",{tenant_id:state.tenants[0]}),0,
   "Widget charged even though billing flag OFF");
@@ -155,52 +179,87 @@ async function liveAB(){
 }
 async function cleanup(){
  const issues=[];
- async function remove(table,column,values){
-  for(const id of [...values].reverse()){
-   try{
-    const result=await admin.from(table).delete().eq(column,id).select(column);
+ const check=async(label,work)=>{
+  try{return await work();}catch(e){
+   issues.push(label+": "+(e instanceof Error?e.message:String(e)));return null;
+  }
+ };
+ const before=await check("counts before cleanup",snapshot);
+ if(before)printSnapshot("BEFORE_CLEANUP",before);
+ // Only plan-generated UUIDs and pre-journaled disposable emails are used.
+ // Even after a partially failed setup, continue through every cleanup stage.
+ const tables=["widget_messages","widget_reply_ledger","automation_delivery_attempts",
+  "widget_sessions","widgets","channel_accounts","flow_publication_rate_windows"];
+ for(const tenantId of [...state.tenants].reverse()){
+  for(const table of tables){
+   await check("delete "+table,async()=>{
+    const result=await admin.from(table).delete().eq("tenant_id",tenantId)
+     .select(table==="flow_publication_rate_windows"?"tenant_id":"*");
     hard(result,"delete "+table);
-    console.log("DELETED "+table+" rows="+(result.data?.length??0));
-    if(result.data?.length!==1)issues.push("Missing "+table+" fixture");
-   }catch(e){issues.push(table+":"+(e instanceof Error?e.message:"unknown"));}
+    console.log("DELETED "+table+" count="+(result.data?.length??0));
+   });
   }
  }
- // Only test-created IDs are ever passed to delete.
- try{
-  for(const tid of state.tenants){
-   const del=await admin.from("flow_publication_rate_windows").delete().eq("tenant_id",tid).select("tenant_id");
-   hard(del,"rate windows cleanup");
-   console.log("DELETED rate windows rows="+(del.data?.length??0));
-  }
- }catch(e){issues.push("rate windows: "+String(e));}
- for(const tenantId of state.tenants){
-  for(const [table,column] of [["widget_messages","tenant_id"],["widget_reply_ledger","tenant_id"],
-    ["automation_delivery_attempts","tenant_id"],["widget_sessions","tenant_id"],
-    ["widgets","tenant_id"],["channel_accounts","tenant_id"]]){
-   try{
-    const result=await admin.from(table).delete().eq(column,tenantId).select(column);
-    hard(result,table);
-    console.log("DELETED "+table+" rows="+(result.data?.length??0));
-   }catch(e){issues.push(table+":"+String(e));}
-  }
+ for(const tenantId of [...state.tenants].reverse()){
+  await check("delete tenant",async()=>{
+   const result=await admin.from("tenants").delete().eq("id",tenantId).select("id");
+   hard(result,"delete tenant");
+   console.log("DELETED tenants count="+(result.data?.length??0));
+  });
  }
- await remove("tenants","id",state.tenants);
- for(const u of [...state.users].reverse()){
-  try{hard(await admin.auth.admin.deleteUser(u.id),"delete Auth");
-   console.log("DELETED auth.users rows=1");
-  }catch(e){issues.push("Auth:"+String(e));}
+ for(const user of [...state.users].reverse()){
+  await check("delete Auth user",async()=>{
+   let id=user.id;
+   if(!id){
+    // A createUser timeout may have written Auth without returning its UUID.
+    // Look up ONLY the previously journaled unique flowtest email.
+    assert(/^flowtest-[ab]-[a-z0-9-]+@example\.test$/.test(user.email),
+     "Untrusted fixture email");
+    for(let page=1;page<=50&&!id;page++){
+     const {data,error}=await admin.auth.admin.listUsers({page,perPage:1000});
+     if(error)throw error;
+     id=data.users.find(u=>u.email===user.email)?.id;
+     if(id||data.users.length<1000)break;
+     if(page===50)throw Error("Auth scan truncated; cannot prove cleanup");
+    }
+   }
+   if(!id){
+    console.log("DELETED auth.users count=0 (pending create never materialized)");
+    return;
+   }
+   const result=await admin.auth.admin.deleteUser(id);
+   hard(result,"delete Auth");
+   console.log("DELETED auth.users count=1");
+  });
  }
+ const after=await check("counts after cleanup",snapshot);
+ if(after)printSnapshot("AFTER_CLEANUP",after);
+ if(!state.baseline)issues.push("Baseline missing, cannot verify fixture cleanup");
+ else if(after){
+  try{
+   coreMatches(after);
+   assert.deepEqual(after,state.baseline,
+    "Post-cleanup production counts differ from saved pretest counts");
+  }catch(e){issues.push("snapshot mismatch: "+String(e));}
+ }
+ if(issues.length){
+  console.error("CLEANUP FAILED "+issues.join(" | "));
+  throw Error("Unable to prove complete test-fixture cleanup");
+ }
+ // Only after the full comparison succeeds can the next dry run start.
+ for(const key of ["users","tenants","accounts","widgets","sessions","messages"])
+  state[key]=[];
+ delete state.oldBehavior;
  await save();
- if(issues.length)throw Error("Fixture cleanup FAILED: "+issues.join("; "));
- const after=await snapshot();
- coreMatches(after);
- assert.deepEqual(after,state.baseline,"After cleanup does not match pretest snapshot");
- console.log("PASS CLEANUP: pre/post table counts equal; no test Auth users/tenants/widget/rate rows left");
+ console.log("PASS CLEANUP: all fixture records removed and exact before/after baseline restored");
 }
 const command=process.argv[2];
 switch(command){
  case "preflight":{
+  assert(!state.users.length&&!state.tenants.length&&!state.widgets.length,
+   "Previous disposable fixtures not cleaned: abort preflight");
   const base=await snapshot();coreMatches(base);
+  printSnapshot("BASELINE_BEFORE",base);
   state.baseline=base;await save();
   console.log("PASS baseline: 10 tenants, 4 accounts, 4 conversations, 12 Widget messages, 3 ledger, 5 old answers; switches OFF, outbox 0");
   break;
@@ -209,10 +268,17 @@ switch(command){
   assert(state.baseline,"Run preflight first");
   const a=await newUser("a");
   await newUser("b");
-  const widget=hard(await admin.from("widgets").insert({
-   tenant_id:a.tenantId,name:"flowtest-widget",enabled:true,is_active:true
+  const widgetId=randomUUID();
+  // BOTH token and public_token are explicitly supplied; production columns
+  // are NOT NULL, and token has no DB default.
+  const internalToken=randomBytes(32).toString("hex");
+  const publicToken=randomBytes(32).toString("hex");
+  state.widgets.push({id:widgetId,public_token:publicToken});await save();
+  hard(await admin.from("widgets").insert({
+   id:widgetId,tenant_id:a.tenantId,name:"flowtest-widget",
+   token:internalToken,public_token:publicToken,
+   enabled:true,is_active:true
   }).select("id,public_token").single(),"create test Widget");
-  state.widgets.push(widget);await save();
   console.log("PASS isolated setup: A/B Auth, tenants and inert channels, one Widget; secret values never logged");
   break;
  }
