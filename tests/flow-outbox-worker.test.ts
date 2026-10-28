@@ -30,6 +30,29 @@ test("timeout is uncertain, no retry, no debit",async()=>{
  assert.equal(await executeOnce(d.args),"uncertain");
  assert.deepEqual(d.get(),{sent:1,events:["reserve","send","uncertain:null"]});
 });
+test("provider 2xx lacking a stable message ID is uncertain without charging",async()=>{
+ let calls=0;const events:string[]=[];
+ const result=await executeOnce({
+  reserve:async()=>{events.push("reserve");return true;},
+  send:async()=>{calls++;events.push("send");return null;},
+  confirm:async(status,id)=>{events.push(status+":"+id);return true;},
+  persistAndBill:async()=>{events.push("UNEXPECTED_CHARGE");return true;}
+ });
+ assert.equal(result,"uncertain");
+ assert.equal(calls,1);
+ assert.deepEqual(events,["reserve","send","uncertain:null"]);
+});
+test("provider returning a blank message ID is not confirmed",async()=>{
+ const actions:string[]=[];
+ const result=await executeOnce({
+  reserve:async()=>true,
+  send:async()=>" ",
+  confirm:async(status,id)=>{actions.push(status+":"+id);return true;},
+  persistAndBill:async()=>{actions.push("UNEXPECTED_CHARGE");return true;}
+ });
+ assert.equal(result,"uncertain");
+ assert.deepEqual(actions,["uncertain:null"]);
+});
 test("ambiguous DB confirmation and billing problems never re-send",async()=>{
  const d=deps({confirm:false});
  assert.equal(await executeOnce(d.args),"sent_unconfirmed");
