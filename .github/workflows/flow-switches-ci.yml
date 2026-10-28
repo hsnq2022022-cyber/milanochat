@@ -1,0 +1,82 @@
+name: Same-project automation OFF switches — isolated PostgreSQL
+
+on:
+  push:
+    branches: [db/flows-same-project-disabled-switches]
+  pull_request:
+    paths:
+      - "supabase/migrations/20261028170000_automation_flow_switches.sql"
+      - "supabase/rollbacks/20261028170000_automation_flow_switches.rollback.sql"
+      - "supabase/verification/20261028170000_automation_flow_switches.readonly.sql"
+      - "tests/sql/flow-switch-*.sql"
+      - ".github/workflows/flow-switches-ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  disabled-default:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: synthetic_switch_only
+          POSTGRES_DB: flow_switch_ci
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d flow_switch_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 8
+    env:
+      PGHOST: localhost
+      PGPORT: '5432'
+      PGUSER: postgres
+      PGPASSWORD: synthetic_switch_only
+      PGDATABASE: flow_switch_ci
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create disposable tenant/role fixture
+        run: psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-switch-bootstrap.sql
+      - name: Safe read-only preflight before tables exist
+        run: psql -X -v ON_ERROR_STOP=1 -f supabase/verification/20261028170000_automation_flow_switches.preflight.readonly.sql
+      - name: Apply then reapply exactly the same migration
+        run: |
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028170000_automation_flow_switches.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028170000_automation_flow_switches.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/verification/20261028170000_automation_flow_switches.readonly.sql
+      - name: Prove disabled startup and strict service role controls
+        run: psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-switch-security.test.sql
+      - name: Rollback must refuse nonempty tenant state
+        shell: bash
+        run: |
+          set -euo pipefail
+          if psql -X -v ON_ERROR_STOP=1 -f supabase/rollbacks/20261028170000_automation_flow_switches.rollback.sql; then
+            echo 'UNSAFE rollback accepted a populated table' >&2
+            exit 1
+          fi
+          test "$(psql -XAtq -c 'SELECT count(*) FROM public.automation_flow_tenant_switches')" = "1"
+          echo 'PASS: populated switch state preserved'
+      - name: Rollback empty newly created tables
+        run: |
+          psql -X -v ON_ERROR_STOP=1 -c "DELETE FROM public.automation_flow_tenant_switches"
+          psql -X -v ON_ERROR_STOP=1 -f supabase/rollbacks/20261028170000_automation_flow_switches.rollback.sql
+          test "$(psql -XAtq -c "SELECT to_regclass('public.automation_flow_global_switch') IS NULL")" = "t"
+          echo 'PASS: empty switch tables safely removed'
+      - name: Existing same-name table must be preserved, not reconfigured
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql -X -v ON_ERROR_STOP=1 -c "CREATE TABLE public.automation_flow_tenant_switches(legacy_value text NOT NULL)"
+          psql -X -v ON_ERROR_STOP=1 -c "INSERT INTO public.automation_flow_tenant_switches VALUES ('keep-me')"
+          psql -X -v ON_ERROR_STOP=1 -f supabase/verification/20261028170000_automation_flow_switches.preflight.readonly.sql
+          if psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028170000_automation_flow_switches.sql; then
+            echo 'ERROR: migration modified unrelated existing table' >&2
+            exit 1
+          fi
+          test "$(psql -XAtq -c 'SELECT legacy_value FROM public.automation_flow_tenant_switches')" = 'keep-me'
+          test "$(psql -XAtq -c "SELECT to_regclass('public.automation_flow_global_switch') IS NULL")" = 't'
+          echo 'PASS: colliding legacy table and contents left unchanged'
