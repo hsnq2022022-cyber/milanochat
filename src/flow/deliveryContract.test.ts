@@ -169,3 +169,43 @@ test("validation refuses missing provider ids, untrusted tenant and lease token"
  assert.equal(claimDelivery(record(),gate(),1000,"").decision,"denied");
  assert.equal(claimDelivery(record(),gate(),-1,"lease").decision,"denied");
 });
+
+test("two workers planning against the same old snapshot require an atomic database CAS",()=>{
+ const original=record();
+ const first=claimDelivery(original,gate(),2000,"worker-1");
+ const second=claimDelivery(original,gate(),2000,"worker-2");
+ assert.equal(first.decision,"leased");
+ assert.equal(second.decision,"leased");
+ if(first.decision!=="leased" || second.decision!=="leased")throw Error("no lease");
+ let databaseRow=original,sends=0;
+ function compareAndSwap(expected:DeliveryRecord,desired:DeliveryRecord){
+   if(databaseRow.status!==expected.status ||
+      databaseRow.attempts!==expected.attempts ||
+      databaseRow.leaseToken!==expected.leaseToken)return false;
+   databaseRow=desired;
+   return true;
+ }
+ if(compareAndSwap(original,first.record))sends++;
+ if(compareAndSwap(original,second.record))sends++;
+ assert.equal(sends,1);
+ assert.equal(databaseRow.leaseToken,"worker-1");
+ // Without the database CAS both callers would have received a valid *plan*
+ // and sent twice. The module is not a substitute for SQL atomicity.
+});
+
+test("provider-event receipt and outbox keys remain unique in fake atomic reservation",()=>{
+ const receipts=new Set<string>(),outbox=new Set<string>();let sends=0;
+ function reserve(event:string,effect:string){
+   const receiptKey=JSON.stringify(["tenant-A","account-A",event]);
+   const outboxKey=JSON.stringify(["tenant-A","account-A",effect]);
+   if(receipts.has(receiptKey)||outbox.has(outboxKey))return false;
+   receipts.add(receiptKey);outbox.add(outboxKey);return true;
+ }
+ assert.equal(reserve("meta-mid-1","flow-message-1"),true);
+ assert.equal(reserve("meta-mid-1","flow-message-1"),false);
+ if(receipts.size===1 && outbox.size===1)sends=1;
+ assert.equal(sends,1);
+ assert.equal(receipts.size,1);
+ assert.equal(outbox.size,1);
+ // In production the two inserts plus runtime transition must commit together.
+});
