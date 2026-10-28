@@ -101,7 +101,7 @@ jobs:
         run: |
           deno check supabase/functions/milan-api/exclusiveMessageClaim.ts
           deno check supabase/functions/milan-api/flowPrepareMessage.ts
-          deno check supabase/functions/milan-api/index.ts
+          deno check --node-modules-dir=auto supabase/functions/milan-api/index.ts
       - name: Source-level integration guards
         run: |
           node --input-type=module -e '
