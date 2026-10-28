@@ -1,0 +1,105 @@
+name: Flow draft live-schema baseline (disposable PG17)
+
+on:
+  push:
+    branches: [db/flow-drafts-live-baseline]
+  pull_request:
+    paths:
+      - "supabase/migrations/20261028151500_automation_flow_drafts_baseline.sql"
+      - "supabase/rollbacks/20261028151500_automation_flow_drafts_baseline.rollback.sql"
+      - "supabase/verification/20261028151500_automation_flow_drafts_baseline.readonly.sql"
+      - ".github/workflows/flow-drafts-baseline-ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  empty-db:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: disposable_drafts_ci
+          POSTGRES_DB: drafts_fresh_ci
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d drafts_fresh_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: disposable_drafts_ci
+      PGDATABASE: drafts_fresh_ci
+    steps:
+      - uses: actions/checkout@v4
+      - name: Synthetic auth and tenant A/B
+        run: psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-drafts-bootstrap.sql
+      - name: Apply live baseline to missing drafts table
+        run: |
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028151500_automation_flow_drafts_baseline.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028151500_automation_flow_drafts_baseline.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/verification/20261028151500_automation_flow_drafts_baseline.readonly.sql
+      - name: Empty staging rollback may remove only table created by this migration
+        run: |
+          psql -X -v ON_ERROR_STOP=1 -f supabase/rollbacks/20261028151500_automation_flow_drafts_baseline.rollback.sql
+          result="$(psql -XAtq -c "SELECT to_regclass('public.automation_flow_drafts') IS NULL")"
+          test "$result" = "t"
+      - name: Recreate and verify RLS owner A/B, revision protection and anonymous denial
+        run: |
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028151500_automation_flow_drafts_baseline.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-drafts-rls.test.sql
+      - name: Data-bearing rollback MUST refuse to drop drafts
+        shell: bash
+        run: |
+          set -euo pipefail
+          if psql -X -v ON_ERROR_STOP=1 -f supabase/rollbacks/20261028151500_automation_flow_drafts_baseline.rollback.sql; then
+            echo 'DANGEROUS: rollback dropped nonempty drafts' >&2
+            exit 1
+          fi
+          test "$(psql -XAtq -c "SELECT count(*) FROM public.automation_flow_drafts")" = "2"
+          echo "PASS: existing saved drafts survived rollback refusal"
+
+  already-applied:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: disposable_drafts_ci
+          POSTGRES_DB: drafts_existing_ci
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d drafts_existing_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: disposable_drafts_ci
+      PGDATABASE: drafts_existing_ci
+    steps:
+      - uses: actions/checkout@v4
+      - run: psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-drafts-bootstrap.sql
+      - name: Reproduce exact existing production proposal table
+        run: psql -X -v ON_ERROR_STOP=1 -f supabase/proposals/automation_flow_drafts.review.sql
+      - name: Migration is idempotent and must not mark existing table as newly created
+        run: |
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028151500_automation_flow_drafts_baseline.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028151500_automation_flow_drafts_baseline.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/verification/20261028151500_automation_flow_drafts_baseline.readonly.sql
+      - name: Rollback preserves preexisting production-like table
+        run: |
+          psql -X -v ON_ERROR_STOP=1 -f supabase/rollbacks/20261028151500_automation_flow_drafts_baseline.rollback.sql
+          test "$(psql -XAtq -c "SELECT to_regclass('public.automation_flow_drafts') IS NOT NULL")" = "t"
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-drafts-rls.test.sql
+          echo "PASS: pre-existing drafts table never dropped"
