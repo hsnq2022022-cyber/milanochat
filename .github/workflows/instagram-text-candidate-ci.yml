@@ -89,6 +89,10 @@ jobs:
         run: |
           npm run typecheck
           npm run build
+      - name: Chromium browser for 360px/390px phone and RTL regression
+        run: npx playwright install --with-deps chromium
+      - name: Real browser phone layout and Arabic/English flow UI smoke
+        run: npx playwright test -c playwright.config.ts tests/flow-mobile-locale.spec.ts
       - uses: denoland/setup-deno@v2
         with: {deno-version: v2.x}
       - name: Deno check actual production candidate sources (NO deploy)
