@@ -5,6 +5,18 @@ on:
     branches:
       - main
       - master
+    # Deploy the Vite site only when inputs to the deployed frontend change.
+    # Deliberately exclude workflow-only, SQL-only and Edge-only commits.
+    paths:
+      - "src/**"
+      - "public/**"
+      - "*.html"
+      - "package.json"
+      - "package-lock.json"
+      - "vite.config.*"
+      - "tsconfig*.json"
+      - "tailwind.config.*"
+      - "postcss.config.*"
   workflow_dispatch:
 
 permissions:
