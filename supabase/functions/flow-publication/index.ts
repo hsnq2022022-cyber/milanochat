@@ -72,7 +72,7 @@ Deno.serve(async(req:Request):Promise<Response>=>{
     .select("id,platform,is_active")
     .eq("tenant_id",tenant.id).limit(100);
    if(accountsError)return error("Account list unavailable",503);
-   return respond({ok:true,accounts:(accounts??[]).filter(a=>hasPlatform(a.platform))});
+   return respond({ok:true,accounts:(data??[]).filter((a:{platform:unknown})=>hasPlatform(a.platform))});
   }
 
   const accountId=request.accountId;
