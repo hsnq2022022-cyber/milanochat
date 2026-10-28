@@ -1,6 +1,6 @@
 /**
  * READ-ONLY operations console. No sending, charging or resolving.
- * Dormant until FLOW_DELIVERY_REVIEW_ENABLED=true and deployed with JWT checks.
+ * Owner-authenticated and read-only, disabled explicitly by FLOW_DELIVERY_REVIEW_ENABLED=false.
  */
 import {createClient} from "npm:@supabase/supabase-js@2";
 const env=(k:string)=>Deno.env.get(k)??"";
@@ -14,7 +14,7 @@ export async function handle(req:Request){
  if(req.headers.get("origin")!==ORIGIN)return json({error:"Origin not permitted"},403);
  if(req.method==="OPTIONS")return new Response(null,{status:204,headers});
  if(req.method!=="POST")return json({error:"Method not allowed"},405);
- if(env("FLOW_DELIVERY_REVIEW_ENABLED")!=="true")
+ if(env("FLOW_DELIVERY_REVIEW_ENABLED")==="false")
   return json({error:"Delivery review disabled"},423);
  const key=env("SUPABASE_SERVICE_ROLE_KEY"),base=env("SUPABASE_URL");
  if(!key||!base)return json({error:"Unavailable"},503);
@@ -22,8 +22,28 @@ export async function handle(req:Request){
  if(!auth.startsWith("Bearer ")||auth.length>8192)return json({error:"Unauthorized"},401);
  let body:unknown;
  try{
-  const raw=await req.text();if(raw.length>1024)return json({error:"Payload too large"},413);
-  body=JSON.parse(raw);
+  const limit=1024;
+  const len=req.headers.get("content-length");
+  if(len!==null&&/^\d+$/.test(len)&&Number(len)>limit)
+   return json({error:"Payload too large"},413);
+  if(!req.body)return json({error:"Invalid JSON"},400);
+  const reader=req.body.getReader();
+  const chunks:Uint8Array[]=[];
+  let size=0;
+  try{
+   while(true){
+    const {value,done}=await reader.read();
+    if(done)break;
+    if(!value)continue;
+    size+=value.byteLength;
+    if(size>limit){await reader.cancel();return json({error:"Payload too large"},413);}
+    chunks.push(value);
+   }
+  }finally{reader.releaseLock();}
+  const bytes=new Uint8Array(size);
+  let offset=0;
+  for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.byteLength;}
+  body=JSON.parse(new TextDecoder("utf-8",{fatal:true}).decode(bytes));
  }catch{return json({error:"Invalid JSON"},400)}
  if(!body||typeof body!=="object"||Array.isArray(body))
   return json({error:"Invalid body"},400);
