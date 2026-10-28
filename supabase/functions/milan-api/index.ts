@@ -40,6 +40,8 @@
 
 import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2";
 import * as cheerio from "npm:cheerio@1";
+import { flowShadowMayObserve } from "./flowShadowGate.ts";
+import { persistInboundOnce } from "./persistInboundOnce.ts";
 import { verifyMetaWebhookSignature } from "./metaSignature.ts";
 
 const enc = new TextEncoder();
@@ -1607,8 +1609,8 @@ async function handleIncomingWebhookMessage(
   /**
    * حفظ رسالة العميل الواردة.
    */
-  try {
-    await sb
+  const incomingResult = await persistInboundOnce(async () =>
+    sb
       .from("messages")
       .insert({
         conversation_id: conv.id,
@@ -1619,17 +1621,14 @@ async function handleIncomingWebhookMessage(
         kind: "customer",
         is_auto: false,
         wa_message_id: externalMsgId,
-      });
-  } catch (e: any) {
-    if (e?.code === "23505") {
-      console.log(
-        `[${channel}_webhook] duplicate message skipped: ${externalMsgId}`
-      );
+      })
+  );
+
+  if (incomingResult !== "saved") {
+    if (incomingResult === "duplicate") {
+      console.log(`[${channel}_webhook] duplicate inbound message skipped`);
     } else {
-      console.error(
-        `[${channel}_webhook] incoming insert failed`,
-        e
-      );
+      console.error(`[${channel}_webhook] inbound insert did not commit`);
     }
     return;
   }
@@ -1708,6 +1707,41 @@ async function handleIncomingWebhookMessage(
       `[${channel}_webhook] no credits: ${tenantId}`
     );
     return;
+  }
+
+  /**
+   * تدفق آمن للمراقبة فقط: بدون إرسال أو تغيير على مسار AI.
+   * No extra DB reads unless explicitly enabled by server environment.
+   */
+  if (env("FLOW_SHADOW_MODE") === "observe") {
+    const observe = await flowShadowMayObserve(
+      env("FLOW_SHADOW_MODE"),
+      String(tenantId),
+      String(account?.id ?? ""),
+      {
+        readGlobal: async () => {
+          const { data, error } = await sb
+            .from("automation_flow_global_switch")
+            .select("enabled")
+            .eq("singleton", true)
+            .maybeSingle();
+          if (error) throw error;
+          return data;
+        },
+        readTenant: async (verifiedId: string) => {
+          const { data, error } = await sb
+            .from("automation_flow_tenant_switches")
+            .select("enabled,test_only")
+            .eq("tenant_id", verifiedId)
+            .maybeSingle();
+          if (error) throw error;
+          return data;
+        },
+      }
+    );
+    if (observe) {
+      console.info("[flow-shadow] test account eligible; legacy AI remains owner");
+    }
   }
 
   /**
