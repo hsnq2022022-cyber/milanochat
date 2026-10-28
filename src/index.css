@@ -231,3 +231,12 @@ body > .skiptranslate {
   display: none !important;
 }
 
+
+/* Flow simulator: visited cards are visibly distinct, without altering editor data. */
+.react-flow__node.flow-visited {
+  outline: 3px solid #3DD189;
+  outline-offset: 5px;
+  border-radius: 16px;
+  box-shadow: 0 0 0 8px rgba(61,209,137,0.18);
+}
+.react-flow__node.flow-visited .react-flow__handle { z-index: 1; }
