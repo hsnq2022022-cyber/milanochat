@@ -1,0 +1,50 @@
+name: Credit RPC Lockdown - disposable PostgreSQL
+on:
+  push:
+    branches: [security-restrict-credit-rpcs]
+  pull_request:
+    paths:
+      - "supabase/migrations/20261026_restrict_credit_rpcs.sql"
+      - "supabase/migrations/rollback/20261026_restrict_credit_rpcs.rollback.sql"
+      - "tests/sql/credit-rpc-*.sql"
+permissions:
+  contents: read
+jobs:
+  isolated-privileges:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: synthetic_ci_only
+          POSTGRES_DB: credit_rpc_ci
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d credit_rpc_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 8
+    env:
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGDATABASE: credit_rpc_ci
+      PGUSER: postgres
+      PGPASSWORD: synthetic_ci_only
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create synthetic functions and web roles
+        run: psql -X -v ON_ERROR_STOP=1 -f tests/sql/credit-rpc-bootstrap.sql
+      - name: Apply lockdown migration to disposable database
+        run: psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261026_restrict_credit_rpcs.sql
+      - name: Assert role privileges after lockdown
+        run: psql -X -v ON_ERROR_STOP=1 -f tests/sql/credit-rpc-lockdown.test.sql
+      - name: Reapply migration to prove idempotency
+        run: |
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261026_restrict_credit_rpcs.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/credit-rpc-lockdown.test.sql
+      - name: Verify rollback restores previous synthetic privilege state
+        run: |
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/rollback/20261026_restrict_credit_rpcs.rollback.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/credit-rpc-rollback.test.sql
