@@ -34,6 +34,9 @@ export function planVerifiedInbound(
   nowMs:number,
   seed:number
 ):PipelineResult {
+  // Any malformed server-read document must fail closed; do not let a bad
+  // publication crash webhook handling or accidentally fall back to two AIs.
+  try {
   const decision=selectResponder(trusted,inbound,serverFlows);
   if(decision.owner==="stop")return decision;
   if(decision.owner==="legacy_ai")return decision;
@@ -61,5 +64,8 @@ export function planVerifiedInbound(
     return {owner:"flow",flowId:publication.id,revision:publication.revision,plan};
   } catch {
     return {owner:"stop",reason:"invalid_publication"};
+  }
+  } catch {
+    return {owner:"stop",reason:"malformed_server_event_or_document"};
   }
 }
