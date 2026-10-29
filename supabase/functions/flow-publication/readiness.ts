@@ -51,6 +51,7 @@ export function evaluateFlowReadiness(input:ReadinessInput){
  const baseReady=base.every(key=>checks[key]);
  return {
   checks,
+  candidateKind:input.candidateKind,
   buttonsConfigured:baseReady&&checks.buttons&&input.candidateKind==="buttons",
   delayConfigured:baseReady&&checks.scheduler&&input.candidateKind==="delay",
   // These flags do not activate a revision, start Cron work, or send any message.
