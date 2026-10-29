@@ -51,3 +51,19 @@ test("server checks are owner-scoped, read-only, and do not expose secret values
  assert.match(ui,/data-testid=\{"readiness-published-revision-"\+v\.revision\}/);
  assert.match(ui,/action:"readiness",accountId,flowKey:managedFlowKey/);
 });
+
+test("real server activation cannot bypass durable worker gates",()=>{
+ const api=readFileSync("supabase/functions/flow-publication/index.ts","utf8");
+ const start=api.indexOf("const durableGraph=supportedDurableDocument(publication.document)");
+ const end=api.indexOf("if(!durable)",start);
+ assert(start>0&&end>start);
+ const guarded=api.slice(start,end);
+ for(const flag of [
+  "FLOW_DURABLE_ACTIVATION_READY","FLOW_DURABLE_INGRESS_ENABLED",
+  "FLOW_DURABLE_CANARY_ACCOUNT_ID","FLOW_WORKERS_OPERATOR_RELEASE",
+  "FLOW_OUTBOX_SEND_ENABLED","FLOW_ATOMIC_CONSUME_READY",
+  "FIELD_ENCRYPTION_KEY","FLOW_RICH_BUTTONS_ENABLED",
+  "FLOW_DURABLE_SCHEDULER_ENABLED"
+ ])assert(guarded.includes(flag),flag);
+ assert.match(api.slice(end,end+350),/simpleMessageFromDocument\(publication.document,scope.platform\)===null/);
+});
