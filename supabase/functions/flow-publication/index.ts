@@ -232,6 +232,7 @@ export async function handleFlowPublication(req:Request,
    // durable ingress and sender have passed real provider integration.
    // This prevents a customer from activating a graph that would fall back
    // to legacy AI or never wake up from its first delay.
+   // Explicit operator gates remain independent of browser publication controls.
    const durable=production&&scope.platform==="instagram"&&
     env("FLOW_DURABLE_ACTIVATION_READY")==="true"&&
     env("FLOW_DURABLE_INGRESS_ENABLED")==="true"&&
