@@ -43,3 +43,33 @@ test("the exact incoming message -> question -> two answers are deterministic",(
    assert.equal(next.effects[0].text,reply);
  }
 });
+
+test("a one-minute delay canary is accepted and emits exactly one wake-up reply",()=>{
+ const delay=JSON.parse(readFileSync("examples/flow-instagram-one-minute-delay-v3.json","utf8"));
+ const compiled=preparePublishedDocument(delay,"instagram");
+ assert(compiled,"Publisher rejected the delay canary");
+ assert.equal(supportedDurableDocument(compiled),true);
+ const started=createRuntimeState(compiled,"ig_live_welcome_20261029",4);
+ const before=planRuntimeTransition(compiled,started,{
+  eventKey:"delay-start",nowMs:120000,seed:0
+ });
+ assert.equal(before.error,undefined);
+ assert.equal(before.state.status,"sleeping");
+ assert.equal(before.effects.length,1);
+ assert.equal(before.effects[0].kind,"delay");
+ assert.equal(before.state.wakeAt,180000);
+ const early=planRuntimeTransition(compiled,before.state,{
+  eventKey:"early-wake",nowMs:179999,seed:0
+ });
+ assert.equal(early.state.status,"sleeping");
+ assert.equal(early.effects.length,0);
+ const due=planRuntimeTransition(compiled,before.state,{
+  eventKey:"scheduled-wake",nowMs:180001,seed:0
+ });
+ assert.equal(due.error,undefined);
+ assert.equal(due.state.status,"completed");
+ assert.equal(due.effects.length,1);
+ assert.equal(due.effects[0].kind,"message");
+ if(due.effects[0].kind==="message"&&"text" in due.effects[0])
+  assert.equal(due.effects[0].text,"أهلاً بيك 👋 هذه رسالة وصلت بعد دقيقة من تشغيل التدفق الآلي.");
+});
