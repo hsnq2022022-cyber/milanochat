@@ -1,0 +1,123 @@
+{
+  "version": 3,
+  "name": "اختبار Instagram الحقيقي — تأخير دقيقة واحدة",
+  "nodes": [
+    {
+      "id": "ig-delay-start",
+      "type": "flowNode",
+      "position": {
+        "x": 450,
+        "y": 50
+      },
+      "data": {
+        "text": "",
+        "image": "",
+        "options": [],
+        "contentBlocks": [],
+        "platform": "instagram",
+        "keywords": "",
+        "triggerMode": "message",
+        "inputMode": "buttons",
+        "inputField": "response",
+        "conditionField": "message",
+        "operator": "contains",
+        "conditionValue": "",
+        "delayValue": 1,
+        "delayUnit": "minutes",
+        "actionType": "tag",
+        "actionValue": "",
+        "gotoNode": "",
+        "requestMethod": "GET",
+        "requestUrl": "",
+        "kind": "trigger",
+        "title": "عند وصول رسالة Instagram"
+      }
+    },
+    {
+      "id": "ig-wait-1m",
+      "type": "flowNode",
+      "position": {
+        "x": 450,
+        "y": 320
+      },
+      "data": {
+        "text": "",
+        "image": "",
+        "options": [],
+        "contentBlocks": [],
+        "platform": "instagram",
+        "keywords": "",
+        "triggerMode": "message",
+        "inputMode": "buttons",
+        "inputField": "response",
+        "conditionField": "message",
+        "operator": "contains",
+        "conditionValue": "",
+        "delayValue": 1,
+        "delayUnit": "minutes",
+        "actionType": "tag",
+        "actionValue": "",
+        "gotoNode": "",
+        "requestMethod": "GET",
+        "requestUrl": "",
+        "kind": "delay",
+        "title": "انتظار دقيقة"
+      }
+    },
+    {
+      "id": "ig-delay-reply",
+      "type": "flowNode",
+      "position": {
+        "x": 450,
+        "y": 600
+      },
+      "data": {
+        "text": "أهلاً بيك 👋 هذه رسالة وصلت بعد دقيقة من تشغيل التدفق الآلي.",
+        "image": "",
+        "options": [],
+        "contentBlocks": [],
+        "platform": "instagram",
+        "keywords": "",
+        "triggerMode": "message",
+        "inputMode": "buttons",
+        "inputField": "response",
+        "conditionField": "message",
+        "operator": "contains",
+        "conditionValue": "",
+        "delayValue": 1,
+        "delayUnit": "minutes",
+        "actionType": "tag",
+        "actionValue": "",
+        "gotoNode": "",
+        "requestMethod": "GET",
+        "requestUrl": "",
+        "kind": "message",
+        "title": "رد بعد التأخير"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "ig-delay-edge-start",
+      "type": "flowEdge",
+      "source": "ig-delay-start",
+      "sourceHandle": "next",
+      "target": "ig-wait-1m",
+      "targetHandle": "in",
+      "data": {
+        "label": "التالي"
+      }
+    },
+    {
+      "id": "ig-delay-edge-send",
+      "type": "flowEdge",
+      "source": "ig-wait-1m",
+      "sourceHandle": "next",
+      "target": "ig-delay-reply",
+      "targetHandle": "in",
+      "data": {
+        "label": "التالي"
+      }
+    }
+  ]
+}
