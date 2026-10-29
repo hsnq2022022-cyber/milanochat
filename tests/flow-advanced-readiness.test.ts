@@ -44,7 +44,7 @@ test("server checks are owner-scoped, read-only, and do not expose secret values
  assert.match(body,/evaluateFlowReadiness\(\{/);
  assert.match(body,/supportedDurableDocument\(published\)/);
  assert.match(body,/\.eq\("revision",revision\)\.maybeSingle\(\)/);
- assert.match(body,/return respond\(\{ok:true,readiness\}\)/);
+ assert.match(body,/return respond\(\{ok:true,readiness,candidateRevision:revision\?\?null\}\)/);
  assert.doesNotMatch(body,/\.insert\(|\.update\(|\.delete\(|sendProviderMessage|flow_activate_revision|flow_deactivate_revision/);
  assert.doesNotMatch(body,/env\("[^"]+"\)\s*[,}]/);
  assert.match(ui,/data-testid="flow-readiness-report"/);
