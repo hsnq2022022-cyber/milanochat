@@ -72,3 +72,40 @@ test("phase 6 preview on phone keeps restart and submit within viewport",async({
  await sim.getByRole("button",{name:"إغلاق المعاينة"}).click();
  await expect(sim).toHaveCount(0);
 });
+
+test("local simulator can evaluate both Instagram condition branches without a provider send",async({page})=>{
+ const start={id:"start",type:"flowNode",position:{x:0,y:0},data:{
+  kind:"trigger",title:"Start",platform:"instagram",triggerMode:"message"
+ }};
+ const condition={id:"condition",type:"flowNode",position:{x:0,y:100},data:{
+  kind:"condition",title:"Contains price",conditionField:"message",
+  conditionValue:"سعر",operator:"contains"
+ }};
+ const yes={id:"price",type:"flowNode",position:{x:0,y:220},data:{
+  kind:"message",title:"Price",text:"مسار الأسعار",image:"",options:[],contentBlocks:[]
+ }};
+ const no={id:"general",type:"flowNode",position:{x:220,y:220},data:{
+  kind:"message",title:"General",text:"مسار الترحيب",image:"",options:[],contentBlocks:[]
+ }};
+ const document={version:3,name:"Safe isolated condition preview",
+  nodes:[start,condition,yes,no],edges:[
+   {id:"a",source:"start",target:"condition",sourceHandle:"next",targetHandle:"in",type:"flowEdge"},
+   {id:"b",source:"condition",target:"price",sourceHandle:"yes",targetHandle:"in",type:"flowEdge"},
+   {id:"c",source:"condition",target:"general",sourceHandle:"no",targetHandle:"in",type:"flowEdge"}
+  ]};
+ page.on("dialog",dialog=>{void dialog.accept();});
+ await page.goto("/milanochat/#/flows");
+ await page.locator('input[accept=".json,application/json"]').setInputFiles({
+  name:"safe-condition.json",mimeType:"application/json",
+  buffer:Buffer.from(JSON.stringify(document),"utf8")
+ });
+ await page.getByRole("button",{name:"تجربة"}).click();
+ const sim=page.getByTestId("flow-simulator");
+ await expect(sim).toContainText("مسار الترحيب");
+ await sim.getByRole("textbox",{name:"رسالة البداية التجريبية"})
+  .fill("أريد معرفة سعر الخدمة");
+ await sim.getByRole("button",{name:"إعادة",exact:true}).click();
+ await expect(sim).toContainText("مسار الأسعار");
+ await expect(sim).not.toContainText("مسار الترحيب");
+ await expect(sim).toContainText("لا يجري إرسال رسائل فعلية");
+});
