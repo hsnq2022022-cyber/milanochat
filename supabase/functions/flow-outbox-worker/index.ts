@@ -39,7 +39,7 @@ Deno.serve(async req=>{
   .select("enabled").eq("singleton",true).single();
  if(ge||g?.enabled!==true)return blocked();
  const {data:items,error:listError}=await sb.from("automation_flow_outbox")
-  .select("id,tenant_id,run_id,delivery_status,effect_kind,payload,outgoing_message_id")
+  .select("id,tenant_id,run_id,delivery_status,effect_kind,payload,outgoing_message_id,provider_message_id")
   .in("delivery_status",["pending","charge_pending"]).in("effect_kind",["message","question"])
   .order("created_at",{ascending:true}).limit(10);
  if(listError)return json({error:"Outbox lookup failed"},503);
