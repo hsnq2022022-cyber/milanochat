@@ -12,13 +12,13 @@ type Reply={ok?:boolean;error?:string;accounts?:Account[];
  items?:Version[];activation?:Activation;revision?:number;
  flows?:PublishedFlow[];active?:ActiveFlow;truncated?:boolean;document?:unknown};
 type Props={flowKey:string;document:FlowDocument;language:FlowLanguage;onClose:()=>void;
- onImportRevision?:(document:unknown)=>boolean};
+ onImportRevision?:(document:unknown)=>boolean;onPreviewRevision?:(document:unknown)=>boolean};
 
 const style="min-h-11 rounded-lg border border-[#275443] bg-[#0F2E24] px-3 py-2 text-sm text-white disabled:opacity-40";
 const CANARY_UI=(import.meta as ImportMeta & {env?:Record<string,string|undefined>})
  .env?.VITE_ENABLE_FLOW_CANARY_CONTROLS==="true";
 
-export default function FlowPublicationPanel({flowKey,document,language,onClose,onImportRevision}:Props){
+export default function FlowPublicationPanel({flowKey,document,language,onClose,onImportRevision,onPreviewRevision}:Props){
  const en=language==="en";
  const [accounts,setAccounts]=useState<Account[]>([]);
  const [accountId,setAccountId]=useState("");
@@ -73,6 +73,20 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
   });
   return()=>{cancelled=true;};
  },[accountId,flowKey,call,en]);
+
+ // Read the immutable server revision without importing or writing to local storage.
+ const previewRevision=async(revision:number)=>{
+  if(!onPreviewRevision||busy||!accountId)return;
+  setBusy(true);setNotice("");
+  try{
+   const r=await call({action:"read",accountId,flowKey:managedFlowKey,revision});
+   if(!r.document||!onPreviewRevision(r.document))throw Error("Preview refused");
+   onClose();
+  }catch{
+   setNotice(en?"Could not preview this revision; nothing was changed.":
+    "تعذرت معاينة الإصدار؛ لم تتغير المسودة أو الرسائل المنشورة.");
+  }finally{setBusy(false);}
+ };
 
  const importRevision=async(revision:number)=>{
   if(!onImportRevision||busy||!accountId)return;
@@ -206,6 +220,10 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
       className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[#275443] p-3">
       <div><strong>{(en?"Revision ":"الإصدار ")+v.revision}</strong>
        <p className="text-xs text-[#A8BDB2]">{v.created_at}</p></div>
+      {onPreviewRevision&&<button type="button" className={style}
+       data-testid={"preview-published-revision-"+v.revision}
+       disabled={busy} onClick={()=>void previewRevision(v.revision)}>
+       {en?"Preview without changing live flow":"معاينة دون تغيير التدفق المنشور"}</button>}
       {onImportRevision&&<button type="button" className={style}
        disabled={busy} onClick={()=>void importRevision(v.revision)}>
        {en?"Import as local copy":"استيراد كنسخة محلية"}</button>}

@@ -15,7 +15,7 @@ import FlowPublicationPanel from "../flow/FlowPublicationPanel";
 import { ACCENT, KIND_LIST, LABELS, SAVE_KEY, canConnect, edgeFor, importFlow, makeNode, outputs, validateDocument } from "../flow/model";
 import { arrangeFlow, cardSize, findOpenPosition } from "../flow/layout";
 import { useAddStepMenu } from "../flow/addMenu";
-import type { FlowNode, FlowEdge, Kind } from "../flow/model";
+import type { FlowNode, FlowEdge, Kind, FlowDocument } from "../flow/model";
 import { useFlowStore } from "../flow/store";
 import { getLibraryRecoveryReport, saveLibrary, snapshotLibrary } from "../flow/library";
 import { flowText, flowKindLabel } from "../flow/uiLocale";
@@ -39,6 +39,7 @@ function Editor(){
   const nodesChanged=useFlowStore(s=>s.nodesChanged),edgesChanged=useFlowStore(s=>s.edgesChanged);
   const selected=doc.nodes.find(n=>n.id===selectedId)||null;
   const [showSimulator,setShowSimulator]=useState(false),[trail,setTrail]=useState<string[]>([]);
+  const [publishedPreview,setPublishedPreview]=useState<FlowDocument|null>(null);
   const [showCloudDrafts,setShowCloudDrafts]=useState(false);
   const [showPublications,setShowPublications]=useState(false);
   const [toolbarCollapsed,setToolbarCollapsed]=useState(false);
@@ -120,6 +121,15 @@ function Editor(){
       store().replace(parsed);setNotice("تم استيراد التدفق بنجاح.");
       window.setTimeout(()=>instance.fitView({padding:.24,duration:350}),60);
     }catch{setNotice("الملف غير صالح أو لا يتوافق مع صيغة المحرر.");}
+  };
+  // Previewing an immutable version never calls createFlow/replace/saveLibrary,
+  // nor any production activate, deactivate or publish endpoint.
+  const previewPublishedRevision=(raw:unknown):boolean=>{
+    const parsed=importFlow(raw);
+    if(!parsed)return false;
+    setPublishedPreview(parsed);
+    setShowSimulator(true);
+    return true;
   };
   const importPublishedRevision=(raw:unknown):boolean=>{
     if(protectStoredLibrary){
@@ -260,7 +270,7 @@ function Editor(){
       </div>}
     </header>
     {CLOUD_DRAFT_UI_ENABLED&&showCloudDrafts&&<CloudDraftPanel language={language} onClose={()=>setShowCloudDrafts(false)}/>}
-    {PUBLICATION_UI_ENABLED&&showPublications&&<FlowPublicationPanel key={activeFlowId} flowKey={activeFlowId} document={doc} language={language} onImportRevision={importPublishedRevision} onClose={()=>setShowPublications(false)}/>}
+    {PUBLICATION_UI_ENABLED&&showPublications&&<FlowPublicationPanel key={activeFlowId} flowKey={activeFlowId} document={doc} language={language} onImportRevision={importPublishedRevision} onPreviewRevision={previewPublishedRevision} onClose={()=>setShowPublications(false)}/>}
     {recovery.messages.length>0&&<div role="alert" className="border-b border-[#E5B54B] bg-[#2C2414] px-4 py-3 text-xs text-[#F9E3A2]">
       <strong>تقرير استعادة التدفقات: </strong>{recovery.messages.join(" ")} تم استرجاع {recovery.recovered} وتجاهل {recovery.skipped}.
       {protectStoredLibrary&&<span className="mr-2 font-bold">الحفظ التلقائي متوقف لحماية بيانات المكتبة الأصلية؛ استخدم «تصدير» قبل تأكيد الحفظ اليدوي.</span>}
@@ -357,7 +367,7 @@ function Editor(){
     </div>
     {notice&&<div role="status" className="fixed bottom-5 right-5 z-50 max-w-sm cursor-pointer rounded-xl border border-[#275443] bg-[#0B241C] px-4 py-3 text-xs text-[#3DD189] shadow-2xl" onClick={()=>setNotice("")}>{notice} ×</div>}
     <div className="pointer-events-none absolute bottom-1 left-1/2 z-10 hidden -translate-x-1/2 rounded-lg bg-[#0B241C]/80 px-2 py-1 text-[10px] text-[#8B9E96] sm:block">{t("localOnly")}</div>
-    {showSimulator&&<FlowSimulator language={language} doc={doc} flowId={activeFlowId} flows={snapshotLibrary(activeFlowId,doc,flows).flows} onVisited={setTrail} onClose={()=>setShowSimulator(false)}/>}
+    {showSimulator&&<FlowSimulator language={language} doc={publishedPreview??doc} flowId={publishedPreview?"published-preview":activeFlowId} flows={publishedPreview?[{id:"published-preview",doc:publishedPreview,enabled:false}]:snapshotLibrary(activeFlowId,doc,flows).flows} onVisited={publishedPreview?undefined:setTrail} onClose={()=>{setShowSimulator(false);setPublishedPreview(null);}}/>}
   </div>;
 }
 export default function FlowBuilder(){
