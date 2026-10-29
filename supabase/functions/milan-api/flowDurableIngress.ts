@@ -3,6 +3,7 @@
  * Disabled until an explicit operator-selected account passes live send tests.
  * Never calls Meta or charges: effects are stored for the separate Outbox.
  */
+import type {SupabaseClient} from "npm:@supabase/supabase-js@2";
 import {createRuntimeState,planRuntimeTransition,type RuntimeState} from "../../../src/flow/runtimePlan.ts";
 import type {FlowDocument} from "../../../src/flow/model.ts";
 
@@ -80,7 +81,7 @@ export type DurableEvent={
  tenantId:string;accountId:string;conversationId:string;inboundId:string;
  eventId:string;platform:string;selectedChoiceId?:string|null;
 };
-type Db={from(table:string):any;rpc(name:string,args:RecordValue):Promise<{data:any;error:any}>};
+type Db=Pick<SupabaseClient,"from"|"rpc">;
 type Result="fallback"|"handled";
 const validEvent=(e:DurableEvent)=>
  [e.tenantId,e.accountId,e.conversationId,e.inboundId].every(x=>
