@@ -57,6 +57,7 @@ jobs:
           npx tsc --noEmit -p tsconfig.flows.json
           npm run test:flows
           node --experimental-strip-types --test tests/flow-manage-existing-publications.test.ts
+          node --experimental-strip-types --test tests/flow-advanced-readiness.test.ts
           node --experimental-strip-types --test tests/flow-live-two-choice-canary.test.ts
 
       # Execute existing mobile RTL and editor acceptance before publishing.
