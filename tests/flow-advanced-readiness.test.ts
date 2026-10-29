@@ -16,7 +16,9 @@ const input:ReadinessInput={
 test("all required gates must be green before an advanced canary is configured",()=>{
  const ready=evaluateFlowReadiness(input);
  assert.equal(ready.buttonsConfigured,true);
+ assert.equal(ready.candidateKind,"buttons");
  assert.equal(ready.delayConfigured,false);
+ assert.equal(evaluateFlowReadiness({...input,candidateKind:"delay"}).candidateKind,"delay");
  assert.equal(evaluateFlowReadiness({...input,candidateKind:"delay"}).delayConfigured,true);
  assert.equal(evaluateFlowReadiness({...input,candidateKind:"unsupported"}).buttonsConfigured,false);
  for(const key of Object.keys(input) as Array<keyof ReadinessInput>){
@@ -48,6 +50,13 @@ test("server checks are owner-scoped, read-only, and do not expose secret values
  assert.doesNotMatch(body,/\.insert\(|\.update\(|\.delete\(|sendProviderMessage|flow_activate_revision|flow_deactivate_revision/);
  assert.doesNotMatch(body,/env\("[^"]+"\)\s*[,}]/);
  assert.match(ui,/data-testid="flow-readiness-report"/);
+ assert.match(ui,/readiness\.candidateKind==="buttons"/);
+ assert.match(ui,/readiness\.candidateKind==="delay"/);
+ assert.match(ui,/report\.candidateKind==="delay"/);
+ assert.match(ui,/data-testid="flow-copy-readiness"/);
+ assert.match(ui,/navigator\.clipboard\.writeText\(JSON\.stringify\(report,null,2\)\)/);
+ assert.match(ui,/const report=\{revision:checkedRevision,kind:readiness\.candidateKind,configured,missing\}/);
+
  assert.match(ui,/data-testid=\{"readiness-published-revision-"\+v\.revision\}/);
  assert.match(ui,/action:"readiness",accountId,flowKey:managedFlowKey/);
 });
