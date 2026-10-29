@@ -99,6 +99,8 @@ test("local simulator can evaluate both Instagram condition branches without a p
   name:"safe-condition.json",mimeType:"application/json",
   buffer:Buffer.from(JSON.stringify(document),"utf8")
  });
+ await expect(page.getByRole("textbox",{name:"اسم التدفق"}))
+  .toHaveValue("Safe isolated condition preview");
  await page.getByRole("button",{name:"تجربة"}).click();
  const sim=page.getByTestId("flow-simulator");
  await expect(sim).toContainText("مسار الترحيب");
