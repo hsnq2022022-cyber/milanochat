@@ -16,6 +16,7 @@ export type ReadinessInput={
  creditsAvailable:boolean;
  activePublication:boolean;
  durableIngress:boolean;
+ activationApproved:boolean;
  canaryMatched:boolean;
  operatorReleased:boolean;
  schedulerEnabled:boolean;
@@ -35,6 +36,7 @@ export function evaluateFlowReadiness(input:ReadinessInput){
   activeRevision:input.activePublication,
   supportedCandidate:input.candidateKind!=="unsupported",
   ingress:input.durableIngress,
+  activation:input.activationApproved,
   canary:input.canaryMatched,
   operatorRelease:input.operatorReleased,
   outbox:input.outboxEnabled,
@@ -44,7 +46,7 @@ export function evaluateFlowReadiness(input:ReadinessInput){
   buttons:input.richButtonsEnabled,
  };
  const base=["instagram","tenant","account","globalSwitch","tenantSwitch","credits",
-  "activeRevision","supportedCandidate","ingress","canary","operatorRelease","outbox",
+  "activeRevision","supportedCandidate","ingress","activation","canary","operatorRelease","outbox",
   "atomicDebit","encryption"] as const;
  const baseReady=base.every(key=>checks[key]);
  return {
