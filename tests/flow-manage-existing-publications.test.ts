@@ -52,3 +52,25 @@ test("active server publication is visible and account changes clear stale state
  assert.match(ui,/activeServerFlow\.flow_key\+" · v"\+activeServerFlow\.revision/);
  assert.match(ui,/setCatalog\(\[\]\);setActiveServerFlow\(null\);setCatalogTruncated\(false\)/);
 });
+
+test("published revision preview is read-only and uses isolated simulator state",()=>{
+ assert.match(ui,/onPreviewRevision\?:\(document:unknown\)=>boolean/);
+ assert.match(ui,/data-testid=\{"preview-published-revision-"\+v\.revision\}/);
+ assert.match(ui,/call\(\{action:"read",accountId,flowKey:managedFlowKey,revision\}\)/);
+ assert.match(editor,/onPreviewRevision=\{previewPublishedRevision\}/);
+ const start=editor.indexOf("const previewPublishedRevision=");
+ const end=editor.indexOf("const importPublishedRevision=",start);
+ assert(start>0&&end>start);
+ const preview=editor.slice(start,end);
+ assert.match(preview,/importFlow\(raw\)/);
+ assert.match(preview,/setPublishedPreview\(parsed\)/);
+ assert.match(preview,/setShowSimulator\(true\)/);
+ assert.doesNotMatch(preview,/createFlow|replace\(|saveLibrary|functions\.invoke/);
+ assert.match(editor,/flowId=\{publishedPreview\?"published-preview":activeFlowId\}/);
+ assert.match(editor,/flows=\{publishedPreview\?\[\{id:"published-preview",doc:publishedPreview,enabled:false\}\]/);
+ assert.match(editor,/setShowSimulator\(false\);setPublishedPreview\(null\)/);
+ // Invalid or oversized publications are rejected by the same import boundary.
+ const example=JSON.parse(readFileSync("examples/flow-instagram-two-choice-v3.json","utf8"));
+ assert(importFlow(example));
+ assert.equal(importFlow({version:3,nodes:[],edges:[]}),null);
+});
