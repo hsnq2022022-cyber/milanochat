@@ -8,7 +8,7 @@ const input:ReadinessInput={
  platform:"instagram",candidateKind:"buttons",tenantActive:true,accountActive:true,
  agentEnabled:true,autoReply:true,globalEnabled:true,
  tenantEnabled:true,productionApproved:true,creditsAvailable:true,
- activePublication:true,durableIngress:true,canaryMatched:true,
+ activePublication:true,durableIngress:true,activationApproved:true,canaryMatched:true,
  operatorReleased:true,schedulerEnabled:true,outboxEnabled:true,
  atomicDebitReady:true,richButtonsEnabled:true,encryptionConfigured:true
 };
