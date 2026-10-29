@@ -24,6 +24,10 @@ Deno.serve(async(req)=>{
  if(req.method!=="POST")return answer("method not allowed",405);
  const authorization=req.headers.get("authorization")??"";
  if(!service||authorization!== "Bearer "+service)return answer("unauthorized",401);
+ // Installation of this endpoint must NEVER start queued production delays.
+ // A separate operator-controlled secret enables the scheduler only after E2E.
+ if(Deno.env.get("FLOW_DURABLE_SCHEDULER_ENABLED")!=="true")
+  return answer("durable scheduler disabled",423);
  if(!base)return answer("backend not configured",503);
  const sb=createClient(base,service);
  let body:unknown;
