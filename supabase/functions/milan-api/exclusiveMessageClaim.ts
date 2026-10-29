@@ -18,7 +18,7 @@ export type Dependencies={
  claim(engineReady:boolean):Promise<Claimed|null>;
  legacyAnswer():Promise<string|null>;
  send(text:string):Promise<{providerMessageId:string|null}|void>;
- persistSent(messageId:string,text:string):Promise<boolean>;
+ persistSent(messageId:string,text:string,providerMessageId:string):Promise<boolean>;
  debit(messageId:string):Promise<number>;
  delivery?:DeliveryHooks; // explicit phased rollout: OFF unless provided
 };
@@ -74,7 +74,7 @@ export async function processExclusiveEvent(d:Dependencies):Promise<Result>{
   }catch{return "sent_unconfirmed";}
  }
  let persisted=false;
- try{persisted=await d.persistSent(c.outgoing_message_id,text);}catch{/* external provider might have accepted */}
+ try{persisted=await d.persistSent(c.outgoing_message_id,text,providerMessageId);}catch{/* external provider might have accepted */}
  if(!persisted)return "sent_persist_failed";
  try{
   const result=await d.debit(c.outgoing_message_id);
