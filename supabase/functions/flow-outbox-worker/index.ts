@@ -70,6 +70,7 @@ Deno.serve(async req=>{
    if(accountResult.error||conversationResult.error||activationResult.error||
       !account||!conversation||
       account.tenant_id!==tenant.id||conversation.tenant_id!==tenant.id||
+      account.platform!==run.platform||
       conversation.account_id!==account.id||account.is_active!==true||
       account.agent_enabled!==true||account.auto_reply!==true||
       !allowedChannel(String(account.platform))||
@@ -148,11 +149,13 @@ Deno.serve(async req=>{
      return data===true;
     },
     persistAndBill:async(providerId)=>{
+     if(typeof providerId!=="string"||!providerId.trim())return false;
      const encrypted=await encryptMessageBody(messageText,fieldKey);
      const {error:insertError}=await sb.from("messages").insert({
       id:effect.outgoing_message_id,tenant_id:tenant.id,
       conversation_id:conversation.id,direction:"out",body_encrypted:encrypted,
-      kind:"answer",is_auto:true,wa_message_id:providerId
+      kind:"answer",is_auto:true,wa_message_id:providerId,
+      external_message_id:providerId
      });
      if(insertError&&insertError.code!=="23505"){
       console.error("[outbox] outgoing persisted failed",{code:insertError.code});
