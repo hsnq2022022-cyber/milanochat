@@ -14,7 +14,7 @@ type ReadinessChecks={
  canary:boolean;operatorRelease:boolean;outbox:boolean;atomicDebit:boolean;
  encryption:boolean;scheduler:boolean;buttons:boolean;
 };
-type Readiness={checks:ReadinessChecks;buttonsConfigured:boolean;delayConfigured:boolean};
+type Readiness={checks:ReadinessChecks;candidateKind:"buttons"|"delay"|"unsupported";buttonsConfigured:boolean;delayConfigured:boolean};
 const readinessLabels:Record<keyof ReadinessChecks,{ar:string;en:string}>={
  instagram:{ar:"قناة Instagram",en:"Instagram channel"},
  tenant:{ar:"نشاط المتجر",en:"Active store"},
@@ -128,6 +128,25 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
    setNotice(en?"Unable to verify advanced flow configuration.":
     "تعذر التحقق من إعدادات التدفقات المتقدمة.");
   }finally{setBusy(false);}
+ };
+
+ const missingReadinessChecks=(report:Readiness)=>Object.entries(report.checks)
+  .filter(([key,ready])=>ready!==true&&
+   (key!=="scheduler"||report.candidateKind==="delay")&&
+   (key!=="buttons"||report.candidateKind==="buttons"));
+ const copyReadiness=async()=>{
+  if(!readiness)return;
+  const missing=missingReadinessChecks(readiness).map(([key])=>key);
+  const configured=readiness.candidateKind==="buttons"?readiness.buttonsConfigured:
+   readiness.candidateKind==="delay"?readiness.delayConfigured:false;
+  // No token, account ID, customer identity, message or tenant information.
+  const report={revision:checkedRevision,kind:readiness.candidateKind,configured,missing};
+  try{
+   await navigator.clipboard.writeText(JSON.stringify(report,null,2));
+   setNotice(en?"Readiness report copied.":"تم نسخ تقرير الجاهزية.");
+  }catch{
+   setNotice(en?"Could not copy the readiness report.":"تعذر نسخ تقرير الجاهزية.");
+  }
  };
 
  const importRevision=async(revision:number)=>{
@@ -261,17 +280,26 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
     {readiness&&<div data-testid="flow-readiness-report" role="status"
      className="rounded-lg border border-[#275443] bg-[#0F2E24] p-3 text-xs">
       <p className="font-semibold">{en?"Advanced configuration check":"فحص إعدادات التدفقات المتقدمة"}{checkedRevision?" · v"+checkedRevision:""}</p>
-      <p className="mt-2">{en?"Interactive buttons: ":"الأزرار التفاعلية: "}
-       {readiness.buttonsConfigured?(en?"Configured":"الإعدادات مكتملة"):(en?"Not configured":"الإعدادات غير مكتملة")}</p>
-      <p>{en?"Delayed messages: ":"الرسائل المؤجلة: "}
-       {readiness.delayConfigured?(en?"Configured":"الإعدادات مكتملة"):(en?"Not configured":"الإعدادات غير مكتملة")}</p>
+      {readiness.candidateKind==="buttons"&&<p className="mt-2">
+       {en?"Interactive buttons: ":"الأزرار التفاعلية: "}
+       {readiness.buttonsConfigured?(en?"Configured":"الإعدادات مكتملة"):(en?"Not configured":"الإعدادات غير مكتملة")}</p>}
+      {readiness.candidateKind==="delay"&&<p className="mt-2">
+       {en?"Delayed messages: ":"الرسائل المؤجلة: "}
+       {readiness.delayConfigured?(en?"Configured":"الإعدادات مكتملة"):(en?"Not configured":"الإعدادات غير مكتملة")}</p>}
+      {readiness.candidateKind==="unsupported"&&<p className="mt-2 text-[#F5D99C]">
+       {en?"This revision is not an advanced buttons or delay candidate.":
+        "هذا الإصدار ليس تدفق أزرار أو تأخير مدعومًا."}</p>
       <p className="mt-2 text-[#BED4C9]">{en
        ?"This verifies configuration only. It does not send messages, change live revisions, or prove delivery."
        :"هذا فحص للإعدادات فقط؛ لا يرسل رسائل أو يغيّر الإصدار المنشور، ولا يثبت وصول الرسائل."}</p>
-      {Object.entries(readiness.checks).filter(([,ready])=>ready!==true)
+      {missingReadinessChecks(readiness)
        .map(([key])=><p key={key} className="mt-1 text-[#F5D99C]">
         {"• "+(readinessLabels[key as keyof ReadinessChecks]?.[en?"en":"ar"]??key)}
        </p>)}
+      <button type="button" className={style+" mt-3"}
+       data-testid="flow-copy-readiness" onClick={()=>void copyReadiness()}>
+       {en?"Copy safe readiness report":"نسخ تقرير الجاهزية بدون معلومات سرية"}
+      </button>
      </div>}
     {notice&&<p role="status" className="rounded-lg border border-[#275443] p-3 text-xs">{notice}</p>}
     {loaded&&<div className="space-y-2">
