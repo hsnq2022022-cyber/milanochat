@@ -49,9 +49,13 @@ DECLARE row_data record;
 BEGIN
  IF p_tenant IS NULL OR p_outbox IS NULL THEN RETURN false;END IF;
  IF NOT EXISTS(SELECT 1 FROM public.automation_flow_global_switch WHERE singleton AND enabled)
- OR NOT EXISTS(SELECT 1 FROM public.automation_flow_tenant_switches
-   WHERE tenant_id=p_tenant AND enabled AND test_only)
- THEN RETURN false;END IF;
+ OR NOT EXISTS(
+   SELECT 1 FROM public.automation_flow_tenant_switches s
+   JOIN public.automation_flow_outbox o ON o.tenant_id=s.tenant_id
+   JOIN public.automation_flow_runs r ON r.tenant_id=o.tenant_id AND r.id=o.run_id
+   WHERE s.tenant_id=p_tenant AND o.id=p_outbox AND s.enabled
+    AND (s.test_only OR (s.production_approved AND r.platform='instagram'))
+ ) THEN RETURN false;END IF;
  SELECT o.id,o.tenant_id,o.run_id,o.outgoing_message_id,
    c.id AS claim_id
  INTO row_data FROM public.automation_flow_outbox o
@@ -87,8 +91,11 @@ AS $finish$
 DECLARE final_status text;
 BEGIN
  IF p_tenant IS NULL OR p_outbox IS NULL OR p_result NOT IN('confirmed','uncertain')
- OR (p_provider_message_id IS NOT NULL AND
-     length(p_provider_message_id) NOT BETWEEN 1 AND 255) THEN RETURN false;END IF;
+ OR (p_result='confirmed' AND
+    (p_provider_message_id IS NULL OR
+     length(btrim(p_provider_message_id)) NOT BETWEEN 1 AND 255))
+ OR (p_result='uncertain' AND p_provider_message_id IS NOT NULL)
+ THEN RETURN false;END IF;
  UPDATE public.automation_flow_delivery_attempts
  SET status=p_result,
  provider_message_id=CASE WHEN p_result='confirmed' THEN p_provider_message_id ELSE NULL END,
