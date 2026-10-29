@@ -11,6 +11,7 @@ import {createClient} from "npm:@supabase/supabase-js@2";
 import {sendProviderMessage,decryptAccountToken,encryptMessageBody} from "./deliveryCore.ts";
 import {answerWithVerifiedKnowledge,openAIKnowledgeDependencies} from "./flowKnowledge.ts";
 import {executeOnce} from "./executeOnce.ts";
+import {canDispatchOutbox} from "./productionGate.ts";
 
 const env=(name:string)=>Deno.env.get(name)??"";
 const json=(body:unknown,status=200)=>new Response(JSON.stringify(body),
@@ -49,25 +50,40 @@ Deno.serve(async req=>{
     .select("id,business_name,is_active,credits_remaining")
     .eq("id",effect.tenant_id).maybeSingle();
    const {data:sw}=await sb.from("automation_flow_tenant_switches")
-    .select("enabled,test_only").eq("tenant_id",effect.tenant_id).maybeSingle();
+    .select("enabled,test_only,production_approved").eq("tenant_id",effect.tenant_id).maybeSingle();
    const {data:run}=await sb.from("automation_flow_runs").select("*")
     .eq("id",effect.run_id).eq("tenant_id",effect.tenant_id).maybeSingle();
-   if(!tenant?.is_active||!(tenant.credits_remaining>0)||
-      !sw?.enabled||!sw.test_only||!run){report("blocked");continue;}
-   const [accountResult,conversationResult]=await Promise.all([
+   if(!tenant?.is_active||!sw?.enabled||!run){report("blocked");continue;}
+   const [accountResult,conversationResult,activationResult]=await Promise.all([
     sb.from("channel_accounts").select("id,tenant_id,platform,is_active,agent_enabled,auto_reply,external_id,access_token_encrypted")
       .eq("tenant_id",effect.tenant_id).eq("id",run.channel_account_id).maybeSingle(),
     sb.from("conversations").select("id,tenant_id,account_id,wa_chat_id,transferred,human_agent_until")
-      .eq("tenant_id",effect.tenant_id).eq("id",run.conversation_id).maybeSingle()
+      .eq("tenant_id",effect.tenant_id).eq("id",run.conversation_id).maybeSingle(),
+    sb.from("automation_flow_activations").select("revision,is_active")
+      .eq("tenant_id",effect.tenant_id)
+      .eq("channel_account_id",run.channel_account_id)
+      .eq("platform",run.platform).eq("flow_key",run.flow_key)
+      .eq("revision",run.publication_revision)
+      .eq("is_active",true).maybeSingle()
    ]);
    const account=accountResult.data,conversation=conversationResult.data;
-   if(accountResult.error||conversationResult.error||!account||!conversation||
+   if(accountResult.error||conversationResult.error||activationResult.error||
+      !account||!conversation||
       account.tenant_id!==tenant.id||conversation.tenant_id!==tenant.id||
       conversation.account_id!==account.id||account.is_active!==true||
       account.agent_enabled!==true||account.auto_reply!==true||
       !allowedChannel(String(account.platform))||
       conversation.transferred===true||
-      (conversation.human_agent_until&&Date.parse(conversation.human_agent_until)>Date.now())){
+      (conversation.human_agent_until&&Date.parse(conversation.human_agent_until)>Date.now())||
+      !canDispatchOutbox({
+       globalEnabled:g?.enabled,tenantEnabled:sw?.enabled,
+       testOnly:sw?.test_only,productionApproved:sw?.production_approved,
+       platform:account.platform,accountActive:account.is_active,
+       agentEnabled:account.agent_enabled,autoReply:account.auto_reply,
+       tenantActive:tenant.is_active,credits:tenant.credits_remaining,
+       revisionActive:activationResult.data?.is_active,
+       humanTakeover:conversation.transferred===true
+      })){
     report("blocked");continue;
    }
    const recipientRaw=String(conversation.wa_chat_id??"");
