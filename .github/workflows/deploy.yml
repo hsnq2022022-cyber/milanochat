@@ -57,6 +57,14 @@ jobs:
           npx tsc --noEmit -p tsconfig.flows.json
           npm run test:flows
           node --experimental-strip-types --test tests/flow-manage-existing-publications.test.ts
+          node --experimental-strip-types --test tests/flow-live-two-choice-canary.test.ts
+
+      # Execute existing mobile RTL and editor acceptance before publishing.
+      # The Playwright server has no production credentials and never sends Meta messages.
+      - name: Install Chromium for mobile acceptance
+        run: npx playwright install --with-deps chromium
+      - name: Verify real editor interactions in browser
+        run: npx playwright test -c playwright.config.ts tests/flow-mobile-locale.spec.ts
 
       # ✅ تحقق: هل ملف الشعار موجود فعلًا في public/؟
       - name: Verify logo.png exists
