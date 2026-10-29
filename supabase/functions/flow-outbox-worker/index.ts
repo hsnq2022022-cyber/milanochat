@@ -80,7 +80,9 @@ Deno.serve(async req=>{
       !canDispatchOutbox({
        globalEnabled:g?.enabled,tenantEnabled:sw?.enabled,
        testOnly:sw?.test_only,productionApproved:sw?.production_approved,
-       platform:account.platform,accountActive:account.is_active,
+       platform:account.platform,accountId:account.id,
+       canaryAccountId:env("FLOW_DURABLE_CANARY_ACCOUNT_ID"),
+       accountActive:account.is_active,
        agentEnabled:account.agent_enabled,autoReply:account.auto_reply,
        tenantActive:tenant.is_active,credits:tenant.credits_remaining,
        revisionActive:activationResult.data?.is_active,
