@@ -150,6 +150,11 @@ export async function handleFlowPublication(req:Request,
   // Account-scoped, read-only release preflight. Never returns secret values,
   // alters an activation, claims a message, or dispatches an Outbox item.
   if(action==="readiness"){
+   const requestedRevision=request.revision;
+   if(requestedRevision!==undefined&&
+      (typeof requestedRevision!=="number"||
+       !Number.isSafeInteger(requestedRevision)||requestedRevision<1))
+    return error("Invalid revision",400);
    const [global,tenantFlags,activated,credit]=await Promise.all([
     client.from("automation_flow_global_switch")
      .select("enabled").eq("singleton",true).maybeSingle(),
@@ -164,8 +169,19 @@ export async function handleFlowPublication(req:Request,
    if(global.error||tenantFlags.error||activated.error||credit.error)
     return error("Readiness check unavailable",503);
    if((activated.data??[]).length>1)return error("Conflicting active revisions",409);
+   const revision=requestedRevision??activated.data?.[0]?.revision;
+   const candidate=typeof revision==="number"?
+    await client.from("automation_flow_publications").select("document")
+     .eq("tenant_id",scope.tenantId).eq("channel_account_id",scope.accountId)
+     .eq("platform",scope.platform).eq("flow_key",flowKey)
+     .eq("revision",revision).maybeSingle():null;
+   if(candidate?.error)return error("Candidate revision unavailable",503);
+   const published=candidate?.data?.document;
+   const supported=supportedDurableDocument(published);
+   const candidateKind:"buttons"|"delay"|"unsupported"=supported?
+    (published.nodes.some(n=>n.data.kind==="question")?"buttons":"delay"):"unsupported";
    const readiness=evaluateFlowReadiness({
-    platform:scope.platform,tenantActive:tenant.is_active===true,
+    platform:scope.platform,candidateKind,tenantActive:tenant.is_active===true,
     accountActive:account.is_active===true,
     agentEnabled:account.agent_enabled===true,autoReply:account.auto_reply===true,
     globalEnabled:global.data?.enabled===true,
@@ -183,7 +199,7 @@ export async function handleFlowPublication(req:Request,
     richButtonsEnabled:env("FLOW_RICH_BUTTONS_ENABLED")==="true",
     encryptionConfigured:env("FIELD_ENCRYPTION_KEY").length>0
    });
-   return respond({ok:true,readiness});
+   return respond({ok:true,readiness,candidateRevision:revision??null});
   }
 
   // Authenticated read-only catalog. Never accepts a tenant ID from the browser.
