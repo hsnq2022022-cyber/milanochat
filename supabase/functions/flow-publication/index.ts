@@ -9,6 +9,7 @@ import {
  UUID_REGEX,VALID_FLOW_KEY,type ProviderPlatform
 } from "../../../src/flow/serverPublicationValidation.ts";
 import type {FlowCapability} from "../../../src/flow/publicationGate.ts";
+import {evaluateFlowReadiness} from "./readiness.ts";
 import {simpleMessageFromDocument} from "../milan-api/flowPrepareMessage.ts";
 import {supportedDurableDocument} from "../milan-api/flowDurableIngress.ts";
 
@@ -146,6 +147,62 @@ export async function handleFlowPublication(req:Request,
     actorId:auth.user.id};
   const action=request.action;
 
+  // Account-scoped, read-only release preflight. Never returns secret values,
+  // alters an activation, claims a message, or dispatches an Outbox item.
+  if(action==="readiness"){
+   const requestedRevision=request.revision;
+   if(requestedRevision!==undefined&&
+      (typeof requestedRevision!=="number"||
+       !Number.isSafeInteger(requestedRevision)||requestedRevision<1))
+    return error("Invalid revision",400);
+   const [global,tenantFlags,activated,credit]=await Promise.all([
+    client.from("automation_flow_global_switch")
+     .select("enabled").eq("singleton",true).maybeSingle(),
+    client.from("automation_flow_tenant_switches")
+     .select("enabled,production_approved").eq("tenant_id",scope.tenantId).maybeSingle(),
+    client.from("automation_flow_activations")
+     .select("revision").eq("tenant_id",scope.tenantId)
+     .eq("channel_account_id",scope.accountId).eq("platform",scope.platform)
+     .eq("flow_key",flowKey).eq("is_active",true).limit(2),
+    client.from("tenants").select("credits_remaining").eq("id",scope.tenantId).maybeSingle()
+   ]);
+   if(global.error||tenantFlags.error||activated.error||credit.error)
+    return error("Readiness check unavailable",503);
+   if((activated.data??[]).length>1)return error("Conflicting active revisions",409);
+   const revision=requestedRevision??activated.data?.[0]?.revision;
+   const candidate=typeof revision==="number"?
+    await client.from("automation_flow_publications").select("document")
+     .eq("tenant_id",scope.tenantId).eq("channel_account_id",scope.accountId)
+     .eq("platform",scope.platform).eq("flow_key",flowKey)
+     .eq("revision",revision).maybeSingle():null;
+   if(candidate?.error)return error("Candidate revision unavailable",503);
+   const published:unknown=candidate?.data?.document;
+   const supported=supportedDurableDocument(published);
+   const candidateKind:"buttons"|"delay"|"unsupported"=supported?
+    (published.nodes.some(n=>n.data.kind==="question")?"buttons":"delay"):"unsupported";
+   const readiness=evaluateFlowReadiness({
+    platform:scope.platform,candidateKind,tenantActive:tenant.is_active===true,
+    accountActive:account.is_active===true,
+    agentEnabled:account.agent_enabled===true,autoReply:account.auto_reply===true,
+    globalEnabled:global.data?.enabled===true,
+    tenantEnabled:tenantFlags.data?.enabled===true,
+    productionApproved:tenantFlags.data?.production_approved===true,
+    creditsAvailable:typeof credit.data?.credits_remaining==="number"&&
+     credit.data.credits_remaining>0,
+    activePublication:(activated.data??[]).length===1,
+    durableIngress:env("FLOW_DURABLE_INGRESS_ENABLED")==="true",
+    activationApproved:env("FLOW_DURABLE_ACTIVATION_READY")==="true",
+    canaryMatched:env("FLOW_DURABLE_CANARY_ACCOUNT_ID")===scope.accountId,
+    operatorReleased:env("FLOW_WORKERS_OPERATOR_RELEASE")==="production-canary-approved",
+    schedulerEnabled:env("FLOW_DURABLE_SCHEDULER_ENABLED")==="true",
+    outboxEnabled:env("FLOW_OUTBOX_SEND_ENABLED")==="true",
+    atomicDebitReady:env("FLOW_ATOMIC_CONSUME_READY")==="true",
+    richButtonsEnabled:env("FLOW_RICH_BUTTONS_ENABLED")==="true",
+    encryptionConfigured:env("FIELD_ENCRYPTION_KEY").length>0
+   });
+   return respond({ok:true,readiness,candidateRevision:revision??null});
+  }
+
   // Authenticated read-only catalog. Never accepts a tenant ID from the browser.
   // The existing account lookup above already scopes this account to auth.user.
   if(action==="catalog"){
@@ -275,11 +332,19 @@ export async function handleFlowPublication(req:Request,
    // This prevents a customer from activating a graph that would fall back
    // to legacy AI or never wake up from its first delay.
    // Explicit operator gates remain independent of browser publication controls.
-   const durable=production&&scope.platform==="instagram"&&
+   const rawDocument:unknown=publication.document;
+   const durableGraph=supportedDurableDocument(rawDocument);
+   const buttonGraph=durableGraph&&rawDocument.nodes.some(n=>n.data.kind==="question");
+   const durable=production&&scope.platform==="instagram"&&durableGraph&&
     env("FLOW_DURABLE_ACTIVATION_READY")==="true"&&
     env("FLOW_DURABLE_INGRESS_ENABLED")==="true"&&
     env("FLOW_DURABLE_CANARY_ACCOUNT_ID")===scope.accountId&&
-    supportedDurableDocument(publication.document);
+    env("FLOW_WORKERS_OPERATOR_RELEASE")==="production-canary-approved"&&
+    env("FLOW_OUTBOX_SEND_ENABLED")==="true"&&
+    env("FLOW_ATOMIC_CONSUME_READY")==="true"&&
+    env("FIELD_ENCRYPTION_KEY").length>0&&
+    (buttonGraph?env("FLOW_RICH_BUTTONS_ENABLED")==="true":
+     env("FLOW_DURABLE_SCHEDULER_ENABLED")==="true");
    if(!durable){
     if(simpleMessageFromDocument(publication.document,scope.platform)===null)
      return error("This flow uses unsupported runtime features",422);
