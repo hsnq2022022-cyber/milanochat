@@ -1,0 +1,176 @@
+{
+  "version": 3,
+  "name": "اختبار Instagram الحقيقي — أزرار الأسعار والمعلومات",
+  "nodes": [
+    {
+      "id": "ig-start",
+      "type": "flowNode",
+      "position": {
+        "x": 410,
+        "y": 40
+      },
+      "data": {
+        "text": "",
+        "image": "",
+        "options": [],
+        "contentBlocks": [],
+        "platform": "instagram",
+        "keywords": "",
+        "triggerMode": "message",
+        "inputMode": "buttons",
+        "inputField": "response",
+        "conditionField": "message",
+        "operator": "contains",
+        "conditionValue": "",
+        "delayValue": 1,
+        "delayUnit": "minutes",
+        "actionType": "tag",
+        "actionValue": "",
+        "gotoNode": "",
+        "requestMethod": "GET",
+        "requestUrl": "",
+        "kind": "trigger",
+        "title": "عند وصول رسالة Instagram"
+      }
+    },
+    {
+      "id": "ig-choice",
+      "type": "flowNode",
+      "position": {
+        "x": 410,
+        "y": 310
+      },
+      "data": {
+        "text": "أهلاً بيك 👋 اختار شتحتاج من الخيارات:",
+        "image": "",
+        "options": [
+          {
+            "id": "prices",
+            "label": "الأسعار",
+            "action": "step"
+          },
+          {
+            "id": "info",
+            "label": "معلومات",
+            "action": "step"
+          }
+        ],
+        "contentBlocks": [],
+        "platform": "instagram",
+        "keywords": "",
+        "triggerMode": "message",
+        "inputMode": "buttons",
+        "inputField": "response",
+        "conditionField": "message",
+        "operator": "contains",
+        "conditionValue": "",
+        "delayValue": 1,
+        "delayUnit": "minutes",
+        "actionType": "tag",
+        "actionValue": "",
+        "gotoNode": "",
+        "requestMethod": "GET",
+        "requestUrl": "",
+        "kind": "question",
+        "title": "اختيار الخدمة"
+      }
+    },
+    {
+      "id": "ig-price",
+      "type": "flowNode",
+      "position": {
+        "x": 120,
+        "y": 640
+      },
+      "data": {
+        "text": "أهلاً بيك 👋 حتى أساعدك بالسعر، اكتب اسم الخدمة أو المنتج المطلوب.",
+        "image": "",
+        "options": [],
+        "contentBlocks": [],
+        "platform": "instagram",
+        "keywords": "",
+        "triggerMode": "message",
+        "inputMode": "buttons",
+        "inputField": "response",
+        "conditionField": "message",
+        "operator": "contains",
+        "conditionValue": "",
+        "delayValue": 1,
+        "delayUnit": "minutes",
+        "actionType": "tag",
+        "actionValue": "",
+        "gotoNode": "",
+        "requestMethod": "GET",
+        "requestUrl": "",
+        "kind": "message",
+        "title": "رد الأسعار"
+      }
+    },
+    {
+      "id": "ig-info",
+      "type": "flowNode",
+      "position": {
+        "x": 690,
+        "y": 640
+      },
+      "data": {
+        "text": "أهلاً بيك 👋 وصلتنا رسالتك عن طريق إدارة سوشيال. شلون نكدر نساعدك؟",
+        "image": "",
+        "options": [],
+        "contentBlocks": [],
+        "platform": "instagram",
+        "keywords": "",
+        "triggerMode": "message",
+        "inputMode": "buttons",
+        "inputField": "response",
+        "conditionField": "message",
+        "operator": "contains",
+        "conditionValue": "",
+        "delayValue": 1,
+        "delayUnit": "minutes",
+        "actionType": "tag",
+        "actionValue": "",
+        "gotoNode": "",
+        "requestMethod": "GET",
+        "requestUrl": "",
+        "kind": "message",
+        "title": "رد المعلومات"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge-start-choice",
+      "type": "flowEdge",
+      "source": "ig-start",
+      "sourceHandle": "next",
+      "target": "ig-choice",
+      "targetHandle": "in",
+      "data": {
+        "label": "التالي"
+      }
+    },
+    {
+      "id": "edge-choice-prices",
+      "type": "flowEdge",
+      "source": "ig-choice",
+      "sourceHandle": "prices",
+      "target": "ig-price",
+      "targetHandle": "in",
+      "data": {
+        "label": "الأسعار"
+      }
+    },
+    {
+      "id": "edge-choice-info",
+      "type": "flowEdge",
+      "source": "ig-choice",
+      "sourceHandle": "info",
+      "target": "ig-info",
+      "targetHandle": "in",
+      "data": {
+        "label": "معلومات"
+      }
+    }
+  ]
+}
