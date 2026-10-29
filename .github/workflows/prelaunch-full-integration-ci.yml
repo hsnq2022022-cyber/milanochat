@@ -209,6 +209,7 @@ jobs:
           node --experimental-strip-types --test tests/flow-shadow-integration.test.ts
           node --test tests/flow-versioned-debit.test.mjs
           node --test tests/flow-direct-meta-mid.test.mjs
+          node --test tests/flow-durable-worker-disabled.test.mjs
           node --test tests/flow-live-controls.test.mjs
           node --experimental-strip-types --test tests/flow-simple-instagram-text.test.ts
           node --experimental-strip-types --test tests/flow-instant-condition.test.ts
