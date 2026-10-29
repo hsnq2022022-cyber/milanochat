@@ -1,0 +1,21 @@
+import {test} from "node:test";
+import assert from "node:assert/strict";
+import {readFileSync} from "node:fs";
+test("scheduled worker calls are Vault-backed and only for work already due",()=>{
+ const setup=readFileSync("supabase/migrations/20261029122000_flow_scheduler_extensions.sql","utf8");
+ const scheduler=readFileSync("supabase/proposals/flow_scheduler_vault_jobs.review.sql","utf8");
+ assert.match(setup,/CREATE EXTENSION pg_cron WITH SCHEMA pg_catalog/);
+ assert.match(setup,/CREATE EXTENSION pg_net WITH SCHEMA extensions/);
+ assert.doesNotMatch(setup,/cron\.schedule\(/);
+ assert.match(scheduler,/SELECT decrypted_secret\s+FROM vault\.decrypted_secrets/g);
+ assert.match(scheduler,/WHERE name='flow_worker_service_role_key'/g);
+ assert.match(scheduler,/SELECT 1 FROM public\.automation_flow_runs/);
+ assert.match(scheduler,/run_status='sleeping' AND wake_at<=now\(\)/);
+ assert.match(scheduler,/SELECT 1 FROM public\.automation_flow_outbox/);
+ assert.match(scheduler,/delivery_status IN \('pending','charge_pending'\)/);
+ assert.match(scheduler,/'Authorization','Bearer '\|\|/);
+ assert.match(scheduler,/flow-runtime-worker/);
+ assert.match(scheduler,/flow-outbox-worker/);
+ assert.doesNotMatch(scheduler,/sb_secret_[a-zA-Z0-9]+/);
+ assert.doesNotMatch(scheduler,/eyJ[A-Za-z0-9_-]{30,}/);
+});
