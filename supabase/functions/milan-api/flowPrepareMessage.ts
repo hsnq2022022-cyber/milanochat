@@ -8,6 +8,7 @@ type Platform = "instagram" | "facebook" | "whatsapp";
  */
 export async function prepareSimpleFlowReply(
  sb:SupabaseClient, tenantId:string, accountId:string, platform:Platform,
+ incomingText:string="",
 ):Promise<string|null>{
  const mode=Deno.env.get("FLOW_RUNTIME_MODE")??"";
  // An explicit emergency OFF always overrides database approvals.
@@ -39,34 +40,73 @@ export async function prepareSimpleFlowReply(
    .eq("platform",platform).eq("flow_key",selected.flow_key)
    .eq("revision",selected.revision).maybeSingle();
   if(pubError||!publication)return null;
-  return simpleMessageFromDocument(publication.document,platform);
+  return simpleMessageFromDocument(publication.document,platform,incomingText);
  }catch{return null;}
 }
 
-/** Pure validation for the supported subset of published FlowDocument v3. */
-export function simpleMessageFromDocument(raw:unknown,platform:Platform):string|null{
- if(!raw||typeof raw!=="object"||Array.isArray(raw))return null;
+/** Pure validation: no IO, actions, schedules or hidden side effects.
+ * Supports: trigger(message)->message(text), and
+ * trigger(message)->condition(message)->yes/no plain-text replies.
+ */
+export function simpleMessageFromDocument(
+ raw:unknown,platform:Platform,incomingText:string=""
+):string|null{
+ if(!raw||typeof raw!=="object"||Array.isArray(raw)||
+    typeof incomingText!=="string"||incomingText.length>4096)return null;
  const doc=raw as Record<string,unknown>;
- if(doc.version!==3||!Array.isArray(doc.nodes)||!Array.isArray(doc.edges)||
-    doc.nodes.length!==2||doc.edges.length!==1)return null;
- // Node storage order has no semantic meaning in FlowDocument v3.
- // Locate the only trigger and message by kind; malformed/extra nodes fail closed.
+ if(doc.version!==3||!Array.isArray(doc.nodes)||!Array.isArray(doc.edges))return null;
  const nodes=doc.nodes as Record<string,unknown>[];
- const start=nodes.find(n=>(n?.data as Record<string,unknown>|undefined)?.kind==="trigger");
- const message=nodes.find(n=>(n?.data as Record<string,unknown>|undefined)?.kind==="message");
- if(!start||!message)return null;
- const s=start.data as Record<string,unknown>|undefined;
- const m=message?.data as Record<string,unknown>|undefined;
+ const edges=doc.edges as Record<string,unknown>[];
+ const conditional=nodes.length===4&&edges.length===3;
+ if(!(nodes.length===2&&edges.length===1)&&!conditional)return null;
+ if(nodes.some(n=>!n||typeof n!=="object"||typeof n.id!=="string"||!n.id||
+   !n.data||typeof n.data!=="object")||
+   new Set(nodes.map(n=>n.id)).size!==nodes.length)return null;
+ const kind=(n:Record<string,unknown>)=>(n.data as Record<string,unknown>).kind;
+ const starts=nodes.filter(n=>kind(n)==="trigger");
+ const messages=nodes.filter(n=>kind(n)==="message");
+ const conditions=nodes.filter(n=>kind(n)==="condition");
+ if(starts.length!==1||messages.length!==(conditional?2:1)||
+    conditions.length!==(conditional?1:0))return null;
+ const start=starts[0],s=start.data as Record<string,unknown>;
  const requestedPlatform=platform==="facebook"?"messenger":platform;
- if(s?.kind!=="trigger"||s.platform!==requestedPlatform||
-    s.triggerMode!=="message"||m?.kind!=="message")return null;
- const edge=doc.edges[0] as Record<string,unknown>;
- if(edge.source!==start.id||edge.target!==message.id||
-    edge.sourceHandle!=="next")return null;
- if(!Array.isArray(m.options)||m.options.length!==0||
-    !Array.isArray(m.contentBlocks)||m.contentBlocks.length!==0||
-    (typeof m.image==="string" && m.image.trim()))return null;
- if(typeof m.text!=="string"||m.text.trim().length===0||
-    new TextEncoder().encode(m.text).byteLength>1000)return null;
- return m.text.trim();
+ if(s.platform!==requestedPlatform||s.triggerMode!=="message")return null;
+ const edge=(source:string,target:string,port:string)=>
+  edges.filter(e=>e?.source===source&&e.target===target&&e.sourceHandle===port).length===1;
+ const textOf=(node:Record<string,unknown>):string|null=>{
+  const d=node.data as Record<string,unknown>;
+  if(!Array.isArray(d.options)||d.options.length!==0||
+     !Array.isArray(d.contentBlocks)||d.contentBlocks.length!==0||
+     (typeof d.image==="string"&&d.image.trim())||
+     typeof d.text!=="string"||!d.text.trim()||
+     new TextEncoder().encode(d.text).byteLength>1000)return null;
+  return d.text.trim();
+ };
+ if(!conditional){
+  const reply=messages[0];
+  if(!edge(String(start.id),String(reply.id),"next"))return null;
+  return textOf(reply);
+ }
+ const test=conditions[0],data=test.data as Record<string,unknown>;
+ if(data.conditionField!=="message"||
+    !["contains","equals","not_equals","exists"].includes(String(data.operator))||
+    (data.operator!=="exists"&&
+      (typeof data.conditionValue!=="string"||!data.conditionValue.trim()||
+       data.conditionValue.length>250)))return null;
+ const yesEdges=edges.filter(e=>e.source===test.id&&e.sourceHandle==="yes");
+ const noEdges=edges.filter(e=>e.source===test.id&&e.sourceHandle==="no");
+ if(!edge(String(start.id),String(test.id),"next")||
+    yesEdges.length!==1||noEdges.length!==1||
+    yesEdges[0].target===noEdges[0].target)return null;
+ const yes=messages.find(n=>n.id===yesEdges[0].target);
+ const no=messages.find(n=>n.id===noEdges[0].target);
+ if(!yes||!no)return null;
+ const yesText=textOf(yes),noText=textOf(no);
+ if(!yesText||!noText)return null;
+ const expected=typeof data.conditionValue==="string"?data.conditionValue:"";
+ const matched=data.operator==="exists"?Boolean(incomingText):
+  data.operator==="equals"?incomingText===expected:
+  data.operator==="not_equals"?incomingText!==expected:
+  incomingText.includes(expected);
+ return matched?yesText:noText;
 }
