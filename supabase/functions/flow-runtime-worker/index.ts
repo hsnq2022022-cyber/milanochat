@@ -8,6 +8,7 @@ import {createClient} from "npm:@supabase/supabase-js@2";
 import {acceptsFlowWorkerBearer} from "../flowWorkerAuth.ts";
 import type {FlowDocument} from "../../../src/flow/model.ts";
 import {planRuntimeTransition} from "../../../src/flow/runtimePlan.ts";
+import {canWakeDurableRun} from "./eligibility.ts";
 
 const base=Deno.env.get("SUPABASE_URL")??"";
 const service=Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")??"";
@@ -57,6 +58,46 @@ Deno.serve(async(req)=>{
    const {data:run,error:re}=await sb.from("automation_flow_runs").select("*")
     .eq("tenant_id",tenantId).eq("id",runId).single();
    if(re||!run||run.run_status!=="sleeping")throw Error("missing sleeping run");
+   // The lease is not permission to continue an inactive revision. Recheck
+   // tenant, exact canary account and human takeover before planning effects.
+   const [tenant,flags,account,conversation,activation]=await Promise.all([
+    sb.from("tenants").select("is_active").eq("id",tenantId).maybeSingle(),
+    sb.from("automation_flow_tenant_switches")
+     .select("enabled,test_only,production_approved").eq("tenant_id",tenantId).maybeSingle(),
+    sb.from("channel_accounts")
+     .select("id,tenant_id,platform,is_active,agent_enabled,auto_reply")
+     .eq("tenant_id",tenantId).eq("id",run.channel_account_id).maybeSingle(),
+    sb.from("conversations")
+     .select("tenant_id,account_id,transferred,human_agent_until")
+     .eq("tenant_id",tenantId).eq("id",run.conversation_id).maybeSingle(),
+    sb.from("automation_flow_activations")
+     .select("revision,is_active").eq("tenant_id",tenantId)
+     .eq("channel_account_id",run.channel_account_id)
+     .eq("platform",run.platform).eq("flow_key",run.flow_key)
+     .eq("revision",run.publication_revision).maybeSingle()
+   ]);
+   if([tenant,flags,account,conversation,activation].some(v=>v.error))
+    throw Error("wake eligibility query failed");
+   if(!canWakeDurableRun({
+    runPlatform:run.platform,runStatus:run.run_status,
+    runRevision:Number(run.publication_revision),
+    tenantActive:tenant.data?.is_active,
+    tenantSwitchEnabled:flags.data?.enabled,
+    tenantTestOnly:flags.data?.test_only,
+    tenantProductionApproved:flags.data?.production_approved,
+    globalEnabled:gate?.enabled,
+    accountId:run.channel_account_id,
+    canaryAccountId:Deno.env.get("FLOW_DURABLE_CANARY_ACCOUNT_ID"),
+    accountTenantMatches:account.data?.tenant_id===tenantId,
+    accountActive:account.data?.is_active,
+    agentEnabled:account.data?.agent_enabled,autoReply:account.data?.auto_reply,
+    conversationTenantMatches:conversation.data?.tenant_id===tenantId,
+    conversationAccountMatches:conversation.data?.account_id===run.channel_account_id,
+    humanTransferred:conversation.data?.transferred,
+    humanAgentUntil:conversation.data?.human_agent_until,
+    activeRevision:activation.data?Number(activation.data.revision):null,
+    revisionIsActive:activation.data?.is_active
+   },Date.now()))throw Error("wake not eligible for current canary activation");
    const {data:published,error:pe}=await sb.from("automation_flow_publications")
     .select("document")
     .eq("tenant_id",tenantId).eq("flow_key",run.flow_key)
