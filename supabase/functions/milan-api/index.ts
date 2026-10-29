@@ -1864,7 +1864,11 @@ async function handleIncomingWebhookMessage(
         return true;
       }
     }}:{}),
-    persistSent: async (outgoingId, text) => {
+    persistSent: async (outgoingId, text, providerMessageId) => {
+      // Store the provider-accepted MID on the outgoing row, not merely in
+      // the ephemeral send response. Both fields already exist in production.
+      // wa_message_id is also used by existing webhook/Inbox lookups;
+      // external_message_id preserves the provider-neutral identifier.
       const { error } = await sb.from("messages").insert({
         id: outgoingId,
         conversation_id: conv.id,
@@ -1873,6 +1877,8 @@ async function handleIncomingWebhookMessage(
         body_encrypted: await encryptField(text),
         kind: "answer",
         is_auto: true,
+        wa_message_id: providerMessageId,
+        external_message_id: providerMessageId,
       });
       // Same deterministic outgoing UUID cannot be persisted twice.
       return !error;
