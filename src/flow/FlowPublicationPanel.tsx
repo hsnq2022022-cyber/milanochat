@@ -288,7 +288,7 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
        {readiness.delayConfigured?(en?"Configured":"الإعدادات مكتملة"):(en?"Not configured":"الإعدادات غير مكتملة")}</p>}
       {readiness.candidateKind==="unsupported"&&<p className="mt-2 text-[#F5D99C]">
        {en?"This revision is not an advanced buttons or delay candidate.":
-        "هذا الإصدار ليس تدفق أزرار أو تأخير مدعومًا."}</p>
+        "هذا الإصدار ليس تدفق أزرار أو تأخير مدعومًا."}</p>}
       <p className="mt-2 text-[#BED4C9]">{en
        ?"This verifies configuration only. It does not send messages, change live revisions, or prove delivery."
        :"هذا فحص للإعدادات فقط؛ لا يرسل رسائل أو يغيّر الإصدار المنشور، ولا يثبت وصول الرسائل."}</p>
