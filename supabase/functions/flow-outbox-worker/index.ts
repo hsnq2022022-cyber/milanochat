@@ -28,6 +28,9 @@ Deno.serve(async req=>{
  const cronKey=env("flow_worker_service_role_key");
  if(!acceptsFlowWorkerBearer(req.headers.get("authorization"),secret,cronKey))
   return json({error:"Unauthorized"},401);
+ // A separate fail-closed rollout gate prevents existing Cron from sending
+ // or charging after this authentication fix is deployed.
+ if(env("FLOW_WORKERS_OPERATOR_RELEASE")!=="production-canary-approved")return blocked();
  if(env("FLOW_OUTBOX_SEND_ENABLED")!=="true"||
     env("FLOW_ATOMIC_CONSUME_READY")!=="true")return blocked();
  const base=env("SUPABASE_URL"),fieldKey=env("FIELD_ENCRYPTION_KEY");
