@@ -152,7 +152,7 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
     <label className="block space-y-1">
      <span>{en?"Channel account":"حساب القناة"}</span>
      <select className={style+" w-full"} value={accountId} disabled={busy}
-      onChange={e=>{setAccountId(e.target.value);setManagedFlowKey(flowKey);setCatalog([]);setLoaded(false);setVersions([]);setActivation(null);setNotice("");}}>
+      onChange={e=>{setAccountId(e.target.value);setManagedFlowKey(flowKey);setCatalog([]);setActiveServerFlow(null);setCatalogTruncated(false);setLoaded(false);setVersions([]);setActivation(null);setNotice("");}}>
       <option value="">{en?"Select an account":"اختر الحساب"}</option>
       {accounts.map(a=><option key={a.id} value={a.id}>
        {a.platform+" · "+a.id.slice(0,8)+(a.is_active?"":" (غير نشط)")}
@@ -178,6 +178,16 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
       ?"Managing a server flow: view, stop or import a revision. Publishing local edits to another flow is disabled."
       :"إدارة تدفق منشور: يمكنك عرض الإصدارات أو إيقافه أو استيراد نسخة، ولا يمكن نشر مسودة محلية مختلفة عليه مباشرة."}</p>}
     </label>}
+    {accountId&&activeServerFlow&&<div data-testid="flow-active-server-status"
+     role="status" className="rounded-lg border border-[#3DD189]/50 bg-[#14392C] p-3">
+      <strong>{en?"Active published automation":"التدفق المنشور النشط"}</strong>
+      <p className="mt-1 break-all text-xs text-[#C9E8D9]">
+       {activeServerFlow.flow_key+" · v"+activeServerFlow.revision}
+      </p>
+      <p className="mt-1 text-xs text-[#BED4C9]">{en
+       ?"Select Load revisions to inspect or stop this live automation."
+       :"اضغط «عرض الإصدارات» لفحص هذا التدفق أو إيقافه."}</p>
+    </div>}
     <div className="flex flex-wrap gap-2">
      <button type="button" className={style} disabled={!accountId||busy}
       onClick={()=>void load()}>{en?"Load revisions":"عرض الإصدارات"}</button>
