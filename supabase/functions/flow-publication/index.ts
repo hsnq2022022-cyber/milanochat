@@ -176,7 +176,7 @@ export async function handleFlowPublication(req:Request,
      .eq("platform",scope.platform).eq("flow_key",flowKey)
      .eq("revision",revision).maybeSingle():null;
    if(candidate?.error)return error("Candidate revision unavailable",503);
-   const published=candidate?.data?.document;
+   const published:unknown=candidate?.data?.document;
    const supported=supportedDurableDocument(published);
    const candidateKind:"buttons"|"delay"|"unsupported"=supported?
     (published.nodes.some(n=>n.data.kind==="question")?"buttons":"delay"):"unsupported";
@@ -332,8 +332,9 @@ export async function handleFlowPublication(req:Request,
    // This prevents a customer from activating a graph that would fall back
    // to legacy AI or never wake up from its first delay.
    // Explicit operator gates remain independent of browser publication controls.
-   const durableGraph=supportedDurableDocument(publication.document);
-   const buttonGraph=durableGraph&&publication.document.nodes.some(n=>n.data.kind==="question");
+   const rawDocument:unknown=publication.document;
+   const durableGraph=supportedDurableDocument(rawDocument);
+   const buttonGraph=durableGraph&&rawDocument.nodes.some(n=>n.data.kind==="question");
    const durable=production&&scope.platform==="instagram"&&durableGraph&&
     env("FLOW_DURABLE_ACTIVATION_READY")==="true"&&
     env("FLOW_DURABLE_INGRESS_ENABLED")==="true"&&
