@@ -10,7 +10,7 @@ type PublishedFlow={flowKey:string;latestRevision:number};
 type ActiveFlow={flow_key:string;revision:number}|null;
 type ReadinessChecks={
  instagram:boolean;tenant:boolean;account:boolean;globalSwitch:boolean;
- tenantSwitch:boolean;credits:boolean;activeRevision:boolean;ingress:boolean;
+ tenantSwitch:boolean;credits:boolean;activeRevision:boolean;supportedCandidate:boolean;ingress:boolean;
  canary:boolean;operatorRelease:boolean;outbox:boolean;atomicDebit:boolean;
  encryption:boolean;scheduler:boolean;buttons:boolean;
 };
@@ -22,7 +22,8 @@ const readinessLabels:Record<keyof ReadinessChecks,{ar:string;en:string}>={
  globalSwitch:{ar:"مفتاح التشغيل العام",en:"Global automation switch"},
  tenantSwitch:{ar:"موافقة تشغيل المتجر",en:"Store production approval"},
  credits:{ar:"توفر رصيد الردود",en:"Reply credits available"},
- activeRevision:{ar:"إصدار منشور نشط لهذا التدفق",en:"Active revision for selected flow"},
+ activeRevision:{ar:"وجود إصدار نشط لهذا التدفق",en:"Active revision for selected flow"},
+ supportedCandidate:{ar:"الإصدار المحدد متوافق مع الأزرار أو التأخير",en:"Selected revision supports buttons or delay"},
  ingress:{ar:"استقبال التدفقات المتقدمة",en:"Durable ingress enabled"},
  canary:{ar:"حصر التجربة بهذا الحساب",en:"Canary scoped to account"},
  operatorRelease:{ar:"موافقة تشغيل العمال",en:"Worker operator approval"},
@@ -34,7 +35,7 @@ const readinessLabels:Record<keyof ReadinessChecks,{ar:string;en:string}>={
 };
 type Reply={ok?:boolean;error?:string;accounts?:Account[];
  items?:Version[];activation?:Activation;revision?:number;
- flows?:PublishedFlow[];active?:ActiveFlow;truncated?:boolean;document?:unknown;readiness?:Readiness};
+ flows?:PublishedFlow[];active?:ActiveFlow;truncated?:boolean;document?:unknown;readiness?:Readiness;candidateRevision?:number|null};
 type Props={flowKey:string;document:FlowDocument;language:FlowLanguage;onClose:()=>void;
  onImportRevision?:(document:unknown)=>boolean;onPreviewRevision?:(document:unknown)=>boolean};
 
@@ -56,6 +57,7 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
  const [busy,setBusy]=useState(false);
  const [notice,setNotice]=useState("");
  const [readiness,setReadiness]=useState<Readiness|null>(null);
+ const [checkedRevision,setCheckedRevision]=useState<number|null>(null);
  const productionReady=accounts.some(a=>a.id===accountId&&a.canActivate===true);
  const isEditingLocalFlow=managedFlowKey===flowKey;
  const showActivationControls=CANARY_UI||productionReady;
@@ -113,13 +115,14 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
   }finally{setBusy(false);}
  };
 
- const inspectReadiness=async()=>{
+ const inspectReadiness=async(revision?:number)=>{
   if(!accountId||busy)return;
-  setReadiness(null);setBusy(true);setNotice("");
+  setReadiness(null);setCheckedRevision(null);setBusy(true);setNotice("");
   try{
-   const r=await call({action:"readiness",accountId,flowKey:managedFlowKey});
+   const r=await call({action:"readiness",accountId,flowKey:managedFlowKey,...(revision?{revision}:{})});
    if(!r.readiness)throw Error("Missing readiness report");
    setReadiness(r.readiness);
+   setCheckedRevision(r.candidateRevision??null);
   }catch{
    setNotice(en?"Unable to verify advanced flow configuration.":
     "تعذر التحقق من إعدادات التدفقات المتقدمة.");
@@ -204,7 +207,7 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
     <label className="block space-y-1">
      <span>{en?"Channel account":"حساب القناة"}</span>
      <select className={style+" w-full"} value={accountId} disabled={busy}
-      onChange={e=>{setAccountId(e.target.value);setManagedFlowKey(flowKey);setCatalog([]);setActiveServerFlow(null);setCatalogTruncated(false);setLoaded(false);setVersions([]);setActivation(null);setReadiness(null);setNotice("");}}>
+      onChange={e=>{setAccountId(e.target.value);setManagedFlowKey(flowKey);setCatalog([]);setActiveServerFlow(null);setCatalogTruncated(false);setLoaded(false);setVersions([]);setActivation(null);setReadiness(null);setCheckedRevision(null);setNotice("");}}>
       <option value="">{en?"Select an account":"اختر الحساب"}</option>
       {accounts.map(a=><option key={a.id} value={a.id}>
        {a.platform+" · "+a.id.slice(0,8)+(a.is_active?"":" (غير نشط)")}
@@ -215,7 +218,7 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
      <span>{en?"Published flow":"إدارة التدفقات المنشورة للحساب"}</span>
      <select className={style+" w-full"} value={managedFlowKey} disabled={busy}
       onChange={e=>{setManagedFlowKey(e.target.value);setLoaded(false);
-       setVersions([]);setActivation(null);setReadiness(null);setNotice("");}}>
+       setVersions([]);setActivation(null);setReadiness(null);setCheckedRevision(null);setNotice("");}}>
       <option value={flowKey}>{en?"Current local flow":"التدفق المحلي المفتوح"}</option>
       {catalog.filter(item=>item.flowKey!==flowKey).map(item=><option
        key={item.flowKey} value={item.flowKey}>
@@ -256,7 +259,7 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
     </div>
     {readiness&&<div data-testid="flow-readiness-report" role="status"
      className="rounded-lg border border-[#275443] bg-[#0F2E24] p-3 text-xs">
-      <p className="font-semibold">{en?"Advanced configuration check":"فحص إعدادات التدفقات المتقدمة"}</p>
+      <p className="font-semibold">{en?"Advanced configuration check":"فحص إعدادات التدفقات المتقدمة"}{checkedRevision?" · v"+checkedRevision:""}</p>
       <p className="mt-2">{en?"Interactive buttons: ":"الأزرار التفاعلية: "}
        {readiness.buttonsConfigured?(en?"Configured":"الإعدادات مكتملة"):(en?"Not configured":"الإعدادات غير مكتملة")}</p>
       <p>{en?"Delayed messages: ":"الرسائل المؤجلة: "}
@@ -278,6 +281,10 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
       className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[#275443] p-3">
       <div><strong>{(en?"Revision ":"الإصدار ")+v.revision}</strong>
        <p className="text-xs text-[#A8BDB2]">{v.created_at}</p></div>
+      <button type="button" data-testid={"readiness-published-revision-"+v.revision}
+       className={style} disabled={busy} onClick={()=>void inspectReadiness(v.revision)}>
+       {en?"Check readiness":"فحص جاهزية الإصدار"}
+      </button>
       {onPreviewRevision&&<button type="button" className={style}
        data-testid={"preview-published-revision-"+v.revision}
        disabled={busy} onClick={()=>void previewRevision(v.revision)}>
