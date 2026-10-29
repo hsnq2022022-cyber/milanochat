@@ -8,6 +8,7 @@
  * activated publication, account permission, no human takeover, positive credit.
  */
 import {createClient} from "npm:@supabase/supabase-js@2";
+import {acceptsFlowWorkerBearer} from "../flowWorkerAuth.ts";
 import {sendProviderMessage,decryptAccountToken,encryptMessageBody} from "./deliveryCore.ts";
 import {answerWithVerifiedKnowledge,openAIKnowledgeDependencies} from "./flowKnowledge.ts";
 import {executeOnce} from "./executeOnce.ts";
@@ -24,7 +25,8 @@ Deno.serve(async req=>{
  if(req.method!=="POST")return json({error:"Method not allowed"},405);
  // Do not rely on a public Bearer supplied by a browser.
  const secret=env("SUPABASE_SERVICE_ROLE_KEY");
- if(!secret||req.headers.get("authorization")!=="Bearer "+secret)
+ const cronKey=env("flow_worker_service_role_key");
+ if(!acceptsFlowWorkerBearer(req.headers.get("authorization"),secret,cronKey))
   return json({error:"Unauthorized"},401);
  if(env("FLOW_OUTBOX_SEND_ENABLED")!=="true"||
     env("FLOW_ATOMIC_CONSUME_READY")!=="true")return blocked();

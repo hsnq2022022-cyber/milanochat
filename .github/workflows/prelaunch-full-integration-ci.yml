@@ -243,6 +243,7 @@ jobs:
           node --test tests/flow-vault-scheduler.test.mjs
           node --test tests/flow-advanced-activation-guard.test.mjs
           node --test tests/flow-durable-worker-disabled.test.mjs
+          node --experimental-strip-types --test tests/flow-vault-cron-auth.test.ts
           node --test tests/flow-live-controls.test.mjs
           node --experimental-strip-types --test tests/flow-simple-instagram-text.test.ts
           node --experimental-strip-types --test tests/flow-instant-condition.test.ts
