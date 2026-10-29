@@ -146,6 +146,48 @@ export async function handleFlowPublication(req:Request,
     actorId:auth.user.id};
   const action=request.action;
 
+  // Authenticated read-only catalog. Never accepts a tenant ID from the browser.
+  // The existing account lookup above already scopes this account to auth.user.
+  if(action==="catalog"){
+   const [pubs,active]=await Promise.all([
+    client.from("automation_flow_publications")
+     .select("flow_key,revision")
+     .eq("tenant_id",scope.tenantId).eq("channel_account_id",scope.accountId)
+     .eq("platform",scope.platform)
+     .order("revision",{ascending:false}).limit(500),
+    client.from("automation_flow_activations")
+     .select("flow_key,revision")
+     .eq("tenant_id",scope.tenantId).eq("channel_account_id",scope.accountId)
+     .eq("platform",scope.platform).eq("is_active",true).limit(2)
+   ]);
+   if(pubs.error||active.error)return error("Flow catalog unavailable",503);
+   if((active.data??[]).length>1)return error("Conflicting active revisions",409);
+   const unique=new Map<string,number>();
+   for(const item of pubs.data??[]){
+    if(typeof item.flow_key==="string"&&VALID_FLOW_KEY.test(item.flow_key)&&
+       !unique.has(item.flow_key))unique.set(item.flow_key,item.revision);
+   }
+   return respond({ok:true,flows:[...unique].map(([flowKey,latestRevision])=>({
+    flowKey,latestRevision
+   })),active:active.data?.[0]??null,truncated:(pubs.data??[]).length===500});
+  }
+
+  // Read only an immutable revision owned by the signed-in account.
+  // Import into the editor is always explicit and makes a NEW local copy.
+  if(action==="read"){
+   const revision=request.revision;
+   if(typeof revision!=="number"||!Number.isSafeInteger(revision)||revision<1)
+    return error("Invalid revision",400);
+   const {data:publication,error:readError}=await client
+    .from("automation_flow_publications").select("document")
+    .eq("tenant_id",scope.tenantId).eq("channel_account_id",scope.accountId)
+    .eq("platform",scope.platform).eq("flow_key",flowKey)
+    .eq("revision",revision).maybeSingle();
+   if(readError)return error("Publication read unavailable",503);
+   if(!publication)return error("Publication not found",404);
+   return respond({ok:true,revision,document:publication.document});
+  }
+
   if(action==="publish"){
    if(tenant.is_active!==true||account.is_active!==true)
     return error("Account is disabled",403);
