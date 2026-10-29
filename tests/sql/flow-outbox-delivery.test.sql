@@ -16,6 +16,11 @@ BEGIN
  IF public.flow_reserve_outbox_delivery(
     'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',second) IS DISTINCT FROM false
  THEN RAISE EXCEPTION 'Cross tenant send reservation';END IF;
+ -- Never confirm without a provider-issued stable ID or mark uncertain with one.
+ IF public.flow_finish_outbox_delivery(tenant,first,'confirmed',NULL) IS DISTINCT FROM false
+ OR public.flow_finish_outbox_delivery(tenant,first,'confirmed','  ') IS DISTINCT FROM false
+ OR public.flow_finish_outbox_delivery(tenant,first,'uncertain','invalid') IS DISTINCT FROM false
+ THEN RAISE EXCEPTION 'Provider ID confirmation contract bypassed';END IF;
  IF public.flow_finish_outbox_delivery(tenant,first,'confirmed','mid.example.1') IS DISTINCT FROM true
  OR public.flow_finish_outbox_delivery(tenant,first,'confirmed','mid.example.1') IS DISTINCT FROM false
  THEN RAISE EXCEPTION 'Duplicate delivery confirmed';END IF;
@@ -39,6 +44,26 @@ BEGIN
  IF (SELECT count(*) FROM public.automation_flow_delivery_attempts)<>2
  THEN RAISE EXCEPTION 'Unexpected attempt count';END IF;
 END $test$;
+DO $prod$
+DECLARE tenant uuid:='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+ effect uuid:='eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee3';
+BEGIN
+ UPDATE public.automation_flow_tenant_switches
+ SET test_only=false,production_approved=false WHERE tenant_id=tenant;
+ IF public.flow_reserve_outbox_delivery(tenant,effect) IS DISTINCT FROM false
+ THEN RAISE EXCEPTION 'Unapproved production effect reserved';END IF;
+ UPDATE public.automation_flow_tenant_switches SET production_approved=true
+ WHERE tenant_id=tenant;
+ IF public.flow_reserve_outbox_delivery(tenant,effect) IS DISTINCT FROM true
+ OR public.flow_reserve_outbox_delivery(tenant,effect) IS DISTINCT FROM false
+ THEN RAISE EXCEPTION 'Approved production effect reservation not exactly once';END IF;
+ IF public.flow_finish_outbox_delivery(tenant,effect,'confirmed',NULL) IS DISTINCT FROM false
+ THEN RAISE EXCEPTION 'Confirmed missing provider MID';END IF;
+ IF public.flow_finish_outbox_delivery(tenant,effect,'confirmed','ig.mid.003') IS DISTINCT FROM true
+ THEN RAISE EXCEPTION 'Confirmed production delivery rejected';END IF;
+ IF public.flow_reserve_outbox_delivery(tenant,effect) IS DISTINCT FROM false
+ THEN RAISE EXCEPTION 'Production effect replayed after confirmation';END IF;
+END $prod$;
 RESET ROLE;
 DO $acl$
 BEGIN

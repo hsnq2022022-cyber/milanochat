@@ -1,4 +1,7 @@
 \set ON_ERROR_STOP on
+-- Match the applied production switch schema only in disposable CI.
+ALTER TABLE public.automation_flow_tenant_switches
+ ADD COLUMN IF NOT EXISTS production_approved boolean NOT NULL DEFAULT false;
 INSERT INTO public.automation_flow_activations(
  tenant_id,channel_account_id,platform,flow_key,revision,is_active)
 VALUES('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
