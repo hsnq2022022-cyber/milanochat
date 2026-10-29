@@ -37,7 +37,8 @@ BEGIN
  FOR r IN SELECT run.tenant_id,run.id
   FROM public.automation_flow_runs run
   JOIN public.automation_flow_tenant_switches x
-   ON x.tenant_id=run.tenant_id AND x.enabled AND x.test_only
+   ON x.tenant_id=run.tenant_id AND x.enabled
+     AND (x.test_only OR (x.production_approved AND run.platform='instagram'))
   WHERE run.run_status='sleeping' AND run.wake_at<=now()
   ORDER BY run.wake_at,run.id
   FOR UPDATE OF run SKIP LOCKED LIMIT p_limit
@@ -81,9 +82,12 @@ BEGIN
  IF (p_next_status='sleeping') IS DISTINCT FROM (p_wake_at IS NOT NULL)
  THEN RETURN false; END IF;
  IF NOT EXISTS(SELECT 1 FROM public.automation_flow_global_switch WHERE singleton AND enabled)
- OR NOT EXISTS(SELECT 1 FROM public.automation_flow_tenant_switches
-   WHERE tenant_id=p_tenant AND enabled AND test_only)
- THEN RETURN false; END IF;
+ OR NOT EXISTS(
+   SELECT 1 FROM public.automation_flow_tenant_switches x
+   JOIN public.automation_flow_runs r ON r.tenant_id=x.tenant_id AND r.id=p_run
+   WHERE x.tenant_id=p_tenant AND x.enabled
+    AND (x.test_only OR (x.production_approved AND r.platform='instagram'))
+ ) THEN RETURN false; END IF;
  SELECT run_status,step_count,wake_at INTO old
  FROM public.automation_flow_runs WHERE id=p_run AND tenant_id=p_tenant FOR UPDATE;
  IF NOT FOUND OR old.run_status<>p_expect_status OR old.step_count<>p_expect_step OR

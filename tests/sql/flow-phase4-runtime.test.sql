@@ -46,6 +46,44 @@ BEGIN
  OR (SELECT count(*) FROM public.automation_flow_metrics WHERE run_id=run AND event_key='completed')<>1
  THEN RAISE EXCEPTION 'LEASE_NOT_RELEASED_OR_METRIC_MISSING';END IF;
 END $test$;
+-- Production rollout reuses the same durable DB leases, but may only
+-- operate on operator-approved Instagram runs. Do not enable customer sends.
+DO $production$
+DECLARE tenant uuid:='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+ run uuid:='77777777-7777-4777-8777-7777777777a4';
+ lease uuid;
+BEGIN
+ UPDATE public.automation_flow_runs SET run_status='ready',
+  step_count=0,current_node_id='start',wake_at=NULL
+ WHERE tenant_id=tenant AND id=run;
+ UPDATE public.automation_flow_tenant_switches
+ SET test_only=false,production_approved=false WHERE tenant_id=tenant;
+ IF public.flow_commit_run_step(tenant,run,0,'ready','delay',1,'sleeping',
+   '{}'::jsonb,now()-interval '1 minute','[]'::jsonb,'transition',NULL)
+   IS DISTINCT FROM false
+ THEN RAISE EXCEPTION 'UNAPPROVED_PRODUCTION_RUN_ACCEPTED'; END IF;
+ UPDATE public.automation_flow_tenant_switches SET production_approved=true
+ WHERE tenant_id=tenant;
+ IF public.flow_commit_run_step(tenant,run,0,'ready','delay',1,'sleeping',
+   '{}'::jsonb,now()-interval '1 minute','[]'::jsonb,'transition',NULL)
+   IS DISTINCT FROM true
+ THEN RAISE EXCEPTION 'APPROVED_INSTAGRAM_RUN_REJECTED'; END IF;
+ SELECT lease_token INTO lease FROM public.flow_lease_due_runs(10);
+ IF lease IS NULL THEN RAISE EXCEPTION 'APPROVED_DUE_INSTAGRAM_NOT_LEASED';END IF;
+ UPDATE public.automation_flow_tenant_switches SET production_approved=false
+ WHERE tenant_id=tenant;
+ IF public.flow_commit_run_step(tenant,run,1,'sleeping','finish',2,'completed',
+   '{}'::jsonb,NULL,'[]'::jsonb,'completed',lease) IS DISTINCT FROM false
+ THEN RAISE EXCEPTION 'REVOKED_APPROVAL_STILL_RESUMED';END IF;
+ UPDATE public.automation_flow_tenant_switches SET production_approved=true
+ WHERE tenant_id=tenant;
+ IF public.flow_commit_run_step(tenant,run,1,'sleeping','finish',2,'completed',
+   '{}'::jsonb,NULL,'[]'::jsonb,'completed',lease) IS DISTINCT FROM true
+ THEN RAISE EXCEPTION 'APPROVED_WAKE_UP_NOT_COMPLETED';END IF;
+ IF (SELECT count(*) FROM public.automation_flow_run_leases
+     WHERE tenant_id=tenant AND run_id=run)<>0
+ THEN RAISE EXCEPTION 'LEASE_NOT_RELEASED';END IF;
+END $production$;
 RESET ROLE;
 DO $privacy$
 BEGIN
