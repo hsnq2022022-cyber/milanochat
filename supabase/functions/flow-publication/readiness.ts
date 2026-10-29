@@ -5,6 +5,7 @@
  */
 export type ReadinessInput={
  platform:string;
+ candidateKind:"buttons"|"delay"|"unsupported";
  tenantActive:boolean;
  accountActive:boolean;
  agentEnabled:boolean;
@@ -32,6 +33,7 @@ export function evaluateFlowReadiness(input:ReadinessInput){
   tenantSwitch:input.tenantEnabled&&input.productionApproved,
   credits:input.creditsAvailable,
   activeRevision:input.activePublication,
+  supportedCandidate:input.candidateKind!=="unsupported",
   ingress:input.durableIngress,
   canary:input.canaryMatched,
   operatorRelease:input.operatorReleased,
@@ -42,13 +44,13 @@ export function evaluateFlowReadiness(input:ReadinessInput){
   buttons:input.richButtonsEnabled,
  };
  const base=["instagram","tenant","account","globalSwitch","tenantSwitch","credits",
-  "activeRevision","ingress","canary","operatorRelease","outbox",
+  "activeRevision","supportedCandidate","ingress","canary","operatorRelease","outbox",
   "atomicDebit","encryption"] as const;
  const baseReady=base.every(key=>checks[key]);
  return {
   checks,
-  buttonsConfigured:baseReady&&checks.buttons,
-  delayConfigured:baseReady&&checks.scheduler,
+  buttonsConfigured:baseReady&&checks.buttons&&input.candidateKind==="buttons",
+  delayConfigured:baseReady&&checks.scheduler&&input.candidateKind==="delay",
   // These flags do not activate a revision, start Cron work, or send any message.
  };
 }
