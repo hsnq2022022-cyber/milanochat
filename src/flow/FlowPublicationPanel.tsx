@@ -8,9 +8,33 @@ type Version={revision:number;created_at:string};
 type Activation={revision:number;is_active:boolean}|null;
 type PublishedFlow={flowKey:string;latestRevision:number};
 type ActiveFlow={flow_key:string;revision:number}|null;
+type ReadinessChecks={
+ instagram:boolean;tenant:boolean;account:boolean;globalSwitch:boolean;
+ tenantSwitch:boolean;credits:boolean;activeRevision:boolean;ingress:boolean;
+ canary:boolean;operatorRelease:boolean;outbox:boolean;atomicDebit:boolean;
+ encryption:boolean;scheduler:boolean;buttons:boolean;
+};
+type Readiness={checks:ReadinessChecks;buttonsConfigured:boolean;delayConfigured:boolean};
+const readinessLabels:Record<keyof ReadinessChecks,{ar:string;en:string}>={
+ instagram:{ar:"قناة Instagram",en:"Instagram channel"},
+ tenant:{ar:"نشاط المتجر",en:"Active store"},
+ account:{ar:"نشاط حساب القناة والرد التلقائي",en:"Active channel and auto reply"},
+ globalSwitch:{ar:"مفتاح التشغيل العام",en:"Global automation switch"},
+ tenantSwitch:{ar:"موافقة تشغيل المتجر",en:"Store production approval"},
+ credits:{ar:"توفر رصيد الردود",en:"Reply credits available"},
+ activeRevision:{ar:"إصدار منشور نشط لهذا التدفق",en:"Active revision for selected flow"},
+ ingress:{ar:"استقبال التدفقات المتقدمة",en:"Durable ingress enabled"},
+ canary:{ar:"حصر التجربة بهذا الحساب",en:"Canary scoped to account"},
+ operatorRelease:{ar:"موافقة تشغيل العمال",en:"Worker operator approval"},
+ outbox:{ar:"إرسال Outbox",en:"Outbox sender enabled"},
+ atomicDebit:{ar:"الخصم المحمي",en:"Atomic debit enabled"},
+ encryption:{ar:"تشفير الرسائل",en:"Message encryption configured"},
+ scheduler:{ar:"جدولة التأخير",en:"Delay scheduler enabled"},
+ buttons:{ar:"إرسال الأزرار التفاعلية",en:"Rich buttons enabled"}
+};
 type Reply={ok?:boolean;error?:string;accounts?:Account[];
  items?:Version[];activation?:Activation;revision?:number;
- flows?:PublishedFlow[];active?:ActiveFlow;truncated?:boolean;document?:unknown};
+ flows?:PublishedFlow[];active?:ActiveFlow;truncated?:boolean;document?:unknown;readiness?:Readiness};
 type Props={flowKey:string;document:FlowDocument;language:FlowLanguage;onClose:()=>void;
  onImportRevision?:(document:unknown)=>boolean;onPreviewRevision?:(document:unknown)=>boolean};
 
@@ -31,6 +55,7 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
  const [loaded,setLoaded]=useState(false);
  const [busy,setBusy]=useState(false);
  const [notice,setNotice]=useState("");
+ const [readiness,setReadiness]=useState<Readiness|null>(null);
  const productionReady=accounts.some(a=>a.id===accountId&&a.canActivate===true);
  const isEditingLocalFlow=managedFlowKey===flowKey;
  const showActivationControls=CANARY_UI||productionReady;
@@ -85,6 +110,19 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
   }catch{
    setNotice(en?"Could not preview this revision; nothing was changed.":
     "تعذرت معاينة الإصدار؛ لم تتغير المسودة أو الرسائل المنشورة.");
+  }finally{setBusy(false);}
+ };
+
+ const inspectReadiness=async()=>{
+  if(!accountId||busy)return;
+  setReadiness(null);setBusy(true);setNotice("");
+  try{
+   const r=await call({action:"readiness",accountId,flowKey:managedFlowKey});
+   if(!r.readiness)throw Error("Missing readiness report");
+   setReadiness(r.readiness);
+  }catch{
+   setNotice(en?"Unable to verify advanced flow configuration.":
+    "تعذر التحقق من إعدادات التدفقات المتقدمة.");
   }finally{setBusy(false);}
  };
 
@@ -166,7 +204,7 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
     <label className="block space-y-1">
      <span>{en?"Channel account":"حساب القناة"}</span>
      <select className={style+" w-full"} value={accountId} disabled={busy}
-      onChange={e=>{setAccountId(e.target.value);setManagedFlowKey(flowKey);setCatalog([]);setActiveServerFlow(null);setCatalogTruncated(false);setLoaded(false);setVersions([]);setActivation(null);setNotice("");}}>
+      onChange={e=>{setAccountId(e.target.value);setManagedFlowKey(flowKey);setCatalog([]);setActiveServerFlow(null);setCatalogTruncated(false);setLoaded(false);setVersions([]);setActivation(null);setReadiness(null);setNotice("");}}>
       <option value="">{en?"Select an account":"اختر الحساب"}</option>
       {accounts.map(a=><option key={a.id} value={a.id}>
        {a.platform+" · "+a.id.slice(0,8)+(a.is_active?"":" (غير نشط)")}
@@ -177,7 +215,7 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
      <span>{en?"Published flow":"إدارة التدفقات المنشورة للحساب"}</span>
      <select className={style+" w-full"} value={managedFlowKey} disabled={busy}
       onChange={e=>{setManagedFlowKey(e.target.value);setLoaded(false);
-       setVersions([]);setActivation(null);setNotice("");}}>
+       setVersions([]);setActivation(null);setReadiness(null);setNotice("");}}>
       <option value={flowKey}>{en?"Current local flow":"التدفق المحلي المفتوح"}</option>
       {catalog.filter(item=>item.flowKey!==flowKey).map(item=><option
        key={item.flowKey} value={item.flowKey}>
@@ -203,6 +241,11 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
        :"اضغط «عرض الإصدارات» لفحص هذا التدفق أو إيقافه."}</p>
     </div>}
     <div className="flex flex-wrap gap-2">
+     <button type="button" data-testid="flow-readiness-check"
+      className={style} disabled={!accountId||busy}
+      onClick={()=>void inspectReadiness()}>
+      {en?"Check advanced readiness":"فحص جاهزية التدفقات المتقدمة"}
+     </button>
      <button type="button" className={style} disabled={!accountId||busy}
       onClick={()=>void load()}>{en?"Load revisions":"عرض الإصدارات"}</button>
      <button type="button" className={style} disabled={!accountId||busy||!isEditingLocalFlow}
@@ -211,6 +254,21 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
       disabled={busy||!loaded} onClick={()=>void change("deactivate")}>
       {en?"Stop automation":"إيقاف التدفق"}</button>}
     </div>
+    {readiness&&<div data-testid="flow-readiness-report" role="status"
+     className="rounded-lg border border-[#275443] bg-[#0F2E24] p-3 text-xs">
+      <p className="font-semibold">{en?"Advanced configuration check":"فحص إعدادات التدفقات المتقدمة"}</p>
+      <p className="mt-2">{en?"Interactive buttons: ":"الأزرار التفاعلية: "}
+       {readiness.buttonsConfigured?(en?"Configured":"الإعدادات مكتملة"):(en?"Not configured":"الإعدادات غير مكتملة")}</p>
+      <p>{en?"Delayed messages: ":"الرسائل المؤجلة: "}
+       {readiness.delayConfigured?(en?"Configured":"الإعدادات مكتملة"):(en?"Not configured":"الإعدادات غير مكتملة")}</p>
+      <p className="mt-2 text-[#BED4C9]">{en
+       ?"This verifies configuration only. It does not send messages, change live revisions, or prove delivery."
+       :"هذا فحص للإعدادات فقط؛ لا يرسل رسائل أو يغيّر الإصدار المنشور، ولا يثبت وصول الرسائل."}</p>
+      {Object.entries(readiness.checks).filter(([,ready])=>ready!==true)
+       .map(([key])=><p key={key} className="mt-1 text-[#F5D99C]">
+        {"• "+(readinessLabels[key as keyof ReadinessChecks]?.[en?"en":"ar"]??key)}
+       </p>)}
+     </div>}
     {notice&&<p role="status" className="rounded-lg border border-[#275443] p-3 text-xs">{notice}</p>}
     {loaded&&<div className="space-y-2">
      <p className="text-xs text-[#BED4C9]">{activation?.is_active
