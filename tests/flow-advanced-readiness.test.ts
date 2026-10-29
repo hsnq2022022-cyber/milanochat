@@ -54,7 +54,7 @@ test("server checks are owner-scoped, read-only, and do not expose secret values
 
 test("real server activation cannot bypass durable worker gates",()=>{
  const api=readFileSync("supabase/functions/flow-publication/index.ts","utf8");
- const start=api.indexOf("const durableGraph=supportedDurableDocument(publication.document)");
+ const start=api.indexOf("const rawDocument:unknown=publication.document");
  const end=api.indexOf("if(!durable)",start);
  assert(start>0&&end>start);
  const guarded=api.slice(start,end);
