@@ -48,6 +48,7 @@ export function supportedDurableDocument(raw:unknown):raw is FlowDocument{
   const qd=q.data as RecordValue;
   if(qd.inputMode!=="buttons"||typeof qd.text!=="string"||
      !qd.text.trim()||new TextEncoder().encode(qd.text).byteLength>1000||
+     qd.image!==""||!Array.isArray(qd.contentBlocks)||qd.contentBlocks.length!==0||
      !Array.isArray(qd.options)||qd.options.length!==2)return false;
   const opts=qd.options as unknown[];
   if(opts.some(o=>!record(o)||!safeId(o.id)||typeof o.label!=="string"||
