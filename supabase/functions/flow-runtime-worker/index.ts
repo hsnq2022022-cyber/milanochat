@@ -27,6 +27,10 @@ Deno.serve(async(req)=>{
  const cronKey=Deno.env.get("flow_worker_service_role_key")??"";
  if(!acceptsFlowWorkerBearer(authorization,service,cronKey))
   return answer("unauthorized",401);
+ // Safe to deploy the authentication fix while existing Cron jobs run.
+ // Do not lease or process any live work until a separate operator GO.
+ if(Deno.env.get("FLOW_WORKERS_OPERATOR_RELEASE")!=="production-canary-approved")
+  return answer("worker rollout not approved",423);
  // Installation of this endpoint must NEVER start queued production delays.
  // A separate operator-controlled secret enables the scheduler only after E2E.
  if(Deno.env.get("FLOW_DURABLE_SCHEDULER_ENABLED")!=="true")
