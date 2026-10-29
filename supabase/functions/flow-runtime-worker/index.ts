@@ -5,6 +5,7 @@
  * A scheduler/deployment is NOT approved or configured.
  */
 import {createClient} from "npm:@supabase/supabase-js@2";
+import {acceptsFlowWorkerBearer} from "../flowWorkerAuth.ts";
 import type {FlowDocument} from "../../../src/flow/model.ts";
 import {planRuntimeTransition} from "../../../src/flow/runtimePlan.ts";
 
@@ -22,8 +23,10 @@ function validVariables(value:unknown):value is Record<string,string>{
 }
 Deno.serve(async(req)=>{
  if(req.method!=="POST")return answer("method not allowed",405);
- const authorization=req.headers.get("authorization")??"";
- if(!service||authorization!== "Bearer "+service)return answer("unauthorized",401);
+ const authorization=req.headers.get("authorization");
+ const cronKey=Deno.env.get("flow_worker_service_role_key")??"";
+ if(!acceptsFlowWorkerBearer(authorization,service,cronKey))
+  return answer("unauthorized",401);
  // Installation of this endpoint must NEVER start queued production delays.
  // A separate operator-controlled secret enables the scheduler only after E2E.
  if(Deno.env.get("FLOW_DURABLE_SCHEDULER_ENABLED")!=="true")
