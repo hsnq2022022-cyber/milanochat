@@ -44,6 +44,7 @@ import { flowShadowMayObserve } from "./flowShadowGate.ts";
 import { persistInboundOnce } from "./persistInboundOnce.ts";
 import { processExclusiveEvent } from "./exclusiveMessageClaim.ts";
 import { prepareSimpleFlowReply } from "./flowPrepareMessage.ts";
+import {attemptDurableInstagram,selectedFlowChoice} from "./flowDurableIngress.ts";
 import { chargeWidgetReply } from "./widgetCredit.ts";
 import { verifyMetaWebhookSignature } from "./metaSignature.ts";
 import { recordVerifiedMetaReceipts } from "./metaDeliveryReceipts.ts";
@@ -1209,12 +1210,14 @@ function extractIgMessages(entry: any): Array<{
   recipientId: string;
   text: string;
   mid: string | null;
+  choiceId: string | null;
 }> {
   const out: Array<{
     senderId: string;
     recipientId: string;
     text: string;
     mid: string | null;
+    choiceId: string | null;
   }> = [];
 
   // ─── 1) البنية القديمة: entry.messaging[] ───
@@ -1244,6 +1247,7 @@ function extractIgMessages(entry: any): Array<{
           recipientId,
           text,
           mid,
+          choiceId:selectedFlowChoice(ev.message),
         });
       }
     }
@@ -1293,6 +1297,7 @@ function extractIgMessages(entry: any): Array<{
               recipientId,
               text,
               mid,
+              choiceId:selectedFlowChoice(ev.message),
             });
           }
         }
@@ -1328,6 +1333,7 @@ function extractIgMessages(entry: any): Array<{
             recipientId,
             text,
             mid,
+            choiceId:selectedFlowChoice(value.message),
           });
         }
       }
@@ -1552,7 +1558,8 @@ async function handleIncomingWebhookMessage(
   customerText: string,
   externalMsgId: string | null,
   channel: "whatsapp" | "instagram" | "facebook",
-  phoneId?: string
+  phoneId?: string,
+  selectedChoiceId?: string | null
 ) {
   const tenantId: string =
     channel === "whatsapp"
@@ -1777,6 +1784,17 @@ async function handleIncomingWebhookMessage(
   // The exclusive DB claim is ALWAYS required for webhook auto-replies.
   // The flow engine is an optional prepared message-only subset; any engine
   // error or OFF switch resolves to legacy AI BEFORE choosing the route.
+  // The durable engine is strictly isolated to the operator-selected
+  // Instagram account and defaults OFF. No direct send is made in this path:
+  // the atomic Outbox and an authenticated worker own actual provider calls.
+  if(channel==="instagram"){
+    const durable=await attemptDurableInstagram(sb,{
+      tenantId,accountId:String(account.id),conversationId:String(conv.id),
+      inboundId:inboundMessageId,eventId:externalMsgId,platform:channel,
+      selectedChoiceId
+    });
+    if(durable==="handled")return;
+  }
   const deliveryTracking=env("DELIVERY_TRACKING_V1_ENABLED")==="true";
   const outcome = await processExclusiveEvent({
     prepareFlow: () => prepareSimpleFlowReply(
@@ -2577,7 +2595,9 @@ Deno.serve(async (req) => {
               msgId,
               channel as
                 | "instagram"
-                | "facebook"
+                | "facebook",
+              undefined,
+              msg.choiceId
             );
 
             /* ── جلب بيانات المرسل (اسم + صورة) وحفظها ──
