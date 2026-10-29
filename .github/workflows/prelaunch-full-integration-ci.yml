@@ -101,6 +101,20 @@ jobs:
           psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028225000_flow_runtime_advance.sql
           psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-phase4-runtime-bootstrap.sql
           psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-phase4-runtime.test.sql
+      - name: Atomic durable Instagram button start and resume in isolated PG17
+        shell: bash
+        run: |
+          set -euo pipefail
+          createdb flow_button_review
+          export PGDATABASE=flow_button_review
+          sed '/^CREATE ROLE /d' tests/sql/fixtures/flow-live-shape-bootstrap.sql | psql -X -v ON_ERROR_STOP=1
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/fixtures/installed-flow-switches.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/fixtures/installed-flow-runtime.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-exclusive-claim-bootstrap.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028220000_webhook_exclusive_claim.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028225000_flow_runtime_advance.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/proposals/flow_durable_button_ingress.review.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-durable-button-ingress.test.sql
   staff-delivery-pg:
     runs-on: ubuntu-latest
     timeout-minutes: 18
