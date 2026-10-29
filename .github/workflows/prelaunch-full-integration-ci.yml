@@ -245,6 +245,7 @@ jobs:
           node --test tests/flow-durable-worker-disabled.test.mjs
           node --experimental-strip-types --test tests/flow-vault-cron-auth.test.ts
           node --experimental-strip-types --test tests/flow-worker-operator-release.test.ts
+          node --experimental-strip-types --test tests/flow-wake-eligibility.test.ts
           node --test tests/flow-live-controls.test.mjs
           node --experimental-strip-types --test tests/flow-simple-instagram-text.test.ts
           node --experimental-strip-types --test tests/flow-instant-condition.test.ts
