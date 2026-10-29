@@ -94,6 +94,34 @@ test("blank MID is marked uncertain in delivery journal and never charged",async
  assert.equal(f.snapshot().stored,0);
  assert.equal(f.snapshot().billed,0);
 });
+test("confirmed provider MID reaches outgoing storage exactly once, including on replay",async()=>{
+ const f=fixture({switchOn:true});
+ const stored:Array<{id:string;providerId:string}>=[];
+ const deps={...f.deps,
+  async send(){return {providerMessageId:"mid.real.instagram.123"};},
+  async persistSent(id:string,_text:string,providerId:string){
+   stored.push({id,providerId});return true;
+  }
+ };
+ assert.equal(await processExclusiveEvent(deps),"sent_and_billed");
+ assert.equal(await processExclusiveEvent(deps),"duplicate");
+ assert.deepEqual(stored,[{
+  id:"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",providerId:"mid.real.instagram.123"
+ }]);
+ assert.equal(f.snapshot().billed,1);
+});
+test("replaying a claimed webhook in parallel never repeats a provider MID or charge",async()=>{
+ const f=fixture({switchOn:true});
+ const replies:string[]=[];
+ const deps={...f.deps,
+  async send(){replies.push("accepted");return {providerMessageId:"mid.123"};}
+ };
+ const outcomes=await Promise.all(Array.from({length:10},()=>processExclusiveEvent(deps)));
+ assert.equal(outcomes.filter(x=>x==="sent_and_billed").length,1);
+ assert.equal(outcomes.filter(x=>x==="duplicate").length,9);
+ assert.equal(replies.length,1);
+ assert.equal(f.snapshot().billed,1);
+});
 test("safe flow subset accepts one trigger->message only",()=>{
  const doc={version:3,name:"x",nodes:[
   {id:"start",data:{kind:"trigger",platform:"instagram",triggerMode:"message"}},
