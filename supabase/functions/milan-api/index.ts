@@ -1780,7 +1780,7 @@ async function handleIncomingWebhookMessage(
   const deliveryTracking=env("DELIVERY_TRACKING_V1_ENABLED")==="true";
   const outcome = await processExclusiveEvent({
     prepareFlow: () => prepareSimpleFlowReply(
-      sb, tenantId, String(account.id), channel
+      sb, tenantId, String(account.id), channel, customerText
     ),
     claim: async (engineReady) => {
       const { data, error } = await sb.rpc("flow_claim_inbound", {

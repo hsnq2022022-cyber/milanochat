@@ -234,7 +234,7 @@ export async function handleFlowPublication(req:Request,
     return error("This flow uses unsupported runtime features",422);
    const caps=new Set<FlowCapability>(canary?
     (env("FLOW_ACTIVATION_CAPABILITIES").split(",").map(s=>s.trim()).filter(Boolean) as FlowCapability[]):
-    ["execution-engine","instagram","trigger:message","message:text"]);
+    ["execution-engine","instagram","trigger:message","message:text","condition"]);
    if(!publicationCanActivate(publication.document,scope.platform,caps,true))
     return error("This flow uses unsupported runtime features",422);
 
