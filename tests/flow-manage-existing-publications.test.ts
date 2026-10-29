@@ -45,3 +45,10 @@ test("immutable revisions restore only as separate validated local copies",()=>{
  assert.equal(parsed.edges.length,3);
  assert.equal(importFlow({version:3,nodes:[],edges:[]}),null);
 });
+
+test("active server publication is visible and account changes clear stale state",()=>{
+ assert.match(ui,/data-testid="flow-active-server-status"/);
+ assert.match(ui,/accountId&&activeServerFlow/);
+ assert.match(ui,/activeServerFlow\.flow_key\+" · v"\+activeServerFlow\.revision/);
+ assert.match(ui,/setCatalog\(\[\]\);setActiveServerFlow\(null\);setCatalogTruncated\(false\)/);
+});
