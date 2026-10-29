@@ -48,6 +48,16 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Production Pages must not publish an unverified Flow Builder bundle.
+      # Only local, isolated checks: no Supabase secrets or provider sends.
+      - name: Verify flow TypeScript and regression tests before publishing
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx tsc --noEmit -p tsconfig.flows.json
+          npm run test:flows
+          node --experimental-strip-types --test tests/flow-manage-existing-publications.test.ts
+
       # ✅ تحقق: هل ملف الشعار موجود فعلًا في public/؟
       - name: Verify logo.png exists
         run: |
