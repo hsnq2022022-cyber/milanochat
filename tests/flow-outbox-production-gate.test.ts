@@ -4,7 +4,8 @@ import {readFileSync} from "node:fs";
 import {canDispatchOutbox} from "../supabase/functions/flow-outbox-worker/productionGate.ts";
 const eligible={
  globalEnabled:true,tenantEnabled:true,testOnly:false,
- productionApproved:true,platform:"instagram",accountActive:true,
+ productionApproved:true,platform:"instagram",
+ accountId:"ig-owner-canary",canaryAccountId:"ig-owner-canary",accountActive:true,
  agentEnabled:true,autoReply:true,tenantActive:true,credits:3,
  revisionActive:true,humanTakeover:false
 } as const;
@@ -12,6 +13,7 @@ test("production operator approval permits only active Instagram revision",()=>{
  assert.equal(canDispatchOutbox(eligible),true);
  for(const [name,value] of [
   ["globalEnabled",false],["tenantEnabled",false],["productionApproved",false],
+  ["canaryAccountId","other"],["accountId","other"],["canaryAccountId",""],
   ["revisionActive",false],["accountActive",false],["agentEnabled",false],
   ["autoReply",false],["tenantActive",false],["humanTakeover",true],
   ["credits",0],["credits",-1],["credits",NaN],
@@ -36,6 +38,7 @@ test("worker reads server switches and exact revision, persists provider MID onc
  assert.match(worker,/\.eq\("revision",run\.publication_revision\)/);
  assert.match(worker,/\.eq\("is_active",true\)\.maybeSingle\(\)/);
  assert.match(worker,/account\.platform!==run\.platform/);
+ assert.match(worker,/canaryAccountId:env\("FLOW_DURABLE_CANARY_ACCOUNT_ID"\)/);
  assert.match(worker,/canDispatchOutbox\(/);
  assert.match(worker,/typeof providerId!=="string"\|\|!providerId\.trim\(\)/);
  assert.match(worker,/external_message_id:providerId/);

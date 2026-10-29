@@ -9,6 +9,8 @@ export function canDispatchOutbox(input:{
  testOnly:unknown;
  productionApproved:unknown;
  platform:unknown;
+ accountId:unknown;
+ canaryAccountId:unknown;
  accountActive:unknown;
  agentEnabled:unknown;
  autoReply:unknown;
@@ -26,5 +28,7 @@ export function canDispatchOutbox(input:{
  if(input.platform!=="instagram"&&input.platform!=="facebook"&&
     input.platform!=="whatsapp")return false;
  return input.testOnly===true||
-   (input.platform==="instagram"&&input.productionApproved===true);
+   (input.platform==="instagram"&&input.productionApproved===true&&
+    typeof input.accountId==="string"&&input.accountId.length>0&&
+    input.canaryAccountId===input.accountId);
 }
