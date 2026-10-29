@@ -191,6 +191,7 @@ export async function handleFlowPublication(req:Request,
      credit.data.credits_remaining>0,
     activePublication:(activated.data??[]).length===1,
     durableIngress:env("FLOW_DURABLE_INGRESS_ENABLED")==="true",
+    activationApproved:env("FLOW_DURABLE_ACTIVATION_READY")==="true",
     canaryMatched:env("FLOW_DURABLE_CANARY_ACCOUNT_ID")===scope.accountId,
     operatorReleased:env("FLOW_WORKERS_OPERATOR_RELEASE")==="production-canary-approved",
     schedulerEnabled:env("FLOW_DURABLE_SCHEDULER_ENABLED")==="true",
@@ -331,11 +332,18 @@ export async function handleFlowPublication(req:Request,
    // This prevents a customer from activating a graph that would fall back
    // to legacy AI or never wake up from its first delay.
    // Explicit operator gates remain independent of browser publication controls.
-   const durable=production&&scope.platform==="instagram"&&
+   const durableGraph=supportedDurableDocument(publication.document);
+   const buttonGraph=durableGraph&&publication.document.nodes.some(n=>n.data.kind==="question");
+   const durable=production&&scope.platform==="instagram"&&durableGraph&&
     env("FLOW_DURABLE_ACTIVATION_READY")==="true"&&
     env("FLOW_DURABLE_INGRESS_ENABLED")==="true"&&
     env("FLOW_DURABLE_CANARY_ACCOUNT_ID")===scope.accountId&&
-    supportedDurableDocument(publication.document);
+    env("FLOW_WORKERS_OPERATOR_RELEASE")==="production-canary-approved"&&
+    env("FLOW_OUTBOX_SEND_ENABLED")==="true"&&
+    env("FLOW_ATOMIC_CONSUME_READY")==="true"&&
+    env("FIELD_ENCRYPTION_KEY").length>0&&
+    (buttonGraph?env("FLOW_RICH_BUTTONS_ENABLED")==="true":
+     env("FLOW_DURABLE_SCHEDULER_ENABLED")==="true");
    if(!durable){
     if(simpleMessageFromDocument(publication.document,scope.platform)===null)
      return error("This flow uses unsupported runtime features",422);
