@@ -1,0 +1,51 @@
+name: PROTECTED MANUAL — flow-publication only
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_release:
+        description: "Type deploy-flow-publication-reviewed after separate production approval"
+        required: true
+        type: string
+        default: "NOT_APPROVED"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: protected-supabase-nmhefwvhoholcjrbbila
+  cancel-in-progress: false
+
+jobs:
+  deploy-flow-publication:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.confirm_release == 'deploy-flow-publication-reviewed' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: protected-supabase-flow-release
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      PROJECT_REF: nmhefwvhoholcjrbbila
+    steps:
+      - name: Checkout reviewed revision
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Confirm exact release scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "hsnq2022022-cyber/milanochat"
+          test "$GITHUB_REF" = "refs/heads/main"
+          test -n "$SUPABASE_ACCESS_TOKEN"
+          test -f supabase/functions/flow-publication/index.ts
+          echo "Manual release approved for flow-publication only"
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+      - name: Deploy only authenticated publication API
+        shell: bash
+        run: |
+          set -euo pipefail
+          supabase functions deploy flow-publication --project-ref "$PROJECT_REF"
