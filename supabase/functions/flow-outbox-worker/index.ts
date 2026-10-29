@@ -12,6 +12,7 @@ import {sendProviderMessage,decryptAccountToken,encryptMessageBody} from "./deli
 import {answerWithVerifiedKnowledge,openAIKnowledgeDependencies} from "./flowKnowledge.ts";
 import {executeOnce} from "./executeOnce.ts";
 import {canDispatchOutbox} from "./productionGate.ts";
+import {confirmedOutboxMid,matchesPreviouslyPersistedReply} from "./confirmedSettlement.ts";
 
 const env=(name:string)=>Deno.env.get(name)??"";
 const json=(body:unknown,status=200)=>new Response(JSON.stringify(body),
@@ -39,7 +40,7 @@ Deno.serve(async req=>{
  if(ge||g?.enabled!==true)return blocked();
  const {data:items,error:listError}=await sb.from("automation_flow_outbox")
   .select("id,tenant_id,run_id,delivery_status,effect_kind,payload,outgoing_message_id")
-  .eq("delivery_status","pending").in("effect_kind",["message","question"])
+  .in("delivery_status",["pending","charge_pending"]).in("effect_kind",["message","question"])
   .order("created_at",{ascending:true}).limit(10);
  if(listError)return json({error:"Outbox lookup failed"},503);
  const outcomes:Record<string,number>={};
@@ -124,6 +125,61 @@ Deno.serve(async req=>{
    if(websiteButtons && (env("FLOW_RICH_BUTTONS_ENABLED")!=="true" || account.platform!=="facebook")){
      report("blocked");continue;
    }
+   const persistAndBill=async(providerId:string):Promise<boolean>=>{
+     if(typeof providerId!=="string"||!providerId.trim())return false;
+     const encrypted=await encryptMessageBody(messageText,fieldKey);
+     const {error:insertError}=await sb.from("messages").insert({
+      id:effect.outgoing_message_id,tenant_id:tenant.id,
+      conversation_id:conversation.id,direction:"out",body_encrypted:encrypted,
+      kind:"answer",is_auto:true,wa_message_id:providerId,
+      external_message_id:providerId
+     });
+     if(insertError?.code==="23505"){
+      // Unique conflicts on a different provider MID must NEVER authorize
+      // a debit of the expected outgoing UUID.
+      const {data:prior,error:priorError}=await sb.from("messages")
+       .select("id,tenant_id,conversation_id,direction,wa_message_id,external_message_id,is_auto")
+       .eq("id",effect.outgoing_message_id).maybeSingle();
+      if(priorError||!matchesPreviouslyPersistedReply(prior,{
+       id:effect.outgoing_message_id,tenantId:tenant.id,
+       conversationId:conversation.id,providerMid:providerId
+      }))return false;
+     }else if(insertError){
+      console.error("[outbox] outgoing persisted failed",{code:insertError.code});
+      return false;
+     }
+     const {data:charge,error:chargeError}=await sb.rpc("consume_flow_reply",{
+      p_tenant_id:tenant.id,p_message_id:effect.outgoing_message_id
+     });
+     if(chargeError||typeof charge!=="number"||!(charge>=0||charge===-2)){
+      console.error("[outbox] charge pending",{
+       code:chargeError?.code??"credit_status",
+       tenantId:tenant.id,outboxId:effect.id,result:charge
+      });
+      return false;
+     }
+     const {data:settled,error:finalizeError}=await sb.from("automation_flow_outbox")
+      .update({delivery_status:"settled"}).eq("tenant_id",tenant.id)
+      .eq("id",effect.id).eq("delivery_status","charge_pending")
+      .select("id").maybeSingle();
+     if(finalizeError||!settled){
+      console.error("[outbox] settlement failed",{code:finalizeError?.code??"missing_transition"});
+      return false;
+     }
+     return true;
+   };
+   // A previous Meta 2xx cannot be re-sent. Recover an already confirmed
+   // journal entry by persisting and billing only, never using sendProviderMessage.
+   if(effect.delivery_status==="charge_pending"){
+    const {data:attempt,error:attemptError}=await sb
+     .from("automation_flow_delivery_attempts")
+     .select("status,provider_message_id")
+     .eq("tenant_id",effect.tenant_id).eq("outbox_id",effect.id).maybeSingle();
+    const mid=confirmedOutboxMid(effect,attempt);
+    if(attemptError||!mid){report("blocked");continue;}
+    report(await persistAndBill(mid)?"settled":"billing_pending");
+    continue;
+   }
    const token=account.platform==="whatsapp"?
     (env("WA_ACCESS_TOKEN")||env("WHATSAPP_ACCESS_TOKEN")):
     await decryptAccountToken(String(account.access_token_encrypted??""),fieldKey);
@@ -148,39 +204,8 @@ Deno.serve(async req=>{
      if(error){console.error("[outbox] finish error",{code:error.code});return false;}
      return data===true;
     },
-    persistAndBill:async(providerId)=>{
-     if(typeof providerId!=="string"||!providerId.trim())return false;
-     const encrypted=await encryptMessageBody(messageText,fieldKey);
-     const {error:insertError}=await sb.from("messages").insert({
-      id:effect.outgoing_message_id,tenant_id:tenant.id,
-      conversation_id:conversation.id,direction:"out",body_encrypted:encrypted,
-      kind:"answer",is_auto:true,wa_message_id:providerId,
-      external_message_id:providerId
-     });
-     if(insertError&&insertError.code!=="23505"){
-      console.error("[outbox] outgoing persisted failed",{code:insertError.code});
-      return false;
-     }
-     const {data:charge,error:chargeError}=await sb.rpc("consume_flow_reply",{
-      p_tenant_id:tenant.id,p_message_id:effect.outgoing_message_id
-     });
-     if(chargeError||typeof charge!=="number"||!(charge>=0||charge===-2)){
-      console.error("[outbox] charge pending",{
-       code:chargeError?.code??"credit_status",
-       tenantId:tenant.id,outboxId:effect.id,result:charge
-      });
-      return false;
-     }
-     const {data:settled,error:finalizeError}=await sb.from("automation_flow_outbox")
-      .update({delivery_status:"settled"}).eq("tenant_id",tenant.id)
-      .eq("id",effect.id).eq("delivery_status","charge_pending")
-      .select("id").maybeSingle();
-     if(finalizeError||!settled){
-      console.error("[outbox] settlement failed",{code:finalizeError?.code??"missing_transition"});
-      return false;
-     }
-     return true;
-    }
+
+    persistAndBill
    });
    report(res);
   }catch(err){
