@@ -22,3 +22,13 @@ const pub=await fetch(base+"/flow-publication",{
 });
 assert([401,403].includes(pub.status),"Publication endpoint should reject anonymous GET, received "+pub.status);
 console.log("PASS: live flow-publication rejected anonymous GET with "+pub.status);
+
+for(const fn of ["flow-runtime-worker","flow-outbox-worker"]){
+ const resp=await fetch(base+"/"+fn,{
+  method:"POST",redirect:"manual",signal:AbortSignal.timeout(15000),
+  headers:{"content-type":"application/json"},
+  body:JSON.stringify({mode:"tick"})
+ });
+ assert.equal(resp.status,401,fn+" must reject an anonymous tick");
+ console.log("PASS: "+fn+" rejects anonymous tick with HTTP 401");
+}
