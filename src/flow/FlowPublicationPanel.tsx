@@ -10,7 +10,7 @@ type PublishedFlow={flowKey:string;latestRevision:number};
 type ActiveFlow={flow_key:string;revision:number}|null;
 type ReadinessChecks={
  instagram:boolean;tenant:boolean;account:boolean;globalSwitch:boolean;
- tenantSwitch:boolean;credits:boolean;activeRevision:boolean;supportedCandidate:boolean;ingress:boolean;
+ tenantSwitch:boolean;credits:boolean;activeRevision:boolean;supportedCandidate:boolean;ingress:boolean;activation:boolean;
  canary:boolean;operatorRelease:boolean;outbox:boolean;atomicDebit:boolean;
  encryption:boolean;scheduler:boolean;buttons:boolean;
 };
@@ -25,6 +25,7 @@ const readinessLabels:Record<keyof ReadinessChecks,{ar:string;en:string}>={
  activeRevision:{ar:"وجود إصدار نشط لهذا التدفق",en:"Active revision for selected flow"},
  supportedCandidate:{ar:"الإصدار المحدد متوافق مع الأزرار أو التأخير",en:"Selected revision supports buttons or delay"},
  ingress:{ar:"استقبال التدفقات المتقدمة",en:"Durable ingress enabled"},
+ activation:{ar:"موافقة تفعيل التدفقات المتقدمة",en:"Advanced activation approval"},
  canary:{ar:"حصر التجربة بهذا الحساب",en:"Canary scoped to account"},
  operatorRelease:{ar:"موافقة تشغيل العمال",en:"Worker operator approval"},
  outbox:{ar:"إرسال Outbox",en:"Outbox sender enabled"},
