@@ -34,6 +34,7 @@ export default function FlowSimulator({
     variables:{message:"اشتراكات",first_name:"عميل"},visited:[],waiting:false,stepCount:0
   });
   const [input,setInput]=useState(""),[note,setNote]=useState("");
+  const [triggerMessage,setTriggerMessage]=useState("اشتراكات");
   const t=(key:Parameters<typeof flowText>[0])=>flowText(key,language);
   const getDoc=(id:string)=>id===flowId?doc:flows.find(f=>f.id===id)?.doc||null;
   const currentDoc=getDoc(sim.activeFlowId)||doc;
@@ -125,7 +126,7 @@ export default function FlowSimulator({
   },[doc,flowId,flows,onVisited]);
   const restart=()=>{
     setInput("");setNote("");
-    const vars={message:"اشتراكات",first_name:"عميل"};
+    const vars={message:triggerMessage,first_name:"عميل"};
     const start=doc.nodes.find(n=>n.data.kind==="trigger");
     const platform=start?.data.platform||"instagram";
     const initial:SimState={activeFlowId:flowId,at:null,history:[bubble("system","معاينة "+PLATFORM_LABELS[platform]+" — لا يجري إرسال رسائل فعلية")],variables:vars,visited:[],waiting:false,stepCount:0};
@@ -204,6 +205,17 @@ export default function FlowSimulator({
           <div><h2 className="font-semibold">{t("testFlow")}{currentDoc.name}</h2><p className="text-[11px] text-[#8B9E96]">{t("noMeta")}</p></div>
         </div><button aria-label={t("closePreview")} onClick={onClose}><X size={20}/></button>
       </header>
+      <div className="border-b border-[#275443] px-4 py-2" data-testid="flow-simulator-inbound-message">
+        <label className="flex flex-col gap-1 text-xs text-[#BED4C9]">
+          <span>{language==="en"?"Simulated incoming message":"رسالة البداية التجريبية"}</span>
+          <input aria-label={language==="en"?"Simulated incoming message":"رسالة البداية التجريبية"}
+           className="min-w-0 rounded-lg border border-[#275443] bg-[#0F2E24] px-3 py-2 text-sm text-white"
+           maxLength={500} value={triggerMessage} onChange={e=>setTriggerMessage(e.target.value)}/>
+        </label>
+        <p className="mt-1 text-[10px] text-[#8B9E96]">{language==="en"
+         ?"Click Restart below to apply the message locally; nothing is sent."
+         :"اضغط «إعادة» لتطبيق الرسالة داخل المحاكي فقط دون إرسالها."}</p>
+      </div>
       <div className="flex-1 space-y-3 overflow-y-auto bg-[#061A14] p-4">
         {sim.history.map(m=><div key={m.id} className={"max-w-[90%] rounded-2xl px-3 py-2.5 text-sm "+(m.side==="user"?"mr-auto bg-[#235740]":m.side==="bot"?"ml-auto bg-[#173D30]":"mx-auto bg-[#25382D] text-center text-xs text-[#C7D5C9]")}>
           {m.image&&<img className="mb-2 max-h-52 w-full rounded-xl object-contain" src={m.image} alt="صورة الرسالة"/>}
