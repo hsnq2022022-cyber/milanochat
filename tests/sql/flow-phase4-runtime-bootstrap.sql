@@ -1,4 +1,8 @@
 \set ON_ERROR_STOP on
+-- Production-approved flag is installed by a separate additive migration on live.
+-- Reconstruct only in isolated disposable PostgreSQL test schema.
+ALTER TABLE public.automation_flow_tenant_switches
+ ADD COLUMN production_approved boolean NOT NULL DEFAULT false;
 -- Fake tenant A, active flow, receipt, and sleeping run in disposable PG.
 INSERT INTO public.automation_flow_publications(
  tenant_id,flow_key,revision,channel_account_id,platform,document,published_by)
