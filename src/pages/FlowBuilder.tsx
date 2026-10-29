@@ -121,6 +121,20 @@ function Editor(){
       window.setTimeout(()=>instance.fitView({padding:.24,duration:350}),60);
     }catch{setNotice("الملف غير صالح أو لا يتوافق مع صيغة المحرر.");}
   };
+  const importPublishedRevision=(raw:unknown):boolean=>{
+    if(protectStoredLibrary){
+      setNotice("الحفظ المحلي متوقف لحماية بيانات المكتبة. صدّر نسخة احتياطية وأصلح بيانات التخزين قبل الاستيراد.");
+      return false;
+    }
+    const parsed=importFlow(raw);
+    if(!parsed)return false;
+    const newId=store().createFlow(parsed.name,true);
+    if(!newId){setNotice("وصلت إلى الحد الأقصى للتدفقات المحلية (30).");return false;}
+    store().replace(parsed);
+    setNotice("تم استيراد الإصدار المنشور كنسخة محلية جديدة دون تغيير التدفق الأصلي.");
+    window.setTimeout(()=>instance.fitView({padding:.24,duration:350}),60);
+    return true;
+  };
   const validConnection=useCallback((c:Connection|Edge)=>canConnect(c as Connection,useFlowStore.getState().doc),[]);
   const reconnect=useCallback((old:FlowEdge,c:Connection)=>{
     if(!canConnect(c,useFlowStore.getState().doc,old.id)){reconnectOk.current=false;return;}
@@ -246,7 +260,7 @@ function Editor(){
       </div>}
     </header>
     {CLOUD_DRAFT_UI_ENABLED&&showCloudDrafts&&<CloudDraftPanel language={language} onClose={()=>setShowCloudDrafts(false)}/>}
-    {PUBLICATION_UI_ENABLED&&showPublications&&<FlowPublicationPanel key={activeFlowId} flowKey={activeFlowId} document={doc} language={language} onClose={()=>setShowPublications(false)}/>}
+    {PUBLICATION_UI_ENABLED&&showPublications&&<FlowPublicationPanel key={activeFlowId} flowKey={activeFlowId} document={doc} language={language} onImportRevision={importPublishedRevision} onClose={()=>setShowPublications(false)}/>}
     {recovery.messages.length>0&&<div role="alert" className="border-b border-[#E5B54B] bg-[#2C2414] px-4 py-3 text-xs text-[#F9E3A2]">
       <strong>تقرير استعادة التدفقات: </strong>{recovery.messages.join(" ")} تم استرجاع {recovery.recovered} وتجاهل {recovery.skipped}.
       {protectStoredLibrary&&<span className="mr-2 font-bold">الحفظ التلقائي متوقف لحماية بيانات المكتبة الأصلية؛ استخدم «تصدير» قبل تأكيد الحفظ اليدوي.</span>}
