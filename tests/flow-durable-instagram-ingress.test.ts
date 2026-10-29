@@ -12,7 +12,7 @@ const id={tenant:"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
 const doc={
  version:3,name:"Interactive Instagram",nodes:[
   {id:"start",data:{kind:"trigger",platform:"instagram",triggerMode:"message"}},
-  {id:"choose",data:{kind:"question",inputMode:"buttons",text:"اختر",options:[
+  {id:"choose",data:{kind:"question",inputMode:"buttons",text:"اختر",image:"",contentBlocks:[],options:[
    {id:"prices",label:"الأسعار"},{id:"support",label:"المساعدة"}]}},
   {id:"yes",data:{kind:"message",text:"هذه الأسعار",image:"",options:[],contentBlocks:[]}},
   {id:"no",data:{kind:"message",text:"تواصل معنا",image:"",options:[],contentBlocks:[]}}
