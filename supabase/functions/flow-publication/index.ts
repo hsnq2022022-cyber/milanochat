@@ -10,6 +10,7 @@ import {
 } from "../../../src/flow/serverPublicationValidation.ts";
 import type {FlowCapability} from "../../../src/flow/publicationGate.ts";
 import {simpleMessageFromDocument} from "../milan-api/flowPrepareMessage.ts";
+import {supportedDurableDocument} from "../milan-api/flowDurableIngress.ts";
 
 const env=(k:string)=>Deno.env.get(k)??"";
 // Only the existing production GitHub Pages origin. Never reflect Origin.
@@ -227,16 +228,25 @@ export async function handleFlowPublication(req:Request,
     .eq("revision",rev).maybeSingle();
    if(publicationError)return error("Publication lookup unavailable",503);
    if(!publication)return error("Publication revision not found",404);
-   // Deployed milan-api currently supports exactly one trigger(message)
-   // followed by one plain text message, no rich actions/side effects.
-   // Refuse every broader graph until its actual sender has passed live CI.
-   if(simpleMessageFromDocument(publication.document,scope.platform)===null)
-    return error("This flow uses unsupported runtime features",422);
-   const caps=new Set<FlowCapability>(canary?
-    (env("FLOW_ACTIVATION_CAPABILITIES").split(",").map(s=>s.trim()).filter(Boolean) as FlowCapability[]):
-    ["execution-engine","instagram","trigger:message","message:text","condition"]);
-   if(!publicationCanActivate(publication.document,scope.platform,caps,true))
-    return error("This flow uses unsupported runtime features",422);
+   // Advanced activation is independently gated by the operator AFTER the
+   // durable ingress and sender have passed real provider integration.
+   // This prevents a customer from activating a graph that would fall back
+   // to legacy AI or never wake up from its first delay.
+   // Explicit operator gates remain independent of browser publication controls.
+   const durable=production&&scope.platform==="instagram"&&
+    env("FLOW_DURABLE_ACTIVATION_READY")==="true"&&
+    env("FLOW_DURABLE_INGRESS_ENABLED")==="true"&&
+    env("FLOW_DURABLE_CANARY_ACCOUNT_ID")===scope.accountId&&
+    supportedDurableDocument(publication.document);
+   if(!durable){
+    if(simpleMessageFromDocument(publication.document,scope.platform)===null)
+     return error("This flow uses unsupported runtime features",422);
+    const caps=new Set<FlowCapability>(canary?
+     (env("FLOW_ACTIVATION_CAPABILITIES").split(",").map(s=>s.trim()).filter(Boolean) as FlowCapability[]):
+     ["execution-engine","instagram","trigger:message","message:text","condition"]);
+    if(!publicationCanActivate(publication.document,scope.platform,caps,true))
+     return error("This flow uses unsupported runtime features",422);
+   }
 
    const {data:enabled,error:dbError}=await client.rpc("flow_activate_revision",{
     p_tenant_id:scope.tenantId,p_account_id:scope.accountId,
