@@ -136,7 +136,7 @@ After completing a task, report:
 
 Agents live in `.claude/agents/`: `task-haiku` (model: haiku), `task-sonnet` (model: sonnet), `task-opus` (model: opus). Section 2 stays the classification guide; this section is how to act on it.
 
-**Do not dispatch** non-sensitive work when the current session can finish the task in a few tool calls. An agent costs a cold start and its own context. This shortcut never applies to sensitive work: sensitive work is ALWAYS routed to `task-opus`, regardless of apparent simplicity, size, or number of files, and this rule takes absolute priority over the shortcut. The current session, Haiku, and Sonnet must never bypass it.
+**Do not dispatch** non-sensitive work when the current session's own model already matches the task's tier (section 2) and it can finish the task in a few tool calls; an agent costs a cold start and its own context. When the task's tier differs from the current session's model (for example a simple task in a Sonnet session, or a complex task in a Sonnet session), dispatch to the matching agent. This shortcut never applies to sensitive work: sensitive work is ALWAYS routed to `task-opus`, regardless of apparent simplicity, size, or number of files, and this rule takes absolute priority over the shortcut. The current session, Haiku, and Sonnet must never bypass it.
 
 **Routing (by actual difficulty per section 2, not cheapest by default):** `task-haiku` for simple tasks, `task-sonnet` for moderate tasks and as the default for ordinary development and normal bug fixing, `task-opus` for difficult, advanced, and professional tasks and for every sensitive task.
 
