@@ -1,155 +1,218 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="ar" dir="rtl">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>سياسة الخصوصية | MilanoChat</title>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: 'Segoe UI', Tahoma, Arial, sans-serif;
-            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-            color: #eee;
-            line-height: 1.8;
-            min-height: 100vh;
-        }
-        .container {
-            max-width: 800px;
-            margin: 0 auto;
-            padding: 40px 20px;
-        }
-        .header {
-            text-align: center;
-            padding: 40px 0;
-            border-bottom: 2px solid #0f3460;
-            margin-bottom: 40px;
-        }
-        .header h1 {
-            color: #e94560;
-            font-size: 2.5em;
-            margin-bottom: 10px;
-        }
-        .header p {
-            color: #888;
-            font-size: 1.1em;
-        }
-        .section {
-            background: rgba(255,255,255,0.05);
-            border-radius: 12px;
-            padding: 30px;
-            margin-bottom: 25px;
-            border-right: 4px solid #e94560;
-        }
-        .section h2 {
-            color: #e94560;
-            font-size: 1.4em;
-            margin-bottom: 15px;
-        }
-        .section ul {
-            padding-right: 20px;
-            margin-top: 10px;
-        }
-        .section li {
-            margin-bottom: 8px;
-        }
-        .highlight {
-            background: rgba(233, 69, 96, 0.1);
-            padding: 15px;
-            border-radius: 8px;
-            margin: 15px 0;
-            border-right: 3px solid #e94560;
-        }
-        .footer {
-            text-align: center;
-            padding: 30px;
-            color: #666;
-            border-top: 1px solid #333;
-            margin-top: 40px;
-        }
-        a { color: #e94560; text-decoration: none; }
-        a:hover { text-decoration: underline; }
-        .back-btn {
-            display: inline-block;
-            margin-top: 20px;
-            padding: 12px 30px;
-            background: #e94560;
-            color: white;
-            border-radius: 25px;
-            text-decoration: none;
-            transition: 0.3s;
-        }
-        .back-btn:hover {
-            background: #c73650;
-            transform: translateY(-2px);
-        }
-        @media (max-width: 600px) {
-            .header h1 { font-size: 1.8em; }
-            .section { padding: 20px; }
-        }
-    </style>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="index,follow">
+  <meta name="description" content="سياسة الخصوصية لمنصة إدارة سوشيال: البيانات التي نعالجها، استخدام تكاملات Meta والذكاء الاصطناعي، الحماية، الاحتفاظ، وحقوق طلب الحذف.">
+  <title>سياسة الخصوصية | إدارة سوشيال</title>
+  <style>
+    :root{color-scheme:dark;--bg:#061a14;--panel:#0b241c;--panel2:#0f2e24;--line:#214536;--text:#f4f7f5;--muted:#a7b8b0;--green:#3dd189;--gold:#e5b54b;--link:#70e4ad}
+    *{box-sizing:border-box}
+    html{scroll-behavior:smooth;background:var(--bg)}
+    body{margin:0;background:radial-gradient(900px 500px at 85% -10%,#153c2d 0%,transparent 65%),var(--bg);color:var(--text);font-family:Tahoma,"Segoe UI",Arial,sans-serif;line-height:1.95}
+    a{color:var(--link);text-decoration:none}a:hover{text-decoration:underline}
+    .wrap{width:min(960px,calc(100% - 32px));margin:0 auto;padding:34px 0 60px}
+    header{text-align:center;padding:28px 18px 32px;border-bottom:1px solid var(--line);margin-bottom:26px}
+    .brand{display:inline-flex;align-items:center;gap:9px;color:var(--text);font-weight:800;font-size:15px;letter-spacing:.2px}
+    .mark{width:10px;height:10px;border-radius:3px;background:var(--green);box-shadow:0 0 22px #3dd18988}
+    h1{font-size:clamp(29px,5vw,42px);line-height:1.35;margin:18px 0 5px;color:var(--text)}
+    .sub{color:var(--muted);margin:0}
+    .meta{display:flex;justify-content:center;flex-wrap:wrap;gap:8px 18px;color:var(--muted);font-size:13px;margin-top:15px}
+    .lang{display:flex;justify-content:center;gap:10px;margin:22px 0 5px}
+    .lang a{border:1px solid var(--line);background:var(--panel);padding:7px 14px;border-radius:999px;font-size:13px}
+    .intro{background:linear-gradient(120deg,#0d3023,#0b241c);border:1px solid #28553f;border-radius:18px;padding:20px 22px;margin:24px 0}
+    .intro strong{color:var(--green)}
+    .section{background:rgba(11,36,28,.88);border:1px solid var(--line);border-radius:16px;padding:22px 24px;margin:14px 0}
+    h2{font-size:19px;color:var(--green);margin:0 0 10px}
+    h3{font-size:15px;color:var(--gold);margin:18px 0 5px}
+    p{margin:7px 0}
+    ul{padding-inline-start:22px;margin:8px 0}
+    li{margin:5px 0}
+    .small{font-size:13px;color:var(--muted)}
+    .linkbox{border:1px dashed #47745c;background:var(--panel2);border-radius:12px;padding:14px 16px;margin-top:13px}
+    .english{direction:ltr;text-align:left;font-family:Arial,"Segoe UI",sans-serif;margin-top:28px}
+    .english ul{padding-left:22px;padding-right:0}
+    footer{text-align:center;color:var(--muted);font-size:12px;padding:26px 10px 0}
+    @media(max-width:600px){.wrap{width:min(100% - 22px,960px);padding-top:18px}.section{padding:18px 16px}.intro{padding:17px}}
+  </style>
 </head>
 <body>
-    <div class="container">
-        <div class="header">
-            <h1>🔒 سياسة الخصوصية</h1>
-            <p>MilanoChat — آخر تحديث: سبتمبر 2025</p>
-        </div>
+  <main class="wrap">
+    <header id="top">
+      <a class="brand" href="./" aria-label="إدارة سوشيال"><span class="mark"></span><span>إدارة سوشيال</span></a>
+      <h1>سياسة الخصوصية</h1>
+      <p class="sub">كيف نتعامل مع بيانات أصحاب الأنشطة وعملائهم عند استخدام المنصة.</p>
+      <div class="meta"><span>آخر تحديث: 4 نوفمبر 2026</span><span>تاريخ السريان: 4 نوفمبر 2026</span></div>
+      <nav class="lang" aria-label="اختيار اللغة"><a href="#arabic">العربية</a><a href="#english">English</a></nav>
+    </header>
 
-        <div class="section">
-            <h2>📋 مقدمة</h2>
-            <p>مرحباً بك في <strong>MilanoChat</strong>. نحن نحترم خصوصيتك ونلتزم بحماية بياناتك الشخصية. توضح هذه السياسة كيفية جمعنا واستخدامنا وحمايتنا لمعلوماتك عند استخدام موقعنا.</p>
-        </div>
+    <section class="intro">
+      <strong>ملخص مهم</strong>
+      <p>إدارة سوشيال منصة لإدارة محادثات العملاء ومساعدة الأنشطة التجارية على الرد عبر القنوات التي يربطها صاحب النشاط. نعالج البيانات لتشغيل الخدمة، وإظهار المحادثات، وإنتاج الردود بمساعدة الذكاء الاصطناعي، وتأمين الحسابات. لا نبيع بيانات المستخدمين ولا نستخدم بيانات Meta لإنشاء ملفات إعلانية.</p>
+    </section>
 
-        <div class="section">
-            <h2>📊 المعلومات التي نجمعها</h2>
-            <ul>
-                <li><strong>معلومات التسجيل:</strong> الاسم، البريد الإلكتروني، كلمة المرور</li>
-                <li><strong>معلومات الاستخدام:</strong> سجل الدردشة، تفضيلاتك، إعدادات الحساب</li>
-                <li><strong>معلومات تقنية:</strong> عنوان IP، نوع المتصفح، الجهاز المستخدم</li>
-                <li><strong>ملفات تعريف الارتباط (Cookies):</strong> لتحسين تجربتك</li>
-            </ul>
-        </div>
+    <div id="arabic">
+      <section class="section">
+        <h2>1. من نحن ونطاق هذه السياسة</h2>
+        <p>تشير كلمات «نحن» و«المنصة» إلى خدمة <strong>إدارة سوشيال</strong> وموقعها ولوحة التحكم وأدوات المحادثة والربط التابعة لها. تشرح هذه السياسة البيانات التي قد نجمعها أو نستقبلها أو نخزنها أو نعالجها عند زيارة الموقع أو إنشاء حساب أو ربط قناة أو استخدام أدوات المنصة.</p>
+        <p>المنصة موجهة إلى أصحاب الأنشطة التجارية الذين يستخدمونها لإدارة التواصل مع عملائهم. عندما يعالج النظام رسائل عملاء النشاط نيابةً عن صاحب الحساب، يكون صاحب النشاط مسؤولاً عن تحديد الغرض من التواصل وعن امتلاكه الأساس النظامي اللازم لجمع الرسائل واستخدامها، وعن إبلاغ عملائه عند الحاجة. وتعمل إدارة سوشيال على معالجة تلك البيانات لتقديم الخدمة وفق إعدادات وتعليمات صاحب النشاط.</p>
+      </section>
 
-        <div class="section">
-            <h2>🎯 كيف نستخدم معلوماتك</h2>
-            <ul>
-                <li>توفير خدمة الدردشة والتواصل</li>
-                <li>تحسين وتطوير المنصة</li>
-                <li>ضمان الأمان ومنع الاحتيال</li>
-                <li>التواصل معك بشأن التحديثات</li>
-            </ul>
-        </div>
-        <div class="section">
-            <h2>🔐 حماية البيانات</h2>
-            <p>نستخدم تقنيات تشفير متقدمة (SSL/TLS) لحماية بياناتك. يتم تخزين المعلومات على خوادم آمنة مع قيود وصول صارمة.</p>
-            <div class="highlight">
-                <strong>⚠️ ملاحظة:</strong> لا نشارك بياناتك مع أطراف ثالثة إلا إذا كان ذلك مطلوباً قانونياً أو بموافقتك الصريحة.
-            </div>
-        </div>
+      <section class="section">
+        <h2>2. البيانات التي قد نعالجها</h2>
+        <ul>
+          <li><strong>بيانات الحساب:</strong> البريد الإلكتروني ومعرّف الحساب وبيانات المصادقة، واسم النشاط أو مساحة العمل، وإعدادات الوكيل واللغة والخطة والرصيد.</li>
+          <li><strong>بيانات القنوات المرتبطة:</strong> اسم الحساب أو الصفحة، اسم المستخدم، المعرّفات الرقمية للحسابات والصفحات، صورة الملف الشخصي أو الصورة الرمزية عند إتاحتها، الصلاحيات الممنوحة، حالة الربط، مواعيد انتهاء صلاحية الوصول، ورموز الوصول اللازمة للربط. تُخزّن رموز الوصول التي تتطلبها الوظائف بصيغة مشفّرة. لا نطلب كلمة مرور حسابك على Meta.</li>
+          <li><strong>بيانات المحادثات:</strong> نصوص الرسائل الواردة والصادرة، وقت الرسالة، معرّفات الرسائل لدى المنصة الأصلية، القناة المستخدمة، ومعرّفات المراسِل مثل رقم الهاتف أو اسم المستخدم، وقد تشمل اسم العميل أو صورته إذا أتاحتها القناة.</li>
+          <li><strong>بيانات المعرفة والمحتوى:</strong> النصوص أو الملفات أو روابط المواقع أو بيانات المنتجات التي يضيفها صاحب النشاط إلى قاعدة المعرفة، والتعليمات وإعدادات الردود التي يكتبها.</li>
+          <li><strong>بيانات أداة المحادثة بالموقع:</strong> معرّف جلسة الزائر، الرسائل التي يرسلها إلى الأداة، وقد تتم معالجة عنوان IP ومعلومات المتصفح والجهاز مثل نوع المتصفح ووكيل المستخدم لأغراض التشغيل والحماية والتشخيص.</li>
+          <li><strong>بيانات المعاملات:</strong> عند إتاحة الشحن أو الدفع، قد نعالج مرجع الفاتورة أو الطلب، والمبلغ والعملة وحالة الدفع ومزوّد الدفع ومعرّف العملية وأحداث تأكيد الدفع. لا نطلب منك إرسال كلمة مرور مصرفية أو رمز تحقق للبطاقة عبر المحادثات.</li>
+          <li><strong>بيانات تقنية وتشغيلية:</strong> سجلات الأخطاء والطلبات، أوقات الاستخدام، حالة المزامنة، ومعلومات لازمة لاكتشاف إساءة الاستخدام وحماية الخدمة.</li>
+        </ul>
+        <p class="small">تختلف البيانات المعالجة بحسب القنوات والميزات التي يفعّلها صاحب النشاط؛ ولا يلزم أن تُجمع كل الفئات المذكورة في كل استخدام.</p>
+      </section>
 
-        <div class="section">
-            <h2>👤 حقوقك</h2>
-            <ul>
-                <li>الوصول إلى بياناتك الشخصية</li>
-                <li>تصحيح أو حذف معلوماتك</li>
-                <li>تصدير بياناتك</li>
-                <li>إلغاء الاشتراك في الرسائل الترويجية</li>
-            </ul>
-        </div>
+      <section class="section">
+        <h2>3. من أين نحصل على البيانات</h2>
+        <ul>
+          <li>منك مباشرةً عند التسجيل أو إعداد مساحة العمل أو إضافة مصادر المعرفة أو التواصل مع الدعم.</li>
+          <li>من Meta عند ربط حساب أو صفحة ومنح الأذونات المطلوبة، ومن خلال واجهاتها وإشعارات Webhooks المرتبطة بالميزات المفعّلة.</li>
+          <li>من قنوات المراسلة التي يربطها صاحب النشاط، ومن الرسائل التي يرسلها العملاء إلى تلك القنوات.</li>
+          <li>من أدوات الموقع عندما يتفاعل الزائر مع أداة المحادثة.</li>
+          <li>من مزوّد الدفع عند استخدام ميزة دفع متاحة، ومن Salla عند تفعيل تكامل المتجر ومزامنة بيانات المنتجات.</li>
+        </ul>
+      </section>
 
-        <div class="section">
-            <h2>📞 التواصل</h2>
-            <p>لأي استفسار حول سياسة الخصوصية، يمكنك التواصل معنا عبر:</p>
-            <ul>
-                <li>📧 البريد الإلكتروني: <a href="mailto:privacy@milanochat.com">privacy@milanochat.com</a></li>
-                <li>🌐 الموقع: <a href="https://hsnq2022022-cyber.github.io/milanochat/">MilanoChat</a></li>
-            </ul>
-        </div>
+      <section class="section">
+        <h2>4. لماذا نستخدم البيانات</h2>
+        <ul>
+          <li>إنشاء الحساب وإدارته وتقديم وظائف لوحة التحكم.</li>
+          <li>ربط حسابات وقنوات النشاط وإظهار بياناتها الأساسية واستقبال الرسائل وإرسال الردود التي يطلبها صاحب النشاط.</li>
+          <li>عرض المحادثات وسجل الرسائل، وتسهيل تحويل المحادثة إلى موظف بشري عند تفعيل ذلك.</li>
+          <li>استخدام نص الرسالة والسياق أو المعلومات ذات الصلة من قاعدة معرفة النشاط لإنتاج رد آلي مناسب بواسطة مزوّد الذكاء الاصطناعي المضبوط للخدمة.</li>
+          <li>حفظ مصادر المعرفة ومزامنة معلومات المنتجات عند تفعيل تكامل Salla.</li>
+          <li>إدارة الرصيد والفواتير والمدفوعات عند إتاحة هذه الوظائف.</li>
+          <li>حماية المنصة، منع الاحتيال والإساءة، حل الأعطال، وتحسين موثوقية الخدمة.</li>
+          <li>الرد على طلبات الدعم والخصوصية والالتزامات القانونية.</li>
+        </ul>
+      </section>
 
-        <div class="footer">
-            <p>© 2025 MilanoChat. جميع الحقوق محفوظة.</p>
-            <a href="https://hsnq2022022-cyber.github.io/milanochat/#top" class="back-btn">← العودة للموقع</a>
+      <section class="section">
+        <h2>5. تكامل Meta وبيانات المنصة</h2>
+        <p>عند ربط Instagram أو Facebook أو أي منتج من منتجات Meta تدعمه المنصة، نعالج فقط البيانات والصلاحيات اللازمة للميزة التي اختارها صاحب النشاط ومنحها. وقد تشمل بيانات الحساب أو الصفحة ومعرّفاتها ومعلومات الملف الشخصي والرسائل والبيانات الفنية المرتبطة بوصول الرسائل وإرسال الردود.</p>
+        <p>نستخدم هذه البيانات لتشغيل الربط وعرض المحادثات وإرسال الردود التي يهيئها صاحب النشاط. لا نبيع بيانات Meta، ولا نستخدمها لبناء ملفات إعلانية أو لتوجيه إعلانات شخصية. ولا نستخدم بيانات Meta لتدريب نماذج ذكاء اصطناعي عامة نملكها. وعند تشغيل الردود الذكية، قد يُرسل نص الرسالة والسياق الضروري إلى مزوّد الذكاء الاصطناعي المحدد في إعدادات الخدمة لمعالجة الطلب وإرجاع الرد فقط.</p>
+        <p>تظل معالجة Meta خاضعة أيضاً لشروط وسياسات Meta. ويمكن لصاحب النشاط فصل الحساب من لوحة التحكم أو إلغاء أذونات التطبيق من إعدادات حسابه لدى Meta. فصل الحساب داخل المنصة يوقف الربط ويحذف رمز الوصول المشفّر من سجل الحساب المرتبط، لكنه لا يعني وحده حذف سجل المحادثات التاريخي؛ لطلب الحذف الكامل اتبع <a href="data-deletion.html">تعليمات حذف البيانات</a>.</p>
+      </section>
+
+      <section class="section">
+        <h2>6. الذكاء الاصطناعي ومزوّدو الخدمات</h2>
+        <p>تعتمد بعض الوظائف على مزوّد نموذج ذكاء اصطناعي، وقد يتغير المزوّد بحسب إعدادات التشغيل؛ ويشمل ذلك Google Gemini أو OpenAI عند ضبطهما. نرسل إلى المزوّد النص والسياق اللازمين لتنفيذ طلب إنشاء الرد أو معالجة المعرفة. لا نرسل إليه كلمة مرور حساب Meta أو رموز الوصول الخاصة بالقنوات لغرض إنشاء الرد.</p>
+        <p>قد نستعين بمزوّدين لتشغيل الاستضافة وقاعدة البيانات والمصادقة والرسائل والمدفوعات، ومنهم Supabase وMeta وGoogle أو OpenAI وSalla ومزوّد الدفع الذي يكون مفعّلاً. يحصل كل مزوّد على البيانات اللازمة لأداء خدمته فقط، وتخضع معالجته لشروطه وسياساته. لا نسمح لمزوّدي الخدمة باستخدام البيانات خارج تقديم الخدمة أو الالتزامات المسموح بها بموجب الاتفاقات والسياسات المنطبقة.</p>
+        <p>تُستضاف قاعدة بيانات المشروع الحالية على بنية Supabase في منطقة خارج العراق؛ وقد تتم معالجة بعض البيانات أو نقلها عبر دول أخرى بحسب مواقع مزوّدي الخدمات وبنيتهم التحتية.</p>
+      </section>
+
+      <section class="section">
+        <h2>7. مشاركة البيانات</h2>
+        <p>لا نبيع البيانات الشخصية. ولا نشاركها إلا بالقدر اللازم في الحالات التالية: مع القنوات والمنصات التي يختار صاحب النشاط ربطها لإتمام الرسائل؛ مع مزوّدي الاستضافة والذكاء الاصطناعي والدفع والتكاملات لتشغيل الخدمة؛ مع صاحب النشاط وفريقه المخوّل لإدارة محادثات عملائه؛ أو عندما يوجب القانون ذلك أو يلزم لحماية الحقوق والأمن ومنع الاحتيال.</p>
+      </section>
+
+      <section class="section">
+        <h2>8. الاحتفاظ بالبيانات</h2>
+        <p>نحتفظ بالبيانات ما دامت لازمة لتقديم الخدمة وإدارة الحساب والوفاء بالالتزامات التشغيلية والقانونية. وعند إغلاق الحساب أو استلام طلب حذف صحيح، نراجع البيانات المرتبطة ونحذف أو نزيل ما يمكن ربطه بصاحب الطلب من الأنظمة النشطة، ما لم يلزم الاحتفاظ بجزء منها لأسباب قانونية أو أمنية أو لتسوية معاملة. وقد تبقى نسخ احتياطية لفترة محدودة وفق دورة النسخ الاحتياطي لدى مزوّد الاستضافة ثم تُزال وفق آلية تلك النسخ.</p>
+        <p>قد نحتفظ ببيانات مالية أو سجلات معاملات بالقدر الذي تفرضه القوانين أو متطلبات المحاسبة ومنع الاحتيال. كما أن حذف بيانات عميل نهائي من محادثة تجارية قد يتطلب التنسيق مع صاحب النشاط الذي يدير تلك القناة.</p>
+      </section>
+
+      <section class="section">
+        <h2>9. حماية البيانات</h2>
+        <p>نستخدم تدابير تقنية وتنظيمية مناسبة، تشمل ضوابط الوصول وعزل بيانات مساحات العمل بحسب الصلاحيات، وتشفير حقلي باستخدام AES-GCM لبعض البيانات الحساسة المخزنة مثل محتوى الرسائل ومعرّفات الاتصال ورموز الوصول. ونقيّد الوصول إلى أسرار التكامل ومفاتيح التشفير على بيئة الخادم. لا توجد وسيلة نقل أو تخزين آمنة بصورة مطلقة، لذلك لا يمكن ضمان انعدام المخاطر تماماً.</p>
+      </section>
+
+      <section class="section">
+        <h2>10. حقوقك وخياراتك</h2>
+        <p>بحسب القوانين السارية والظروف التي تنطبق عليك، يمكنك طلب معرفة البيانات المرتبطة بك، أو الوصول إليها، أو تصحيحها، أو حذفها، أو الاعتراض على بعض أوجه معالجتها، أو سحب موافقتك عندما تكون الموافقة هي الأساس. كما يمكنك فصل القنوات المرتبطة من لوحة التحكم أو إلغاء أذونات التطبيق من المنصة الأصلية.</p>
+        <div class="linkbox">
+          <strong>لطلب حذف البيانات أو الاستفسار عن الخصوصية:</strong>
+          <p><a href="data-deletion.html">افتح صفحة تعليمات حذف البيانات</a> أو راسلنا على <a href="mailto:hsnq2022@gmail.com">hsnq2022@gmail.com</a>.</p>
         </div>
+      </section>
+
+      <section class="section">
+        <h2>11. مسؤولية صاحب النشاط</h2>
+        <p>صاحب النشاط مسؤول عن مشروعية إدخال بيانات عملائه إلى المنصة، وتوفير الإشعارات أو الحصول على الموافقات التي يطلبها القانون، وتحديد المعلومات التي يضيفها إلى قاعدة المعرفة، وضبط صلاحيات أعضاء فريقه، وعدم إدخال كلمات مرور أو بيانات بطاقات أو معلومات شديدة الحساسية لا يحتاجها تشغيل الخدمة.</p>
+      </section>
+
+      <section class="section">
+        <h2>12. التغييرات والتواصل</h2>
+        <p>قد نحدّث هذه السياسة عند تغيير وظائف المنصة أو المزوّدين أو المتطلبات القانونية. سننشر النسخة الأحدث في هذه الصفحة مع تعديل تاريخ التحديث. إذا كان التغيير جوهرياً، سنسعى إلى إبلاغ المستخدمين عبر وسيلة مناسبة قبل تطبيقه متى كان ذلك مطلوباً.</p>
+        <p>لأي استفسار أو طلب متعلق بالخصوصية، تواصل معنا عبر البريد: <a href="mailto:hsnq2022@gmail.com">hsnq2022@gmail.com</a>.</p>
+      </section>
     </div>
+
+    <div id="english" class="english" lang="en" dir="ltr">
+      <section class="section">
+        <h2>Privacy Policy — English</h2>
+        <p><strong>Service:</strong> إدارة سوشيال (Edarat Social). <strong>Last updated / Effective date:</strong> 4 November 2026.</p>
+        <p>This policy applies to the إدارة سوشيال website, dashboard, connected-channel tools and chat widgets. The service helps businesses manage customer conversations and prepare responses across channels enabled by the account owner.</p>
+      </section>
+      <section class="section">
+        <h2>1. Roles and scope</h2>
+        <p>We operate إدارة سوشيال. Business account owners decide which channels to connect and what business information to provide. When we process their customers' messages to provide the service, we do so on the business owner's behalf and according to the owner's settings. The business owner is responsible for having an appropriate legal basis and providing any notices required to their customers.</p>
+      </section>
+      <section class="section">
+        <h2>2. Data we may process</h2>
+        <ul>
+          <li>Account information, including email address, account identifier, workspace/business name, authentication-related information, plan and credit status.</li>
+          <li>Connected-channel information, including account/page names, usernames, platform identifiers, profile images where available, granted permissions, connection status, token expiry information and encrypted access tokens. We do not ask for your Meta password.</li>
+          <li>Conversation data, including inbound and outbound message text, timestamps, message identifiers, channel information and sender identifiers such as phone numbers or usernames. Names and profile images may be received where supported by the channel.</li>
+          <li>Business knowledge and content, including uploaded text or files, website URLs, product information, prompts and response settings.</li>
+          <li>Chat-widget visitor information, including session identifiers and messages; IP address and browser/device information, such as user-agent data, may also be processed for operation, security and diagnostics.</li>
+          <li>Where billing features are enabled, transaction references, invoice/order identifiers, amounts, currency, provider and payment status.</li>
+          <li>Technical and operational logs, including error, request, synchronization and security events.</li>
+        </ul>
+        <p class="small">The data processed depends on the channels and features enabled by the account owner. Not every category is collected in every use of the service.</p>
+      </section>
+      <section class="section">
+        <h2>3. Sources and purposes</h2>
+        <p>We receive information directly from account owners, from Meta when an account grants permissions, from connected messaging channels and their webhooks, from visitors using a chat widget, and from integrations such as Salla or a payment provider when enabled.</p>
+        <p>We use data to create and operate accounts, connect channels, display and route conversations, send responses requested by the business, provide AI-assisted replies using message text and relevant business context, synchronize business knowledge or product data, administer credits and transactions, secure the service, troubleshoot errors and respond to support or privacy requests.</p>
+      </section>
+      <section class="section">
+        <h2>4. Meta Platform Data</h2>
+        <p>When Instagram, Facebook or another supported Meta product is connected, we process the account/page information, identifiers, profile information, messages and technical data needed for the features and permissions selected by the business owner. We use this data to operate the connection, display conversations and send responses configured by the business owner.</p>
+        <p>We do not sell Meta Platform Data, use it to build advertising profiles or target personal advertising, or use it to train our own general-purpose AI models. When AI-assisted replies are enabled, message text and the context needed to generate a reply may be sent to the AI provider configured for the service for that purpose.</p>
+        <p>Disconnecting a channel removes the stored encrypted access token and stops that connection, but does not by itself delete historical conversations. See our <a href="data-deletion.html">Data Deletion Instructions</a> for a full deletion request.</p>
+      </section>
+      <section class="section">
+        <h2>5. AI and service providers</h2>
+        <p>AI functions may use Google Gemini or OpenAI, depending on the service configuration. The text and context needed to generate a response or process business knowledge may be sent to the configured provider. Channel passwords and access tokens are not sent to the AI provider to generate a reply.</p>
+        <p>We rely on providers such as Supabase for hosting, database and authentication, and on Meta, Google or OpenAI, Salla and an enabled payment provider for the integrations requested by the account owner. Providers receive data needed to perform their services and process it under their applicable terms and policies. The current Supabase project is hosted outside Iraq; data may be processed in other countries depending on provider infrastructure and locations.</p>
+      </section>
+      <section class="section">
+        <h2>6. Sharing and retention</h2>
+        <p>We do not sell personal data. We share it only as needed with the channels selected by the business, our hosting/AI/payment/integration providers, authorized members of the business workspace, or where required by law or necessary to protect rights and security.</p>
+        <p>We retain information while it is needed to provide the service, manage the account and meet operational or legal obligations. After a valid deletion request or account closure, we review and delete or de-identify data in active systems where possible, except information that must be retained for legal, security or transaction purposes. Limited backup copies may remain until the hosting provider's backup cycle removes them. Transaction records may be retained where accounting or anti-fraud requirements apply.</p>
+      </section>
+      <section class="section">
+        <h2>7. Security and your choices</h2>
+        <p>We use access controls, workspace-level data separation and AES-GCM field encryption for certain sensitive stored fields, such as message content, contact identifiers and access tokens. No method of transmission or storage is completely secure.</p>
+        <p>Subject to applicable law, you may request access, correction or deletion, object to certain processing, or withdraw consent where consent is the basis. You may also disconnect channels in the dashboard or revoke app permissions through the relevant platform settings.</p>
+      </section>
+      <section class="section">
+        <h2>8. Business owner responsibilities</h2>
+        <p>Business owners are responsible for the lawfulness of the customer data they submit, providing required notices or obtaining required permissions, choosing the content placed in their knowledge base, managing team access, and avoiding unnecessary sensitive information such as passwords or payment-card credentials.</p>
+      </section>
+      <section class="section">
+        <h2>9. Changes and contact</h2>
+        <p>We may update this policy when the service, providers or legal requirements change. The latest version and update date will be published on this page.</p>
+        <p>For privacy questions or deletion requests, contact <a href="mailto:hsnq2022@gmail.com">hsnq2022@gmail.com</a> or visit our <a href="data-deletion.html">Data Deletion Instructions page</a>.</p>
+      </section>
+    </div>
+
+    <footer>
+      <p>© 2026 إدارة سوشيال — جميع الحقوق محفوظة.</p>
+      <p><a href="./">العودة إلى الموقع</a> · <a href="data-deletion.html">حذف البيانات</a></p>
+    </footer>
+  </main>
 </body>
 </html>
