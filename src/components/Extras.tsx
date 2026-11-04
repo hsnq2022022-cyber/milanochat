@@ -1,6 +1,6 @@
 import { IconWhatsapp, Logo } from "./Icons";
 
-/* ============================ شريط الأنشطة المتحرك ============================ */
+/* ============================ الشريط المتحرك ============================ */
 
 const SECTORS = [
   "مقاهي ومطاعم",
@@ -40,7 +40,7 @@ export function Marquee() {
   return (
     <section
       className="relative py-6 border-y border-verde/12 bg-pine/50 overflow-hidden"
-      aria-label="الأنشطة التي تخدمها إدارة ســوشـــيــــال"
+      aria-label="الأنشطة التي تخدمها إدارة سوشيال"
     >
       <div className="marquee-track flex w-max items-center gap-8 pe-8">
         {row.map((s, i) => (
@@ -83,9 +83,11 @@ const FOOT_LINKS = [
 ];
 
 export function Footer() {
+  const privacyUrl = import.meta.env.BASE_URL + "privacy.html";
+  const deletionUrl = import.meta.env.BASE_URL + "data-deletion.html";
+
   return (
     <footer className="relative border-t border-verde/12 bg-night overflow-hidden">
-      {/* بند ختامي */}
       <div className="max-w-6xl mx-auto px-5 lg:px-8 pt-16 pb-10 grid lg:grid-cols-[1.2fr_1fr] gap-10 items-center">
         <div>
           <h2 className="font-display font-extrabold text-4xl sm:text-5xl leading-[1.15] text-bone">
@@ -93,7 +95,6 @@ export function Footer() {
             <br />
             <span className="text-oro">…وموظفك بعد اليوم ما ينام</span>
           </h2>
-
           <p className="mt-4 text-sage leading-7 max-w-md">
             40,000 دينار تفصل مشروعك عن موظف يرد بدقّة، ويعترف لما ما يعرف، ويوصّل لك
             القرار.
@@ -108,7 +109,6 @@ export function Footer() {
             <IconWhatsapp className="w-5 h-5" />
             أنشئ موظفك الآن
           </a>
-
           <a
             href="#demo"
             className="inline-flex items-center justify-center gap-2 border border-verde/30 text-mist font-semibold px-8 py-4 rounded-2xl hover:border-oro/60 hover:text-oro transition-all duration-300 active:scale-95"
@@ -118,22 +118,19 @@ export function Footer() {
         </div>
       </div>
 
-      {/* روابط الفوتر */}
       <div className="border-t border-verde/10">
         <div className="max-w-6xl mx-auto px-5 lg:px-8 py-10 grid sm:grid-cols-[1.4fr_1fr_1fr] gap-8">
           <div>
             <a href="#top" className="flex items-center gap-2.5 mb-4">
               <span>
-                <img src={`${import.meta.env.BASE_URL}logo.png`} alt="شعار إدارة ســوشـــيــــال" className="w-9 h-9" />
+                <img src={import.meta.env.BASE_URL + "logo.png"} alt="شعار إدارة سوشيال" className="w-9 h-9" />
               </span>
-
               <span className="font-display font-bold text-2xl text-bone">
-                إدارة ســوشـــيــــال<span className="text-oro">.</span>
+                إدارة سوشيال<span className="text-oro">.</span>
               </span>
             </a>
-
             <p className="text-[12.5px] text-sage/80 leading-6 max-w-sm">
-              موظف خدمة عملاء بالذكاء الاصطناعي يشتغل على واتساب مشروعك — يرد من
+              موظف خدمة عملاء بالذكاء الاصطناعي يشتغل على قنوات مشروعك — يرد من
               معلوماتك الحقيقية فقط، ويحوّل لك الحالات اللي تحتاج قرارك.
             </p>
           </div>
@@ -143,7 +140,6 @@ export function Footer() {
               <p className="font-display font-bold text-oro mb-3.5">
                 {col.title}
               </p>
-
               <ul className="space-y-2.5">
                 {col.links.map((l) => (
                   <li key={l.label}>
@@ -161,14 +157,16 @@ export function Footer() {
         </div>
       </div>
 
-      {/* الشريط الأخير */}
       <div className="border-t border-verde/10">
         <div className="max-w-6xl mx-auto px-5 lg:px-8 py-5 flex flex-col sm:flex-row items-center justify-between gap-3 text-[11.5px] text-sage/70">
-          <p>© 2026 إدارة ســوشـــيــــال — جميع الحقوق محفوظة.</p>
+          <p>© 2026 إدارة سوشيال — جميع الحقوق محفوظة.</p>
+          <nav aria-label="روابط الخصوصية" className="flex flex-wrap items-center justify-center gap-x-5 gap-y-2">
+            <a href={privacyUrl} className="hover:text-verde transition-colors">سياسة الخصوصية</a>
+            <a href={deletionUrl} className="hover:text-verde transition-colors">حذف البيانات</a>
+            <a href="mailto:hsnq2022@gmail.com" className="hover:text-verde transition-colors">تواصل معنا</a>
+          </nav>
           <p className="text-center sm:text-left leading-5 max-w-xl">
-            الربط عبر «الأجهزة المرتبطة» في واتساب وليس قناة رسمية من Meta، وقد
-            تقيّد واتساب أي رقم وفق تقديرها.{" "}
-            <span className="text-oro-soft">اقرأ التفاصيل قبل الربط.</span>
+            الربط عبر «الأجهزة المرتبطة» في واتساب قد يختلف عن تكامل WhatsApp Business Platform الرسمي؛ راجع طريقة الربط المعروضة في حسابك.
           </p>
         </div>
       </div>
