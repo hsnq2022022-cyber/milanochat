@@ -43,8 +43,9 @@ test("170000 is the newest migration and follows 130000/140000/150000/160000",()
  const stamps=readdirSync("supabase/migrations").filter(f=>f.endsWith(".sql"))
   .map(f=>f.split("_")[0].padEnd(14,"0"));
  // Only 20261029180000_flow_durable_button_run_guards (requires 170000) and
- // 20261029190000_flow_begin_durable_run_superseding (requires 180000) are newer.
- for(const s of stamps)if(!["20261029170000","20261029180000","20261029190000"].includes(s))assert.ok(s<"20261029170000",s);
+ // 20261029190000_flow_begin_durable_run_superseding (requires 180000) and
+ // 20261029200000_flow_media_storage (independent storage bucket) are newer.
+ for(const s of stamps)if(!["20261029170000","20261029180000","20261029190000","20261029200000"].includes(s))assert.ok(s<"20261029170000",s);
  for(const f of [CLAIM,LC,AI,TK,CP])assert.ok(existsSync(f),f);
 });
 test("migration: bounded, additive, service_role only, never touches flow_claim_inbound or billing",()=>{

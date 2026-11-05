@@ -1124,3 +1124,69 @@ test("pending handoff: older than 24h never silences; fresh blocks; cap counts o
   for(const h of [fresh,expired,manyExpired,manyFresh,broken])assert.deepEqual(h.writes,[]);
  });
 });
+
+// ---- Image messages (FLOW_MEDIA_SEND_ENABLED, default OFF).
+const MEDIA_PROJECT="https://abcd1234.supabase.co";
+const MEDIA_IMG=MEDIA_PROJECT+"/storage/v1/object/public/flow-media/u1/0f8c2b1e-1111-4222-8333-444455556666.webp";
+const withMediaEnv=<T,>(env:Record<string,string>,fn:()=>T):T=>{
+ const old=(globalThis as any).Deno;(globalThis as any).Deno={env:{get:(k:string)=>env[k]}};
+ try{return fn();}finally{(globalThis as any).Deno=old;}
+};
+const MEDIA_ON={FLOW_MEDIA_SEND_ENABLED:"true",SUPABASE_URL:MEDIA_PROJECT};
+const imgMsg=(nid:string,blocks:unknown[],over:Record<string,unknown>={})=>
+ ({id:nid,data:{kind:"message",text:"صورة المنتج",image:"",options:[],contentBlocks:blocks,...over}});
+const imageDoc=(blocks:unknown[],over:Record<string,unknown>={})=>({version:3,name:"img",
+ nodes:[T,imgMsg("pic",blocks,over),txt("after","شكراً")],edges:[E("start","pic"),E("pic","after")]});
+const TEXT_IMG=[{id:"b1",type:"text",text:"هذا منتجنا"},{id:"b2",type:"image",url:MEDIA_IMG}];
+test("image whitelist: flag OFF rejects image messages exactly as before",()=>{
+ for(const env of [{},{FLOW_MEDIA_SEND_ENABLED:"false",SUPABASE_URL:MEDIA_PROJECT},{FLOW_MEDIA_SEND_ENABLED:"1"}])
+  withMediaEnv(env as Record<string,string>,()=>{
+   assert.equal(supportedDurableDocument(imageDoc(TEXT_IMG)),false);
+   assert.equal(supportedDurableDocument(imageDoc([{id:"b",type:"image",url:MEDIA_IMG}])),false);
+   assert.equal(supportedDurableDocument(chainDoc),true,"text-only graphs unchanged");
+  });
+ // No Deno runtime at all: fail closed.
+ const old=(globalThis as any).Deno;delete (globalThis as any).Deno;
+ try{assert.equal(supportedDurableDocument(imageDoc(TEXT_IMG)),false);}finally{(globalThis as any).Deno=old;}
+});
+test("image whitelist: flag ON accepts text+image blocks from the project flow-media bucket only",()=>withMediaEnv(MEDIA_ON,()=>{
+ assert.equal(supportedDurableDocument(imageDoc(TEXT_IMG)),true);
+ assert.equal(supportedDurableDocument(imageDoc([{id:"b",type:"image",url:MEDIA_IMG}])),true);
+ assert.equal(durableCandidateKind(imageDoc(TEXT_IMG)),"text");
+ const bad=(blocks:unknown[],over:Record<string,unknown>={},why="")=>
+  assert.equal(supportedDurableDocument(imageDoc(blocks,over)),false,why||JSON.stringify(blocks));
+ bad([{id:"b",type:"text",text:"نص فقط"}],{},"text blocks without any image");
+ bad([{id:"b",type:"pdf",url:MEDIA_IMG},{id:"c",type:"image",url:MEDIA_IMG}],{},"pdf");
+ bad([{id:"b",type:"collection",field:"x"},{id:"c",type:"image",url:MEDIA_IMG}],{},"collection");
+ bad([{id:"b",type:"delay",seconds:3},{id:"c",type:"image",url:MEDIA_IMG}],{},"delay in blocks");
+ bad([{id:"b",type:"image",url:"data:image/png;base64,AAAA"}],{},"data: url");
+ bad([{id:"b",type:"image",url:MEDIA_IMG.replace("https:","http:")}],{},"http url");
+ bad([{id:"b",type:"image",url:MEDIA_IMG.replace("abcd1234.supabase.co","evil.example.com")}],{},"wrong host");
+ bad([{id:"b",type:"image",url:MEDIA_PROJECT+"/storage/v1/object/public/avatars/a.webp"}],{},"other bucket");
+ bad([{id:"b",type:"image",url:MEDIA_PROJECT+"/storage/v1/object/public/flow-media/u1/%2e%2e/x.webp"}],{},"traversal");
+ bad([{id:"b",type:"image"}],{},"missing url");
+ bad([{id:"b",type:"text",text:""},{id:"c",type:"image",url:MEDIA_IMG}],{},"blank text block");
+ bad(["x",{id:"c",type:"image",url:MEDIA_IMG}],{},"non-object block");
+ bad(TEXT_IMG,{image:MEDIA_IMG},"legacy d.image still refused");
+ bad(TEXT_IMG,{image:"data:image/png;base64,AAAA"},"legacy data image");
+ bad(TEXT_IMG,{text:""},"message text still required");
+ bad(TEXT_IMG,{options:[{id:"o1",label:"نعم",action:"step"}]},"no buttons on an image message");
+ bad(Array.from({length:11},(_,i)=>({id:"b"+i,type:"image",url:MEDIA_IMG})),{},"block bound");
+ // Questions keep the plain rule (no content blocks at all).
+ const q={...imageDoc(TEXT_IMG)};
+ q.nodes=q.nodes.map((n:any)=>n.id==="pic"?{id:"pic",data:{kind:"question",text:"؟",inputMode:"email",
+  inputField:"email",image:"",contentBlocks:TEXT_IMG}}:n);
+ assert.equal(supportedDurableDocument(q),false,"question with image blocks");
+}));
+test("image whitelist: V2 still rejects image documents, and the lone trigger->image is durable only with the flag",()=>{
+ const lone={version:3,nodes:[T,imgMsg("hi",TEXT_IMG)],edges:[E("start","hi")]};
+ assert.equal(simpleMessageFromDocument(lone,"instagram",""),null);
+ assert.equal(simpleMessageFromDocument(imageDoc(TEXT_IMG),"instagram",""),null);
+ withMediaEnv(MEDIA_ON,()=>assert.equal(supportedDurableDocument(lone),true));
+ withMediaEnv({},()=>assert.equal(supportedDurableDocument(lone),false));
+ const src=readFileSync("supabase/functions/milan-api/flowDurableIngress.ts","utf8");
+ assert.match(src,/DO NOT ENABLE/);
+ assert.match(src,/try\{return Deno\.env\.get\("FLOW_MEDIA_SEND_ENABLED"\)==="true";\}catch\{return false;\}/);
+ // Live effect kinds unchanged: the planner does not emit message_image yet.
+ assert.equal(src.includes('"message_image"'),false);
+});

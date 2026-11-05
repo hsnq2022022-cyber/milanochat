@@ -4,7 +4,7 @@
  * A chained durable step commits up to 5 effects in ONE transaction, so they
  * share created_at; payload.seq (0..4, set by src/flow/runtimeChain.ts) is
  * their order. An effect may be dispatched only when every earlier provider
- * effect (message/question) of the SAME tenant and run is out of the way:
+ * effect (message/question/message_image) of the SAME tenant and run is out of the way:
  *  - same commit (equal created_at), lower seq: must be sent (settled /
  *    charge_pending = provider 2xx) or terminally cancelled/dead_letter/
  *    billing_blocked (e.g. a legacy knowledge_ai charge_pending row without a
@@ -20,7 +20,7 @@ export type OrderRow={
  effect_kind:string;payload:unknown;created_at:string;
 };
 const SENT_OR_TERMINAL=new Set(["settled","charge_pending","cancelled","dead_letter","billing_blocked"]);
-export const ORDERED_KINDS=["message","question"];
+export const ORDERED_KINDS=["message","question","message_image"];
 export const ORDER_SIBLING_LIMIT=1000;
 
 export function effectSeq(payload:unknown):number{

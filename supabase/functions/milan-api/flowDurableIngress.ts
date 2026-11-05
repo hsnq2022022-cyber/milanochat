@@ -11,6 +11,7 @@ import type {FlowDocument} from "../../../src/flow/model.ts";
 import {simpleMessageFromDocument} from "./flowPrepareMessage.ts";
 import {durableAnswerMode,normalizeDurableAnswer,reaskText,type DurableAnswerMode}
  from "./flowDurableAnswer.ts";
+import {isAllowedFlowImageUrl} from "../flow-outbox-worker/mediaPolicy.ts";
 
 type RecordValue=Record<string,unknown>;
 const record=(v:unknown):v is RecordValue=>!!v&&typeof v==="object"&&!Array.isArray(v);
@@ -21,6 +22,39 @@ const textOk=(t:unknown)=>typeof t==="string"&&t.trim().length>0&&
 /** No image, no content blocks (media/collections/inline delays). */
 const plain=(d:RecordValue)=>(d.image===""||d.image===undefined)&&
  Array.isArray(d.contentBlocks)&&d.contentBlocks.length===0;
+/**
+ * FLOW_MEDIA_SEND_ENABLED (default OFF). DO NOT ENABLE until the planner
+ * (src/flow/runtimePlan.ts / runtimeChain.ts) emits message_image and the
+ * publication gate (flow-publication, src/flow/publicationGate.ts) accepts
+ * message:image; until then a whitelisted image flow still fails at plan time.
+ * Read fail-closed: no Deno runtime (or any error) means OFF.
+ */
+const mediaSendEnabled=()=>{
+ try{return Deno.env.get("FLOW_MEDIA_SEND_ENABLED")==="true";}catch{return false;}
+};
+const supabaseHost=()=>{try{return Deno.env.get("SUPABASE_URL")??"";}catch{return "";}};
+export const MAX_IMAGE_MESSAGE_BLOCKS=10;
+/**
+ * Flag ON only: a message whose content blocks are ONLY text and image blocks
+ * (at least one image), every image URL in the project's public flow-media
+ * bucket (mediaPolicy.ts, same rule as src/flow/model.ts isAllowedImageUrl).
+ * Legacy d.image, pdf, collection and inline delay blocks stay refused.
+ */
+const imageMessage=(d:RecordValue)=>{
+ if(!mediaSendEnabled()||!(d.image===""||d.image===undefined)||
+    !Array.isArray(d.contentBlocks)||d.contentBlocks.length<1||
+    d.contentBlocks.length>MAX_IMAGE_MESSAGE_BLOCKS)return false;
+ const host=supabaseHost();
+ let images=0;
+ for(const b of d.contentBlocks as unknown[]){
+  if(!record(b))return false;
+  if(b.type==="image"){
+   if(!isAllowedFlowImageUrl(b.url,host))return false;
+   images++;
+  }else if(b.type!=="text"||!textOk(b.text))return false;
+ }
+ return images>=1;
+};
 /** Run variable names usable by set_field/condition. "message" (the inbound text) is never allowed. */
 const fieldOk=(f:unknown):f is string=>typeof f==="string"&&
  /^[a-zA-Z_][a-zA-Z0-9_]{0,63}$/.test(f)&&!f.startsWith("__")&&
@@ -58,7 +92,9 @@ function durablePorts(d:RecordValue):{ports:string[];required:string[]}|null{
    return d.platform==="instagram"&&d.triggerMode==="message"?
     {ports:["next"],required:["next"]}:null;
   case "message":{
-   if(!textOk(d.text)||!plain(d)||!Array.isArray(d.options))return null;
+   if(!textOk(d.text)||!Array.isArray(d.options))return null;
+   // Image message (flag ON): no buttons, a single "next" port.
+   if(!plain(d))return imageMessage(d)&&d.options.length===0?{ports:["next"],required:[]}:null;
    if(d.options.length===0)return {ports:["next"],required:[]};
    if(!stepButtons(d.options,1))return null;
    const ids=(d.options as RecordValue[]).map(o=>o.id as string);

@@ -333,7 +333,9 @@ test("worker: list reads retry_wait only when due; AI claim precedes the model; 
  const code=readFileSync("supabase/functions/flow-outbox-worker/index.ts","utf8");
  // The original pending/charge_pending scan is unchanged; due retry_wait rows
  // come from a separate bounded query filtered on retry_at <= now.
- assert.match(code,/\.in\("delivery_status",\["pending","charge_pending"\]\)\.in\("effect_kind",\["message","question"\]\)\s*\.order\("created_at",\{ascending:true\}\)\.limit\(OUTBOX_SCAN_LIMIT\);/);
+ // message_image (FLOW_MEDIA_SEND_ENABLED) is listed only in the pending scan,
+ // never in the retry_wait query (images have no AI backoff).
+ assert.match(code,/\.in\("delivery_status",\["pending","charge_pending"\]\)\.in\("effect_kind",\["message","question","message_image"\]\)\s*\.order\("created_at",\{ascending:true\}\)\.limit\(OUTBOX_SCAN_LIMIT\);/);
  assert.match(code,/\.eq\("delivery_status","retry_wait"\)\.lte\("retry_at",new Date\(\)\.toISOString\(\)\)\s*\.in\("effect_kind",\["message","question"\]\)\s*\.order\("retry_at",\{ascending:true\}\)\.limit\(OUTBOX_DISPATCH_LIMIT\);/);
  assert.doesNotMatch(code,/answerWithVerifiedKnowledge\(sb/,"legacy null-on-error path removed from the worker");
  assert.doesNotMatch(code,/\?\?"";\s*\}\s*if\(!messageText/);

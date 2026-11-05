@@ -362,3 +362,131 @@ test("a plain question takes part in per-run seq ordering like any message",()=>
  assert.equal(heldByEarlierEffect(b,[{...a,delivery_status:"settled"},b]),false);
  assert.ok((ORDERED_KINDS as readonly string[]).includes("question"));
 });
+
+// ---- message_image (FLOW_MEDIA_SEND_ENABLED, default OFF): Instagram image attachment.
+import {mediaEffectGate,classifyMediaFailure,isAllowedFlowImageUrl}
+ from "../supabase/functions/flow-outbox-worker/mediaPolicy.ts";
+import {ProviderHttpError} from "../supabase/functions/flow-outbox-worker/deliveryCore.ts";
+const PROJECT="https://abcd1234.supabase.co";
+const IMG=PROJECT+"/storage/v1/object/public/flow-media/u1/0f8c2b1e-1111-4222-8333-444455556666.webp";
+const BAD_URLS=["http://abcd1234.supabase.co/storage/v1/object/public/flow-media/u1/a.webp",
+ "https://evil.example.com/storage/v1/object/public/flow-media/u1/a.webp",
+ "data:image/png;base64,AAAA","https://user:pw@abcd1234.supabase.co/storage/v1/object/public/flow-media/u1/a.webp",
+ PROJECT+"/storage/v1/object/public/flow-media/",PROJECT+"/storage/v1/object/public/other/a.webp",
+ PROJECT+"/storage/v1/object/public/flow-media/u1/%2e%2e/x.webp",PROJECT+"/storage/v1/object/public/flow-media/../x",
+ PROJECT+"/storage/v1/object/public/flow-media/u1/a.webp?x=1",PROJECT+"/storage/v1/object/public/flow-media/u1/a.webp#f",
+ " "+IMG,"",null,42];
+function recorder(status=200,body:unknown={message_id:"mid-img"}){
+ const calls:Array<{url:string;body:any}>=[];
+ const fake=(async(url:string,init:RequestInit)=>{
+  calls.push({url,body:JSON.parse(String(init.body))});
+  return new Response(JSON.stringify(body),{status});
+ }) as typeof fetch;
+ return {calls,fake};
+}
+const imageReq={platform:"instagram" as const,token:"IG-token",externalId:"",recipient:"123456",
+ text:"",imageUrl:IMG,imageHost:PROJECT};
+test("image payload is exactly {recipient:{id},message:{attachment:{type:'image',payload:{url}}}} with no text key",async()=>{
+ const r=recorder();
+ assert.equal(await sendProviderMessage(imageReq,r.fake),"mid-img");
+ assert.equal(r.calls.length,1);
+ assert.equal(r.calls[0].url,"https://graph.instagram.com/v21.0/me/messages");
+ assert.deepEqual(r.calls[0].body,{recipient:{id:"123456"},message:{attachment:{type:"image",payload:{url:IMG}}}});
+ assert.equal("text" in r.calls[0].body.message,false);
+ assert.equal(JSON.stringify(r.calls[0].body).includes("quick_replies"),false);
+ // Text path unchanged.
+ const t=recorder();
+ await sendProviderMessage({platform:"instagram",token:"IG-token",externalId:"",recipient:"123456",text:"اهلا"},t.fake);
+ assert.deepEqual(t.calls[0].body,{recipient:{id:"123456"},message:{text:"اهلا"}});
+});
+test("non-Instagram, mixed, invalid-URL or texted image requests are refused before any request",async()=>{
+ const r=recorder();
+ for(const platform of ["facebook","whatsapp"] as const)
+  await assert.rejects(()=>sendProviderMessage({...imageReq,platform,externalId:"100001"},r.fake),/Invalid provider image/);
+ for(const url of BAD_URLS.filter(u=>typeof u==="string"&&u!==""))
+  await assert.rejects(()=>sendProviderMessage({...imageReq,imageUrl:url as string},r.fake),/Invalid provider/,String(url));
+ await assert.rejects(()=>sendProviderMessage({...imageReq,text:"caption"},r.fake),/Invalid provider/);
+ await assert.rejects(()=>sendProviderMessage({...imageReq,quickReplies:[{id:"a",label:"A"}]},r.fake),/Invalid provider image/);
+ assert.equal(r.calls.length,0);
+});
+test("worker media gate: flag OFF holds, other platforms and bad URLs fail permanently, valid sends",()=>{
+ const p={kind:"message_image",url:IMG,seq:0};
+ assert.deepEqual(mediaEffectGate({flagEnabled:false,platform:"instagram",payload:p,supabaseUrl:PROJECT}),{action:"hold"});
+ assert.deepEqual(mediaEffectGate({flagEnabled:false,platform:"whatsapp",payload:{url:"x"},supabaseUrl:PROJECT}),{action:"hold"});
+ for(const platform of ["facebook","whatsapp","",undefined])
+  assert.deepEqual(mediaEffectGate({flagEnabled:true,platform,payload:p,supabaseUrl:PROJECT}),
+   {action:"fail",code:"media_platform_unsupported"},String(platform));
+ for(const url of BAD_URLS)
+  assert.deepEqual(mediaEffectGate({flagEnabled:true,platform:"instagram",payload:{...p,url},supabaseUrl:PROJECT}),
+   {action:"fail",code:"media_url_invalid"},String(url));
+ assert.deepEqual(mediaEffectGate({flagEnabled:true,platform:"instagram",payload:null,supabaseUrl:PROJECT}),
+  {action:"fail",code:"media_url_invalid"});
+ assert.deepEqual(mediaEffectGate({flagEnabled:true,platform:"instagram",payload:p,supabaseUrl:PROJECT}),{action:"send",url:IMG});
+ assert.equal(isAllowedFlowImageUrl(IMG,PROJECT),true);
+ assert.equal(isAllowedFlowImageUrl(IMG,"https://other.supabase.co"),false);
+});
+test("Meta 400 / code 100 on the image is permanent; 5xx/network uncertain; never resent",async()=>{
+ const run=async(status:number,body:unknown)=>{
+  const r=recorder(status,body);const events:string[]=[];let failure:string|null=null;
+  const res=await executeOnce({
+   reserve:async()=>{events.push("reserve");return true;},
+   send:()=>sendProviderMessage(imageReq,r.fake).catch(e=>{failure=classifyMediaFailure(e);throw e;}),
+   confirm:async(s,id)=>{events.push(s+":"+id);return true;},
+   persistAndBill:async()=>{events.push("UNEXPECTED_BILL");return true;}
+  });
+  return {res,events,failure,calls:r.calls.length};
+ };
+ const rejected=await run(400,{error:{code:100,message:"Invalid parameter"}});
+ assert.deepEqual(rejected,{res:"uncertain",events:["reserve","uncertain:null"],failure:"media_rejected",calls:1});
+ for(const status of [500,502,503]){
+  const out=await run(status,{error:{code:2}});
+  assert.deepEqual(out,{res:"uncertain",events:["reserve","uncertain:null"],failure:"uncertain",calls:1},String(status));
+ }
+ assert.equal((await run(429,{})).failure,"uncertain");
+ assert.equal((await run(401,{error:{code:190}})).failure,"auth");
+ assert.equal((await run(400,{error:{code:190}})).failure,"auth");
+ assert.equal(classifyMediaFailure(new Error("timeout")),"uncertain");
+ assert.equal(classifyMediaFailure(new ProviderHttpError(404,null)),"media_rejected");
+ // Text errors keep their previous message and remain plain uncertain.
+ const t=recorder(400,{error:{code:100}});
+ await assert.rejects(()=>sendProviderMessage({...imageReq,imageUrl:undefined,text:"hi"},t.fake),
+  (e:unknown)=>e instanceof Error&&!(e instanceof ProviderHttpError)&&e.message==="Provider HTTP 400");
+});
+test("an image 2xx without a provider id is uncertain and never resent nor billed",async()=>{
+ const r=recorder(200,{});const events:string[]=[];
+ const res=await executeOnce({reserve:async()=>true,send:()=>sendProviderMessage(imageReq,r.fake),
+  confirm:async(s,id)=>{events.push(s+":"+id);return true;},
+  persistAndBill:async()=>{events.push("UNEXPECTED_BILL");return true;}});
+ assert.equal(res,"uncertain");assert.deepEqual(events,["uncertain:null"]);assert.equal(r.calls.length,1);
+ const ok=recorder();const billed:string[]=[];
+ assert.equal(await executeOnce({reserve:async()=>true,send:()=>sendProviderMessage(imageReq,ok.fake),
+  confirm:async()=>true,persistAndBill:async(id)=>{billed.push(String(id));return true;}}),"settled");
+ assert.deepEqual(billed,["mid-img"],"one persist/debit per image, same path as text");
+});
+test("message_image takes part in per-run seq ordering with text effects",()=>{
+ const img=row("i0",0,"pending",{effect_kind:"message_image",payload:{kind:"message_image",url:IMG,seq:0}});
+ const txt=row("t1",1);
+ assert.ok((ORDERED_KINDS as readonly string[]).includes("message_image"));
+ assert.equal(heldByEarlierEffect(txt,[img,txt]),true,"text waits for the earlier image");
+ assert.equal(heldByEarlierEffect(txt,[{...img,delivery_status:"uncertain"},txt]),true,"uncertain image still holds same commit");
+ assert.equal(heldByEarlierEffect(txt,[{...img,delivery_status:"settled"},txt]),false);
+ const img1=row("i1",1,"pending",{effect_kind:"message_image",payload:{kind:"message_image",url:IMG,seq:1}});
+ assert.equal(heldByEarlierEffect(img1,[row("t0",0),img1]),true,"image waits for the earlier text");
+ assert.deepEqual([img1,row("t0",0)].sort(compareOutbox).map(r=>r.id),["t0","i1"]);
+});
+test("worker wiring: image gate precedes reservation, flag default OFF, retry query and billing unchanged",()=>{
+ const code=readFileSync("supabase/functions/flow-outbox-worker/index.ts","utf8");
+ assert.match(code,/DO NOT ENABLE/);
+ assert.match(code,/flagEnabled:env\("FLOW_MEDIA_SEND_ENABLED"\)==="true"/);
+ assert.match(code,/if\(media\.action==="hold"\|\|\(effect\.delivery_status==="charge_pending"&&media\.action!=="send"\)\)\{\s*report\("blocked"\);continue;\s*\}/);
+ assert.match(code,/if\(media\.action==="fail"\)\{[\s\S]{0,160}await skip\("ineligible","invalid"\);continue;\s*\}/);
+ const gate=code.indexOf("!canDispatchOutbox({"),media=code.indexOf("const media=mediaEffectGate("),
+  dispatched=code.indexOf("dispatched++;"),reserve=code.indexOf('sb.rpc("flow_reserve_outbox_delivery"');
+ assert(gate>0&&media>gate&&dispatched>media&&reserve>dispatched);
+ assert.match(code,/\.in\("effect_kind",\["message","question","message_image"\]\)/);
+ assert.match(code,/\.eq\("delivery_status","retry_wait"\)[^;]*\.in\("effect_kind",\["message","question"\]\)/);
+ assert.match(code,/text:"",imageUrl,imageHost:base/);
+ assert.equal((code.match(/sb\.rpc\("consume_flow_reply"/g)??[]).length,1,"billing untouched");
+ const mp=readFileSync("supabase/functions/flow-outbox-worker/mediaPolicy.ts","utf8");
+ assert.match(mp,/DO NOT ENABLE/);
+});

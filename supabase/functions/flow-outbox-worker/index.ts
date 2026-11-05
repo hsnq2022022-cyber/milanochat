@@ -8,6 +8,11 @@
  * Necessary server-side gates (ALL default OFF):
  * FLOW_OUTBOX_SEND_ENABLED, FLOW_ATOMIC_CONSUME_READY, global and tenant test_only,
  * activated publication, account permission, no human takeover, positive credit.
+ *
+ * message_image effects (Instagram image attachment) additionally need
+ * FLOW_MEDIA_SEND_ENABLED (default OFF; see mediaPolicy.ts). DO NOT ENABLE
+ * until the planner and the publication gate emit/accept message_image and the
+ * database accepts that effect kind (CHECK, run RPCs, flow_reserve_outbox_delivery).
  */
 import {createClient} from "npm:@supabase/supabase-js@2";
 import {acceptsFlowWorkerBearer} from "../flowWorkerAuth.ts";
@@ -24,6 +29,7 @@ import {permanentOutboxBlock,temporaryOutboxPause,humanTakeoverActive,OUTBOX_SCA
 import {compareOutbox,heldByEarlierEffect,statusAfterOutcome,ORDERED_KINDS,
  ORDER_SIBLING_LIMIT,type OrderRow} from "./effectOrder.ts";
 import {plainInputQuestion} from "./questionMode.ts";
+import {mediaEffectGate,classifyMediaFailure,type MediaFailure} from "./mediaPolicy.ts";
 import {runInternalEffects,internalActionsReleased} from "../flow-internal-worker/internalEffects.ts";
 
 const env=(name:string)=>Deno.env.get(name)??"";
@@ -68,7 +74,7 @@ Deno.serve(async req=>{
  const OUTBOX_COLUMNS="id,tenant_id,run_id,delivery_status,effect_kind,payload,outgoing_message_id,provider_message_id,created_at";
  const {data:listed,error:listError}=await sb.from("automation_flow_outbox")
   .select(OUTBOX_COLUMNS)
-  .in("delivery_status",["pending","charge_pending"]).in("effect_kind",["message","question"])
+  .in("delivery_status",["pending","charge_pending"]).in("effect_kind",["message","question","message_image"])
   .order("created_at",{ascending:true}).limit(OUTBOX_SCAN_LIMIT);
  if(listError)return json({error:"Outbox lookup failed"},503);
  // retry_wait rows (knowledge_ai backoff) are read only once retry_at is due,
@@ -229,8 +235,28 @@ Deno.serve(async req=>{
        payload.inputMode!=="buttons")){
     report("blocked");continue;
    }
+   // Instagram image attachment (mediaPolicy.ts), decided before any send.
+   // Flag OFF: row untouched (any status). Other platform / URL outside the
+   // allowlist: cancelled for good without a request. Already sent
+   // (charge_pending): billing recovery below, never a send.
+   let imageUrl:string|undefined;
+   if(effect.effect_kind==="message_image"){
+    const media=mediaEffectGate({flagEnabled:env("FLOW_MEDIA_SEND_ENABLED")==="true",
+     platform:account.platform,payload,supabaseUrl:base});
+    if(media.action==="hold"||(effect.delivery_status==="charge_pending"&&media.action!=="send")){
+     report("blocked");continue;
+    }
+    if(media.action==="fail"){
+     console.warn("[outbox] image effect not sendable",{id:effect.id,code:media.code});
+     report(media.code);await skip("ineligible","invalid");continue;
+    }
+    if("source" in payload){await skip("ineligible","invalid");continue;}
+    imageUrl=media.url;
+   }
    dispatched++;
-   let messageText=typeof payload.text==="string"?payload.text.trim():"";
+   // An image is persisted (encrypted, like text) with its URL as the body.
+   let messageText=imageUrl!==undefined?imageUrl:
+    typeof payload.text==="string"?payload.text.trim():"";
    if(payload.source==="knowledge_ai"){
     if(env("FLOW_RAG_ENABLED")!=="true"){report("blocked");continue;}
     if(effect.delivery_status==="charge_pending"){
@@ -392,6 +418,9 @@ Deno.serve(async req=>{
     (env("WA_ACCESS_TOKEN")||env("WHATSAPP_ACCESS_TOKEN")):
     await decryptAccountToken(String(account.access_token_encrypted??""),fieldKey);
    if(!token){report("blocked");continue;}
+   // Images are not idempotent: a failure is classified for the report only;
+   // executeOnce still records it as uncertain and NEVER resends.
+   const media:{failure:MediaFailure|null}={failure:null};
    const res=await executeOnce({
     reserve:async()=>{
      const {data,error}=await sb.rpc("flow_reserve_outbox_delivery",{
@@ -400,10 +429,13 @@ Deno.serve(async req=>{
      if(error){console.error("[outbox] reserve error",{code:error.code});return false;}
      return data===true;
     },
-    send:()=>sendProviderMessage({
+    send:()=>imageUrl===undefined?sendProviderMessage({
      platform:account.platform,externalId:String(account.external_id??""),
      token,recipient,text:messageText,quickReplies,websiteButtons
-    }),
+    }):sendProviderMessage({
+     platform:account.platform,externalId:String(account.external_id??""),
+     token,recipient,text:"",imageUrl,imageHost:base
+    }).catch(e=>{media.failure=classifyMediaFailure(e);throw e;}),
     confirm:async(status,providerId)=>{
      const {data,error}=await sb.rpc("flow_finish_outbox_delivery",{
       p_tenant:effect.tenant_id,p_outbox:effect.id,p_result:status,
@@ -416,6 +448,10 @@ Deno.serve(async req=>{
     persistAndBill
    });
    report(res);
+   if(media.failure){
+    console.warn("[outbox] image send failed",{id:effect.id,code:media.failure});
+    report(media.failure==="media_rejected"?"media_rejected":"media_"+media.failure);
+   }
   }catch(err){
    // No automatic retry of any reserved provider call, even on timeout.
    console.error("[outbox] effect blocked/uncertain",{id:effect.id,
