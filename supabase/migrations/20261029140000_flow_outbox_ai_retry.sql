@@ -20,6 +20,8 @@
 -- flow_reserve_outbox_delivery (unchanged), which requires delivery_status
 -- 'pending'; retry_wait rows can never be reserved.
 BEGIN;
+SET LOCAL lock_timeout='3s';
+SET LOCAL statement_timeout='60s';
 
 DO $preflight$
 DECLARE

@@ -2,8 +2,9 @@
 // 20261029130000_flow_run_lifecycle -> 20261029140000_flow_outbox_ai_retry ->
 // 20261029150000_flow_takeover_resume and their rollbacks (150000 -> 140000 -> 130000).
 //
-//  (a) lock-timeout handling with the operator PGOPTIONS (130000/140000 set no
-//      timeout themselves): a conflicting lock makes the apply fail fast with
+//  (a) lock-timeout handling (130000/140000 set their own SET LOCAL timeouts,
+//      like 150000..180000; PGOPTIONS is no longer required): a conflicting
+//      lock makes the apply fail fast with
 //      lock_not_available, leaves no partial change and succeeds on retry.
 //  (b) MEASURES (prints, never asserts tight timings) the heaviest steps on a
 //      larger seeded fixture (~200k runs, ~500k outbox rows).
@@ -41,7 +42,7 @@ const DB="supabase/migrations/20261029125000_flow_durable_button_run.sql";
 const DB_RB="supabase/rollbacks/20261029125000_flow_durable_button_run.rollback.sql";
 const GD="supabase/migrations/20261029180000_flow_durable_button_run_guards.sql";
 const GD_RB="supabase/rollbacks/20261029180000_flow_durable_button_run_guards.rollback.sql";
-// Operator rule: 130000/140000 must be applied with these session settings.
+// Former operator rule for 130000/140000 (they now set the same values via SET LOCAL).
 const PGOPTIONS="-c lock_timeout=3s -c statement_timeout=60s";
 const OPTS={PGOPTIONS};
 const HOLD=5; // seconds a conflicting session keeps its lock
@@ -51,9 +52,8 @@ const md5=x=>createHash("md5").update(x).digest("hex");
 const body=(f,tag)=>{const s=src(f),o=`AS $${tag}$`,a=s.indexOf(o)+o.length;return s.slice(a,s.indexOf(`$${tag}$`,a));};
 
 // ---------------------------------------------------------------- static
-test("130000/140000 set no timeouts of their own (PGOPTIONS required); 125000, 150000..180000 and all rollbacks do",()=>{
- for(const f of [LC,AI])assert.doesNotMatch(src(f),/lock_timeout|statement_timeout/,f);
- for(const f of [DB,TK,CP,CC,GD,DB_RB,LC_RB,AI_RB,TK_RB,CP_RB,CC_RB,GD_RB])
+test("125000..180000 (incl. 130000/140000) and all rollbacks set bounded timeouts right after BEGIN",()=>{
+ for(const f of [DB,LC,AI,TK,CP,CC,GD,DB_RB,LC_RB,AI_RB,TK_RB,CP_RB,CC_RB,GD_RB])
   assert.match(src(f),/^BEGIN;\nSET LOCAL lock_timeout='3s';\nSET LOCAL statement_timeout='60s';\n/m,f);
  // 20261029180000 (durable button run guards; requires the whole chain) is the
  // newest migration, then 20261029170000 (canary claim).
@@ -369,14 +369,17 @@ test("(a) lock contention: fail fast with lock_not_available, no partial change,
   assert.equal(after,want[TK]);
   rows.push(`20261029150000 vs open ROW EXCLUSIVE writers on runs/outbox/leases: applied in ${r.ms} ms (not blocked)`);
  }
- // WITHOUT PGOPTIONS 130000 queues behind the lock (and everything queues behind it).
+ // WITHOUT PGOPTIONS 130000 still fails fast on its own SET LOCAL lock_timeout.
  {
   const db=clone("lk");
-  const {r,after}=await contended(db,AS("automation_flow_runs"),LC,{env:{}});
-  assert.equal(r.code,0,r.err);
-  assert.ok(r.ms>=(HOLD-1)*1000,`waited ${r.ms} ms`);
-  assert.equal(after,want[LC]);
-  rows.push(`20261029130000 WITHOUT PGOPTIONS: waited ${r.ms} ms for the lock holder (unbounded queueing)`);
+  const {r,before,after}=await contended(db,AS("automation_flow_runs"),LC,{env:{}});
+  assert.notEqual(r.code,0,"130000 without PGOPTIONS must fail under the lock");
+  assert.match(r.err,/55P03: canceling statement due to lock timeout/,r.err);
+  assert.ok(r.ms>=2500&&r.ms<6000,`130000 without PGOPTIONS: failed after ${r.ms} ms`);
+  assert.equal(after,before,"130000 without PGOPTIONS: no partial change");
+  rows.push(`20261029130000 WITHOUT PGOPTIONS (own SET LOCAL): lock_not_available after ${r.ms} ms`);
+  apply(db,LC,"130000 retry");
+  assert.equal(fp(db),want[LC]);
  }
  // WITHOUT ON_ERROR_STOP psql exits 0 although nothing was applied.
  {

@@ -28,6 +28,8 @@
 -- to_jsonb(row), so the functions work whether or not those columns exist.
 -- The preflight fails closed if a required object is missing.
 BEGIN;
+SET LOCAL lock_timeout='3s';
+SET LOCAL statement_timeout='60s';
 
 DO $preflight$
 DECLARE
