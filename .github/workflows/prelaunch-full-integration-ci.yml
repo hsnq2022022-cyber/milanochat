@@ -146,6 +146,40 @@ jobs:
           grep -qx '# fail 0' "$RUNNER_TEMP/flow-guards.tap"
           grep -qx '# cancelled 0' "$RUNNER_TEMP/flow-guards.tap"
           grep -qx '# skipped 0' "$RUNNER_TEMP/flow-guards.tap"
+  flow-throwaway-pg-suites:
+    # Each suite builds its own throwaway unix-socket cluster from the runner's
+    # PostgreSQL server binaries (PG_BIN or /usr/lib/postgresql/*/bin); PG* is stripped.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Superseding durable run start 20261029190000 in throwaway PG
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test --test-reporter=tap tests/flow-begin-durable-run-superseding.test.mjs | tee "$RUNNER_TEMP/flow-superseding.tap"
+          grep -qx '# fail 0' "$RUNNER_TEMP/flow-superseding.tap"
+          grep -qx '# cancelled 0' "$RUNNER_TEMP/flow-superseding.tap"
+          grep -qx '# skipped 0' "$RUNNER_TEMP/flow-superseding.tap"
+      - name: Predeploy checks in throwaway PG
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test --test-reporter=tap tests/flow-predeploy-checks.test.mjs | tee "$RUNNER_TEMP/flow-predeploy.tap"
+          grep -qx '# fail 0' "$RUNNER_TEMP/flow-predeploy.tap"
+          grep -qx '# cancelled 0' "$RUNNER_TEMP/flow-predeploy.tap"
+          grep -qx '# skipped 0' "$RUNNER_TEMP/flow-predeploy.tap"
+      - name: Outbox AI retry SQL transitions in throwaway PG
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test --test-reporter=tap tests/flow-outbox-ai-retry.test.mjs | tee "$RUNNER_TEMP/flow-ai-retry.tap"
+          grep -qx '# fail 0' "$RUNNER_TEMP/flow-ai-retry.tap"
+          grep -qx '# cancelled 0' "$RUNNER_TEMP/flow-ai-retry.tap"
+          grep -qx '# skipped 0' "$RUNNER_TEMP/flow-ai-retry.tap"
   staff-delivery-pg:
     runs-on: ubuntu-latest
     timeout-minutes: 18
@@ -290,6 +324,8 @@ jobs:
           node --experimental-strip-types --test tests/flow-outbox-confirmed-settlement.test.ts
           node --experimental-strip-types --test tests/flow-outbox-production-gate.test.ts
           node --experimental-strip-types --test tests/flow-rich-actions-meta.test.ts
+          node --experimental-strip-types --test tests/flow-outbox-ai-retry.test.ts
+          node --experimental-strip-types --test tests/flow-internal-actions-ui.test.ts
           node --experimental-strip-types --test src/flow/runtimeExtra.test.ts
           node --experimental-strip-types --test src/flow/runtimePlan.test.ts
           node --experimental-strip-types --test src/flow/aiMetricsGate.test.ts
