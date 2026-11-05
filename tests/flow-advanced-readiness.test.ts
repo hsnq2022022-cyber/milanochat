@@ -131,3 +131,45 @@ test("text/email/phone collection graphs are durable 'text' candidates needing n
  assert.equal(durableCandidateKind({...collect,nodes:collect.nodes.map(n=>n.id==="n"?ask("n","number","name"):n)}),"unsupported");
  assert.equal(durableCandidateKind({...collect,nodes:collect.nodes.map(n=>n.id==="n"?ask("n","text","message"):n)}),"unsupported");
 });
+
+import {durableNeedsInternalActions,supportedDurableDocument}
+ from "../supabase/functions/milan-api/flowDurableIngress.ts";
+test("tag/untag/notify/handoff graphs additionally require FLOW_INTERNAL_ACTIONS_ENABLED; old callers unchanged",()=>{
+ // Old inputs (no internal fields) keep exactly their previous results.
+ for(const kind of ["buttons","delay","mixed","text"] as const){
+  const before=evaluateFlowReadiness({...input,candidateKind:kind});
+  assert.equal(before.needsInternalActions,false,kind);
+  assert.equal(before.checks.internalActions,false,kind);
+  const notNeeded=evaluateFlowReadiness({...input,candidateKind:kind,needsInternalActions:false,internalActionsEnabled:false});
+  assert.equal(notNeeded.configured,before.configured,kind);
+  assert.equal(notNeeded.buttonsConfigured,before.buttonsConfigured,kind);
+  assert.equal(notNeeded.delayConfigured,before.delayConfigured,kind);
+  const needed=evaluateFlowReadiness({...input,candidateKind:kind,needsInternalActions:true});
+  assert.equal(needed.needsInternalActions,true);
+  assert.equal(needed.configured,false,kind+": flag missing");
+  assert.equal(needed.buttonsConfigured,false);assert.equal(needed.delayConfigured,false);
+  const on=evaluateFlowReadiness({...input,candidateKind:kind,needsInternalActions:true,internalActionsEnabled:true});
+  assert.equal(on.configured,before.configured,kind+": flag present");
+  assert.equal(on.buttonsConfigured,before.buttonsConfigured);assert.equal(on.delayConfigured,before.delayConfigured);
+ }
+ // The flag never makes an unsupported candidate or a red base gate ready.
+ assert.equal(evaluateFlowReadiness({...input,candidateKind:"unsupported",needsInternalActions:true,internalActionsEnabled:true}).configured,false);
+ assert.equal(evaluateFlowReadiness({...input,candidateKind:"text",outboxEnabled:false,needsInternalActions:true,internalActionsEnabled:true}).configured,false);
+ // The publication endpoint derives the need from the SAME whitelist and the real flag.
+ const api=readFileSync("supabase/functions/flow-publication/index.ts","utf8");
+ assert.match(api,/needsInternalActions:supported&&durableNeedsInternalActions\(published\),/);
+ assert.match(api,/internalActionsEnabled:env\("FLOW_INTERNAL_ACTIONS_ENABLED"\)==="true"/);
+ const T={id:"start",data:{kind:"trigger",platform:"instagram",triggerMode:"message"}};
+ const doc={version:3,nodes:[T,{id:"m",data:{kind:"message",text:"bye",image:"",options:[],contentBlocks:[]}},
+  {id:"h",data:{kind:"action",actionType:"handoff",actionValue:""}}],
+  edges:[{source:"start",target:"m",sourceHandle:"next"},{source:"m",target:"h",sourceHandle:"next"}]};
+ assert.equal(supportedDurableDocument(doc),true);
+ assert.equal(durableNeedsInternalActions(doc as any),true);
+});
+test("activation guard requires the internal executor flag exactly when the graph has internal actions",()=>{
+ const api=readFileSync("supabase/functions/flow-publication/index.ts","utf8");
+ const start=api.indexOf("const rawDocument:unknown=publication.document");
+ const guard=api.slice(start,api.indexOf("if(!durable){",start));
+ assert.match(guard,/const needsInternal=!durableGraph\|\|durableNeedsInternalActions\(rawDocument\);/);
+ assert.match(guard,/\(!needsInternal\|\|env\("FLOW_INTERNAL_ACTIONS_ENABLED"\)==="true"\)&&/);
+});

@@ -188,3 +188,51 @@ test("template rendering is limited to collected fields, single pass and bounded
   const plain = doc([t, m], [[t, "next", m]]);
   assert.equal((planUntilWait(plain, createRuntimeState(plain, "f", 1), input).effects[0] as { text: string }).text, "Hello {{name}}");
 });
+
+test("internal actions: tag/untag/notify are chained in seq order, notify renders collected fields, handoff ends the run", () => {
+  const t = trigger(), hi = text("Welcome");
+  const ask = makeNode("question", { x: 0, y: 0 }, { text: "Email?", inputMode: "email", inputField: "email", options: [] });
+  const tag = makeNode("action", { x: 0, y: 0 }, { actionType: "tag", actionValue: " lead " });
+  const untag = makeNode("action", { x: 0, y: 0 }, { actionType: "untag", actionValue: "cold" });
+  const notify = makeNode("action", { x: 0, y: 0 }, { actionType: "notify", actionValue: "New lead {{email}} {{first_name}}" });
+  const bye = text("A human will reply");
+  const human = makeNode("action", { x: 0, y: 0 }, { actionType: "handoff", actionValue: "" });
+  const after = text("never planned");
+  const flow = doc([t, hi, ask, tag, untag, notify, bye, human, after],
+    [[t, "next", hi], [hi, "next", ask], [ask, "valid", tag], [tag, "next", untag], [untag, "next", notify],
+     [notify, "next", bye], [bye, "next", human], [human, "next", after]]);
+  const start = planUntilWait(flow, createRuntimeState(flow, "f", 1), input);
+  assert.equal(start.state.status, "awaiting_input");
+  const r = planUntilWait(flow, start.state, { ...input, eventKey: "mid.answer", answer: "ali@shop.example" });
+  assert.equal(r.error, undefined);
+  assert.equal(r.state.status, "handoff");
+  assert.equal(r.state.nodeId, human.id, "the run stops AT the handoff; nothing after it is planned");
+  assert.deepEqual(r.effects.map(e => [e.kind, e.seq]),
+    [["tag", 0], ["untag", 1], ["staff_notification", 2], ["message", 3], ["handoff", 4]]);
+  assert.equal((r.effects[0] as { tag: string }).tag, "lead");
+  assert.equal((r.effects[2] as { text: string }).text, "New lead ali@shop.example {{first_name}}");
+  assert.equal(new Set(r.effects.map(e => e.idempotencyKey)).size, 5);
+  // A handoff run is terminal for the planner.
+  assert.deepEqual(planUntilWait(flow, r.state, { ...input, eventKey: "mid.later" }).effects, []);
+  // A sixth effect still fails closed (handoff counts towards the cap).
+  const extra = text("one more");
+  const six = doc([t, hi, ask, extra, tag, untag, notify, bye, human],
+    [[t, "next", hi], [hi, "next", ask], [ask, "valid", extra], [extra, "next", tag], [tag, "next", untag],
+     [untag, "next", notify], [notify, "next", bye], [bye, "next", human]]);
+  const s6 = planUntilWait(six, start.state, { ...input, eventKey: "mid.answer", answer: "ali@shop.example" });
+  assert.equal(s6.effects.length, 0);
+  assert.match(String(s6.error), /exceeds 5 effects/);
+});
+
+test("internal actions: rendered notification text is bounded to 500 characters", () => {
+  const t = trigger();
+  const ask = makeNode("question", { x: 0, y: 0 }, { text: "Name?", inputMode: "text", inputField: "name", options: [] });
+  const notify = makeNode("action", { x: 0, y: 0 }, { actionType: "notify", actionValue: "x".repeat(490) + "{{name}}" });
+  const flow = doc([t, ask, notify], [[t, "next", ask], [ask, "valid", notify]]);
+  const start = planUntilWait(flow, createRuntimeState(flow, "f", 1), input);
+  const r = planUntilWait(flow, start.state, { ...input, eventKey: "mid.n", answer: "علي".repeat(20) });
+  assert.equal(r.state.status, "completed");
+  const body = (r.effects[0] as { text: string }).text;
+  assert.equal(Array.from(body).length, 500);
+  assert.ok(body.startsWith("x".repeat(490) + "علي"));
+});

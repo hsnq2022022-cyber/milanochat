@@ -121,7 +121,9 @@ export default function NodeEditor({node,onClose,language="ar"}:{node:FlowNode|n
       </>}
       {d.kind==="action"&&<>
         <label className={section}>نوع الإجراء</label><select className={input} value={d.actionType} onChange={e=>edit({actionType:e.target.value as FlowData["actionType"]})}>{Object.entries(actions).map(([v,t])=><option key={v} value={v}>{t}</option>)}</select>
-        <label className={section}>القيمة / اسم الوسم</label><input className={input} value={d.actionValue} onChange={e=>edit({actionValue:e.target.value})}/>
+        {d.actionType==="handoff"
+          ?<p data-testid="handoff-hint" className="mt-2 text-[11px] text-[#8B9E96]">يُفضّل إضافة رسالة قبل تحويل المحادثة إلى موظف</p>
+          :<><label className={section}>القيمة / اسم الوسم</label><input className={input} value={d.actionValue} onChange={e=>edit({actionValue:e.target.value})}/></>}
         <p className="mt-2 text-[11px] text-[#8B9E96]">هذه إعدادات تصميمية، وليست أوامر مفعّلة في النظام الحقيقي.</p>
       </>}
       {d.kind==="randomizer"&&<>

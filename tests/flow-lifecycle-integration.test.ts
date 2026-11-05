@@ -154,6 +154,9 @@ async function postgrest(req:Request):Promise<Response>{
   const cols=Object.keys(list[0]);
   q=`WITH i AS (INSERT INTO public.${table}(${cols.map(ident).join(",")}) VALUES ${
    list.map(r=>"("+cols.map(c=>lit(r[c])).join(",")+")").join(",")} RETURNING ${select}) SELECT '@@'||coalesce(jsonb_agg(to_jsonb(i)),'[]'::jsonb)::text FROM i;`;
+ }else if(req.method==="DELETE"){
+  if(!where.length)return pgResponse(400,{code:"21000",message:"DELETE requires a filter",details:null,hint:null});
+  q=`WITH d AS (DELETE FROM public.${table}${w} RETURNING ${select}) SELECT '@@'||coalesce(jsonb_agg(to_jsonb(d)),'[]'::jsonb)::text FROM d;`;
  }else return pgResponse(405,{code:"PGRST000",message:"unsupported",details:null,hint:null});
  const r=await psql(db,q,"service_role");
  if(!r.ok)return pgError(r.err);
@@ -304,6 +307,21 @@ const collectDelayDoc={version:3,name:"collect+delay",nodes:[
  {source:"follow",target:"done",sourceHandle:"next"}
 ]};
 
+// Internal actions: welcome -> email question -> tag -> notify {{email}} -> handoff message -> handoff.
+const handoffDoc={version:3,name:"lead handoff",nodes:[
+ {id:"start",data:{kind:"trigger",platform:"instagram",triggerMode:"message"}},
+ {id:"welcome",data:{kind:"message",text:"أهلاً بك",image:"",options:[],contentBlocks:[]}},
+ {id:"askEmail",data:{kind:"question",inputMode:"email",inputField:"email",text:"ما بريدك الإلكتروني؟",image:"",contentBlocks:[],options:[]}},
+ {id:"tagLead",data:{kind:"action",actionType:"tag",actionValue:"lead"}},
+ {id:"notify",data:{kind:"action",actionType:"notify",actionValue:"عميل جديد {{email}}"}},
+ {id:"bye",data:{kind:"message",text:"سيتواصل معك موظف الآن",image:"",options:[],contentBlocks:[]}},
+ {id:"human",data:{kind:"action",actionType:"handoff",actionValue:""}}
+],edges:[
+ {source:"start",target:"welcome",sourceHandle:"next"},{source:"welcome",target:"askEmail",sourceHandle:"next"},
+ {source:"askEmail",target:"tagLead",sourceHandle:"valid"},{source:"tagLead",target:"notify",sourceHandle:"next"},
+ {source:"notify",target:"bye",sourceHandle:"next"},{source:"bye",target:"human",sourceHandle:"next"}
+]};
+
 // Production live-only columns (schema.sql / omnichannel / human_agent migrations).
 const LIVE_COLUMNS=`
 ALTER TABLE public.tenants ADD COLUMN is_active boolean NOT NULL DEFAULT true,
@@ -330,11 +348,13 @@ VALUES('${A}','buttons',1,'${ACC}','instagram',${lit(buttonsDoc)},'88888888-8888
       ('${A}','chain',1,'${ACC}','instagram',${lit(chainDoc)},'88888888-8888-4888-8888-888888888888'),
       ('${A}','collect',1,'${ACC}','instagram',${lit(collectDoc)},'88888888-8888-4888-8888-888888888888'),
       ('${A}','collectdelay',1,'${ACC}','instagram',${lit(collectDelayDoc)},'88888888-8888-4888-8888-888888888888'),
+      ('${A}','handoff',1,'${ACC}','instagram',${lit(handoffDoc)},'88888888-8888-4888-8888-888888888888'),
       ('${B}','bflow',1,'${ACCB}','instagram',${lit(buttonsDoc)},'88888888-8888-4888-8888-888888888888');
 INSERT INTO public.automation_flow_activations(tenant_id,channel_account_id,platform,flow_key,revision,is_active)
 VALUES('${A}','${ACC}','instagram','buttons',1,false),('${A}','${ACC}','instagram','delay',1,false),
       ('${A}','${ACC}','instagram','chain',1,false),
       ('${A}','${ACC}','instagram','collect',1,false),('${A}','${ACC}','instagram','collectdelay',1,false),
+      ('${A}','${ACC}','instagram','handoff',1,false),
       ('${B}','${ACCB}','instagram','bflow',1,true);
 INSERT INTO public.automation_flow_tenant_switches(tenant_id,enabled,test_only,production_approved)
 VALUES('${A}',true,true,true),('${B}',true,true,true)
@@ -372,6 +392,12 @@ const CHAIN=[
  "supabase/migrations/20261028224000_delivery_attempts.sql",
  "supabase/migrations/20261028225000_flow_runtime_advance.sql",
  "supabase/migrations/20261028226000_flow_outbox_delivery_attempts.sql",
+ // Staff memberships + internal effect tables (flow_conversation_tags,
+ // flow_staff_notifications) used by the internal executor; the bootstrap
+ // adds the auth.users stub and tenants.user_id (owner) they reference.
+ "tests/sql/flow-staff-membership-bootstrap.sql",
+ "supabase/migrations/20261028227000_tenant_staff_memberships.sql",
+ "supabase/migrations/20261028228000_flow_internal_actions.sql",
  // Durable start/button RPCs (bodies identical to the former proposal step).
  "supabase/migrations/20261029125000_flow_durable_button_run.sql",
  "supabase/migrations/20261029130000_flow_run_lifecycle.sql",
@@ -1368,6 +1394,118 @@ Deno.test({name:"flow V3/V4 lifecycle integration (real handlers + throwaway Pos
    assert.equal(await val(`SELECT count(*)::int FROM public.automation_flow_delivery_attempts a
     JOIN public.automation_flow_outbox o ON o.tenant_id=a.tenant_id AND o.id=a.outbox_id WHERE o.run_id='${runId}'`),3,
     "question + saved + follow-up: one provider attempt each");
+  });
+
+  await t.step("internal actions: welcome -> email -> tag -> notify -> handoff message -> handoff; order, exactly once, takeover, silence, replays, tenant isolation",async()=>{
+   await freshDb();resetMeta();await activate("handoff",true);
+   const {runInternalEffects}=await import("../supabase/functions/flow-internal-worker/internalEffects.ts");
+   const internalTick=()=>runInternalEffects(sb,{canaryAccountId:ACC});
+   Deno.env.set("FLOW_INTERNAL_ACTIONS_ENABLED","true");
+   try{
+    const OWNER_A="99999999-9999-4999-8999-999999999999";
+    // One commit shares created_at: order by (created_at, payload.seq) like the workers.
+    const ordered=(cv:string)=>rows<{id:string;effect_kind:string;delivery_status:string;cancel_reason:string|null;payload:any}>(
+     `SELECT o.id,o.effect_kind,o.delivery_status,o.cancel_reason,o.payload FROM public.automation_flow_outbox o
+      JOIN public.automation_flow_runs r ON r.tenant_id=o.tenant_id AND r.id=o.run_id
+      WHERE r.conversation_id='${cv}' ORDER BY o.created_at,coalesce((o.payload->>'seq')::int,0),o.id`);
+    const c=await conv("9700001");const m1=await inbound(c,"mid.h.1");
+    assert.equal(await attemptDurableInstagram(sb,evText(c,m1,"mid.h.1","hi")),"handled");
+    let o=await outboxTick();
+    assert.equal(o.body.status.settled,2,JSON.stringify(o.body));
+    assert.deepEqual(sentTexts(),["أهلاً بك","ما بريدك الإلكتروني؟"]);
+    // Answer: tag, notify, handoff message and handoff in ONE commit; the run ends in 'handoff'.
+    const m2=await inbound(c,"mid.h.2");
+    assert.equal(await attemptDurableInstagram(sb,evText(c,m2,"mid.h.2","Ali@Shop.Example")),"handled");
+    assert.deepEqual((await runRow(c)).map(r=>[r.run_status,r.current_node_id,r.variables]),
+     [["handoff","human",{email:"ali@shop.example"}]]);
+    let fx=await ordered(c);
+    assert.deepEqual(fx.map(e=>[e.effect_kind,e.payload.seq??null,e.delivery_status]),[
+     ["message",0,"settled"],["question",1,"settled"],["tag",0,"pending"],["staff_notification",1,"pending"],
+     ["message",2,"pending"],["handoff",3,"pending"]]);
+    // Customer writes again before the handoff is executed: silent (no claim, no run, no V2).
+    const m3=await inbound(c,"mid.h.3");
+    assert.equal(await attemptDurableInstagram(sb,evText(c,m3,"mid.h.3","hello?")),"handled");
+    assert.equal(await val(`SELECT count(*)::int FROM public.automation_message_claims WHERE provider_event_id='mid.h.3'`),0);
+    assert.equal((await runsOf(c)).length,1);
+    // Internal pass BEFORE the message is sent: tag + notify run, the handoff waits for its message.
+    let it=await internalTick();
+    assert.equal(it.tag_applied,1,JSON.stringify(it));assert.equal(it.staff_notification_applied,1);
+    assert.equal(it.held_order,1);
+    assert.deepEqual(await rows(`SELECT transferred,auto_paused_reason FROM public.conversations WHERE id='${c}'`),
+     [{transferred:false,auto_paused_reason:null}]);
+    // Outbox tick: the handoff message goes out FIRST, then the same tick switches the conversation.
+    const before=Date.now();
+    o=await outboxTick();
+    const after=Date.now();
+    assert.equal(o.body.status.settled,1,JSON.stringify(o.body));
+    assert.equal(o.body.internal.handoff_applied,1,JSON.stringify(o.body));
+    assert.deepEqual(sentTexts(),["أهلاً بك","ما بريدك الإلكتروني؟","سيتواصل معك موظف الآن"]);
+    const conv1=(await rows<{transferred:boolean;auto_paused_reason:string;human_agent_expires_at:string}>(
+     `SELECT transferred,auto_paused_reason,human_agent_expires_at FROM public.conversations WHERE id='${c}'`))[0];
+    assert.equal(conv1.transferred,true);assert.equal(conv1.auto_paused_reason,"ai_handoff");
+    const exp=Date.parse(conv1.human_agent_expires_at);
+    assert.ok(exp>=before+15*60000-1000&&exp<=after+15*60000+1000,"same 15 min expiry as the existing handoff");
+    assert.equal(await val(`SELECT public.flow_conversation_human_takeover('${A}','${c}')`,"service_role"),true,
+     "existing takeover helper sees the handoff");
+    fx=await ordered(c);
+    assert.ok(fx.every(e=>e.delivery_status==="settled"),JSON.stringify(fx.map(e=>e.delivery_status)));
+    assert.deepEqual(await rows(`SELECT tag,created_by_outbox::text AS src FROM public.flow_conversation_tags WHERE conversation_id='${c}'`),
+     [{tag:"lead",src:fx.find(e=>e.effect_kind==="tag")!.id}]);
+    assert.deepEqual(await rows(`SELECT tenant_id::text AS t,recipient_user_id::text AS u,body,status FROM public.flow_staff_notifications WHERE conversation_id='${c}'`),
+     [{t:A,u:OWNER_A,body:"عميل جديد ali@shop.example",status:"queued"}]);
+    // Exactly once: more ticks (outbox + standalone executor, concurrently) change nothing.
+    await Promise.all([outboxTick(),internalTick(),internalTick()]);await outboxTick();
+    assert.equal(meta.calls.length,3);
+    assert.equal(await val(`SELECT count(*)::int FROM public.flow_conversation_tags`),1);
+    assert.equal(await val(`SELECT count(*)::int FROM public.flow_staff_notifications`),1);
+    assert.deepEqual(await rows(`SELECT effect_kind,attempts FROM public.automation_flow_outbox WHERE effect_kind IN('tag','staff_notification','handoff') ORDER BY effect_kind`),
+     [{effect_kind:"handoff",attempts:1},{effect_kind:"staff_notification",attempts:1},{effect_kind:"tag",attempts:1}]);
+    // Duplicate redelivery: replays of the claimed answer/trigger are inert; the inbound index stops them earlier.
+    assert.equal(await attemptDurableInstagram(sb,evText(c,m2,"mid.h.2","Ali@Shop.Example")),"handled");
+    assert.equal(await attemptDurableInstagram(sb,evText(c,m1,"mid.h.1","hi")),"handled");
+    const dup=await psql(db,`SELECT it.inbound('${A}','${c}','mid.h.2');`);
+    assert.equal(dup.ok,false);assert.equal(sqlError(dup.err).code,"23505");
+    assert.equal((await runsOf(c)).length,1);assert.equal((await effectsOf(c)).length,6);
+    // Next inbound after the takeover: milan-api/index.ts returns at `if (conv.transferred)`
+    // BEFORE the durable/V2 routing (source order pinned), so no automated reply...
+    const server=Deno.readTextFileSync(repo+"supabase/functions/milan-api/index.ts");
+    const takeoverReturn=server.indexOf("conversation transferred: ${conv.id}");
+    assert.ok(takeoverReturn>0&&takeoverReturn<server.indexOf("const durable=await attemptDurableInstagram(sb,{"));
+    assert.ok(takeoverReturn<server.indexOf("const outcome = await processExclusiveEvent({"));
+    // ...and even if a run were started anyway, its messages are skipped as human_takeover.
+    const m4=await inbound(c,"mid.h.4");
+    assert.equal(await attemptDurableInstagram(sb,evText(c,m4,"mid.h.4","still there?")),"handled");
+    await outboxTick();
+    assert.equal(meta.calls.length,3,"no automated reply after the handoff");
+    assert.ok((await effectsOf(c)).filter(e=>e.delivery_status==="cancelled").every(e=>e.cancel_reason==="human_takeover"));
+    assert.equal((await rows(`SELECT transferred FROM public.conversations WHERE id='${c}'`))[0].transferred,true);
+    // Cross-tenant negative: a tenant-B internal effect (own run/conversation, non-canary account) is
+    // never executed and never touches tenant A; a forged tenant-B run on tenant A's conversation is
+    // refused by the composite FKs.
+    const cb=await conv("9700002",B,ACCB);
+    await exec(`INSERT INTO public.automation_flow_event_receipts(tenant_id,channel_account_id,platform,provider_event_id)
+     VALUES('${B}','${ACCB}','instagram','mid.hb.1');
+     INSERT INTO public.automation_flow_runs(tenant_id,id,flow_key,publication_revision,channel_account_id,platform,conversation_id,provider_event_id,current_node_id,run_status)
+     VALUES('${B}','77777777-7777-4777-8777-7777777777b9','bflow',1,'${ACCB}','instagram','${cb}','mid.hb.1','yes','completed');
+     INSERT INTO public.automation_flow_outbox(tenant_id,run_id,idempotency_key,effect_kind,payload)
+     VALUES('${B}','77777777-7777-4777-8777-7777777777b9','b-tag','tag','{"kind":"tag","tag":"lead","seq":0}'),
+           ('${B}','77777777-7777-4777-8777-7777777777b9','b-hand','handoff','{"kind":"handoff","seq":1}');`);
+    it=await internalTick();
+    assert.equal(it.blocked_canary,1,JSON.stringify(it));
+    assert.deepEqual(await rows(`SELECT effect_kind,delivery_status FROM public.automation_flow_outbox WHERE tenant_id='${B}' ORDER BY effect_kind`),
+     [{effect_kind:"handoff",delivery_status:"pending"},{effect_kind:"tag",delivery_status:"pending"}]);
+    assert.equal(await val(`SELECT count(*)::int FROM public.flow_conversation_tags WHERE tenant_id='${B}'`),0);
+    assert.equal((await rows(`SELECT transferred FROM public.conversations WHERE id='${cb}'`))[0].transferred,false);
+    // Tenant B's queued handoff never silences tenant A, and A's settled one no longer silences anything.
+    const ca=await conv("9700003");const ma=await inbound(ca,"mid.h.5");
+    assert.equal(await attemptDurableInstagram(sb,evText(ca,ma,"mid.h.5","hi")),"handled");
+    assert.deepEqual((await runRow(ca)).map(r=>[r.run_status,r.current_node_id]),[["awaiting_input","askEmail"]]);
+    await exec(`INSERT INTO public.automation_flow_event_receipts(tenant_id,channel_account_id,platform,provider_event_id)
+     VALUES('${B}','${ACCB}','instagram','mid.hb.2');`);
+    const forged=await psql(db,`INSERT INTO public.automation_flow_runs(tenant_id,flow_key,publication_revision,channel_account_id,platform,conversation_id,provider_event_id,current_node_id,run_status)
+     VALUES('${B}','bflow',1,'${ACCB}','instagram','${c}','mid.hb.2','yes','completed');`);
+    assert.equal(forged.ok,false);assert.equal(sqlError(forged.err).code,"23503");
+   }finally{Deno.env.delete("FLOW_INTERNAL_ACTIONS_ENABLED");}
   });
 
   await t.step("worker endpoints refuse unauthenticated ticks before touching the database",async()=>{

@@ -11,8 +11,8 @@ import {
 import type {FlowCapability} from "../../../src/flow/publicationGate.ts";
 import {evaluateFlowReadiness} from "./readiness.ts";
 import {simpleMessageFromDocument} from "../milan-api/flowPrepareMessage.ts";
-import {supportedDurableDocument,durableCandidateKind,durableRuntimeNeeds,type DurableCandidateKind}
- from "../milan-api/flowDurableIngress.ts";
+import {supportedDurableDocument,durableCandidateKind,durableRuntimeNeeds,durableNeedsInternalActions,
+ type DurableCandidateKind} from "../milan-api/flowDurableIngress.ts";
 
 const env=(k:string)=>Deno.env.get(k)??"";
 // Only the existing production GitHub Pages origin. Never reflect Origin.
@@ -199,7 +199,10 @@ export async function handleFlowPublication(req:Request,
     outboxEnabled:env("FLOW_OUTBOX_SEND_ENABLED")==="true",
     atomicDebitReady:env("FLOW_ATOMIC_CONSUME_READY")==="true",
     richButtonsEnabled:env("FLOW_RICH_BUTTONS_ENABLED")==="true",
-    encryptionConfigured:env("FIELD_ENCRYPTION_KEY").length>0
+    encryptionConfigured:env("FIELD_ENCRYPTION_KEY").length>0,
+    // tag/untag/notify/handoff nodes need the internal executor flag.
+    needsInternalActions:supported&&durableNeedsInternalActions(published),
+    internalActionsEnabled:env("FLOW_INTERNAL_ACTIONS_ENABLED")==="true"
    });
    return respond({ok:true,readiness,candidateRevision:revision??null});
   }
@@ -338,6 +341,8 @@ export async function handleFlowPublication(req:Request,
    // Flags follow the actual nodes: buttons sender for question/button
    // messages, scheduler for delays (both for mixed graphs, none for text).
    const needs=durableGraph?durableRuntimeNeeds(rawDocument):{buttons:true,scheduler:true};
+   // tag/untag/notify/handoff run only through the internal executor.
+   const needsInternal=!durableGraph||durableNeedsInternalActions(rawDocument);
    const durable=production&&scope.platform==="instagram"&&durableGraph&&
     env("FLOW_DURABLE_ACTIVATION_READY")==="true"&&
     env("FLOW_DURABLE_INGRESS_ENABLED")==="true"&&
@@ -347,6 +352,7 @@ export async function handleFlowPublication(req:Request,
     env("FLOW_ATOMIC_CONSUME_READY")==="true"&&
     env("FIELD_ENCRYPTION_KEY").length>0&&
     (!needs.buttons||env("FLOW_RICH_BUTTONS_ENABLED")==="true")&&
+    (!needsInternal||env("FLOW_INTERNAL_ACTIONS_ENABLED")==="true")&&
     (!needs.scheduler||env("FLOW_DURABLE_SCHEDULER_ENABLED")==="true");
    if(!durable){
     if(simpleMessageFromDocument(publication.document,scope.platform)===null)

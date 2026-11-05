@@ -26,8 +26,10 @@ import { chooseWeightedPort } from "./simulation.ts";
  *    inputField is a valid, non-"message" field name);
  *  - text/email/phone question: variables[node.inputField] = the answer the
  *    caller already validated and normalized (planRuntimeTransition stores it).
- * Message/question texts get {{field}} rendering for those collected fields
- * only (renderCollectedTemplate); the simulator is not affected.
+ * Message/question texts and staff notification texts get {{field}}
+ * rendering for those collected fields only (renderCollectedTemplate); the
+ * simulator is not affected. Tag names are never rendered.
+ * A handoff ends the chain (status "handoff"); it is always the last effect.
  */
 export const MAX_CHAIN_EFFECTS = 5;
 export const MAX_CHAIN_CALLS = MAX_CHAIN_EFFECTS + 1;
@@ -159,7 +161,16 @@ export function renderCollectedTemplate(text: string, variables: Record<string, 
   });
   return clipBytes(rendered, MAX_RENDERED_BYTES);
 }
+/** Max characters of a staff notification body (flow_staff_notifications CHECK 1..500). */
+export const MAX_NOTIFICATION_CHARS = 500;
 function rendered(effect: PlannedEffect, variables: Record<string, string>, fields: Set<string>): PlannedEffect {
+  if (effect.kind === "staff_notification") {
+    // Same collected-field rule as messages; bounded to the stored body limit
+    // (code points, like PostgreSQL length()).
+    const r = renderCollectedTemplate(effect.text, variables, fields);
+    const text = Array.from(r).slice(0, MAX_NOTIFICATION_CHARS).join("");
+    return text === effect.text ? effect : { ...effect, text };
+  }
   if ((effect.kind !== "message" && effect.kind !== "question") || "source" in effect) return effect;
   const text = renderCollectedTemplate(effect.text, variables, fields);
   return text === effect.text ? effect : { ...effect, text };

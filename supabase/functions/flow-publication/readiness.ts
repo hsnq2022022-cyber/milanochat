@@ -30,6 +30,14 @@ export type ReadinessInput={
  atomicDebitReady:boolean;
  richButtonsEnabled:boolean;
  encryptionConfigured:boolean;
+ /**
+  * The graph contains tag/untag/notify/handoff nodes (durableNeedsInternalActions,
+  * same whitelist): the internal executor flag is then required. Optional so
+  * older callers keep their exact results (absent = not needed).
+  */
+ needsInternalActions?:boolean;
+ /** FLOW_INTERNAL_ACTIONS_ENABLED==="true" (internal executor released). */
+ internalActionsEnabled?:boolean;
 };
 export function evaluateFlowReadiness(input:ReadinessInput){
  const checks={
@@ -50,6 +58,7 @@ export function evaluateFlowReadiness(input:ReadinessInput){
   encryption:input.encryptionConfigured,
   scheduler:input.schedulerEnabled,
   buttons:input.richButtonsEnabled,
+  internalActions:input.internalActionsEnabled===true,
  };
  const base=["instagram","tenant","account","globalSwitch","tenantSwitch","credits",
   "activeRevision","supportedCandidate","ingress","activation","canary","operatorRelease","outbox",
@@ -57,16 +66,19 @@ export function evaluateFlowReadiness(input:ReadinessInput){
  const baseReady=base.every(key=>checks[key]);
  const needsButtons=input.candidateKind==="buttons"||input.candidateKind==="mixed";
  const needsScheduler=input.candidateKind==="delay"||input.candidateKind==="mixed";
+ const needsInternalActions=input.needsInternalActions===true;
+ const internalOk=!needsInternalActions||checks.internalActions;
  return {
   checks,
   candidateKind:input.candidateKind,
   needsButtons,
   needsScheduler,
-  buttonsConfigured:baseReady&&checks.buttons&&input.candidateKind==="buttons",
-  delayConfigured:baseReady&&checks.scheduler&&input.candidateKind==="delay",
+  needsInternalActions,
+  buttonsConfigured:baseReady&&checks.buttons&&input.candidateKind==="buttons"&&internalOk,
+  delayConfigured:baseReady&&checks.scheduler&&input.candidateKind==="delay"&&internalOk,
   // Any supported kind: every base gate plus exactly the flags its nodes need.
   configured:baseReady&&input.candidateKind!=="unsupported"&&
-   (!needsButtons||checks.buttons)&&(!needsScheduler||checks.scheduler),
+   (!needsButtons||checks.buttons)&&(!needsScheduler||checks.scheduler)&&internalOk,
   // These flags do not activate a revision, start Cron work, or send any message.
  };
 }

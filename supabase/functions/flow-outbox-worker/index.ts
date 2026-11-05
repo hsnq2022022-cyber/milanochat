@@ -1,7 +1,9 @@
 /**
  * REVIEW-ONLY source. NOT deployed or scheduled.
- * Effect dispatcher: text messages only. Rich questions, tags and staff actions
- * remain separate permission-reviewed executors. Never resend uncertain effects.
+ * Effect dispatcher: text messages only. Internal effects (tags, staff
+ * notifications, handoff) are executed afterwards by the separate executor
+ * flow-internal-worker/internalEffects.ts (FLOW_INTERNAL_ACTIONS_ENABLED),
+ * never sent or billed. Never resend uncertain effects.
  *
  * Necessary server-side gates (ALL default OFF):
  * FLOW_OUTBOX_SEND_ENABLED, FLOW_ATOMIC_CONSUME_READY, global and tenant test_only,
@@ -22,6 +24,7 @@ import {permanentOutboxBlock,temporaryOutboxPause,humanTakeoverActive,OUTBOX_SCA
 import {compareOutbox,heldByEarlierEffect,statusAfterOutcome,ORDERED_KINDS,
  ORDER_SIBLING_LIMIT,type OrderRow} from "./effectOrder.ts";
 import {plainInputQuestion} from "./questionMode.ts";
+import {runInternalEffects,internalActionsReleased} from "../flow-internal-worker/internalEffects.ts";
 
 const env=(name:string)=>Deno.env.get(name)??"";
 const json=(body:unknown,status=200)=>new Response(JSON.stringify(body),
@@ -397,5 +400,12 @@ Deno.serve(async req=>{
    report("error");
   }
  }
- return json({processed:(items??[]).length,dispatched,status:outcomes});
+ // Internal effects (tag/untag/staff_notification/handoff) after the message
+ // pass, so a handoff/tag that follows a message sent in THIS tick can run in
+ // the same tick. Never sends, never bills; OFF unless both operator flags.
+ const internal=internalActionsReleased(k=>Deno.env.get(k))?
+  await runInternalEffects(sb,{canaryAccountId:env("FLOW_DURABLE_CANARY_ACCOUNT_ID")}).catch(()=>({error:1})):
+  undefined;
+ return json({processed:(items??[]).length,dispatched,status:outcomes,
+  ...(internal?{internal}:{})});
 });

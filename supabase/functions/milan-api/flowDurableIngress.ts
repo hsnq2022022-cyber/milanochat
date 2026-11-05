@@ -25,6 +25,19 @@ const plain=(d:RecordValue)=>(d.image===""||d.image===undefined)&&
 const fieldOk=(f:unknown):f is string=>typeof f==="string"&&
  /^[a-zA-Z_][a-zA-Z0-9_]{0,63}$/.test(f)&&!f.startsWith("__")&&
  f.toLowerCase()!=="message"&&f!=="constructor"&&f!=="prototype";
+/**
+ * Tag names: exactly the planner rule (runtimePlan.ts) on the trimmed value,
+ * which also satisfies the flow_conversation_tags CHECK (1..64, no <> or
+ * control characters). Never rendered.
+ */
+export const tagOk=(t:string)=>/^[\p{L}\p{N}_ -]{1,64}$/u.test(t)&&t.trim()===t;
+/**
+ * Staff notification text: 1..500 characters after trim (planner rule and the
+ * flow_staff_notifications body CHECK), no control characters except tab and
+ * line breaks. Only the collected {{field}} placeholders are rendered.
+ */
+export const notifyOk=(t:unknown)=>typeof t==="string"&&t.trim().length>=1&&
+ t.trim().length<=500&&!/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(t);
 /** Step buttons only (no website/flow/AI actions), same limits as before. */
 const stepButtons=(opts:unknown,min:number)=>Array.isArray(opts)&&
  opts.length>=min&&opts.length<=MAX_BUTTONS&&
@@ -78,8 +91,22 @@ function durablePorts(d:RecordValue):{ports:string[];required:string[]}|null{
      d.conditionValue.trim().length>0&&d.conditionValue.length<=250))?
     {ports:["yes","no"],required:["yes","no"]}:null;
   case "action":{
-   // set_field only; tag/untag/notify/handoff/AI stay unsupported live.
-   if(d.actionType!=="set_field"||typeof d.actionValue!=="string")return null;
+   // set_field, tag/untag, notify and handoff; AI stays unsupported live.
+   // Internal actions run in flow-internal-worker/internalEffects.ts (never
+   // sent to Meta, never billed) behind FLOW_INTERNAL_ACTIONS_ENABLED.
+   if(d.actionType==="handoff")
+    // Terminal: the planner never follows an edge out of a handoff, so none
+    // may exist. The optional handoff message is a message node BEFORE it;
+    // text typed into the node itself would never be sent, so it is refused.
+    return d.actionValue===undefined||d.actionValue===null||
+     (typeof d.actionValue==="string"&&d.actionValue.trim()==="")?
+     {ports:[],required:[]}:null;
+   if(typeof d.actionValue!=="string")return null;
+   if(d.actionType==="tag"||d.actionType==="untag")
+    return tagOk(d.actionValue.trim())?{ports:["next"],required:[]}:null;
+   if(d.actionType==="notify")
+    return notifyOk(d.actionValue)?{ports:["next"],required:[]}:null;
+   if(d.actionType!=="set_field")return null;
    const at=d.actionValue.indexOf("=");
    const value=d.actionValue.slice(at+1).trim();
    return at>=1&&fieldOk(d.actionValue.slice(0,at).trim())&&value.length<=500?
@@ -110,7 +137,9 @@ function durablePorts(d:RecordValue):{ports:string[];required:string[]}|null{
  * shapes and chained graphs built only from: one Instagram message trigger,
  * text messages (optional step buttons), button questions, text/email/phone
  * questions (answer stored under a safe inputField), delay (1..30 units),
- * condition (not on the inbound message), set_field, randomizer, goto and end. Every node must be reachable from the trigger and every
+ * condition (not on the inbound message), set_field, randomizer, goto, end,
+ * tag/untag (safe tag name), notify (bounded text) and handoff (terminal, no
+ * outgoing edge). Every node must be reachable from the trigger and every
  * branch port connected exactly once. Graphs the existing V2 simple engine
  * (flowPrepareMessage.ts) handles are NEVER accepted, so they keep falling
  * back to V2 unchanged.
@@ -181,6 +210,14 @@ export function durableRuntimeNeeds(doc:FlowDocument):{buttons:boolean;scheduler
   scheduler:nodes.some(n=>kind(n)==="delay")
  };
 }
+/** Internal actions (FLOW_INTERNAL_ACTIONS_ENABLED) the graph needs: tag/untag/notify/handoff. */
+export const INTERNAL_ACTION_TYPES=["tag","untag","notify","handoff"] as const;
+export function durableNeedsInternalActions(doc:FlowDocument):boolean{
+ return (doc.nodes as unknown as RecordValue[]).some(n=>{
+  const d=n.data as RecordValue;
+  return d.kind==="action"&&(INTERNAL_ACTION_TYPES as readonly unknown[]).includes(d.actionType);
+ });
+}
 export type DurableCandidateKind="buttons"|"delay"|"mixed"|"text"|"unsupported";
 /** Readiness/activation classification shared with flow-publication. */
 export function durableCandidateKind(raw:unknown):DurableCandidateKind{
@@ -198,12 +235,24 @@ export function selectedFlowChoice(raw:unknown):string|null{
 // payload carries `seq` (order inside this commit) for the Outbox ordering.
 const effectsPayload=(effects:ChainPlan["effects"])=>
  effects.map(e=>({kind:e.kind,idempotencyKey:e.idempotencyKey,payload:e}));
-const safePlan=(plan:ChainPlan)=>
+/**
+ * Effects the live engine may commit. Internal kinds (tag/untag/
+ * staff_notification/handoff) are executed by internalEffects.ts after every
+ * earlier effect of the run; knowledge_ai ("source") stays excluded.
+ */
+export const LIVE_EFFECT_KINDS=["message","question","delay","tag","untag","staff_notification","handoff"];
+/**
+ * A handoff ends the automated flow: it must be the LAST effect and the run
+ * must end in status "handoff" (and "handoff" only with that effect).
+ */
+export const safePlan=(plan:ChainPlan)=>
  !plan.error&&plan.state.status!=="blocked"&&
- ["completed","sleeping","awaiting_input"].includes(plan.state.status)&&
+ ["completed","sleeping","awaiting_input","handoff"].includes(plan.state.status)&&
  plan.effects.length>=1&&plan.effects.length<=MAX_CHAIN_EFFECTS&&
  plan.effects.every((e,i)=>e.seq===i&&
-  ["message","question","delay"].includes(e.kind)&&!("source" in e));
+  LIVE_EFFECT_KINDS.includes(e.kind)&&!("source" in e)&&
+  (e.kind!=="handoff"||i===plan.effects.length-1))&&
+ (plan.state.status==="handoff")===(plan.effects[plan.effects.length-1].kind==="handoff");
 /** After a typed answer a flow may also end silently (answer -> end). */
 const safeAnswerPlan=(plan:ChainPlan)=>safePlan(plan)||
  (!plan.error&&plan.state.status==="completed"&&plan.effects.length===0);
@@ -307,6 +356,32 @@ async function supersedeActiveRuns(db:Db,event:DurableEvent):Promise<boolean>{
      run.run_status as string))return false;
  }
  return true;
+}
+/** Bound of the tenant-wide queued-handoff read (a full page fails closed). */
+export const PENDING_HANDOFF_SCAN=100;
+/**
+ * READ-ONLY: is a handoff of THIS tenant/account/conversation committed but
+ * not yet executed (outbox effect pending or leased)? Between the commit and
+ * the internal worker switching conversations.transferred, the conversation
+ * must stay silent like a human takeover. Executed, cancelled or failed
+ * (dead_letter) handoffs do not hold anything. Errors fail closed.
+ */
+async function pendingHandoff(db:Db,event:DurableEvent):Promise<"none"|"pending"|"error">{
+ const queued=await db.from("automation_flow_outbox").select("run_id,tenant_id")
+  .eq("tenant_id",event.tenantId).eq("effect_kind","handoff")
+  .in("delivery_status",["pending","leased"]).limit(PENDING_HANDOFF_SCAN);
+ if(queued.error||!Array.isArray(queued.data))return "error";
+ if(queued.data.length>=PENDING_HANDOFF_SCAN)return "error";
+ const runIds=[...new Set((queued.data as RecordValue[])
+  .filter(r=>record(r)&&r.tenant_id===event.tenantId&&typeof r.run_id==="string")
+  .map(r=>r.run_id as string))];
+ if(runIds.length===0)return "none";
+ const runs=await db.from("automation_flow_runs").select("id,tenant_id,channel_account_id,conversation_id")
+  .eq("tenant_id",event.tenantId).eq("conversation_id",event.conversationId)
+  .in("id",runIds).limit(PENDING_HANDOFF_SCAN);
+ if(runs.error||!Array.isArray(runs.data))return "error";
+ return (runs.data as RecordValue[]).some(r=>record(r)&&r.tenant_id===event.tenantId&&
+  r.conversation_id===event.conversationId&&runIds.includes(r.id as string))?"pending":"none";
 }
 type Claimed="acquired"|Result;
 /**
@@ -542,6 +617,10 @@ export async function attemptDurableInstagram(
    return "handled";
   }
   if(choice)return "handled"; // stale choice must never start a fresh run.
+  // A committed handoff whose conversation switch is still queued: the human
+  // takeover is about to start, so neither a new run nor V2/AI may answer.
+  const handoff=await pendingHandoff(db,event);
+  if(handoff!=="none")return "handled";
   const active=await db.from("automation_flow_activations")
    .select("flow_key,revision,is_active").eq("tenant_id",event.tenantId)
    .eq("channel_account_id",event.accountId).eq("platform","instagram")

@@ -126,7 +126,8 @@ const waitingRun=(over:Record<string,unknown>={})=>({id:id.run,tenant_id:id.tena
  run_status:"awaiting_input",step_count:2,variables:{},wake_at:null,...over});
 type Opts={awaiting?:any[];active?:any[];activations?:any[];document?:unknown;
  rpc?:Record<string,(args:any)=>any>;switches?:Record<string,unknown>|null;
- claims?:any[];inbound?:any[];priorError?:boolean};
+ claims?:any[];inbound?:any[];priorError?:boolean;
+ outbox?:any[];outboxError?:boolean;runsById?:any[]};
 function lifecycleDb(o:Opts){
  const calls:Array<{name:string;args:any}>=[];
  const reads:Array<{table:string;filters:Record<string,unknown>}>=[];
@@ -146,7 +147,10 @@ function lifecycleDb(o:Opts){
      error:null};},
     limit:async()=>{reads.push({table,filters});
      if(table==="automation_flow_runs")
-      return {data:Array.isArray(filters.run_status)?(o.active??[]):(o.awaiting??[]),error:null};
+      return {data:Array.isArray(filters.id)?(o.runsById??[]):
+       Array.isArray(filters.run_status)?(o.active??[]):(o.awaiting??[]),error:null};
+     if(table==="automation_flow_outbox")
+      return o.outboxError?{data:null,error:{code:"XX000",message:"db down"}}:{data:o.outbox??[],error:null};
      if(table==="automation_flow_activations")
       return {data:o.activations??[{flow_key:"flow",revision:1,is_active:true}],error:null};
      if(table==="automation_message_claims")
@@ -542,7 +546,9 @@ test("chain whitelist rejects every unsupported feature (fail closed)",()=>{
  const bad:Array<[string,unknown]>=[
   ["http request",{...chainDoc,nodes:[...chainDoc.nodes,{id:"http",data:{kind:"request",requestUrl:"https://x"}}],
    edges:[...chainDoc.edges.filter(e=>e.source!=="follow"),E("follow","http")]}],
-  ...["tag","untag","notify","handoff","ai"].map(t=>["action "+t,node(logicDoc,"tier",{actionType:t,actionValue:"vip"})] as [string,unknown]),
+  // tag/untag/notify/handoff are live now (internal executor); AI is not.
+  ["action ai",node(logicDoc,"tier",{actionType:"ai",actionValue:"vip"})],
+  ["handoff with text",node(logicDoc,"tier",{actionType:"handoff",actionValue:"vip"})],
   ["set_field writes inbound field",node(logicDoc,"tier",{actionValue:"message=hi"})],
   ["condition on inbound message",node(logicDoc,"isGold",{conditionField:"message"})],
   ["condition on Message",node(logicDoc,"isGold",{conditionField:"Message"})],
@@ -915,4 +921,121 @@ test("index.ts passes the inbound text to the durable path only (V2 call site ke
  const server=readFileSync("supabase/functions/milan-api/index.ts","utf8");
  assert.equal((server.match(/text:customerText,\n\s+selectedChoiceId,providerEventIdGenuine/g)??[]).length,1);
  assert.match(server,/prepareFlow: \(\) => prepareSimpleFlowReply\(\n\s+sb, tenantId, String\(account\.id\), channel, customerText\n\s+\)/);
+});
+
+// ---- Internal actions: tag / untag / notify / handoff (Instagram durable only).
+import {durableNeedsInternalActions,safePlan,tagOk,notifyOk} from "../supabase/functions/milan-api/flowDurableIngress.ts";
+const act=(nid:string,actionType:string,actionValue="")=>({id:nid,data:{kind:"action",actionType,actionValue}});
+// welcome -> email question -> tag -> notify {{email}} -> handoff message -> handoff
+const handoffDoc={version:3,name:"lead handoff",nodes:[T,txt("welcome","أهلاً بك"),
+ ask("askEmail","email","email","ما بريدك؟"),act("tagLead","tag","lead"),
+ act("notify","notify","عميل جديد {{email}}"),txt("bye","سيتواصل معك موظف الآن"),act("human","handoff")],
+ edges:[E("start","welcome"),E("welcome","askEmail"),E("askEmail","tagLead","valid"),
+  E("tagLead","notify"),E("notify","bye"),E("bye","human")]};
+test("internal actions: whitelist accepts tag/untag/notify/handoff with valid fields and flags the operator need",()=>{
+ assert.equal(supportedDurableDocument(handoffDoc),true);
+ assert.equal(durableNeedsInternalActions(handoffDoc as any),true);
+ // Not a new candidate kind: buttons/scheduler classification is unchanged.
+ assert.equal(durableCandidateKind(handoffDoc),"text");
+ assert.deepEqual(durableRuntimeNeeds(handoffDoc as any),{buttons:false,scheduler:false});
+ for(const d of [chainDoc,logicDoc,collectDoc])assert.equal(durableNeedsInternalActions(d as any),false);
+ const untag={version:3,nodes:[T,act("u","untag","vip"),txt("m","تم")],edges:[E("start","u"),E("u","m")]};
+ assert.equal(supportedDurableDocument(untag),true);
+ // tag/notify may end the flow (no next); handoff alone after the trigger.
+ assert.equal(supportedDurableDocument({version:3,nodes:[T,txt("a","x"),act("t","tag","عميل_مميز 2")],
+  edges:[E("start","a"),E("a","t")]}),true);
+ assert.equal(supportedDurableDocument({version:3,nodes:[T,act("h","handoff")],edges:[E("start","h")]}),true);
+ assert.equal(supportedDurableDocument({version:3,nodes:[T,{id:"h",data:{kind:"action",actionType:"handoff"}}],
+  edges:[E("start","h")]}),true,"absent actionValue");
+ assert.equal(tagOk("VIP lead-1"),true);assert.equal(notifyOk("سطر\nثاني"),true);
+});
+test("internal actions: invalid fields, edges after a handoff and AI stay rejected (fail closed)",()=>{
+ const withAct=(a:any,extra:any[]=[],edges=[E("start","x")])=>({version:3,nodes:[T,a,...extra],edges});
+ const bad:Array<[string,unknown]>=[
+  ["empty tag",withAct(act("x","tag","  "))],
+  ["65-char tag",withAct(act("x","tag","a".repeat(65)))],
+  ["tag with markup",withAct(act("x","untag","<b>vip</b>"))],
+  ["tag with control char",withAct(act("x","tag","vip\u0007"))],
+  ["tag with placeholder",withAct(act("x","tag","{{email}}"))],
+  ["empty notify",withAct(act("x","notify","   "))],
+  ["notify 501 chars",withAct(act("x","notify","n".repeat(501)))],
+  ["notify control char",withAct(act("x","notify","hi\u0000"))],
+  ["non-string value",withAct({id:"x",data:{kind:"action",actionType:"notify",actionValue:5}})],
+  ["handoff text (never sent)",withAct(act("x","handoff","سيتواصل معك موظف"))],
+  ["edge out of a handoff",withAct(act("x","handoff"),[txt("after","x")],[E("start","x"),E("x","after")])],
+  ["ai action",withAct(act("x","ai","prompt"))],
+  ["unknown action",withAct(act("x","webhook","https://x.example"))],
+ ];
+ for(const [label,d] of bad)assert.equal(supportedDurableDocument(d),false,label);
+ assert.equal(durableCandidateKind(withAct(act("x","ai","p"))),"unsupported");
+ // V2 shapes still fall back (unchanged), even next to the new kinds.
+ assert.equal(supportedDurableDocument(v2Lone),false);assert.equal(supportedDurableDocument(v2Cond),false);
+});
+test("internal actions: safePlan accepts them within the cap; handoff only last and only with status handoff",()=>{
+ const e=(kind:string,seq:number,extra:Record<string,unknown>={})=>({kind,seq,idempotencyKey:"k"+seq,nodeId:"n"+seq,...extra}) as any;
+ const st=(status:string)=>({flowId:"f",revision:1,nodeId:"n",status,stepCount:3,variables:{},wakeAt:null}) as any;
+ assert.equal(safePlan({state:st("handoff"),effects:[e("message",0,{text:"a"}),e("tag",1,{tag:"x"}),
+  e("staff_notification",2,{text:"t"}),e("untag",3,{tag:"y"}),e("handoff",4)]}),true);
+ assert.equal(safePlan({state:st("completed"),effects:[e("tag",0,{tag:"x"})]}),true);
+ assert.equal(safePlan({state:st("handoff"),effects:[e("handoff",0)]}),true);
+ assert.equal(safePlan({state:st("completed"),effects:[e("handoff",0)]}),false,"handoff effect needs status handoff");
+ assert.equal(safePlan({state:st("handoff"),effects:[e("message",0,{text:"a"})]}),false,"status handoff needs the effect");
+ assert.equal(safePlan({state:st("handoff"),effects:[e("handoff",0),e("handoff",1)]}),false,"handoff not last");
+ assert.equal(safePlan({state:st("completed"),effects:[e("message",0,{source:"knowledge_ai",text:""})]}),false);
+ assert.equal(safePlan({state:st("completed"),effects:[e("tag",1,{tag:"x"})]}),false,"seq must match order");
+ assert.equal(safePlan({state:st("blocked"),effects:[e("tag",0,{tag:"x"})]}),false);
+ assert.equal(safePlan({state:st("handoff"),effects:[]}),false);
+});
+test("internal actions: start and typed-answer resume commit tag/notify/handoff in seq order; run ends in handoff",async()=>{
+ await withCanary(async()=>{
+  const start=lifecycleDb({document:handoffDoc});
+  assert.equal(await attemptDurableInstagram(start.db,baseEvent),"handled");
+  const b=start.calls.find(c=>c.name==="flow_begin_durable_run")!.args;
+  assert.equal(b.p_status,"awaiting_input");
+  assert.deepEqual(b.p_effects.map((x:any)=>[x.kind,x.payload.seq]),[["message",0],["question",1]]);
+  const run=waitingRun({current_node_id:"askEmail",step_count:3});
+  const r=lifecycleDb({document:handoffDoc,awaiting:[run]});
+  assert.equal(await attemptDurableInstagram(r.db,typedEvent("Ali@Shop.Example")),"handled");
+  assert.deepEqual(names(r.calls),["flow_claim_inbound","flow_resume_button_run"]);
+  const a=resumeArgs(r.calls);
+  assert.equal(a.p_status,"handoff");assert.equal(a.p_next,"human");assert.equal(a.p_wake,null);
+  assert.deepEqual(a.p_effects.map((x:any)=>[x.kind,x.payload.seq]),
+   [["tag",0],["staff_notification",1],["message",2],["handoff",3]]);
+  assert.equal(a.p_effects[0].payload.tag,"lead");
+  assert.equal(a.p_effects[1].payload.text,"عميل جديد ali@shop.example","collected field rendered");
+  assert.equal(a.p_effects[2].payload.text,"سيتواصل معك موظف الآن");
+  assert.equal(new Set(a.p_effects.map((x:any)=>x.idempotencyKey)).size,4);
+ });
+});
+test("internal actions: a queued handoff keeps the conversation silent; scoped to tenant+conversation; fails closed",async()=>{
+ await withCanary(async()=>{
+  const queued=[{run_id:"r-h",tenant_id:id.tenant}];
+  const mine=lifecycleDb({document:chainDoc,outbox:queued,runsById:[{id:"r-h",tenant_id:id.tenant,
+   channel_account_id:id.account,conversation_id:id.conversation}]});
+  assert.equal(await attemptDurableInstagram(mine.db,baseEvent),"handled");
+  assert.deepEqual(mine.calls,[],"no claim, no run: neither durable nor V2 answers");
+  const q=mine.reads.find(r=>r.table==="automation_flow_outbox")!;
+  assert.deepEqual(q.filters,{tenant_id:id.tenant,effect_kind:"handoff",delivery_status:["pending","leased"]});
+  const rr=mine.reads.find(r=>r.table==="automation_flow_runs"&&Array.isArray(r.filters.id))!;
+  assert.deepEqual(rr.filters,{tenant_id:id.tenant,conversation_id:id.conversation,id:["r-h"]});
+  // A queued handoff of ANOTHER conversation (or a foreign row) changes nothing.
+  for(const runsById of [[],[{id:"r-h",tenant_id:id.tenant,conversation_id:"99999999-9999-4999-8999-999999999999"}],
+   [{id:"r-h",tenant_id:"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",conversation_id:id.conversation}]]){
+   const other=lifecycleDb({document:chainDoc,outbox:queued,runsById});
+   assert.equal(await attemptDurableInstagram(other.db,baseEvent),"handled");
+   assert.deepEqual(names(other.calls),["flow_claim_inbound","flow_begin_durable_run"]);
+  }
+  const foreignOutbox=lifecycleDb({document:chainDoc,outbox:[{run_id:"r-h",tenant_id:"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"}]});
+  assert.equal(await attemptDurableInstagram(foreignOutbox.db,baseEvent),"handled");
+  assert.deepEqual(names(foreignOutbox.calls),["flow_claim_inbound","flow_begin_durable_run"]);
+  const broken=lifecycleDb({document:chainDoc,outboxError:true});
+  assert.equal(await attemptDurableInstagram(broken.db,baseEvent),"handled");
+  assert.deepEqual(broken.calls,[]);
+  const full=lifecycleDb({document:chainDoc,outbox:Array.from({length:100},(_,i)=>({run_id:"r"+i,tenant_id:id.tenant}))});
+  assert.equal(await attemptDurableInstagram(full.db,baseEvent),"handled");
+  assert.deepEqual(full.calls,[],"a full page fails closed");
+  // The check precedes the flow lookup: even a V2-shaped active flow stays silent.
+  const v2=lifecycleDb({document:v2Lone,outbox:queued,runsById:[{id:"r-h",tenant_id:id.tenant,conversation_id:id.conversation}]});
+  assert.equal(await attemptDurableInstagram(v2.db,baseEvent),"handled","queued handoff also silences a V2-shaped flow");
+ });
 });

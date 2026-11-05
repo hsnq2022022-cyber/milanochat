@@ -464,6 +464,23 @@ test("audit: AI Step and action buttons create editable nodes rather than inert 
  await expect(panel.getByText("هذه إعدادات تصميمية، وليست أوامر مفعّلة في النظام الحقيقي.")).toBeVisible();
 });
 
+test("handoff action hides the value field and shows a hint; other actions keep the value field",async({page})=>{
+ await page.goto("/milanochat/#/flows");
+ await page.locator(".react-flow__node").nth(1).click();
+ const panel=page.getByTestId("step-settings-panel");
+ await panel.getByRole("button",{name:"إضافة زر"}).click();
+ await panel.getByTestId("button-action-editor").getByRole("button",{name:"AI Step",exact:true}).click();
+ const hint=panel.getByTestId("handoff-hint");
+ const valueLabel=panel.getByText("القيمة / اسم الوسم");
+ await panel.locator("select").filter({hasText:"إضافة وسم"}).selectOption("handoff");
+ await expect(hint).toBeVisible();
+ await expect(hint).toHaveText("يُفضّل إضافة رسالة قبل تحويل المحادثة إلى موظف");
+ await expect(valueLabel).toHaveCount(0);
+ await panel.locator("select").filter({hasText:"إضافة وسم"}).selectOption("tag");
+ await expect(valueLabel).toBeVisible();
+ await expect(hint).toHaveCount(0);
+});
+
 test("batch 5 typed email and phone use input previews, never quick-reply buttons",async({page})=>{
  await page.goto("/milanochat/#/flows");
  await page.locator(".react-flow__node").nth(2).click();
