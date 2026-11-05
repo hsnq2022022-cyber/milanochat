@@ -311,3 +311,148 @@ test("wiring: outbox worker runs the executor after its message pass behind both
  assert.match(iw,/req\.headers\.get\("authorization"\)!=="Bearer "\+key/);
  assert.ok(iw.indexOf("internalActionsReleased(")<iw.indexOf("createClient("),"flags before any client");
 });
+
+// ---------------------------------------------------------------- reliability
+const later=(ms:number)=>({...deps,now:()=>NOW+ms});
+const four=()=>[outbox("r-tag","tag",{tag:"vip",seq:0}),outbox("r-untag","untag",{tag:"old",seq:1}),
+ outbox("r-not","staff_notification",{text:"راجع",seq:2}),outbox("r-hand","handoff",{seq:3})];
+const writes=(log:Op[])=>log.filter(o=>o.op!=="select"&&o.table!=="automation_flow_outbox");
+
+test("crash between the write and the settle (all four kinds): the row stays leased, is reclaimed only after expiry, re-run is a no-op",async()=>{
+ const t=world({outbox:four(),tables:{flow_conversation_tags:[{tenant_id:A,conversation_id:CONV,tag:"old",created_by_outbox:"x"}]}});
+ // The settle of every effect is lost (process killed after the write).
+ let crash=true;
+ const {db}=fakeDb(t,(table,op,row)=>crash&&table==="automation_flow_outbox"&&op==="update"&&
+  row?.delivery_status==="settled"?{code:"08006",message:"connection lost"}:null);
+ let r=await runInternalEffects(db,deps);
+ // Only the first is applied: the later ones are held by the unsettled earlier effect.
+ assert.equal(r.finish_failed,1,JSON.stringify(r));assert.equal(r.held_order,3);
+ assert.equal(status(t,"r-tag").delivery_status,"leased");
+ assert.deepEqual(t.flow_conversation_tags.map(x=>x.tag).sort(),["old","vip"]);
+ // Live lease: another tick (another worker) leaves it alone and does not write.
+ crash=false;
+ r=await runInternalEffects(db,later(60000));
+ assert.equal(r.tag_noop??0,0,JSON.stringify(r));assert.equal(status(t,"r-tag").attempts,1);
+ // After expiry it is reclaimed (attempts 2), the write is a duplicate -> noop, then the rest run in order.
+ r=await runInternalEffects(db,later(121000));
+ assert.equal(r.tag_noop,1,JSON.stringify(r));assert.equal(r.untag_applied,1);
+ assert.equal(r.staff_notification_applied,1);assert.equal(r.handoff_applied,1);
+ assert.equal(status(t,"r-tag").attempts,2);
+ assert.deepEqual(t.flow_conversation_tags.map(x=>x.tag),["vip"]);
+ // Each other kind alone: lost settle -> lease expiry -> reclaim (attempts 2) -> noop, exactly one result.
+ for(const [kind,p] of [["untag",{tag:"x"}],["staff_notification",{text:"x"}],["handoff",{}]] as Array<[string,Row]>){
+  const t2=world({outbox:[outbox("e",kind,{...p,seq:0})]});
+  let lost=false;
+  const {db:d2}=fakeDb(t2,(table,op,row)=>{
+   if(!lost&&table==="automation_flow_outbox"&&op==="update"&&row?.delivery_status==="settled"){lost=true;return {code:"08006",message:"lost"};}
+   return null;});
+  assert.equal((await runInternalEffects(d2,deps)).finish_failed,1,kind);
+  assert.equal(status(t2,"e").delivery_status,"leased",kind);
+  const after=await runInternalEffects(d2,later(121000));
+  assert.equal(after[kind+"_noop"]??after[kind+"_applied"],1,kind+" "+JSON.stringify(after));
+  assert.equal(status(t2,"e").delivery_status,"settled",kind);assert.equal(status(t2,"e").attempts,2,kind);
+  assert.equal(t2.flow_staff_notifications.length,kind==="staff_notification"?1:0);
+  if(kind==="handoff"){
+   assert.equal(after.handoff_noop,1,"already transferred by the crashed attempt");
+   assert.equal(t2.conversations[0].human_agent_expires_at,new Date(NOW+HANDOFF_EXPIRY_MINUTES*60000).toISOString(),
+    "the reclaimed handoff did not move the takeover expiry");
+  }
+ }
+});
+
+test("final attempt crashed after its write (attempts=3, expired lease): verified read-only and settled, never a false dead_letter",async()=>{
+ const expired=new Date(NOW-1000).toISOString();
+ const leased=(id:string,kind:string,p:Row,seq:number)=>outbox(id,kind,{...p,seq},{delivery_status:"leased",
+  attempts:INTERNAL_MAX_ATTEMPTS,lease_token:"22222222-0000-4000-8000-00000000000"+seq,lease_expires_at:expired});
+ const t=world({outbox:[leased("a","tag",{tag:"vip"},0),leased("b","untag",{tag:"gone"},1),
+  leased("c","staff_notification",{text:"x"},2),leased("d","handoff",{},3)],
+  tables:{flow_conversation_tags:[{tenant_id:A,conversation_id:CONV,tag:"vip",created_by_outbox:"a"}],
+   flow_staff_notifications:[{tenant_id:A,outbox_id:"c",conversation_id:CONV,recipient_user_id:OWNER,body:"x"}]}});
+ Object.assign(t.conversations[0],{transferred:true,auto_paused_reason:"ai_handoff",human_agent_expires_at:"2026-11-05T10:14:00.000Z"});
+ const {db,log}=fakeDb(t);
+ const r=await runInternalEffects(db,deps);
+ assert.deepEqual(r,{tag_recovered:1,untag_recovered:1,staff_notification_recovered:1,handoff_recovered:1});
+ for(const id of ["a","b","c","d"]){
+  assert.equal(status(t,id).delivery_status,"settled",id);assert.equal(status(t,id).attempts,INTERNAL_MAX_ATTEMPTS,id);
+  assert.equal(status(t,id).lease_token,null,id);
+ }
+ assert.deepEqual(writes(log),[],"verification never writes");
+ for(const op of log.filter(o=>["flow_conversation_tags","flow_staff_notifications","conversations"].includes(o.table)))
+  assert.equal(op.eq.tenant_id,A,"verification is tenant-scoped: "+op.table);
+ assert.equal(t.conversations[0].human_agent_expires_at,"2026-11-05T10:14:00.000Z");
+ // Not applied -> dead_letter (bounded); lookup error -> stays leased for the next tick.
+ const n=world({outbox:[leased("a","tag",{tag:"vip"},0),{...leased("h","handoff",{},1),run_id:RUNB,tenant_id:B}]});
+ const rn=await runInternalEffects(fakeDb(n).db,{...deps,canaryAccountId:ACC});
+ assert.equal(rn.failed_exhausted,1,JSON.stringify(rn));assert.equal(status(n,"a").delivery_status,"dead_letter");
+ const e=world({outbox:[leased("a","tag",{tag:"vip"},0)]});
+ const re=await runInternalEffects(fakeDb(e,(tb,op)=>tb==="flow_conversation_tags"&&op==="select"?{code:"57014"}:null).db,deps);
+ assert.equal(re.blocked,1,JSON.stringify(re));assert.equal(status(e,"a").delivery_status,"leased");
+ // A LIVE final lease is never touched.
+ const l=world({outbox:[{...leased("a","tag",{tag:"vip"},0),lease_expires_at:new Date(NOW+60000).toISOString()}]});
+ assert.deepEqual(await runInternalEffects(fakeDb(l).db,deps),{});
+ assert.equal(status(l,"a").delivery_status,"leased");
+});
+
+test("concurrent executors: one claimant per effect; a stale lease token can never settle a reclaimed effect",async()=>{
+ const t=world({outbox:four()});
+ const {db}=fakeDb(t);
+ const [x,y]=await Promise.all([runInternalEffects(db,deps),runInternalEffects(db,deps)]);
+ const sum=(k:string)=>(x[k]??0)+(y[k]??0);
+ assert.equal(sum("tag_applied"),1,JSON.stringify([x,y]));
+ assert.equal(t.flow_conversation_tags.length,1);
+ // Drain the rest; every effect claimed exactly once.
+ await runInternalEffects(db,deps);await runInternalEffects(db,deps);
+ for(const o of t.automation_flow_outbox){assert.equal(o.delivery_status,"settled",o.id);assert.equal(o.attempts,1,o.id);}
+ assert.equal(t.flow_staff_notifications.length,1);
+ // Worker 1 is slow: while it writes, its lease expires and worker 2 reclaims (new token).
+ const s=world({outbox:[outbox("s","tag",{tag:"vip",seq:0})]});
+ const W2="33333333-0000-4000-8000-000000000002";
+ const {db:sd}=fakeDb(s,(table,op)=>{
+  if(table==="flow_conversation_tags"&&op==="insert")
+   Object.assign(status(s,"s"),{lease_token:W2,attempts:2,lease_expires_at:new Date(NOW+999999).toISOString()});
+  return null;});
+ const r=await runInternalEffects(sd,deps);
+ assert.equal(r.finish_failed,1,JSON.stringify(r));
+ assert.equal(status(s,"s").delivery_status,"leased");assert.equal(status(s,"s").lease_token,W2,"worker 2 keeps its lease");
+});
+
+test("scan: older held / paused / live-leased rows of other runs never hold a newer eligible effect (no head-of-line blocking)",async()=>{
+ const RUN2="77777777-7777-4777-8777-7777777777d4",CONV2="44444444-4444-4444-8444-4444444444d4";
+ const older="2026-11-05T09:00:00.000+00:00";
+ const t=world({outbox:[
+  outbox("m2","message",{text:"x",seq:0},{run_id:RUN2,created_at:older}),
+  ...Array.from({length:20},(_,i)=>outbox("held"+i,"tag",{tag:"t"+i,seq:1},{run_id:RUN2,created_at:older})),
+  ...Array.from({length:20},(_,i)=>outbox("live"+i,"tag",{tag:"l"+i,seq:0},{run_id:RUN2,created_at:older,
+   delivery_status:"leased",attempts:1,lease_token:"44444444-0000-4000-8000-0000000000"+String(i).padStart(2,"0"),
+   lease_expires_at:new Date(NOW+60000).toISOString()})),
+  outbox("new","tag",{tag:"vip",seq:0})]});
+ t.automation_flow_runs.push({id:RUN2,tenant_id:A,channel_account_id:ACC,platform:"instagram",conversation_id:CONV2,
+  flow_key:"lead",publication_revision:1,run_status:"completed"});
+ t.conversations.push({id:CONV2,tenant_id:A,account_id:ACC,transferred:false});
+ const r=await runInternalEffects(fakeDb(t).db,deps);
+ assert.equal(r.tag_applied,1,JSON.stringify(r));assert.equal(r.held_order,20);
+ assert.equal(status(t,"new").delivery_status,"settled");
+ assert.ok(t.automation_flow_outbox.filter(o=>o.id.startsWith("live")).every(o=>o.delivery_status==="leased"));
+});
+
+test("handoff failures: transient -> bounded retries -> dead_letter, conversation untouched, run state unchanged, nothing logged but ids/codes",async()=>{
+ const logs:string[]=[];const orig={error:console.error,warn:console.warn,info:console.info};
+ for(const k of ["error","warn","info"] as const)(console as any)[k]=(...a:unknown[])=>logs.push(JSON.stringify(a));
+ try{
+  const t=world({outbox:[outbox("h","handoff",{seq:0})]});
+  const {db}=fakeDb(t,(table,op)=>table==="conversations"&&op==="update"?{code:"40001",message:"serialization"}:null);
+  for(let i=1;i<=INTERNAL_MAX_ATTEMPTS;i++)await runInternalEffects(db,deps);
+  assert.equal(status(t,"h").delivery_status,"dead_letter");assert.equal(status(t,"h").attempts,INTERNAL_MAX_ATTEMPTS);
+  assert.equal(t.conversations[0].transferred,false);assert.equal(t.conversations[0].auto_paused_reason,null);
+  assert.equal(t.automation_flow_runs[0].run_status,"handoff","the run keeps its committed status");
+  assert.deepEqual(await runInternalEffects(db,deps),{},"a dead_letter is never retried");
+  // Permanent: the conversation vanished between the scope check and the switch -> dead_letter at once.
+  const p=world({outbox:[outbox("h","handoff",{seq:0})]});
+  const {db:pd}=fakeDb(p,(table,op)=>{if(table==="conversations"&&op==="update")p.conversations[0].account_id=ACCB;return null;});
+  assert.equal((await runInternalEffects(pd,deps)).failed_permanent,1);
+  assert.equal(status(p,"h").delivery_status,"dead_letter");assert.equal(status(p,"h").attempts,1);
+ }finally{Object.assign(console,orig);}
+ const all=logs.join("\n");
+ assert.match(all,/effect failed terminally/);assert.match(all,/"code":"40001"/);
+ assert.doesNotMatch(all,/serialization|ai_handoff/);
+});

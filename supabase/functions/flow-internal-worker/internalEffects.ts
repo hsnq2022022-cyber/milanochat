@@ -26,7 +26,11 @@
  * INTERNAL_MAX_ATTEMPTS = the outbox attempts CHECK 0..3), then dead_letter;
  * permanent errors (invalid payload, no recipient, broken FK) -> dead_letter;
  * scope/lifecycle problems -> cancelled with the existing cancel reasons.
- * dead_letter/cancelled rows are listed to the owner by flow-delivery-review.
+ * A final attempt whose lease expired after its write committed is verified
+ * read-only (alreadyApplied) and settled, never reported as a failure.
+ * dead_letter rows (kind + attempts, no reason column) are listed to the
+ * owner by flow-delivery-review; cancelled rows keep cancel_reason in the
+ * outbox but are NOT in that failure list (operator: SQL / worker counters).
  *
  * Ordering (per tenant + run, payload.seq inside one commit): an internal
  * effect waits until every EARLIER provider effect (message/question) of the
@@ -232,6 +236,21 @@ export async function runInternalEffects(sb:InternalDb,deps:InternalDeps):Promis
    if(!input){await end("dead_letter",null,"failed_invalid");continue;}
    const attempts=Number(effect.attempts??0);
    if(!Number.isSafeInteger(attempts)||attempts<0||attempts>=INTERNAL_MAX_ATTEMPTS){
+    // The FINAL attempt crashed after its lease was taken (expired lease):
+    // its write may have committed before the settle was lost. No further
+    // attempt is allowed (attempts CHECK 0..3), so verify read-only and
+    // settle an already applied effect instead of reporting a false failure.
+    if(effect.delivery_status==="leased"&&Number.isSafeInteger(attempts)){
+     const done=await alreadyApplied(sb,input,{tenantId,conversationId:String(r.conversation_id),
+      accountId:String(a.id),outboxId:effect.id});
+     if(done===null){report("blocked");continue;}
+     if(done){
+      const s=await scope()(sb.from("automation_flow_outbox")
+       .update({delivery_status:"settled",lease_token:null,lease_expires_at:null})).select("id");
+      if(s.error||!Array.isArray(s.data)||s.data.length!==1){report("transition_failed");continue;}
+      local.set(effect.id,"settled");report(effect.effect_kind+"_recovered");continue;
+     }
+    }
     await end("dead_letter",null,"failed_exhausted");continue;
    }
    // Claim (exactly one claimant).
@@ -274,6 +293,29 @@ export async function runInternalEffects(sb:InternalDb,deps:InternalDeps):Promis
 
 type Ctx={tenantId:string;outboxId:string;conversationId:string;accountId:string;
  ownerId:string|null;nowMs:number};
+/**
+ * READ-ONLY: is the effect's outcome already in place (what a re-run would
+ * treat as applied/noop)? true/false, null = lookup failed (retry next tick).
+ * tag: the tag exists; untag: it is absent; notification: its row (PK =
+ * outbox id) exists; handoff: the conversation is transferred. Tenant-scoped.
+ */
+async function alreadyApplied(sb:InternalDb,input:NonNullable<ReturnType<typeof internalPayload>>,
+ ctx:Pick<Ctx,"tenantId"|"conversationId"|"accountId"|"outboxId">):Promise<boolean|null>{
+ if(input.kind==="tag"||input.kind==="untag"){
+  const t=await sb.from("flow_conversation_tags").select("tag").eq("tenant_id",ctx.tenantId)
+   .eq("conversation_id",ctx.conversationId).eq("tag",input.tag).maybeSingle();
+  if(t.error)return null;
+  return input.kind==="tag"?record(t.data):!record(t.data);
+ }
+ if(input.kind==="staff_notification"){
+  const n=await sb.from("flow_staff_notifications").select("outbox_id").eq("tenant_id",ctx.tenantId)
+   .eq("outbox_id",ctx.outboxId).maybeSingle();
+  return n.error?null:record(n.data);
+ }
+ const c=await sb.from("conversations").select("id,transferred").eq("tenant_id",ctx.tenantId)
+  .eq("id",ctx.conversationId).eq("account_id",ctx.accountId).maybeSingle();
+ return c.error?null:record(c.data)&&c.data.transferred===true;
+}
 /** Kind-specific idempotent write; every statement carries tenant_id. */
 async function execute(sb:InternalDb,
  input:NonNullable<ReturnType<typeof internalPayload>>,ctx:Ctx):Promise<Outcome>{

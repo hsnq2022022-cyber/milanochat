@@ -1508,6 +1508,136 @@ Deno.test({name:"flow V3/V4 lifecycle integration (real handlers + throwaway Pos
    }finally{Deno.env.delete("FLOW_INTERNAL_ACTIONS_ENABLED");}
   });
 
+  await t.step("internal actions reliability on PostgreSQL: crash between write and settle, lease expiry, concurrent executors, final-attempt recovery, bounded failures visible in delivery review, forged scope refused",async()=>{
+   await freshDb();resetMeta();await activate("handoff",true);
+   const {runInternalEffects}=await import("../supabase/functions/flow-internal-worker/internalEffects.ts");
+   // A supabase-js client whose selected update/insert calls never reach the
+   // database (process killed / connection lost) and return the given error.
+   type Hook=(table:string,op:"update"|"insert",row:Record<string,unknown>)=>null|{code:string;message:string};
+   const hooked=(hook:Hook)=>({from(table:string){
+    // deno-lint-ignore no-explicit-any
+    const q:any=sb.from(table);
+    // deno-lint-ignore no-explicit-any
+    const failing=(e:unknown)=>{const f:any={eq:()=>f,lte:()=>f,is:()=>f,in:()=>f,select:()=>f,maybeSingle:()=>f,
+     then:(res:(v:unknown)=>void)=>res({data:null,error:e})};return f;};
+    for(const op of ["update","insert"] as const){const orig=q[op].bind(q);
+     q[op]=(row:Record<string,unknown>)=>{const e=hook(table,op,row);return e?failing(e):orig(row);};}
+    return q;
+   }});
+   const tickAt=(ms=0,client:unknown=sb)=>runInternalEffects(client as never,{canaryAccountId:ACC,now:()=>Date.now()+ms});
+   let n=0;
+   const mkRun=async(fx:Array<[string,Record<string,unknown>]>)=>{
+    const c=await conv("98"+String(++n).padStart(5,"0"));
+    const run=crypto.randomUUID(),mid="mid.rel."+n;
+    await exec(`INSERT INTO public.automation_flow_event_receipts(tenant_id,channel_account_id,platform,provider_event_id)
+      VALUES('${A}','${ACC}','instagram','${mid}');
+     INSERT INTO public.automation_flow_runs(tenant_id,id,flow_key,publication_revision,channel_account_id,platform,conversation_id,provider_event_id,current_node_id,run_status)
+      VALUES('${A}','${run}','handoff',1,'${ACC}','instagram','${c}','${mid}','human','handoff');
+     INSERT INTO public.automation_flow_outbox(tenant_id,run_id,idempotency_key,effect_kind,payload) VALUES ${
+      fx.map(([k,p],i)=>`('${A}','${run}','${run}:${i}','${k}',${lit({kind:k,...p,seq:i})})`).join(",")};`);
+    return {c,run};
+   };
+   const fxOf=(run:string)=>rows<{id:string;effect_kind:string;delivery_status:string;attempts:number;leased:boolean}>(
+    `SELECT id,effect_kind,delivery_status,attempts,lease_token IS NOT NULL AS leased FROM public.automation_flow_outbox
+     WHERE run_id='${run}' ORDER BY (payload->>'seq')::int`);
+   const st=async(run:string)=>(await fxOf(run)).map(e=>[e.effect_kind,e.delivery_status,e.attempts]);
+   const tagsOf=async(c:string)=>(await rows<{tag:string}>(`SELECT tag FROM public.flow_conversation_tags WHERE conversation_id='${c}' ORDER BY tag`)).map(x=>x.tag);
+   const notesOf=(c:string)=>val<number>(`SELECT count(*)::int FROM public.flow_staff_notifications WHERE conversation_id='${c}'`);
+   const convOf=async(c:string)=>(await rows<{transferred:boolean;auto_paused_reason:string|null;human_agent_expires_at:string|null}>(
+    `SELECT transferred,auto_paused_reason,human_agent_expires_at FROM public.conversations WHERE id='${c}'`))[0];
+   Deno.env.set("FLOW_INTERNAL_ACTIONS_ENABLED","true");
+   try{
+    // (1)+(2) crash between write and settle: the committed write survives, the row stays leased,
+    // a live lease is never reclaimed, an expired one is reclaimed once and the re-run is a no-op.
+    const r1=await mkRun([["tag",{tag:"vip"}],["untag",{tag:"old"}],["staff_notification",{text:"راجع الطلب"}],["handoff",{}]]);
+    const untagId=(await fxOf(r1.run))[1].id;
+    await exec(`INSERT INTO public.flow_conversation_tags(tenant_id,conversation_id,tag,created_by_outbox) VALUES('${A}','${r1.c}','old','${untagId}')`);
+    const loseSettle=hooked((table,op,row)=>table==="automation_flow_outbox"&&op==="update"&&row.delivery_status==="settled"?
+     {code:"08006",message:"connection lost"}:null);
+    let it=await tickAt(0,loseSettle);
+    assert.equal(it.finish_failed,1,JSON.stringify(it));assert.equal(it.held_order,3);
+    assert.deepEqual(await st(r1.run),[["tag","leased",1],["untag","pending",0],["staff_notification","pending",0],["handoff","pending",0]]);
+    assert.deepEqual(await tagsOf(r1.c),["old","vip"],"the write committed before the crash");
+    it=await tickAt(60000);
+    assert.deepEqual(await st(r1.run),[["tag","leased",1],["untag","pending",0],["staff_notification","pending",0],["handoff","pending",0]],
+     "a live lease is left alone: "+JSON.stringify(it));
+    it=await tickAt(125000);
+    assert.equal(it.tag_noop,1,JSON.stringify(it));assert.equal(it.untag_applied,1);
+    assert.equal(it.staff_notification_applied,1);assert.equal(it.handoff_applied,1);
+    assert.deepEqual(await st(r1.run),[["tag","settled",2],["untag","settled",1],["staff_notification","settled",1],["handoff","settled",1]]);
+    assert.ok((await fxOf(r1.run)).every(e=>!e.leased),"no lease left behind");
+    assert.deepEqual(await tagsOf(r1.c),["vip"]);assert.equal(await notesOf(r1.c),1);
+    const conv1=await convOf(r1.c);
+    assert.equal(conv1.transferred,true);assert.equal(conv1.auto_paused_reason,"ai_handoff");
+    // Same for the notification and the handoff themselves: lost settle -> reclaim -> noop (no 2nd row, same expiry).
+    for(const kind of ["staff_notification","handoff"]){
+     const r1b=await mkRun([[kind,kind==="handoff"?{}:{text:"x"}]]);
+     it=await tickAt(0,loseSettle);assert.equal(it.finish_failed,1,kind+" "+JSON.stringify(it));
+     const exp=(await convOf(r1b.c)).human_agent_expires_at;
+     it=await tickAt(150000);
+     assert.equal(it[kind+"_noop"],1,kind+" "+JSON.stringify(it));
+     assert.deepEqual(await st(r1b.run),[[kind,"settled",2]]);
+     assert.equal(await notesOf(r1b.c),kind==="handoff"?0:1);
+     assert.equal((await convOf(r1b.c)).human_agent_expires_at,exp,"a retry never moves the takeover expiry");
+     if(kind==="handoff")assert.equal((await convOf(r1b.c)).transferred,true);
+    }
+
+    // (2)+(4) concurrent executors (standalone worker x2 + the outbox worker's internal pass) on pending effects.
+    const r2=await mkRun([["tag",{tag:"lead"}],["staff_notification",{text:"عميل"}],["handoff",{}]]);
+    await Promise.all([tickAt(),tickAt(),outboxTick()]);
+    for(let i=0;i<4;i++)await Promise.all([tickAt(),tickAt()]);
+    assert.deepEqual(await st(r2.run),[["tag","settled",1],["staff_notification","settled",1],["handoff","settled",1]],"one claim each");
+    assert.deepEqual(await tagsOf(r2.c),["lead"]);assert.equal(await notesOf(r2.c),1);
+    assert.equal(meta.calls.length,0,"internal effects never call Meta");
+
+    // (2) the FINAL attempt crashes after its write (attempts=3): verified and settled, not a false dead_letter.
+    const r3=await mkRun([["tag",{tag:"final"}]]);
+    for(const ms of [0,130000,260000])await tickAt(ms,loseSettle);
+    assert.deepEqual(await st(r3.run),[["tag","leased",3]]);
+    it=await tickAt(390000);
+    assert.equal(it.tag_recovered,1,JSON.stringify(it));
+    assert.deepEqual(await st(r3.run),[["tag","settled",3]]);assert.deepEqual(await tagsOf(r3.c),["final"]);
+
+    // (3)+(7) bounded failures: transient x3 -> dead_letter; invalid payload -> dead_letter at once (no claim);
+    // a dead-lettered handoff leaves the conversation untouched and the run in its committed status.
+    const r4=await mkRun([["staff_notification",{text:"secret note +9647700000001"}],["handoff",{}]]);
+    const r5=await mkRun([["tag",{tag:"<b>bad</b>"}]]);
+    const transient=hooked((table,op)=>(table==="flow_staff_notifications"||table==="conversations")&&
+     (op==="insert"||op==="update")?{code:"57014",message:"canceling statement due to statement timeout"}:null);
+    for(let i=0;i<4;i++)await tickAt(i*1000,transient);
+    for(let i=0;i<3;i++)await tickAt(10000+i*1000,transient);
+    assert.deepEqual(await st(r4.run),[["staff_notification","dead_letter",3],["handoff","dead_letter",3]]);
+    assert.deepEqual(await st(r5.run),[["tag","dead_letter",0]]);
+    assert.equal(await notesOf(r4.c),0);assert.equal((await convOf(r4.c)).transferred,false);
+    assert.equal((await runRow(r4.c))[0].run_status,"handoff");
+    assert.deepEqual(await tickAt(20000),{},"terminal rows are never retried");
+    const review=await loadFlowReview(sb as never,A);
+    const failed=review.flowFailures.filter(f=>[r4.run,r5.run].includes(String(f.run_id)))
+     .map(f=>[f.effect_kind,f.delivery_status,f.attempts]).sort();
+    assert.deepEqual(failed,[["handoff","dead_letter",3],["staff_notification","dead_letter",3],["tag","dead_letter",0]]);
+    const shown=JSON.stringify(review);
+    for(const secret of ["secret note","+9647700000001","<b>bad"])assert.equal(shown.includes(secret),false,secret);
+    assert.equal((await loadFlowReview(sb as never,B)).flowFailures.length,0,"tenant-scoped review");
+
+    // (6) forged scope: extra payload fields cannot redirect a write; cross-tenant rows are refused by the composite FKs.
+    const cb=await conv("9800999",B,ACCB);
+    const r6=await mkRun([["tag",{tag:"own",tenant_id:B,conversation_id:cb}]]);
+    await tickAt();
+    assert.deepEqual(await tagsOf(r6.c),["own"]);assert.deepEqual(await tagsOf(cb),[]);
+    const crossOutbox=await psql(db,`INSERT INTO public.automation_flow_outbox(tenant_id,run_id,idempotency_key,effect_kind,payload)
+     VALUES('${B}','${r6.run}','forged','tag','{"kind":"tag","tag":"x","seq":0}');`);
+    assert.equal(crossOutbox.ok,false);assert.equal(sqlError(crossOutbox.err).code,"23503");
+    const r6id=(await fxOf(r6.run))[0].id;
+    const crossTag=await psql(db,`INSERT INTO public.flow_conversation_tags(tenant_id,conversation_id,tag,created_by_outbox)
+     VALUES('${A}','${cb}','x','${r6id}');`,"service_role");
+    assert.equal(crossTag.ok,false);assert.equal(sqlError(crossTag.err).code,"23503");
+    const crossNote=await psql(db,`INSERT INTO public.flow_staff_notifications(tenant_id,outbox_id,conversation_id,recipient_user_id,body)
+     VALUES('${B}','${r6id}','${cb}','88888888-8888-4888-8888-888888888888','x');`,"service_role");
+    assert.equal(crossNote.ok,false);assert.equal(sqlError(crossNote.err).code,"23503");
+    assert.equal(await val(`SELECT count(*)::int FROM public.flow_conversation_tags WHERE tenant_id='${B}'`),0);
+   }finally{Deno.env.delete("FLOW_INTERNAL_ACTIONS_ENABLED");}
+  });
+
   await t.step("worker endpoints refuse unauthenticated ticks before touching the database",async()=>{
    const before=restLog.length;
    assert.equal((await tick(outboxWorker,"Bearer wrong")).status,401);

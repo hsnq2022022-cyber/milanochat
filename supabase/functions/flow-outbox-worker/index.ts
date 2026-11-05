@@ -404,7 +404,11 @@ Deno.serve(async req=>{
  // pass, so a handoff/tag that follows a message sent in THIS tick can run in
  // the same tick. Never sends, never bills; OFF unless both operator flags.
  const internal=internalActionsReleased(k=>Deno.env.get(k))?
-  await runInternalEffects(sb,{canaryAccountId:env("FLOW_DURABLE_CANARY_ACCOUNT_ID")}).catch(()=>({error:1})):
+  await runInternalEffects(sb,{canaryAccountId:env("FLOW_DURABLE_CANARY_ACCOUNT_ID")}).catch(e=>{
+   // Effects stay pending/leased (reclaimed later); log the type only, never data.
+   console.error("[outbox] internal pass failed",{type:e instanceof Error?e.name:"unknown"});
+   return {error:1};
+  }):
   undefined;
  return json({processed:(items??[]).length,dispatched,status:outcomes,
   ...(internal?{internal}:{})});
