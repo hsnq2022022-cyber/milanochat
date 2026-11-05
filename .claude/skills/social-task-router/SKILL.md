@@ -6,7 +6,6 @@ description: Routes development tasks in the إدارة سوشيال project acc
 # Social Task Router
 
 You are working on the existing إدارة سوشيال project.
-
 Your objective is to complete development efficiently while preserving existing functionality, project architecture, and user changes.
 
 ## 1. Project protection
@@ -19,39 +18,40 @@ Your objective is to complete development efficiently while preserving existing 
 - Preserve existing integrations, database schemas, Edge Functions, and authentication flows.
 - Do not modify production data or deployment settings without explicit authorization.
 
-## 2. Task classification
+## 2. Task analysis and strict model routing
 
-Classify each task before implementation.
+Before implementation, you MUST strictly classify the task. Do not overthink this.
 
-### Haiku-level tasks
-Use Haiku when available for:
-- Small, isolated edits.
-- Simple explanations.
-- Formatting and naming corrections.
-- Reading a small file.
-- Straightforward documentation updates.
+### 🚨 STRICT ROUTING RULES (NON-NEGOTIABLE)
+- **Default Model:** You are FORBIDDEN from using Opus unless the task EXPLICITLY matches the Opus conditions below. Default to Sonnet.
+- **Delegation:** You MUST use the `Task` tool to delegate tasks to the specific model. Do not just "act" like the model.
+- **No Opus for Reading:** You are FORBIDDEN from using Opus to read files, search code, or run basic terminal commands.
 
-### Sonnet-level tasks
-Use Sonnet for:
-- Normal feature development.
-- Bug fixes involving multiple files.
-- API and UI integration.
-- Writing and updating tests.
-- Reviewing related components.
-- Implementing well-defined changes.
+### Haiku-level (MUST delegate to Haiku using Task tool)
+- Reading specific files (when path is provided).
+- Searching for a specific symbol or string (grep).
+- Formatting, naming, or simple text replacements.
+- Running standard tests or build commands.
+- *Rule:* If the task is just retrieving information or making a 1-line change, USE HAIKU.
 
-### Opus-level tasks
-Use Opus for:
-- Complex architecture decisions.
-- Difficult debugging across multiple systems.
-- Security and authentication problems.
-- Database and RAG architecture changes.
-- Complex Meta, Instagram, WhatsApp, and Salla integrations.
-- Reviewing high-impact changes before implementation.
+### Sonnet-level (Default for implementation)
+- Writing new code, building features.
+- Fixing standard bugs.
+- Modifying files across multiple directories.
+- UI/API integration.
+- *Rule:* If you are writing code, use SONNET.
 
-Use only models actually available in the current Claude Code session. Do not request unavailable models.
+### Opus-level (STRICTLY RESTRICTED)
+You may ONLY use Opus if the task strictly requires one of the following:
+1. Designing a completely new system architecture from scratch.
+2. Debugging a critical failure that Haiku and Sonnet have already failed to fix (provide proof of failure).
+3. High-risk security or authentication changes.
+- *Rule:* Do not use Opus just because the word "Supabase" or "Instagram" is mentioned.
 
-Important: This classification is guidance. Do not claim that the skill automatically switches models. If model switching is needed, use only supported Claude Code model-selection mechanisms.
+### Escalation
+- Start with Sonnet (or Haiku for reads).
+- ONLY escalate to Opus if Sonnet explicitly returns an error or states it cannot complete the task.
+- Pass concise context when escalating; never re-read the whole project.
 
 ## 3. Token efficiency
 
@@ -68,7 +68,6 @@ Important: This classification is guidance. Do not claim that the skill automati
 ## 4. Development workflow
 
 For every substantial task:
-
 1. Inspect the relevant code and existing architecture.
 2. Identify dependencies and possible side effects.
 3. State the intended changes briefly.
@@ -82,7 +81,6 @@ Do not claim a test passed unless it was actually executed successfully.
 ## 5. Project-specific priorities
 
 Preserve the existing product direction:
-
 - Arabic-first, RTL interface.
 - Iraqi Arabic and supported Gulf dialects.
 - Instagram, Facebook, and WhatsApp integrations.
@@ -96,7 +94,6 @@ Do not redesign unrelated parts of the product during a focused bug fix.
 ## 6. Failure handling
 
 If an implementation fails:
-
 - Read the actual error.
 - Identify its root cause.
 - Do not repeat the same failed approach without new evidence.
@@ -107,7 +104,6 @@ If an implementation fails:
 ## 7. Progress tracking
 
 For substantial multi-step work, maintain concise project notes only when useful:
-
 - .router/CONTEXT.md
 - .router/PLAN.md
 - .router/PROGRESS.md
@@ -128,7 +124,6 @@ Record confirmed decisions, completed work, test results, and remaining tasks.
 ## 9. Final report
 
 After completing a task, report:
-
 - What was changed.
 - Which files were affected.
 - Tests actually executed and their results.
