@@ -71,7 +71,7 @@ test("opted-in event creates one durable question; later selection resumes SAME 
  const db={
   from:(table:string)=>{
    const q={
-    select:()=>q,eq:()=>q,in:()=>q,
+    select:()=>q,eq:()=>q,in:()=>q,gt:()=>q,
     maybeSingle:async()=>({data:rows[table]??null,error:null}),
     limit:async()=>({data:table==="automation_flow_runs"?
       (waiting?[{id:id.run,tenant_id:id.tenant,channel_account_id:id.account,
@@ -130,27 +130,37 @@ type Opts={awaiting?:any[];active?:any[];activations?:any[];document?:unknown;
  outbox?:any[];outboxError?:boolean;runsById?:any[]};
 function lifecycleDb(o:Opts){
  const calls:Array<{name:string;args:any}>=[];
- const reads:Array<{table:string;filters:Record<string,unknown>}>=[];
+ const reads:Array<{table:string;filters:Record<string,unknown>;gt:Record<string,string>}>=[];
+ const writes:Array<{table:string;op:string}>=[];
  const db={
   from:(table:string)=>{
    const filters:Record<string,unknown>={};
+   const gt:Record<string,string>={};
+   const write=(op:string)=>()=>{writes.push({table,op});throw Error("unexpected write "+op+" on "+table);};
    const q:any={
     select:()=>q,
     eq:(k:string,v:unknown)=>{filters[k]=v;return q;},
     in:(k:string,v:unknown)=>{filters[k]=v;return q;},
-    maybeSingle:async()=>{reads.push({table,filters});return {data:
+    gt:(k:string,v:string)=>{gt[k]=v;return q;},
+    update:write("update"),insert:write("insert"),upsert:write("upsert"),delete:write("delete"),
+    maybeSingle:async()=>{reads.push({table,filters,gt});return {data:
      table==="automation_flow_global_switch"?{enabled:true}:
      table==="automation_flow_tenant_switches"?
       ("switches" in o?o.switches:{enabled:true,test_only:true,production_approved:true}):
      table==="automation_flow_publications"?
       ("document" in o?(o.document===undefined?null:{document:o.document}):{document:doc}):null,
      error:null};},
-    limit:async()=>{reads.push({table,filters});
+    limit:async()=>{reads.push({table,filters,gt});
      if(table==="automation_flow_runs")
       return {data:Array.isArray(filters.id)?(o.runsById??[]):
        Array.isArray(filters.run_status)?(o.active??[]):(o.awaiting??[]),error:null};
-     if(table==="automation_flow_outbox")
-      return o.outboxError?{data:null,error:{code:"XX000",message:"db down"}}:{data:o.outbox??[],error:null};
+     if(table==="automation_flow_outbox"){
+      if(o.outboxError)return {data:null,error:{code:"XX000",message:"db down"}};
+      // Emulates PostgREST gt(created_at): rows without created_at are fresh.
+      const rows=(o.outbox??[]).filter((r:any)=>!gt.created_at||
+       Date.parse(r.created_at??new Date().toISOString())>Date.parse(gt.created_at));
+      return {data:rows,error:null};
+     }
      if(table==="automation_flow_activations")
       return {data:o.activations??[{flow_key:"flow",revision:1,is_active:true}],error:null};
      if(table==="automation_message_claims")
@@ -170,7 +180,7 @@ function lifecycleDb(o:Opts){
    throw Error("Unexpected RPC "+name);
   }
  };
- return {db,calls,reads};
+ return {db,calls,reads,writes};
 }
 const baseEvent={tenantId:id.tenant,accountId:id.account,
  conversationId:id.conversation,inboundId:id.inbound,eventId:"meta-x",platform:"instagram",
@@ -1037,5 +1047,45 @@ test("internal actions: a queued handoff keeps the conversation silent; scoped t
   // The check precedes the flow lookup: even a V2-shaped active flow stays silent.
   const v2=lifecycleDb({document:v2Lone,outbox:queued,runsById:[{id:"r-h",tenant_id:id.tenant,conversation_id:id.conversation}]});
   assert.equal(await attemptDurableInstagram(v2.db,baseEvent),"handled","queued handoff also silences a V2-shaped flow");
+ });
+});
+// ---- Pending-handoff hold expires after PENDING_HANDOFF_MAX_MINUTES (read-only).
+import {PENDING_HANDOFF_MAX_MINUTES,PENDING_HANDOFF_SCAN} from "../supabase/functions/milan-api/flowDurableIngress.ts";
+test("pending handoff: older than 24h never silences; fresh blocks; cap counts only fresh rows; errors fail closed; read-only",async()=>{
+ await withCanary(async()=>{
+  assert.equal(PENDING_HANDOFF_MAX_MINUTES,1440);
+  const ago=(min:number)=>new Date(Date.now()-min*60000).toISOString();
+  const expiredAt=ago(PENDING_HANDOFF_MAX_MINUTES+1),freshAt=ago(PENDING_HANDOFF_MAX_MINUTES-5);
+  const mineRun=[{id:"r-h",tenant_id:id.tenant,channel_account_id:id.account,conversation_id:id.conversation}];
+  // The query itself carries the cutoff (~now-24h) on created_at.
+  const before=Date.now();
+  const fresh=lifecycleDb({document:chainDoc,outbox:[{run_id:"r-h",tenant_id:id.tenant,created_at:freshAt}],runsById:mineRun});
+  assert.equal(await attemptDurableInstagram(fresh.db,baseEvent),"handled");
+  assert.deepEqual(fresh.calls,[],"a fresh pending handoff still silences the conversation");
+  const q=fresh.reads.find(r=>r.table==="automation_flow_outbox")!;
+  assert.deepEqual(q.filters,{tenant_id:id.tenant,effect_kind:"handoff",delivery_status:["pending","leased"]});
+  assert.deepEqual(Object.keys(q.gt),["created_at"]);
+  const cut=Date.parse(q.gt.created_at),win=PENDING_HANDOFF_MAX_MINUTES*60000;
+  assert.ok(cut>=before-win&&cut<=Date.now()-win,"cutoff is now-24h");
+  // An expired pending/leased handoff of this conversation is ignored: the flow runs.
+  const expired=lifecycleDb({document:chainDoc,outbox:[{run_id:"r-h",tenant_id:id.tenant,created_at:expiredAt}],runsById:mineRun});
+  assert.equal(await attemptDurableInstagram(expired.db,baseEvent),"handled");
+  assert.deepEqual(names(expired.calls),["flow_claim_inbound","flow_begin_durable_run"]);
+  // 100 expired rows are filtered by the query: no fail-closed page.
+  const manyExpired=lifecycleDb({document:chainDoc,outbox:Array.from({length:PENDING_HANDOFF_SCAN},(_,i)=>
+   ({run_id:"r"+i,tenant_id:id.tenant,created_at:expiredAt}))});
+  assert.equal(await attemptDurableInstagram(manyExpired.db,baseEvent),"handled");
+  assert.deepEqual(names(manyExpired.calls),["flow_claim_inbound","flow_begin_durable_run"]);
+  // 100 fresh rows still fail closed.
+  const manyFresh=lifecycleDb({document:chainDoc,outbox:Array.from({length:PENDING_HANDOFF_SCAN},(_,i)=>
+   ({run_id:"r"+i,tenant_id:id.tenant,created_at:freshAt}))});
+  assert.equal(await attemptDurableInstagram(manyFresh.db,baseEvent),"handled");
+  assert.deepEqual(manyFresh.calls,[],"a full page of fresh handoffs fails closed");
+  // Query error still fails closed.
+  const broken=lifecycleDb({document:chainDoc,outboxError:true});
+  assert.equal(await attemptDurableInstagram(broken.db,baseEvent),"handled");
+  assert.deepEqual(broken.calls,[]);
+  // Read-only: no table write (no UPDATE of the outbox or conversations) on any path.
+  for(const h of [fresh,expired,manyExpired,manyFresh,broken])assert.deepEqual(h.writes,[]);
  });
 });

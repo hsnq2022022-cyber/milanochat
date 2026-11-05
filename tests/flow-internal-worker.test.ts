@@ -456,3 +456,8 @@ test("handoff failures: transient -> bounded retries -> dead_letter, conversatio
  assert.match(all,/effect failed terminally/);assert.match(all,/"code":"40001"/);
  assert.doesNotMatch(all,/serialization|ai_handoff/);
 });
+import {PENDING_HANDOFF_MAX_MINUTES} from "../supabase/functions/milan-api/flowDurableIngress.ts";
+test("ingress pending-handoff hold expires exactly when the worker stops executing a handoff",()=>{
+ assert.equal(PENDING_HANDOFF_MAX_MINUTES,INTERNAL_STALE_MINUTES);
+ assert.equal(PENDING_HANDOFF_MAX_MINUTES,1440);
+});

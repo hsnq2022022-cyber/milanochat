@@ -360,16 +360,27 @@ async function supersedeActiveRuns(db:Db,event:DurableEvent):Promise<boolean>{
 /** Bound of the tenant-wide queued-handoff read (a full page fails closed). */
 export const PENDING_HANDOFF_SCAN=100;
 /**
+ * Age limit of a queued handoff that may still silence a conversation. Must
+ * equal flow-internal-worker INTERNAL_STALE_MINUTES (the worker never executes
+ * an older one), so a handoff that can no longer run never holds the
+ * conversation, whether or not FLOW_INTERNAL_ACTIONS_ENABLED is on.
+ */
+export const PENDING_HANDOFF_MAX_MINUTES=1440;
+/**
  * READ-ONLY: is a handoff of THIS tenant/account/conversation committed but
- * not yet executed (outbox effect pending or leased)? Between the commit and
- * the internal worker switching conversations.transferred, the conversation
- * must stay silent like a human takeover. Executed, cancelled or failed
- * (dead_letter) handoffs do not hold anything. Errors fail closed.
+ * not yet executed (outbox effect pending or leased) and younger than
+ * PENDING_HANDOFF_MAX_MINUTES? Between the commit and the internal worker
+ * switching conversations.transferred, the conversation must stay silent like
+ * a human takeover. Executed, cancelled, failed (dead_letter) or expired
+ * handoffs do not hold anything; expired rows are filtered in the query so
+ * they never count toward the full-page cap. Errors fail closed.
  */
 async function pendingHandoff(db:Db,event:DurableEvent):Promise<"none"|"pending"|"error">{
+ const cutoff=new Date(Date.now()-PENDING_HANDOFF_MAX_MINUTES*60000).toISOString();
  const queued=await db.from("automation_flow_outbox").select("run_id,tenant_id")
   .eq("tenant_id",event.tenantId).eq("effect_kind","handoff")
-  .in("delivery_status",["pending","leased"]).limit(PENDING_HANDOFF_SCAN);
+  .in("delivery_status",["pending","leased"]).gt("created_at",cutoff)
+  .limit(PENDING_HANDOFF_SCAN);
  if(queued.error||!Array.isArray(queued.data))return "error";
  if(queued.data.length>=PENDING_HANDOFF_SCAN)return "error";
  const runIds=[...new Set((queued.data as RecordValue[])
