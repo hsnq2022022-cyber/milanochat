@@ -154,3 +154,57 @@ test("typed question may be a valid terminal collection step without a next rout
  assert.equal(findings.filter(i=>i.severity==="error").length,0);
  assert.ok(findings.some(i=>i.nodeId===q.id&&i.severity==="warning"&&i.message.includes("نهاية ضمنية")));
 });
+
+function typedQuestionDoc(inputField:string,inputMode:"text"|"email"|"phone"|"number"="email"){
+ const doc=exampleFlow(),q=doc.nodes.find(n=>n.data.kind==="question")!;
+ q.data={...q.data,inputMode,inputField};
+ doc.edges=doc.edges.filter(e=>e.source!==q.id);
+ doc.nodes=doc.nodes.filter(n=>n.id===q.id||n.data.kind==="trigger"||n.data.title==="الترحيب");
+ return {doc,q};
+}
+const liveWarn=(doc:ReturnType<typeof exampleFlow>,id:string)=>validateDocument(doc).filter(i=>i.nodeId===id&&i.severity==="warning"&&i.message.includes("اسم حقل الإجابة غير مقبول"));
+test("live field-name rule: valid names pass",()=>{
+ for(const name of ["email","user_email","_x","a1","Msg","a".repeat(64)]){
+  const {doc,q}=typedQuestionDoc(name);
+  assert.equal(liveWarn(doc,q.id).length,0,name);
+ }
+});
+test("live field-name rule: invalid names are warned with a reason",()=>{
+ const cases:[string,string][]=[["message","محجوز"],["Message","محجوز"],["MESSAGE","محجوز"],["__x","__"],["constructor","محجوزة"],["prototype","محجوزة"],["1abc","أحرفًا"],["a-b","أحرفًا"],["a".repeat(65),"64"]];
+ for(const [name,reason] of cases){
+  const {doc,q}=typedQuestionDoc(name),w=liveWarn(doc,q.id);
+  assert.equal(w.length,1,name);
+  assert.ok(w[0].message.includes(reason),name);
+  assert.equal(validateDocument(doc).filter(i=>i.severity==="error").length,0,name);
+ }
+});
+test("live field-name rule: empty name stays the existing error only",()=>{
+ const {doc,q}=typedQuestionDoc("  ");
+ const issues=validateDocument(doc);
+ assert.ok(issues.some(i=>i.nodeId===q.id&&i.severity==="error"&&i.message.includes("اسم حقل الإجابة مطلوب")));
+ assert.equal(liveWarn(doc,q.id).length,0);
+});
+test("live field-name rule is not applied to button questions",()=>{
+ const doc=exampleFlow(),q=doc.nodes.find(n=>n.data.kind==="question")!;
+ q.data={...q.data,inputMode:"buttons",inputField:"message"};
+ assert.equal(liveWarn(doc,q.id).length,0);
+});
+test("inputMode number warns that live engine does not support it",()=>{
+ const {doc,q}=typedQuestionDoc("age","number");
+ assert.ok(validateDocument(doc).some(i=>i.nodeId===q.id&&i.severity==="warning"&&i.message.includes("«رقم» غير مدعوم")));
+ const ok=typedQuestionDoc("age","phone");
+ assert.ok(!validateDocument(ok.doc).some(i=>i.message.includes("«رقم» غير مدعوم")));
+});
+test("legacy invalid port on typed question warns, valid port does not",()=>{
+ const {doc,q}=typedQuestionDoc("email");
+ const end=doc.nodes.find(n=>n.id!==q.id&&n.data.kind!=="trigger")!;
+ doc.edges.push({id:"e-inv",source:q.id,sourceHandle:"invalid",target:end.id,targetHandle:"in"} as never);
+ const issues=validateDocument(doc);
+ assert.ok(issues.some(i=>i.nodeId===q.id&&i.severity==="warning"&&i.message.includes("«غير صالح» غير مدعوم")));
+ doc.edges=doc.edges.filter(e=>e.id!=="e-inv");
+ doc.edges.push({id:"e-ok",source:q.id,sourceHandle:"valid",target:end.id,targetHandle:"in"} as never);
+ assert.ok(!validateDocument(doc).some(i=>i.message.includes("«غير صالح» غير مدعوم")));
+});
+test("example flow yields no live-engine warnings",()=>{
+ assert.equal(validateDocument(exampleFlow()).filter(i=>i.message.includes("المحرك المباشر")||i.message.includes("غير مقبول")).length,0);
+});

@@ -11,7 +11,8 @@ import {
 import type {FlowCapability} from "../../../src/flow/publicationGate.ts";
 import {evaluateFlowReadiness} from "./readiness.ts";
 import {simpleMessageFromDocument} from "../milan-api/flowPrepareMessage.ts";
-import {supportedDurableDocument} from "../milan-api/flowDurableIngress.ts";
+import {supportedDurableDocument,durableCandidateKind,durableRuntimeNeeds,type DurableCandidateKind}
+ from "../milan-api/flowDurableIngress.ts";
 
 const env=(k:string)=>Deno.env.get(k)??"";
 // Only the existing production GitHub Pages origin. Never reflect Origin.
@@ -177,9 +178,9 @@ export async function handleFlowPublication(req:Request,
      .eq("revision",revision).maybeSingle():null;
    if(candidate?.error)return error("Candidate revision unavailable",503);
    const published:unknown=candidate?.data?.document;
+   // Same whitelist and flag needs as the live ingress and the activation guard.
    const supported=supportedDurableDocument(published);
-   const candidateKind:"buttons"|"delay"|"unsupported"=supported?
-    (published.nodes.some(n=>n.data.kind==="question")?"buttons":"delay"):"unsupported";
+   const candidateKind:DurableCandidateKind=supported?durableCandidateKind(published):"unsupported";
    const readiness=evaluateFlowReadiness({
     platform:scope.platform,candidateKind,tenantActive:tenant.is_active===true,
     accountActive:account.is_active===true,
@@ -334,7 +335,9 @@ export async function handleFlowPublication(req:Request,
    // Explicit operator gates remain independent of browser publication controls.
    const rawDocument:unknown=publication.document;
    const durableGraph=supportedDurableDocument(rawDocument);
-   const buttonGraph=durableGraph&&rawDocument.nodes.some(n=>n.data.kind==="question");
+   // Flags follow the actual nodes: buttons sender for question/button
+   // messages, scheduler for delays (both for mixed graphs, none for text).
+   const needs=durableGraph?durableRuntimeNeeds(rawDocument):{buttons:true,scheduler:true};
    const durable=production&&scope.platform==="instagram"&&durableGraph&&
     env("FLOW_DURABLE_ACTIVATION_READY")==="true"&&
     env("FLOW_DURABLE_INGRESS_ENABLED")==="true"&&
@@ -343,8 +346,8 @@ export async function handleFlowPublication(req:Request,
     env("FLOW_OUTBOX_SEND_ENABLED")==="true"&&
     env("FLOW_ATOMIC_CONSUME_READY")==="true"&&
     env("FIELD_ENCRYPTION_KEY").length>0&&
-    (buttonGraph?env("FLOW_RICH_BUTTONS_ENABLED")==="true":
-     env("FLOW_DURABLE_SCHEDULER_ENABLED")==="true");
+    (!needs.buttons||env("FLOW_RICH_BUTTONS_ENABLED")==="true")&&
+    (!needs.scheduler||env("FLOW_DURABLE_SCHEDULER_ENABLED")==="true");
    if(!durable){
     if(simpleMessageFromDocument(publication.document,scope.platform)===null)
      return error("This flow uses unsupported runtime features",422);

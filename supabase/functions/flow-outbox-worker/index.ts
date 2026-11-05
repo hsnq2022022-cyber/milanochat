@@ -10,10 +10,18 @@
 import {createClient} from "npm:@supabase/supabase-js@2";
 import {acceptsFlowWorkerBearer} from "../flowWorkerAuth.ts";
 import {sendProviderMessage,decryptAccountToken,encryptMessageBody} from "./deliveryCore.ts";
-import {answerWithVerifiedKnowledge,openAIKnowledgeDependencies} from "./flowKnowledge.ts";
+import {answerWithVerifiedKnowledgeOutcome,knowledgeQuestionValid,openAIKnowledgeDependencies}
+ from "./flowKnowledge.ts";
+import {resolveKnowledgeEffect,AI_MAX_ATTEMPTS,AI_CLAIM_LEASE_SECONDS,type AiClaim}
+ from "./knowledgeRetry.ts";
 import {executeOnce} from "./executeOnce.ts";
 import {canDispatchOutbox} from "./productionGate.ts";
 import {confirmedOutboxMid,matchesPreviouslyPersistedReply} from "./confirmedSettlement.ts";
+import {permanentOutboxBlock,temporaryOutboxPause,humanTakeoverActive,OUTBOX_SCAN_LIMIT,
+ OUTBOX_DISPATCH_LIMIT,OUTBOX_STALE_MINUTES,type OutboxSkipReason} from "./skipPolicy.ts";
+import {compareOutbox,heldByEarlierEffect,statusAfterOutcome,ORDERED_KINDS,
+ ORDER_SIBLING_LIMIT,type OrderRow} from "./effectOrder.ts";
+import {plainInputQuestion} from "./questionMode.ts";
 
 const env=(name:string)=>Deno.env.get(name)??"";
 const json=(body:unknown,status=200)=>new Response(JSON.stringify(body),
@@ -43,27 +51,101 @@ Deno.serve(async req=>{
  const {data:g,error:ge}=await sb.from("automation_flow_global_switch")
   .select("enabled").eq("singleton",true).single();
  if(ge||g?.enabled!==true)return blocked();
- const {data:items,error:listError}=await sb.from("automation_flow_outbox")
-  .select("id,tenant_id,run_id,delivery_status,effect_kind,payload,outgoing_message_id,provider_message_id")
+ // Cancel stale effects and effects whose run ended, whose revision is inactive
+ // or whose conversation is under human takeover BEFORE listing, so they are
+ // never sent later. Fail closed: without this sweep a stale message could be
+ // delivered after a takeover ends.
+ const {error:sweepError}=await sb.rpc("flow_skip_blocked_outbox",{
+  p_max_age_minutes:OUTBOX_STALE_MINUTES,p_limit:200
+ });
+ if(sweepError){
+  console.error("[outbox] stale sweep failed",{code:sweepError.code});
+  return json({error:"Outbox lifecycle unavailable",sends:0},503);
+ }
+ const OUTBOX_COLUMNS="id,tenant_id,run_id,delivery_status,effect_kind,payload,outgoing_message_id,provider_message_id,created_at";
+ const {data:listed,error:listError}=await sb.from("automation_flow_outbox")
+  .select(OUTBOX_COLUMNS)
   .in("delivery_status",["pending","charge_pending"]).in("effect_kind",["message","question"])
-  .order("created_at",{ascending:true}).limit(10);
+  .order("created_at",{ascending:true}).limit(OUTBOX_SCAN_LIMIT);
  if(listError)return json({error:"Outbox lookup failed"},503);
+ // retry_wait rows (knowledge_ai backoff) are read only once retry_at is due,
+ // in a separate bounded query: a backed-off effect never occupies a scan slot
+ // of newer effects. A failure here only delays retries; it never sends.
+ const {data:dueRetries,error:retryListError}=await sb.from("automation_flow_outbox")
+  .select(OUTBOX_COLUMNS)
+  .eq("delivery_status","retry_wait").lte("retry_at",new Date().toISOString())
+  .in("effect_kind",["message","question"])
+  .order("retry_at",{ascending:true}).limit(OUTBOX_DISPATCH_LIMIT);
+ if(retryListError)console.error("[outbox] retry lookup failed",{code:retryListError.code});
+ const seen=new Set<string>();
+ const items=[...(listed??[]),...(retryListError?[]:dueRetries??[])]
+  .filter(e=>!seen.has(e.id)&&!!seen.add(e.id))
+  .sort(compareOutbox);
+ // Per-run order (effectOrder.ts): ONE tenant-scoped query per tenant per tick
+ // loads every provider effect of the candidate runs. Lookup error or a
+ // truncated result holds that tenant's effects this tick (fail closed).
+ const siblingsByTenant=new Map<string,OrderRow[]|null>();
+ for(const tenantId of new Set(items.map(e=>String(e.tenant_id)))){
+  const runIds=[...new Set(items.filter(e=>e.tenant_id===tenantId).map(e=>String(e.run_id)))];
+  const {data:siblings,error:siblingError}=await sb.from("automation_flow_outbox")
+   .select("id,tenant_id,run_id,delivery_status,effect_kind,payload,created_at")
+   .eq("tenant_id",tenantId).in("run_id",runIds).in("effect_kind",ORDERED_KINDS)
+   .limit(ORDER_SIBLING_LIMIT);
+  if(siblingError)console.error("[outbox] order lookup failed",{code:siblingError.code});
+  siblingsByTenant.set(tenantId,siblingError||!Array.isArray(siblings)||
+   siblings.length>=ORDER_SIBLING_LIMIT?null:
+   (siblings as OrderRow[]).filter(r=>r.tenant_id===tenantId));
+ }
+ // Status changes made during this tick (sent/cancelled/uncertain) so a later
+ // seq of the same run can follow in the same tick.
+ const localStatus=new Map<string,string>();
  const outcomes:Record<string,number>={};
+ // Scan more rows than are dispatched: rows still waiting on an operator gate
+ // (paused tenant, approval, credit, flags) must not starve newer effects.
+ let dispatched=0;
  for(const effect of items??[]){
-  const report=(key:string)=>outcomes[key]=(outcomes[key]??0)+1;
+  if(dispatched>=OUTBOX_DISPATCH_LIMIT)break;
+  const report=(key:string)=>{
+   const after=statusAfterOutcome(key);
+   if(after)localStatus.set(effect.id,after);
+   return outcomes[key]=(outcomes[key]??0)+1;
+  };
+  const siblings=siblingsByTenant.get(String(effect.tenant_id));
+  if(!siblings){report("blocked_order");continue;}
+  if(heldByEarlierEffect(effect as OrderRow,siblings,localStatus)){report("held_order");continue;}
+  // Permanently unsendable: mark cancelled (tenant-scoped, pending rows only)
+  // so it is never sent later. In-flight/charge_pending rows are never touched.
+  const skip=async(reason:OutboxSkipReason,fallback="blocked")=>{
+   // retry_wait = not yet sent (AI backoff); leased/charge_pending never skipped.
+   if(effect.delivery_status!=="pending"&&effect.delivery_status!=="retry_wait"){
+    report(fallback);return;
+   }
+   const {data:skipped,error:skipError}=await sb.rpc("flow_skip_outbox_effect",{
+    p_tenant:effect.tenant_id,p_outbox:effect.id,p_reason:reason
+   });
+   if(skipError)console.error("[outbox] skip failed",{code:skipError.code,id:effect.id});
+   report(!skipError&&skipped===true?"skipped_"+reason:fallback);
+  };
   try{
-   const {data:tenant}=await sb.from("tenants")
+   const {data:tenant,error:tenantError}=await sb.from("tenants")
     .select("id,business_name,is_active,credits_remaining")
     .eq("id",effect.tenant_id).maybeSingle();
-   const {data:sw}=await sb.from("automation_flow_tenant_switches")
+   const {data:sw,error:switchError}=await sb.from("automation_flow_tenant_switches")
     .select("enabled,test_only,production_approved").eq("tenant_id",effect.tenant_id).maybeSingle();
-   const {data:run}=await sb.from("automation_flow_runs").select("*")
+   const {data:run,error:runError}=await sb.from("automation_flow_runs").select("*")
     .eq("id",effect.run_id).eq("tenant_id",effect.tenant_id).maybeSingle();
-   if(!tenant?.is_active||!sw?.enabled||!run){report("blocked");continue;}
+   if(tenantError||switchError||runError){report("blocked");continue;}
+   // Missing tenant/run is permanent. An inactive tenant is a TEMPORARY pause
+   // (classified below): the effect stays pending, bounded by the stale sweep.
+   if(!tenant||!run){await skip("ineligible");continue;}
+   // Paused tenant: stays pending (bounded by the stale sweep), not cancelled.
+   if(!sw?.enabled){report("blocked");continue;}
    const [accountResult,conversationResult,activationResult]=await Promise.all([
     sb.from("channel_accounts").select("id,tenant_id,platform,is_active,agent_enabled,auto_reply,external_id,access_token_encrypted")
       .eq("tenant_id",effect.tenant_id).eq("id",run.channel_account_id).maybeSingle(),
-    sb.from("conversations").select("id,tenant_id,account_id,wa_chat_id,transferred,human_agent_until")
+    // human_agent_expires_at is the canonical takeover expiry (milan-api,
+    // human_agent_migration.sql); selecting a missing column fails the query.
+    sb.from("conversations").select("id,tenant_id,account_id,wa_chat_id,transferred,auto_paused_reason,human_agent_expires_at")
       .eq("tenant_id",effect.tenant_id).eq("id",run.conversation_id).maybeSingle(),
     sb.from("automation_flow_activations").select("revision,is_active")
       .eq("tenant_id",effect.tenant_id)
@@ -73,15 +155,41 @@ Deno.serve(async req=>{
       .eq("is_active",true).maybeSingle()
    ]);
    const account=accountResult.data,conversation=conversationResult.data;
-   if(accountResult.error||conversationResult.error||activationResult.error||
-      !account||!conversation||
+   if(accountResult.error||conversationResult.error||activationResult.error){
+    report("blocked");continue;
+   }
+   const permanent=permanentOutboxBlock({
+    tenantFound:true,tenantActive:tenant.is_active,runFound:true,
+    accountFound:!!account,conversationFound:!!conversation,
+    accountTenantMatches:account?.tenant_id===tenant.id,
+    conversationTenantMatches:conversation?.tenant_id===tenant.id,
+    accountPlatformMatchesRun:account?.platform===run.platform,
+    conversationAccountMatches:!!account&&conversation?.account_id===account.id,
+    accountActive:account?.is_active,agentEnabled:account?.agent_enabled,
+    autoReply:account?.auto_reply,allowedChannel:allowedChannel(String(account?.platform??"")),
+    humanTransferred:conversation?.transferred,
+    humanAgentExpiresAt:conversation?.human_agent_expires_at,
+    humanPausedReason:conversation?.auto_paused_reason,
+    revisionActive:activationResult.data?.is_active
+   },Date.now());
+   if(permanent){await skip(permanent);continue;}
+   // auto_reply/agent_enabled off or tenant/account inactive: keep pending
+   // (resumes when re-enabled; flow_skip_blocked_outbox cancels it as 'stale'
+   // after OUTBOX_STALE_MINUTES). Never cancelled here.
+   const pause=temporaryOutboxPause({tenantActive:tenant.is_active,
+    accountActive:account?.is_active,agentEnabled:account?.agent_enabled,
+    autoReply:account?.auto_reply});
+   if(pause){report("paused_"+pause);continue;}
+   const takeover=humanTakeoverActive(conversation?.transferred,
+    conversation?.human_agent_expires_at,conversation?.auto_paused_reason,Date.now());
+   // Defense in depth: the original full gate still decides every dispatch.
+   if(!account||!conversation||
       account.tenant_id!==tenant.id||conversation.tenant_id!==tenant.id||
       account.platform!==run.platform||
       conversation.account_id!==account.id||account.is_active!==true||
       account.agent_enabled!==true||account.auto_reply!==true||
       !allowedChannel(String(account.platform))||
-      conversation.transferred===true||
-      (conversation.human_agent_until&&Date.parse(conversation.human_agent_until)>Date.now())||
+      takeover||
       !canDispatchOutbox({
        globalEnabled:g?.enabled,tenantEnabled:sw?.enabled,
        testOnly:sw?.test_only,productionApproved:sw?.production_approved,
@@ -91,42 +199,109 @@ Deno.serve(async req=>{
        agentEnabled:account.agent_enabled,autoReply:account.auto_reply,
        tenantActive:tenant.is_active,credits:tenant.credits_remaining,
        revisionActive:activationResult.data?.is_active,
-       humanTakeover:conversation.transferred===true
+       humanTakeover:takeover
       })){
     report("blocked");continue;
    }
    const recipientRaw=String(conversation.wa_chat_id??"");
    const expectedPrefix=account.platform==="facebook"?"facebook":account.platform;
-   if(!recipientRaw.startsWith(expectedPrefix+":")){report("blocked");continue;}
+   if(!recipientRaw.startsWith(expectedPrefix+":")){await skip("ineligible");continue;}
    const recipient=recipientRaw.slice(expectedPrefix.length+1);
    // Do not allow the AI prompt to dictate recipient, account, URL or tenant.
    const payload=effect.payload;
    if(!payload||typeof payload!=="object"||payload.kind!==effect.effect_kind){
-    report("invalid");continue;
+    await skip("ineligible","invalid");continue;
    }
-   if(effect.effect_kind==="question" &&
+   // Only knowledge_ai effects have an AI backoff; anything else in retry_wait
+   // is left alone (flow_reserve_outbox_delivery only accepts 'pending').
+   if(effect.delivery_status==="retry_wait"&&payload.source!=="knowledge_ai"){
+    report("blocked");continue;
+   }
+   // Durable text/email/phone question (Instagram): plain text, no buttons.
+   const plainQuestion=effect.effect_kind==="question"&&
+    plainInputQuestion(payload,account.platform);
+   if(effect.effect_kind==="question" && !plainQuestion &&
       (env("FLOW_RICH_BUTTONS_ENABLED")!=="true" ||
        !["instagram","facebook"].includes(account.platform) ||
        payload.inputMode!=="buttons")){
     report("blocked");continue;
    }
+   dispatched++;
    let messageText=typeof payload.text==="string"?payload.text.trim():"";
    if(payload.source==="knowledge_ai"){
     if(env("FLOW_RAG_ENABLED")!=="true"){report("blocked");continue;}
-    const question=typeof run.variables?.message==="string"?run.variables.message:"";
-    messageText=await answerWithVerifiedKnowledge(sb,{
-      tenantId:tenant.id,publishedTenantId:run.tenant_id,
-      conversationTenantId:conversation.tenant_id,agentEnabled:account.agent_enabled,
-      humanTakeover:conversation.transferred===true,credits:tenant.credits_remaining,
-      businessName:tenant.business_name
-    },question,openAIKnowledgeDependencies())??"";
+    if(effect.delivery_status==="charge_pending"){
+     // Billing recovery persists EXACTLY the answer that was sent: read the
+     // stored encrypted answer, never call the model again. Fail closed.
+     const {data:cachedRow,error:cachedError}=await sb.from("automation_flow_outbox")
+      .select("ai_answer_encrypted").eq("tenant_id",effect.tenant_id).eq("id",effect.id)
+      .maybeSingle();
+     const enc=typeof cachedRow?.ai_answer_encrypted==="string"?cachedRow.ai_answer_encrypted:"";
+     messageText=enc?(await decryptAccountToken(enc,fieldKey).catch(()=>"")).trim():"";
+     if(cachedError||!messageText){report("billing_pending");continue;}
+    }else{
+     const question=typeof run.variables?.message==="string"?run.variables.message:"";
+     // No customer question is not retryable (previous behaviour: skipped).
+     if(!knowledgeQuestionValid(question)){await skip("ineligible","invalid");continue;}
+     const resolved=await resolveKnowledgeEffect({
+      claim:async():Promise<AiClaim|null>=>{
+       const {data,error}=await sb.rpc("flow_claim_outbox_ai",{
+        p_tenant:effect.tenant_id,p_outbox:effect.id,
+        p_max_attempts:AI_MAX_ATTEMPTS,p_lease_seconds:AI_CLAIM_LEASE_SECONDS
+       });
+       if(error){console.error("[outbox] ai claim error",{code:error.code});return null;}
+       const row=Array.isArray(data)?data[0]:data;
+       if(!row||typeof row.outcome!=="string")return null;
+       if(row.outcome==="claimed")
+        return typeof row.claim_token==="string"&&Number.isInteger(row.attempt)?
+         {outcome:"claimed",token:row.claim_token,attempt:row.attempt}:null;
+       if(row.outcome==="cached")
+        return typeof row.answer_encrypted==="string"?
+         {outcome:"cached",answerEncrypted:row.answer_encrypted}:null;
+       return ["busy","not_due","not_claimable","exhausted"].includes(row.outcome)?
+        {outcome:row.outcome} as AiClaim:null;
+      },
+      decrypt:enc=>decryptAccountToken(enc,fieldKey),
+      generate:()=>answerWithVerifiedKnowledgeOutcome(sb,{
+        tenantId:tenant.id,publishedTenantId:run.tenant_id,
+        conversationTenantId:conversation.tenant_id,agentEnabled:account.agent_enabled,
+        humanTakeover:takeover,credits:tenant.credits_remaining,
+        businessName:tenant.business_name
+      },question,openAIKnowledgeDependencies()),
+      store:async(token,text)=>{
+       const {data,error}=await sb.rpc("flow_store_outbox_ai_answer",{
+        p_tenant:effect.tenant_id,p_outbox:effect.id,p_token:token,
+        p_answer_encrypted:await encryptMessageBody(text,fieldKey)
+       });
+       if(error)console.error("[outbox] ai store error",{code:error.code});
+       return !error&&data===true;
+      },
+      finish:async(token,decision)=>{
+       const {data,error}=await sb.rpc("flow_finish_outbox_ai",{
+        p_tenant:effect.tenant_id,p_outbox:effect.id,p_token:token,
+        p_result:decision.result,
+        p_error_code:"code" in decision?decision.code:null,
+        p_delay_seconds:decision.result==="retry"?decision.delaySeconds:60,
+        p_max_attempts:AI_MAX_ATTEMPTS
+       });
+       if(error)console.error("[outbox] ai finish error",{code:error.code});
+       return !error&&typeof data==="string"?data:null;
+      }
+     });
+     if(resolved.status!=="send"){
+      if(resolved.key!=="ai_retry_scheduled"&&resolved.key!=="ai_busy"&&resolved.key!=="ai_not_due")
+       console.warn("[outbox] knowledge effect not sent",{id:effect.id,result:resolved.key});
+      report(resolved.key);continue;
+     }
+     messageText=resolved.text;
+    }
    }
-   if(!messageText||messageText.length>4000){report("invalid");continue;}
-   const quickReplies=effect.effect_kind==="question" &&
+   if(!messageText||messageText.length>4000){await skip("ineligible","invalid");continue;}
+   const quickReplies=effect.effect_kind==="question" && !plainQuestion &&
      Array.isArray(payload.choices)&&Array.isArray(payload.choiceIds)&&
      payload.choiceIds.length===payload.choices.length?
      payload.choices.map((label:unknown,i:number)=>({id:payload.choiceIds[i],label})):undefined;
-   if(effect.effect_kind==="question" && !quickReplies){report("invalid");continue;}
+   if(effect.effect_kind==="question" && !plainQuestion && !quickReplies){await skip("ineligible","invalid");continue;}
    const websiteButtons=effect.effect_kind==="message" &&
      Array.isArray(payload.websiteButtons)?payload.websiteButtons:undefined;
    if(websiteButtons && (env("FLOW_RICH_BUTTONS_ENABLED")!=="true" || account.platform!=="facebook")){
@@ -222,5 +397,5 @@ Deno.serve(async req=>{
    report("error");
   }
  }
- return json({processed:(items??[]).length,status:outcomes});
+ return json({processed:(items??[]).length,dispatched,status:outcomes});
 });

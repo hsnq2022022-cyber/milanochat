@@ -1559,7 +1559,8 @@ async function handleIncomingWebhookMessage(
   externalMsgId: string | null,
   channel: "whatsapp" | "instagram" | "facebook",
   phoneId?: string,
-  selectedChoiceId?: string | null
+  selectedChoiceId?: string | null,
+  providerEventIdGenuine?: boolean
 ) {
   const tenantId: string =
     channel === "whatsapp"
@@ -1791,7 +1792,8 @@ async function handleIncomingWebhookMessage(
     const durable=await attemptDurableInstagram(sb,{
       tenantId,accountId:String(account.id),conversationId:String(conv.id),
       inboundId:inboundMessageId,eventId:externalMsgId,platform:channel,
-      selectedChoiceId
+      text:customerText,
+      selectedChoiceId,providerEventIdGenuine:providerEventIdGenuine===true
     });
     if(durable==="handled")return;
   }
@@ -2568,6 +2570,10 @@ Deno.serve(async (req) => {
 
             const msgId =
               msg.mid || `ig_${Date.now()}`;
+            // Provenance, never inferred from the id's shape: true only when
+            // Meta itself supplied a non-empty mid (msgId is then that mid).
+            const providerEventIdGenuine =
+              typeof msg.mid === "string" && msg.mid.length > 0;
 
             /**
              * منع التكرار.
@@ -2597,7 +2603,8 @@ Deno.serve(async (req) => {
                 | "instagram"
                 | "facebook",
               undefined,
-              msg.choiceId
+              msg.choiceId,
+              providerEventIdGenuine
             );
 
             /* ── جلب بيانات المرسل (اسم + صورة) وحفظها ──

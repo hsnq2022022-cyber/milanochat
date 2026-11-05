@@ -14,7 +14,16 @@ type ReadinessChecks={
  canary:boolean;operatorRelease:boolean;outbox:boolean;atomicDebit:boolean;
  encryption:boolean;scheduler:boolean;buttons:boolean;
 };
-type Readiness={checks:ReadinessChecks;candidateKind:"buttons"|"delay"|"unsupported";buttonsConfigured:boolean;delayConfigured:boolean};
+type Readiness={checks:ReadinessChecks;candidateKind:"buttons"|"delay"|"mixed"|"text"|"unsupported";
+ buttonsConfigured:boolean;delayConfigured:boolean;
+ // Absent on older servers; the per-kind fallbacks below preserve the old behaviour.
+ configured?:boolean;needsButtons?:boolean;needsScheduler?:boolean};
+const readinessNeeds=(r:Readiness)=>({
+ buttons:typeof r.needsButtons==="boolean"?r.needsButtons:r.candidateKind==="buttons",
+ scheduler:typeof r.needsScheduler==="boolean"?r.needsScheduler:r.candidateKind==="delay"
+});
+const readinessConfigured=(r:Readiness)=>typeof r.configured==="boolean"?r.configured:
+ r.candidateKind==="buttons"?r.buttonsConfigured:r.candidateKind==="delay"?r.delayConfigured:false;
 const readinessLabels:Record<keyof ReadinessChecks,{ar:string;en:string}>={
  instagram:{ar:"قناة Instagram",en:"Instagram channel"},
  tenant:{ar:"نشاط المتجر",en:"Active store"},
@@ -132,13 +141,12 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
 
  const missingReadinessChecks=(report:Readiness)=>Object.entries(report.checks)
   .filter(([key,ready])=>ready!==true&&
-   (key!=="scheduler"||report.candidateKind==="delay")&&
-   (key!=="buttons"||report.candidateKind==="buttons"));
+   (key!=="scheduler"||readinessNeeds(report).scheduler)&&
+   (key!=="buttons"||readinessNeeds(report).buttons));
  const copyReadiness=async()=>{
   if(!readiness)return;
   const missing=missingReadinessChecks(readiness).map(([key])=>key);
-  const configured=readiness.candidateKind==="buttons"?readiness.buttonsConfigured:
-   readiness.candidateKind==="delay"?readiness.delayConfigured:false;
+  const configured=readinessConfigured(readiness);
   // No token, account ID, customer identity, message or tenant information.
   const report={revision:checkedRevision,kind:readiness.candidateKind,configured,missing};
   try{
@@ -286,6 +294,12 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
       {readiness.candidateKind==="delay"&&<p className="mt-2">
        {en?"Delayed messages: ":"الرسائل المؤجلة: "}
        {readiness.delayConfigured?(en?"Configured":"الإعدادات مكتملة"):(en?"Not configured":"الإعدادات غير مكتملة")}</p>}
+      {readiness.candidateKind==="text"&&<p className="mt-2">
+       {en?"Text / data-collection flow: ":"تدفق نصي / جمع بيانات: "}
+       {readinessConfigured(readiness)?(en?"Configured":"الإعدادات مكتملة"):(en?"Not configured":"الإعدادات غير مكتملة")}</p>}
+      {readiness.candidateKind==="mixed"&&<p className="mt-2">
+       {en?"Mixed flow (buttons and delay): ":"تدفق مختلط (أزرار وتأخير): "}
+       {readinessConfigured(readiness)?(en?"Configured":"الإعدادات مكتملة"):(en?"Not configured":"الإعدادات غير مكتملة")}</p>}
       {readiness.candidateKind==="unsupported"&&<p className="mt-2 text-[#F5D99C]">
        {en?"This revision is not an advanced buttons or delay candidate.":
         "هذا الإصدار ليس تدفق أزرار أو تأخير مدعومًا."}</p>}

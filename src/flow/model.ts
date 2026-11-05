@@ -127,6 +127,15 @@ export function exampleFlow(): FlowDocument {
   const edges=[edgeFor({source:a.id,sourceHandle:"next",target:b.id,targetHandle:"in"}),edgeFor({source:b.id,sourceHandle:"next",target:c.id,targetHandle:"in"}),...ds.map((n,i)=>edgeFor({source:c.id,sourceHandle:c.data.options[i].id,target:n.id,targetHandle:"in"},c.data.options[i].label))];
   return {version:3,name:"تدفق ترحيبي",nodes:[a,b,c,...ds],edges};
 }
+/** Live durable engine rule for collected field names; returns an Arabic reason or "" when accepted. */
+function liveFieldNameProblem(name:string):string{
+  if(name.toLowerCase()==="message")return "الاسم «message» محجوز";
+  if(name.startsWith("__"))return "لا يجوز أن يبدأ الاسم بـ __";
+  if(name==="constructor"||name==="prototype")return "الاسم كلمة محجوزة";
+  if(name.length>64)return "الاسم أطول من 64 حرفًا";
+  if(!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name))return "استخدم أحرفًا إنجليزية وأرقامًا و_ فقط، ولا تبدأ برقم";
+  return "";
+}
 export type ValidationIssue = { message: string; nodeId?: string; severity: "error" | "warning" };
 export type ValidationLibraryItem = { id: string; doc?: FlowDocument };
 /** One issue per affected node/port. Existing v3 document fields remain unchanged. */
@@ -155,6 +164,12 @@ export function validateDocument(doc: FlowDocument, library?: readonly Validatio
       error("أضف كلمة مفتاحية واحدة على الأقل لتشغيل هذا الحدث");
     if(d.kind==="question"&&d.inputMode!=="buttons"&&!d.inputField.trim())
       error("اسم حقل الإجابة مطلوب");
+    if(d.kind==="question"&&d.inputMode!=="buttons"){
+      const reason=d.inputField.trim()?liveFieldNameProblem(d.inputField):"";
+      if(reason)add("تحذير للنشر المباشر: اسم حقل الإجابة غير مقبول — "+reason+" — "+(d.title||n.id),n.id,"warning");
+      if(d.inputMode==="number")
+        add("نمط الإجابة «رقم» غير مدعوم في المحرك المباشر (المدعوم: نص أو بريد أو هاتف) — "+(d.title||n.id),n.id,"warning");
+    }
     for(const option of d.options){
       if(option.action==="website"){
         if(!option.url||!/^https:\/\/\S+$/i.test(option.url))error("رابط الموقع للزر "+option.label+" يجب أن يبدأ بـ HTTPS");
@@ -204,6 +219,9 @@ export function validateDocument(doc: FlowDocument, library?: readonly Validatio
     const signature=edge.source+":"+(edge.sourceHandle||"next");
     if(unique.has(signature))add("هناك أكثر من اتصال لنفس مخرج الخطوة — "+byId.get(edge.source)!.data.title,edge.source);
     unique.set(signature,edge.id);
+    const from=byId.get(edge.source)!.data;
+    if(from.kind==="question"&&from.inputMode!=="buttons"&&edge.sourceHandle==="invalid")
+      add("مخرج «غير صالح» غير مدعوم في المحرك المباشر؛ استخدم مخرج «التالي» فقط — "+(from.title||edge.source),edge.source,"warning");
     if(!canConnect({source:edge.source,sourceHandle:edge.sourceHandle||"next",target:edge.target,targetHandle:edge.targetHandle||"in"},
       {...doc,edges:doc.edges.filter(e=>e.id!==edge.id)}))
       add("توصيل غير صالح — "+byId.get(edge.source)!.data.title,edge.source);

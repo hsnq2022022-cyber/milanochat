@@ -618,3 +618,12 @@ test("always-visible content choices have no dead Add Content button",async({pag
  await expect(panel.getByRole("button",{name:"إضافة محتوى"})).toHaveCount(0);
  await expect(panel.getByTestId("content-block-menu").getByRole("button")).toHaveCount(5);
 });
+
+test("typed question with reserved live field name shows a live-engine warning in the findings panel",async({page})=>{
+  await page.goto("/milanochat/#/flows");
+  await page.locator(".react-flow__node").nth(2).click();
+  await page.locator("aside").getByRole("combobox").first().selectOption("email");
+  await page.locator("aside input[maxlength='100']").first().fill("message");
+  await page.getByTitle("فحص التدفق").click();
+  await expect(page.getByText(/⚠ تحذير: .*اسم حقل الإجابة غير مقبول — الاسم «message» محجوز/).first()).toBeVisible();
+});

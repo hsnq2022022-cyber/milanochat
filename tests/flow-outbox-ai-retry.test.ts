@@ -1,0 +1,357 @@
+// knowledge_ai outbox retry policy: outcome classification, bounded backoff,
+// terminal states, duplicate prevention and queue recovery.
+// Run: node --experimental-strip-types --test tests/flow-outbox-ai-retry.test.ts
+// The SQL transitions themselves are exercised against a throwaway local
+// PostgreSQL in tests/flow-outbox-ai-retry.test.mjs; the in-memory store
+// below mirrors those functions so the worker orchestration can be tested.
+import {test} from "node:test";
+import assert from "node:assert/strict";
+import {readFileSync} from "node:fs";
+import {answerWithVerifiedKnowledge,answerWithVerifiedKnowledgeOutcome,
+ classifyKnowledgeError,knowledgeHttpError,openAIKnowledgeDependencies,KnowledgeError,
+ type KnowledgeOutcome} from "../supabase/functions/flow-outbox-worker/flowKnowledge.ts";
+import {AI_MAX_ATTEMPTS,AI_CLAIM_LEASE_SECONDS,aiRetryDelaySeconds,decideKnowledgeOutcome,
+ resolveKnowledgeEffect,safeAiErrorCode,type AiClaim,type AiDecision} from
+ "../supabase/functions/flow-outbox-worker/knowledgeRetry.ts";
+import {executeOnce} from "../supabase/functions/flow-outbox-worker/executeOnce.ts";
+
+// ------------------------------------------------------------ knowledge outcomes
+const rowId="77777777-7777-4777-8777-777777777771";
+const content="Price is 1000 IQD for the item.";
+function kb(opts:{rows?:unknown[];rpcError?:boolean}={}){
+ return {
+  rpc:async()=>opts.rpcError?{data:null,error:{code:"57014"}}:
+   {data:opts.rows??[{id:rowId,content,similarity:0.9}],error:null},
+  from:(table:string)=>{
+   const q={select:()=>q,eq:()=>q,in:()=>q,
+    limit:async()=>({data:table==="knowledge_chunks"?
+     [{id:rowId,tenant_id:"A",content,source_id:"src"}]:
+     [{id:"src",tenant_id:"A",status:"indexed"}],error:null})};
+   return q;
+  }
+ } as never;
+}
+const scope={tenantId:"A",publishedTenantId:"A",conversationTenantId:"A",
+ agentEnabled:true,humanTakeover:false,credits:5,businessName:"Test"};
+const grounded={embed:async()=>[0.1,0.2],
+ complete:async()=>({answer:"Price is 1000 IQD",grounded:true,supporting_quote:content})};
+
+test("outcome: grounded answer, genuine no-knowledge and ineligible are distinct",async()=>{
+ assert.deepEqual(await answerWithVerifiedKnowledgeOutcome(kb(),scope,"How much?",grounded),
+  {kind:"answer",text:"Price is 1000 IQD"});
+ let llmCalls=0;
+ const counting={...grounded,complete:async()=>{llmCalls++;return grounded.complete();}};
+ assert.deepEqual(await answerWithVerifiedKnowledgeOutcome(kb({rows:[]}),scope,"How much?",counting),
+  {kind:"no_knowledge"});
+ assert.equal(llmCalls,0,"no grounded evidence: the model is never called");
+ assert.deepEqual(await answerWithVerifiedKnowledgeOutcome(kb(),scope,"How much?",
+  {...grounded,complete:async()=>({answer:"x",grounded:false,supporting_quote:""})}),{kind:"no_knowledge"});
+ assert.deepEqual(await answerWithVerifiedKnowledgeOutcome(kb(),scope,"How much?",
+  {...grounded,complete:async()=>({answer:"invented",grounded:true,supporting_quote:"This quote is made up."})}),
+  {kind:"no_knowledge"});
+ assert.deepEqual(await answerWithVerifiedKnowledgeOutcome(kb(),{...scope,conversationTenantId:"B"},
+  "How much?",grounded),{kind:"ineligible"});
+ assert.deepEqual(await answerWithVerifiedKnowledgeOutcome(kb(),scope,"  ",grounded),{kind:"ineligible"});
+});
+
+test("outcome: transient vs permanent provider failures are classified, never thrown",async()=>{
+ const fail=(e:unknown)=>({...grounded,embed:async()=>{throw e;}});
+ const cases:[unknown,KnowledgeOutcome][]=[
+  [knowledgeHttpError("Embedding",429),{kind:"transient",code:"ai_http_429"}],
+  [knowledgeHttpError("Embedding",503),{kind:"transient",code:"ai_http_5xx"}],
+  [knowledgeHttpError("LLM",408),{kind:"transient",code:"ai_http_408"}],
+  [new DOMException("timed out","TimeoutError"),{kind:"transient",code:"ai_timeout"}],
+  [new TypeError("fetch failed"),{kind:"transient",code:"ai_network"}],
+  [Error("weird"),{kind:"transient",code:"ai_unknown"}],
+  [knowledgeHttpError("LLM",401),{kind:"permanent",code:"ai_http_401"}],
+  [knowledgeHttpError("LLM",400),{kind:"permanent",code:"ai_http_400"}],
+  [new KnowledgeError("LLM key missing","ai_config_missing",false),{kind:"permanent",code:"ai_config_missing"}],
+ ];
+ for(const [err,want] of cases)
+  assert.deepEqual(await answerWithVerifiedKnowledgeOutcome(kb(),scope,"q?",fail(err)),want,String(err));
+ assert.deepEqual(await answerWithVerifiedKnowledgeOutcome(kb({rpcError:true}),scope,"q?",grounded),
+  {kind:"transient",code:"rag_lookup_failed"});
+ assert.deepEqual(await answerWithVerifiedKnowledgeOutcome(kb(),scope,"q?",{...grounded,embed:async()=>[]}),
+  {kind:"transient",code:"ai_bad_embedding"});
+ assert.deepEqual(classifyKnowledgeError(null),{kind:"transient",code:"ai_unknown"});
+});
+
+test("backward compatible API: string|null, provider errors still throw with old wording",async()=>{
+ assert.equal(await answerWithVerifiedKnowledge(kb(),scope,"How much?",grounded),"Price is 1000 IQD");
+ assert.equal(await answerWithVerifiedKnowledge(kb({rows:[]}),scope,"How much?",grounded),null);
+ await assert.rejects(()=>answerWithVerifiedKnowledge(kb({rpcError:true}),scope,"q?",grounded),
+  /RAG lookup failed: 57014/);
+ await assert.rejects(()=>answerWithVerifiedKnowledge(kb(),scope,"q?",
+  {...grounded,embed:async()=>{throw knowledgeHttpError("Embedding",500);}}),/Embedding HTTP 500/);
+});
+
+test("OpenAI dependencies raise typed errors (HTTP status, missing key) without leaking bodies",async()=>{
+ const g=globalThis as unknown as {Deno?:unknown};
+ const prev=g.Deno;
+ const vars:Record<string,string>={LLM_API_KEY:"k"};
+ g.Deno={env:{get:(n:string)=>vars[n]}};
+ try{
+  const status=(s:number)=>(async()=>new Response("secret body "+s,{status:s})) as unknown as typeof fetch;
+  for(const [s,kind,code] of [[429,"transient","ai_http_429"],[500,"transient","ai_http_5xx"],
+   [502,"transient","ai_http_5xx"],[401,"permanent","ai_http_401"],[403,"permanent","ai_http_403"]] as const){
+   const out=await answerWithVerifiedKnowledgeOutcome(kb(),scope,"q?",openAIKnowledgeDependencies(status(s)));
+   assert.deepEqual(out,{kind,code},String(s));
+  }
+  delete vars.LLM_API_KEY;
+  const out=await answerWithVerifiedKnowledgeOutcome(kb(),scope,"q?",openAIKnowledgeDependencies(status(200)));
+  assert.deepEqual(out,{kind:"permanent",code:"ai_config_missing"});
+ }finally{g.Deno=prev;}
+});
+
+// ------------------------------------------------------------ policy
+test("backoff: 1m/2m/4m/8m with at most +10% jitter, bounded attempts",()=>{
+ assert.equal(AI_MAX_ATTEMPTS,5);
+ assert.equal(AI_CLAIM_LEASE_SECONDS,120);
+ assert.deepEqual([1,2,3,4].map(n=>aiRetryDelaySeconds(n,()=>0)),[60,120,240,480]);
+ assert.deepEqual([1,2,3,4].map(n=>aiRetryDelaySeconds(n,()=>0.999999)),[66,132,264,528]);
+ assert.equal(aiRetryDelaySeconds(9,()=>0),900,"capped");
+ assert.equal(aiRetryDelaySeconds(Number.NaN,()=>Number.NaN),60);
+ const r=(n:number)=>decideKnowledgeOutcome({kind:"transient",code:"ai_http_429"},n,()=>0);
+ assert.deepEqual(r(1),{action:"finish",result:"retry",code:"ai_http_429",delaySeconds:60,exhausted:false});
+ assert.equal((r(4) as {exhausted:boolean}).exhausted,false);
+ assert.equal((r(5) as {exhausted:boolean}).exhausted,true);
+ assert.deepEqual(decideKnowledgeOutcome({kind:"no_knowledge"},1),{action:"finish",result:"no_knowledge"});
+ assert.deepEqual(decideKnowledgeOutcome({kind:"permanent",code:"ai_http_401"},1),
+  {action:"finish",result:"permanent",code:"ai_http_401"});
+ // An empty "answer" is a contract violation, retried, never sent or cancelled.
+ assert.equal((decideKnowledgeOutcome({kind:"answer",text:"  "},1) as {result:string}).result,"retry");
+});
+test("error codes never carry free text",()=>{
+ assert.equal(safeAiErrorCode("ai_http_429"),"ai_http_429");
+ for(const bad of ["Bearer sk-123","customer said hi","A".repeat(10),"x".repeat(49),null,42])
+  assert.equal(safeAiErrorCode(bad),"ai_unknown");
+});
+
+// ------------------------------------------------------------ in-memory mirror of the SQL
+type Row={id:string;tenant:string;created:number;status:string;retryAt:number|null;
+ aiAttempts:number;lastError:string|null;leaseToken:string|null;leaseUntil:number|null;
+ answer:string|null;cancelReason:string|null;delivered:boolean};
+class FakeDb{
+ now=1_000_000;rows=new Map<string,Row>();sends=0;bills=0;modelCalls=0;tokens=0;
+ add(id:string,created=this.now){this.rows.set(id,{id,tenant:"A",created,status:"pending",retryAt:null,
+  aiAttempts:0,lastError:null,leaseToken:null,leaseUntil:null,answer:null,cancelReason:null,delivered:false});}
+ /** Mirrors the worker list filter: pending/charge_pending, or retry_wait whose retry_at is due. */
+ list(limit=50){return [...this.rows.values()].filter(r=>r.status==="pending"||r.status==="charge_pending"||
+  (r.status==="retry_wait"&&r.retryAt!==null&&r.retryAt<=this.now))
+  .sort((a,b)=>a.created-b.created).slice(0,limit);}
+ claim(tenant:string,id:string,max=AI_MAX_ATTEMPTS):AiClaim{
+  const r=this.rows.get(id);
+  if(!r||r.tenant!==tenant||!["pending","retry_wait"].includes(r.status))return {outcome:"not_claimable"};
+  if(r.retryAt!==null&&r.retryAt>this.now)return {outcome:"not_due"};
+  if(r.leaseUntil!==null&&r.leaseUntil>this.now)return {outcome:"busy"};
+  if(r.answer){Object.assign(r,{status:"pending",retryAt:null,leaseToken:null,leaseUntil:null});
+   return {outcome:"cached",answerEncrypted:r.answer};}
+  if(r.aiAttempts>=max){Object.assign(r,{status:"dead_letter",cancelReason:"ai_retries_exhausted",
+   retryAt:null,leaseToken:null,leaseUntil:null});return {outcome:"exhausted"};}
+  const token="t"+(++this.tokens);
+  Object.assign(r,{status:"pending",retryAt:null,aiAttempts:r.aiAttempts+1,leaseToken:token,
+   leaseUntil:this.now+AI_CLAIM_LEASE_SECONDS*1000});
+  return {outcome:"claimed",token,attempt:r.aiAttempts};
+ }
+ store(id:string,token:string,enc:string){const r=this.rows.get(id)!;
+  if(r.status!=="pending"||r.leaseToken!==token||r.answer)return false;
+  Object.assign(r,{answer:enc,lastError:null,leaseToken:null,leaseUntil:null});return true;}
+ finish(id:string,token:string,d:Exclude<AiDecision,{action:"send"}>,max=AI_MAX_ATTEMPTS){
+  const r=this.rows.get(id)!;
+  if(r.status!=="pending"||r.leaseToken!==token||r.answer)return null;
+  const clear={leaseToken:null,leaseUntil:null,retryAt:null};
+  if(d.result==="no_knowledge"||d.result==="ineligible"){
+   Object.assign(r,clear,{status:"cancelled",cancelReason:d.result});return "cancelled";}
+  if(d.result==="permanent"||r.aiAttempts>=max){
+   Object.assign(r,clear,{status:"dead_letter",lastError:d.code,
+    cancelReason:d.result==="permanent"?"ai_unavailable":"ai_retries_exhausted"});return "dead_letter";}
+  Object.assign(r,clear,{status:"retry_wait",lastError:d.code,
+   retryAt:this.now+Math.min(Math.max(d.delaySeconds,30),1800)*1000});return "retry_wait";
+ }
+ /** flow_reserve_outbox_delivery: one-shot, pending only. */
+ reserve(id:string){const r=this.rows.get(id)!;
+  if(r.status!=="pending"||r.delivered)return false;r.status="leased";r.delivered=true;return true;}
+}
+type Gen=()=>Promise<KnowledgeOutcome>;
+/** One worker tick for one effect: AI resolution then one-shot send + bill. */
+async function tick(db:FakeDb,id:string,gen:Gen,hooks:{crashAfterStore?:boolean;crashInGenerate?:boolean}={}){
+ const res=await resolveKnowledgeEffect({
+  claim:async()=>db.claim("A",id),
+  decrypt:async enc=>enc.replace(/^enc:v1:/,""),
+  generate:async()=>{db.modelCalls++;if(hooks.crashInGenerate)throw new Error("process killed");return gen();},
+  store:async(token,text)=>db.store(id,token,"enc:v1:"+text),
+  finish:async(token,d)=>db.finish(id,token,d),
+  random:()=>0
+ });
+ if(hooks.crashAfterStore)throw new Error("worker restarted");
+ if(res.status!=="send")return res.key;
+ return executeOnce({reserve:async()=>db.reserve(id),
+  send:async()=>{db.sends++;return "mid-"+id;},
+  confirm:async()=>{db.rows.get(id)!.status="charge_pending";return true;},
+  persistAndBill:async()=>{db.bills++;db.rows.get(id)!.status="settled";return true;}});
+}
+const transient:Gen=async()=>({kind:"transient",code:"ai_http_5xx"});
+const answer:Gen=async()=>({kind:"answer",text:"Price is 1000 IQD"});
+
+test("transient error schedules backoff, does not cancel, keeps the effect", async()=>{
+ const db=new FakeDb();db.add("e1");
+ assert.equal(await tick(db,"e1",transient),"ai_retry_scheduled");
+ const r=db.rows.get("e1")!;
+ assert.equal(r.status,"retry_wait");assert.equal(r.cancelReason,null);
+ assert.equal(r.aiAttempts,1);assert.equal(r.lastError,"ai_http_5xx");
+ assert.equal(r.retryAt,db.now+60_000);
+ assert.equal(db.sends,0);
+ // Not due yet: not listed, and a direct claim is refused without a model call.
+ assert.deepEqual(db.list().map(x=>x.id),[]);
+ assert.equal(await tick(db,"e1",answer),"ai_not_due");
+ assert.equal(db.modelCalls,1);
+ // After the backoff the same effect succeeds and is sent exactly once.
+ db.now+=60_000;
+ assert.deepEqual(db.list().map(x=>x.id),["e1"]);
+ assert.equal(await tick(db,"e1",answer),"settled");
+ assert.equal(db.sends,1);assert.equal(db.bills,1);assert.equal(r.aiAttempts,2);
+});
+
+test("retries are bounded: 5 model calls, then dead_letter/ai_retries_exhausted, never cancelled", async()=>{
+ const db=new FakeDb();db.add("e1");
+ const delays:number[]=[];
+ for(let i=1;i<=AI_MAX_ATTEMPTS;i++){
+  const before=db.now;
+  const key=await tick(db,"e1",transient);
+  const r=db.rows.get("e1")!;
+  if(i<AI_MAX_ATTEMPTS){assert.equal(key,"ai_retry_scheduled");delays.push((r.retryAt!-before)/1000);
+   db.now=r.retryAt!;}
+  else assert.equal(key,"dead_letter_ai_retries_exhausted");
+ }
+ assert.deepEqual(delays,[60,120,240,480]);
+ const r=db.rows.get("e1")!;
+ assert.equal(r.status,"dead_letter");assert.equal(r.cancelReason,"ai_retries_exhausted");
+ assert.equal(r.lastError,"ai_http_5xx");
+ assert.equal(db.modelCalls,AI_MAX_ATTEMPTS);
+ db.now+=3_600_000;
+ assert.equal(await tick(db,"e1",answer),"ai_not_claimable");
+ assert.equal(db.modelCalls,AI_MAX_ATTEMPTS);assert.equal(db.sends,0);assert.equal(db.bills,0);
+ // Owner review surfaces dead_letter (not cancelled) with this reason.
+ const review=readFileSync("supabase/functions/flow-delivery-review/review.ts","utf8");
+ assert.match(review,/FAILED_OUTBOX_STATUSES = \["uncertain", "dead_letter", "billing_blocked"\]/);
+ assert.match(review,/OUTBOX_LIFECYCLE_COLUMNS = OUTBOX_BASE_COLUMNS \+ ",cancel_reason,cancelled_at"/);
+});
+
+test("no-knowledge is terminal, distinct from transient, and never calls the model again", async()=>{
+ const db=new FakeDb();db.add("e1");
+ assert.equal(await tick(db,"e1",async()=>({kind:"no_knowledge"})),"cancelled_no_knowledge");
+ const r=db.rows.get("e1")!;
+ assert.equal(r.status,"cancelled");assert.equal(r.cancelReason,"no_knowledge");
+ assert.equal(r.lastError,null);assert.equal(r.retryAt,null);
+ db.now+=3_600_000;
+ assert.equal(await tick(db,"e1",answer),"ai_not_claimable");
+ assert.equal(db.modelCalls,1);assert.equal(db.sends,0);
+});
+
+test("permanent error is terminal immediately: dead_letter/ai_unavailable after one call", async()=>{
+ const db=new FakeDb();db.add("e1");
+ assert.equal(await tick(db,"e1",async()=>({kind:"permanent",code:"ai_http_401"})),"dead_letter_ai_unavailable");
+ const r=db.rows.get("e1")!;
+ assert.deepEqual([r.status,r.cancelReason,r.lastError,r.aiAttempts],["dead_letter","ai_unavailable","ai_http_401",1]);
+ assert.equal(await tick(db,"e1",answer),"ai_not_claimable");
+ assert.equal(db.modelCalls,1);assert.equal(db.sends,0);
+});
+
+test("duplicate prevention: concurrent workers and repeated ticks produce one model call, one send, one bill", async()=>{
+ const db=new FakeDb();db.add("e1");
+ let release!:()=>void;const gate=new Promise<void>(r=>release=r);
+ const slow:Gen=async()=>{await gate;return answer();};
+ const a=tick(db,"e1",slow),b=tick(db,"e1",slow);
+ release();
+ const results=(await Promise.all([a,b])).sort();
+ assert.deepEqual(results,["ai_busy","settled"]);
+ assert.equal(db.modelCalls,1);assert.equal(db.sends,1);assert.equal(db.bills,1);
+ for(let i=0;i<3;i++){db.now+=600_000;await tick(db,"e1",answer);}
+ assert.equal(db.modelCalls,1);assert.equal(db.sends,1);assert.equal(db.bills,1);
+});
+
+test("restart after the answer was stored reuses it: no regeneration, exactly one send", async()=>{
+ const db=new FakeDb();db.add("e1");
+ await assert.rejects(()=>tick(db,"e1",answer,{crashAfterStore:true}),/worker restarted/);
+ assert.equal(db.rows.get("e1")!.answer,"enc:v1:Price is 1000 IQD");
+ assert.equal(db.sends,0);
+ assert.equal(await tick(db,"e1",async()=>({kind:"answer",text:"DIFFERENT"})),"settled");
+ assert.equal(db.modelCalls,1,"cached answer, model not called again");
+ assert.equal(db.sends,1);assert.equal(db.bills,1);
+ // A lost claim (another worker re-claimed) cannot overwrite or send.
+ db.add("e2");const c=db.claim("A","e2");assert.equal(c.outcome,"claimed");
+ assert.equal(db.store("e2","stale-token","enc:v1:x"),false);
+ assert.equal(db.claim("B","e2").outcome,"not_claimable","tenant-scoped");
+});
+
+test("restart mid-generation: lease blocks others until it expires, then resumes and counts the attempt", async()=>{
+ const db=new FakeDb();db.add("e1");
+ assert.equal(await tick(db,"e1",answer,{crashInGenerate:true}),"ai_retry_scheduled");
+ // A worker killed outright (no finish) leaves the lease; simulate it directly.
+ db.add("e2");assert.equal(db.claim("A","e2").outcome,"claimed");
+ assert.equal(await tick(db,"e2",answer),"ai_busy");
+ db.now+=AI_CLAIM_LEASE_SECONDS*1000;
+ assert.equal(await tick(db,"e2",answer),"settled");
+ assert.equal(db.rows.get("e2")!.aiAttempts,2);
+ assert.equal(db.sends,1);
+});
+
+test("queue recovery: a backed-off item does not block newer items and is picked up when due", async()=>{
+ const db=new FakeDb();
+ db.add("old",db.now-5000);db.add("new1",db.now-1000);db.add("new2",db.now);
+ assert.equal(await tick(db,"old",transient),"ai_retry_scheduled");
+ assert.deepEqual(db.list().map(x=>x.id),["new1","new2"]);
+ assert.deepEqual(db.list(1).map(x=>x.id),["new1"],"even with a scan limit of 1");
+ for(const id of ["new1","new2"])assert.equal(await tick(db,id,answer),"settled");
+ assert.deepEqual(db.list().map(x=>x.id),[]);
+ db.now+=60_000;
+ assert.deepEqual(db.list().map(x=>x.id),["old"]);
+ assert.equal(await tick(db,"old",answer),"settled");
+ assert.equal(db.sends,3);assert.equal(db.bills,3);
+});
+
+test("claim DB errors and unreadable cached answers fail closed (no model call, no send)", async()=>{
+ let calls=0;
+ const base={decrypt:async()=>{throw Error("bad key");},generate:async()=>{calls++;return {kind:"answer",text:"x"} as KnowledgeOutcome;},
+  store:async()=>true,finish:async()=>"retry_wait"};
+ assert.deepEqual(await resolveKnowledgeEffect({...base,claim:async()=>{throw Error("db");}}),{status:"report",key:"blocked"});
+ assert.deepEqual(await resolveKnowledgeEffect({...base,claim:async()=>null}),{status:"report",key:"blocked"});
+ assert.deepEqual(await resolveKnowledgeEffect({...base,claim:async()=>({outcome:"cached",answerEncrypted:"enc:v1:x"})}),
+  {status:"report",key:"ai_cached_unreadable"});
+ assert.deepEqual(await resolveKnowledgeEffect({...base,claim:async()=>({outcome:"claimed",token:"t",attempt:1}),
+  store:async()=>false}),{status:"report",key:"ai_store_failed"});
+ assert.deepEqual(await resolveKnowledgeEffect({...base,claim:async()=>({outcome:"claimed",token:"t",attempt:1}),
+  generate:async()=>({kind:"transient",code:"ai_timeout"}),finish:async()=>null}),{status:"report",key:"ai_finish_failed"});
+ assert.equal(calls,1);
+});
+
+// ------------------------------------------------------------ worker wiring (static)
+test("worker: list reads retry_wait only when due; AI claim precedes the model; no empty-answer cancel", ()=>{
+ const code=readFileSync("supabase/functions/flow-outbox-worker/index.ts","utf8");
+ // The original pending/charge_pending scan is unchanged; due retry_wait rows
+ // come from a separate bounded query filtered on retry_at <= now.
+ assert.match(code,/\.in\("delivery_status",\["pending","charge_pending"\]\)\.in\("effect_kind",\["message","question"\]\)\s*\.order\("created_at",\{ascending:true\}\)\.limit\(OUTBOX_SCAN_LIMIT\);/);
+ assert.match(code,/\.eq\("delivery_status","retry_wait"\)\.lte\("retry_at",new Date\(\)\.toISOString\(\)\)\s*\.in\("effect_kind",\["message","question"\]\)\s*\.order\("retry_at",\{ascending:true\}\)\.limit\(OUTBOX_DISPATCH_LIMIT\);/);
+ assert.doesNotMatch(code,/answerWithVerifiedKnowledge\(sb/,"legacy null-on-error path removed from the worker");
+ assert.doesNotMatch(code,/\?\?"";\s*\}\s*if\(!messageText/);
+ const gate=code.indexOf('if(env("FLOW_RAG_ENABLED")!=="true"){report("blocked");continue;}');
+ const charge=code.indexOf('if(effect.delivery_status==="charge_pending"){',gate);
+ const claim=code.indexOf('sb.rpc("flow_claim_outbox_ai"');
+ const gen=code.indexOf("answerWithVerifiedKnowledgeOutcome(sb");
+ const store=code.indexOf('sb.rpc("flow_store_outbox_ai_answer"');
+ const reserve=code.indexOf('sb.rpc("flow_reserve_outbox_delivery"');
+ assert(gate>0&&charge>gate&&claim>charge&&gen>claim&&store>gen&&reserve>store,"order");
+ // Billing recovery reads the stored answer and never calls the model.
+ const chargeBlock=code.slice(charge,claim);
+ assert.match(chargeBlock,/select\("ai_answer_encrypted"\)\.eq\("tenant_id",effect\.tenant_id\)\.eq\("id",effect\.id\)/);
+ assert.doesNotMatch(chargeBlock,/answerWithVerifiedKnowledge|openAIKnowledgeDependencies/);
+ // All AI RPCs are tenant-scoped.
+ for(const fn of ["flow_claim_outbox_ai","flow_store_outbox_ai_answer","flow_finish_outbox_ai"])
+  assert.match(code,new RegExp(`sb\\.rpc\\("${fn}",\\{\\s*p_tenant:effect\\.tenant_id,p_outbox:effect\\.id`));
+ // Non-AI retry_wait rows are never dispatched by this worker.
+ assert.match(code,/if\(effect\.delivery_status==="retry_wait"&&payload\.source!=="knowledge_ai"\)\{\s*report\("blocked"\);continue;/);
+ // Kill switches and gates are still checked before any AI work.
+ for(const s of ['env("FLOW_WORKERS_OPERATOR_RELEASE")!=="production-canary-approved"',
+  'env("FLOW_OUTBOX_SEND_ENABLED")!=="true"','sb.rpc("flow_skip_blocked_outbox"','!canDispatchOutbox({'])
+  assert(code.indexOf(s)>0&&code.indexOf(s)<claim,s);
+});

@@ -5,7 +5,13 @@
  */
 export type ReadinessInput={
  platform:string;
- candidateKind:"buttons"|"delay"|"unsupported";
+ /**
+  * Derived from the actual document by durableCandidateKind (milan-api
+  * flowDurableIngress.ts, the same whitelist the live ingress uses):
+  * buttons = needs the buttons sender, delay = needs the scheduler,
+  * mixed = needs both, text = needs neither, unsupported = not live.
+  */
+ candidateKind:"buttons"|"delay"|"mixed"|"text"|"unsupported";
  tenantActive:boolean;
  accountActive:boolean;
  agentEnabled:boolean;
@@ -49,11 +55,18 @@ export function evaluateFlowReadiness(input:ReadinessInput){
   "activeRevision","supportedCandidate","ingress","activation","canary","operatorRelease","outbox",
   "atomicDebit","encryption"] as const;
  const baseReady=base.every(key=>checks[key]);
+ const needsButtons=input.candidateKind==="buttons"||input.candidateKind==="mixed";
+ const needsScheduler=input.candidateKind==="delay"||input.candidateKind==="mixed";
  return {
   checks,
   candidateKind:input.candidateKind,
+  needsButtons,
+  needsScheduler,
   buttonsConfigured:baseReady&&checks.buttons&&input.candidateKind==="buttons",
   delayConfigured:baseReady&&checks.scheduler&&input.candidateKind==="delay",
+  // Any supported kind: every base gate plus exactly the flags its nodes need.
+  configured:baseReady&&input.candidateKind!=="unsupported"&&
+   (!needsButtons||checks.buttons)&&(!needsScheduler||checks.scheduler),
   // These flags do not activate a revision, start Cron work, or send any message.
  };
 }
