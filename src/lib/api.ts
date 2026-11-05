@@ -198,6 +198,28 @@ async function dashSupabase<T>(token: string, path: string, init?: RequestInit):
     return result as T;
   }
 
+  // Read-only staff notification inbox: Edge function gated by FLOW_STAFF_INBOX_ENABLED
+  // (423 = disabled). The client never queries flow_staff_notifications directly.
+  if (path === "/api/dashboard/staff-inbox") {
+    if (!token || token.split(".").length !== 3) throw new Error("يرجى تسجيل الدخول");
+    const tenantId = String(body.tenantId ?? "");
+    if (!/^[0-9a-f-]{36}$/i.test(tenantId)) throw new Error("معرّف المتجر غير صالح");
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/flow-staff-inbox`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        apikey: SUPABASE_ANON,
+        authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ tenantId }),
+    });
+    const result = await res.json().catch(() => ({}));
+    if (res.status === 423) throw new Error("STAFF_INBOX_DISABLED");
+    if (res.status === 401 || res.status === 403) throw new Error("STAFF_INBOX_FORBIDDEN");
+    if (!res.ok) throw new Error((result as any)?.error ?? `HTTP ${res.status}`);
+    return result as T;
+  }
+
   // ─── مسارات dashboard القياسية → milan-api ───
   const m = path.match(/^\/api\/dashboard\/(.*)$/);
   const sub = m?.[1] ?? path;

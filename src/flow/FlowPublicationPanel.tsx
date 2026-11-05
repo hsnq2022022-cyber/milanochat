@@ -12,15 +12,17 @@ type ReadinessChecks={
  instagram:boolean;tenant:boolean;account:boolean;globalSwitch:boolean;
  tenantSwitch:boolean;credits:boolean;activeRevision:boolean;supportedCandidate:boolean;ingress:boolean;activation:boolean;
  canary:boolean;operatorRelease:boolean;outbox:boolean;atomicDebit:boolean;
- encryption:boolean;scheduler:boolean;buttons:boolean;
+ encryption:boolean;scheduler:boolean;buttons:boolean;internalActions?:boolean;
 };
 type Readiness={checks:ReadinessChecks;candidateKind:"buttons"|"delay"|"mixed"|"text"|"unsupported";
  buttonsConfigured:boolean;delayConfigured:boolean;
  // Absent on older servers; the per-kind fallbacks below preserve the old behaviour.
- configured?:boolean;needsButtons?:boolean;needsScheduler?:boolean};
+ configured?:boolean;needsButtons?:boolean;needsScheduler?:boolean;needsInternalActions?:boolean};
 const readinessNeeds=(r:Readiness)=>({
  buttons:typeof r.needsButtons==="boolean"?r.needsButtons:r.candidateKind==="buttons",
- scheduler:typeof r.needsScheduler==="boolean"?r.needsScheduler:r.candidateKind==="delay"
+ scheduler:typeof r.needsScheduler==="boolean"?r.needsScheduler:r.candidateKind==="delay",
+ // Absent on older servers = not needed (same default the server uses).
+ internalActions:r.needsInternalActions===true
 });
 const readinessConfigured=(r:Readiness)=>typeof r.configured==="boolean"?r.configured:
  r.candidateKind==="buttons"?r.buttonsConfigured:r.candidateKind==="delay"?r.delayConfigured:false;
@@ -41,7 +43,8 @@ const readinessLabels:Record<keyof ReadinessChecks,{ar:string;en:string}>={
  atomicDebit:{ar:"الخصم المحمي",en:"Atomic debit enabled"},
  encryption:{ar:"تشفير الرسائل",en:"Message encryption configured"},
  scheduler:{ar:"جدولة التأخير",en:"Delay scheduler enabled"},
- buttons:{ar:"إرسال الأزرار التفاعلية",en:"Rich buttons enabled"}
+ buttons:{ar:"إرسال الأزرار التفاعلية",en:"Rich buttons enabled"},
+ internalActions:{ar:"تفعيل الإجراءات الداخلية (وسم/إزالة وسم/إشعار/تحويل لموظف)",en:"Internal actions enabled (tag/untag/notify/handoff)"}
 };
 type Reply={ok?:boolean;error?:string;accounts?:Account[];
  items?:Version[];activation?:Activation;revision?:number;
@@ -142,7 +145,8 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
  const missingReadinessChecks=(report:Readiness)=>Object.entries(report.checks)
   .filter(([key,ready])=>ready!==true&&
    (key!=="scheduler"||readinessNeeds(report).scheduler)&&
-   (key!=="buttons"||readinessNeeds(report).buttons));
+   (key!=="buttons"||readinessNeeds(report).buttons)&&
+   (key!=="internalActions"||readinessNeeds(report).internalActions));
  const copyReadiness=async()=>{
   if(!readiness)return;
   const missing=missingReadinessChecks(readiness).map(([key])=>key);
@@ -303,6 +307,13 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
       {readiness.candidateKind==="unsupported"&&<p className="mt-2 text-[#F5D99C]">
        {en?"This revision is not an advanced buttons or delay candidate.":
         "هذا الإصدار ليس تدفق أزرار أو تأخير مدعومًا."}</p>}
+      {readiness.needsInternalActions===true&&<p data-testid="flow-readiness-internal-actions"
+       className={"mt-2 "+(readiness.checks.internalActions===true?"text-[#C9E8D9]":"text-[#F5D99C]")}>
+       {readiness.checks.internalActions===true
+        ?(en?"Internal actions (tag, untag, notify, handoff): feature enabled.":
+          "الإجراءات الداخلية (وسم، إزالة وسم، إشعار، تحويل لموظف): الميزة مفعّلة.")
+        :(en?"This flow contains internal actions (tag, untag, notify, handoff). They are NOT executed until the internal-actions feature is enabled on the server, and the flow is not ready.":
+          "يحتوي هذا التدفق على إجراءات داخلية (وسم، إزالة وسم، إشعار، تحويل لموظف). لن تُنفَّذ هذه الإجراءات ما لم تُفعَّل ميزة الإجراءات الداخلية على الخادم، والتدفق غير جاهز حتى ذلك.")}</p>}
       <p className="mt-2 text-[#BED4C9]">{en
        ?"This verifies configuration only. It does not send messages, change live revisions, or prove delivery."
        :"هذا فحص للإعدادات فقط؛ لا يرسل رسائل أو يغيّر الإصدار المنشور، ولا يثبت وصول الرسائل."}</p>

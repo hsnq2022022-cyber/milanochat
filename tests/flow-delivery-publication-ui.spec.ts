@@ -13,7 +13,7 @@ const FAKE_JWT = `${b64({ alg: "none" })}.${b64({ sub: "u1", exp: 4102444800, ro
 
 test.skip(!URL_.startsWith("http://mock."), "needs VITE_SUPABASE_URL=http://mock.supabase.test (fake host)");
 
-async function setup(page: Page, handlers: { review?: unknown; publication?: (b: any) => unknown }) {
+async function setup(page: Page, handlers: { review?: unknown; publication?: (b: any) => unknown; inbox?: { status: number; body: unknown } }) {
   const calls: any[] = [];
   const ref = new URL(URL_).hostname.split(".")[0];
   await page.addInitScript(([key, value]) => localStorage.setItem(key, value), [
@@ -34,6 +34,10 @@ async function setup(page: Page, handlers: { review?: unknown; publication?: (b:
     calls.push({ path: u.pathname, body });
     if (u.pathname.endsWith("/flow-delivery-review")) {
       return json(body.mode === "metrics" ? { events: { started: 3 }, periodDays: 30, truncated: false } : handlers.review);
+    }
+    if (u.pathname.endsWith("/flow-staff-inbox")) {
+      const inbox = handlers.inbox ?? { status: 200, body: { items: [], readOnly: true } };
+      return route.fulfill({ status: inbox.status, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify(inbox.body) });
     }
     if (u.pathname.endsWith("/flow-publication")) return json(handlers.publication?.(body) ?? { ok: false });
     if (u.pathname.endsWith("/milan-api")) {
@@ -113,4 +117,94 @@ test("publication panel shows active, inactive and readiness states from mocked 
   await dialog.getByRole("button", { name: "إيقاف التدفق" }).click();
   await expect(dialog.getByText("التفعيل معطّل")).toBeVisible();
   expect(calls.some((c) => c.body.action === "deactivate")).toBe(true);
+});
+
+const EMPTY_REVIEW = { items: [], readOnly: true, flowAvailable: true, runCounts: {}, flowFailures: [], flowRuns: [], flowItems: [] };
+
+test("delivery review labels internal effect kinds and statuses, unknown values stay generic", async ({ page }) => {
+  await setup(page, {
+    review: { ...EMPTY_REVIEW, flowFailures: [
+      { id: "i-tag", effect_kind: "tag", delivery_status: "dead_letter", attempts: 3, created_at: null, cancel_reason: "revision_inactive" },
+      { id: "i-untag", effect_kind: "untag", delivery_status: "cancelled", attempts: 0, created_at: null, cancel_reason: "stale" },
+      { id: "i-notify", effect_kind: "staff_notification", delivery_status: "retry_wait", attempts: 1, created_at: null, cancel_reason: null },
+      { id: "i-handoff", effect_kind: "handoff", delivery_status: "uncertain", attempts: 1, created_at: null, cancel_reason: "ineligible" },
+      { id: "i-new", effect_kind: "brand_new_kind", delivery_status: "brand_new_status", attempts: 0, created_at: null, cancel_reason: null },
+    ] },
+  });
+  await page.goto("/milanochat/#/dashboard");
+  const items = page.getByTestId("delivery-review-panel").getByRole("region", { name: "رسائل التدفقات الفاشلة أو غير المؤكدة" }).getByRole("listitem");
+  await expect(items).toHaveCount(5);
+  await expect(items.nth(0).getByTestId("flow-effect-kind")).toHaveText("إجراء داخلي: إضافة وسم");
+  await expect(items.nth(0).getByTestId("flow-delivery-status")).toHaveText("فشل الإرسال");
+  await expect(items.nth(0).getByTestId("flow-cancel-reason")).toHaveText("سبب الفشل: نسخة التدفق لم تعد مفعّلة");
+  await expect(items.nth(1).getByTestId("flow-effect-kind")).toHaveText("إجراء داخلي: إزالة وسم");
+  await expect(items.nth(1).getByTestId("flow-delivery-status")).toHaveText("أُلغي");
+  await expect(items.nth(1).getByTestId("flow-cancel-reason")).toHaveText("سبب الإلغاء: انتظرت الرسالة طويلًا ولم تُرسل");
+  await expect(items.nth(2).getByTestId("flow-effect-kind")).toHaveText("إجراء داخلي: إشعار للموظف");
+  await expect(items.nth(2).getByTestId("flow-delivery-status")).toHaveText("بانتظار إعادة المحاولة");
+  await expect(items.nth(3).getByTestId("flow-effect-kind")).toHaveText("إجراء داخلي: تحويل لموظف");
+  await expect(items.nth(3).getByTestId("flow-cancel-reason")).toHaveText("سبب الإلغاء: الرسالة غير مؤهلة للإرسال");
+  await expect(items.nth(4).getByTestId("flow-effect-kind")).toHaveText("إجراء غير معروف");
+  await expect(items.nth(4).getByTestId("flow-delivery-status")).toHaveText("حالة غير معروفة");
+  await expect(page.getByTestId("delivery-review-panel")).not.toContainText("brand_new_");
+});
+
+test("staff inbox shows items from flow-staff-inbox and an empty state", async ({ page }) => {
+  const calls = await setup(page, {
+    review: EMPTY_REVIEW,
+    inbox: { status: 200, body: { readOnly: true, items: [{ outbox_id: "n-1", conversation_id: "abcdef12-0000-4000-8000-000000000000", body: "عميل يطلب موظفًا", status: "settled", created_at: null }] } },
+  });
+  await page.goto("/milanochat/#/dashboard");
+  const inbox = page.getByTestId("staff-inbox-panel");
+  await expect(inbox.getByTestId("staff-inbox-item")).toHaveCount(1);
+  await expect(inbox).toContainText("عميل يطلب موظفًا");
+  await expect(inbox).toContainText("تم التسليم");
+  const call = calls.find((c) => c.path.endsWith("/flow-staff-inbox"));
+  expect(call?.body).toEqual({ tenantId: TENANT });
+  expect(calls.every((c) => !c.path.includes("flow_staff_notifications"))).toBe(true);
+});
+
+test("staff inbox handles empty, disabled (423), forbidden and error states in Arabic", async ({ page }) => {
+  const cases: Array<[{ status: number; body: unknown }, string, string]> = [
+    [{ status: 200, body: { items: [], readOnly: true } }, "staff-inbox-empty", "لا توجد إشعارات للموظفين الآن."],
+    [{ status: 423, body: { error: "Staff inbox disabled" } }, "staff-inbox-disabled", "صندوق إشعارات الموظفين غير مفعّل حاليًا."],
+    [{ status: 403, body: { error: "Not authorized" } }, "staff-inbox-forbidden", "ليس لديك صلاحية عرض إشعارات الموظفين لهذا المتجر."],
+    [{ status: 503, body: { error: "Staff inbox unavailable" } }, "staff-inbox-error", "تعذر تحميل إشعارات الموظفين. حاول مرة أخرى لاحقًا."],
+  ];
+  for (const [inbox, id, text] of cases) {
+    await page.unrouteAll();
+    await setup(page, { review: EMPTY_REVIEW, inbox });
+    await page.goto("/milanochat/#/dashboard");
+    await page.reload();
+    await expect(page.getByTestId("staff-inbox-panel").getByTestId(id)).toHaveText(text);
+    await expect(page.getByTestId("staff-inbox-item")).toHaveCount(0);
+  }
+});
+
+test("publication readiness warns when internal actions are required but not enabled", async ({ page }) => {
+  let needsInternal = true, enabled = false;
+  await setup(page, {
+    publication: (b) => {
+      if (b.action === "accounts") return { ok: true, accounts: [{ id: ACCOUNT, platform: "instagram", is_active: true, canActivate: true }] };
+      if (b.action === "catalog") return { ok: true, flows: [], active: null };
+      if (b.action === "readiness") return { ok: true, candidateRevision: 1, readiness: { candidateKind: "text", buttonsConfigured: false, delayConfigured: false, configured: false, needsInternalActions: needsInternal, checks: { instagram: true, internalActions: enabled } } };
+      return { ok: false, error: "unexpected" };
+    },
+  });
+  await page.goto("/milanochat/#/flows");
+  await page.getByTestId("flow-publications").click();
+  const dialog = page.getByRole("dialog", { name: "الإصدارات المنشورة" });
+  await dialog.getByRole("combobox").first().selectOption(ACCOUNT);
+  await dialog.getByTestId("flow-readiness-check").click();
+  const report = dialog.getByTestId("flow-readiness-report");
+  await expect(report.getByTestId("flow-readiness-internal-actions")).toContainText("لن تُنفَّذ هذه الإجراءات ما لم تُفعَّل ميزة الإجراءات الداخلية");
+  await expect(report).toContainText("• تفعيل الإجراءات الداخلية");
+  enabled = true;
+  await dialog.getByTestId("flow-readiness-check").click();
+  await expect(report.getByTestId("flow-readiness-internal-actions")).toContainText("الميزة مفعّلة");
+  await expect(report).not.toContainText("• تفعيل الإجراءات الداخلية");
+  needsInternal = false; enabled = false;
+  await dialog.getByTestId("flow-readiness-check").click();
+  await expect(report.getByTestId("flow-readiness-internal-actions")).toHaveCount(0);
+  await expect(report).not.toContainText("تفعيل الإجراءات الداخلية");
 });

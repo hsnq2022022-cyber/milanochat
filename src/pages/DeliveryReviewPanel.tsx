@@ -20,8 +20,19 @@ const runStatusNames:Record<string,string>={
  blocked:"متوقفة",completed:"مكتملة",ready:"جاهزة للتنفيذ"
 };
 const failureNames:Record<string,string>={
- uncertain:"إرسال غير مؤكد",dead_letter:"فشل الإرسال",billing_blocked:"موقوف بسبب الرصيد"
+ uncertain:"إرسال غير مؤكد",dead_letter:"فشل الإرسال",billing_blocked:"موقوف بسبب الرصيد",
+ pending:"بانتظار التنفيذ",leased:"قيد التنفيذ",retry_wait:"بانتظار إعادة المحاولة",
+ charge_pending:"بانتظار الخصم",settled:"نُفّذ",cancelled:"أُلغي"
 };
+// Effect kinds incl. internal actions (tag/untag/notify/handoff); unknown kinds show a generic label.
+const effectKindNames:Record<string,string>={
+ message:"رسالة",question:"سؤال",delay:"تأخير",tag:"إضافة وسم",untag:"إزالة وسم",
+ staff_notification:"إشعار للموظف",handoff:"تحويل لموظف"
+};
+const INTERNAL_KINDS=["tag","untag","staff_notification","handoff"];
+const effectKindLabel=(k:string|null|undefined)=>k?(Object.prototype.hasOwnProperty.call(effectKindNames,k)?effectKindNames[k]:"إجراء غير معروف"):"";
+const statusTone=(s:string)=>s==="settled"?"bg-emerald-500/15 text-emerald-100":
+ s==="dead_letter"?"bg-red-500/15 text-red-100":s==="cancelled"?"bg-white/10 text-white/80":"bg-amber-500/15 text-amber-100";
 const cancelReasonNames:Record<string,string>={
  no_knowledge:"لا توجد معرفة كافية للإجابة",ai_unavailable:"خدمة الرد الآلي لم تكن متاحة",
  ai_retries_exhausted:"تعذّر إنتاج رد آلي بعد عدة محاولات",input_timeout:"انتهت مهلة انتظار رد العميل",
@@ -89,7 +100,8 @@ export default function DeliveryReviewPanel({token,tenantId}:{token:string|null;
   {(flow?.flowFailures?.length??0)>0&&<section aria-label="رسائل التدفقات الفاشلة أو غير المؤكدة" className="space-y-2">
    <h3 className="text-sm font-bold">رسائل تدفقات فاشلة أو غير مؤكدة</h3>
    <ul className="space-y-2">{flow!.flowFailures!.map(f=><li key={f.id} className={container}>
-    <span className="rounded-md bg-red-500/15 px-2 py-1 text-xs text-red-100">{failureNames[f.delivery_status]??f.delivery_status}</span>
+    {f.effect_kind&&<span data-testid="flow-effect-kind" data-effect-kind={f.effect_kind} className={"me-2 rounded-md px-2 py-1 text-xs "+(INTERNAL_KINDS.includes(f.effect_kind)?"bg-sky-500/15 text-sky-100":"bg-white/10 text-white/80")}>{INTERNAL_KINDS.includes(f.effect_kind)?"إجراء داخلي: ":""}{effectKindLabel(f.effect_kind)}</span>}
+    <span data-testid="flow-delivery-status" data-status-code={f.delivery_status} className={"rounded-md px-2 py-1 text-xs "+statusTone(f.delivery_status)}>{Object.prototype.hasOwnProperty.call(failureNames,f.delivery_status)?failureNames[f.delivery_status]:"حالة غير معروفة"}</span>
     <p className="mt-2 break-all text-xs text-white/65">مرجع الرسالة: {f.id}</p>
     <p className="mt-1 text-xs text-white/65">المحاولات: {f.attempts} — الوقت: {fmt(f.created_at)}</p>
     {f.delivery_status!=="billing_blocked"&&(f.cancel_reason||f.delivery_status==="dead_letter")&&<p data-testid="flow-cancel-reason" data-reason-code={f.cancel_reason??""} className="mt-1 text-xs text-amber-100">{f.delivery_status==="dead_letter"?"سبب الفشل":"سبب الإلغاء"}: {f.cancel_reason?cancelReasonLabel(f.cancel_reason):"السبب غير محدد"}</p>}
