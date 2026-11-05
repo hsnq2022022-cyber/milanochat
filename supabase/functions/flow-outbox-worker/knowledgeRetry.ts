@@ -92,6 +92,49 @@ export type KnowledgeEffectDeps={
 export type KnowledgeEffectResult={status:"send";text:string}|{status:"report";key:string};
 
 /**
+ * Billing recovery for a knowledge_ai effect in charge_pending (provider 2xx
+ * already confirmed, debit not yet recorded). Never calls the model, never
+ * sends. Returns "bill" ONLY with the exact stored answer that was sent.
+ *
+ * Legacy rows confirmed before answers were stored (ai_answer_encrypted IS
+ * NULL) can never be billed with the exact text, so they are moved ONCE to the
+ * existing terminal status 'billing_blocked' (ai_last_error_code
+ * AI_ANSWER_MISSING_CODE) by a tenant-scoped, status-guarded update and leave
+ * the scan for good. No debit, no refund, no ledger write happens here.
+ * Read errors and unreadable stored answers stay charge_pending (fail closed).
+ */
+export const AI_ANSWER_MISSING_CODE="ai_answer_missing";
+export const BILLING_BLOCKED_ANSWER_MISSING="billing_blocked_"+AI_ANSWER_MISSING_CODE;
+export type StoredAnswerRead={found:boolean;answerEncrypted:string|null};
+export type ChargeRecoveryDeps={
+ /** Tenant-scoped read of ai_answer_encrypted. Throw or return null on DB error. */
+ readStored():Promise<StoredAnswerRead|null>;
+ decrypt(answerEncrypted:string):Promise<string>;
+ /**
+  * charge_pending -> billing_blocked, only while still charge_pending with no
+  * stored answer (tenant-scoped). True only when this call made the transition.
+  */
+ markAnswerMissing():Promise<boolean>;
+};
+export type ChargeRecoveryResult={status:"bill";text:string}|{status:"report";key:string};
+export async function recoverKnowledgeCharge(d:ChargeRecoveryDeps):Promise<ChargeRecoveryResult>{
+ let read:StoredAnswerRead|null;
+ try{read=await d.readStored();}catch{read=null;}
+ if(!read||!read.found)return {status:"report",key:"billing_pending"};
+ const enc=typeof read.answerEncrypted==="string"?read.answerEncrypted:"";
+ if(!enc){
+  let marked=false;
+  try{marked=await d.markAnswerMissing();}catch{marked=false;}
+  return {status:"report",key:marked?BILLING_BLOCKED_ANSWER_MISSING:"billing_pending"};
+ }
+ let text="";
+ try{text=(await d.decrypt(enc)).trim();}catch{text="";}
+ // An answer exists but cannot be read: never regenerate, never terminalize.
+ if(!text||text.length>4000)return {status:"report",key:"billing_pending"};
+ return {status:"bill",text};
+}
+
+/**
  * Resolve the text for one knowledge_ai effect. Returns "send" only with an
  * answer that is durably persisted on the effect (fresh or cached); every
  * other path reports and leaves sending to nobody.

@@ -14,8 +14,8 @@ import {acceptsFlowWorkerBearer} from "../flowWorkerAuth.ts";
 import {sendProviderMessage,decryptAccountToken,encryptMessageBody} from "./deliveryCore.ts";
 import {answerWithVerifiedKnowledgeOutcome,knowledgeQuestionValid,openAIKnowledgeDependencies}
  from "./flowKnowledge.ts";
-import {resolveKnowledgeEffect,AI_MAX_ATTEMPTS,AI_CLAIM_LEASE_SECONDS,type AiClaim}
- from "./knowledgeRetry.ts";
+import {resolveKnowledgeEffect,recoverKnowledgeCharge,AI_MAX_ATTEMPTS,AI_CLAIM_LEASE_SECONDS,
+ AI_ANSWER_MISSING_CODE,BILLING_BLOCKED_ANSWER_MISSING,type AiClaim} from "./knowledgeRetry.ts";
 import {executeOnce} from "./executeOnce.ts";
 import {canDispatchOutbox} from "./productionGate.ts";
 import {confirmedOutboxMid,matchesPreviouslyPersistedReply} from "./confirmedSettlement.ts";
@@ -236,12 +236,35 @@ Deno.serve(async req=>{
     if(effect.delivery_status==="charge_pending"){
      // Billing recovery persists EXACTLY the answer that was sent: read the
      // stored encrypted answer, never call the model again. Fail closed.
-     const {data:cachedRow,error:cachedError}=await sb.from("automation_flow_outbox")
-      .select("ai_answer_encrypted").eq("tenant_id",effect.tenant_id).eq("id",effect.id)
-      .maybeSingle();
-     const enc=typeof cachedRow?.ai_answer_encrypted==="string"?cachedRow.ai_answer_encrypted:"";
-     messageText=enc?(await decryptAccountToken(enc,fieldKey).catch(()=>"")).trim():"";
-     if(cachedError||!messageText){report("billing_pending");continue;}
+     // Legacy rows without a stored answer end ONCE as billing_blocked
+     // (no send, no debit) instead of occupying the scan forever.
+     const recovered=await recoverKnowledgeCharge({
+      readStored:async()=>{
+       const {data:cachedRow,error:cachedError}=await sb.from("automation_flow_outbox")
+        .select("ai_answer_encrypted").eq("tenant_id",effect.tenant_id).eq("id",effect.id)
+        .maybeSingle();
+       if(cachedError)return null;
+       return {found:!!cachedRow,answerEncrypted:typeof cachedRow?.ai_answer_encrypted==="string"?
+        cachedRow.ai_answer_encrypted:null};
+      },
+      decrypt:enc=>decryptAccountToken(enc,fieldKey),
+      markAnswerMissing:async()=>{
+       const {data:marked,error:markError}=await sb.from("automation_flow_outbox")
+        .update({delivery_status:"billing_blocked",ai_last_error_code:AI_ANSWER_MISSING_CODE})
+        .eq("tenant_id",effect.tenant_id).eq("id",effect.id)
+        .eq("delivery_status","charge_pending").is("ai_answer_encrypted",null)
+        .select("id").maybeSingle();
+       if(markError)console.error("[outbox] answer-missing mark failed",{code:markError.code});
+       return !markError&&!!marked;
+      }
+     });
+     if(recovered.status!=="bill"){
+      if(recovered.key===BILLING_BLOCKED_ANSWER_MISSING)
+       console.warn("[outbox] charge_pending without stored answer: billing_blocked",
+        {tenantId:effect.tenant_id,outboxId:effect.id});
+      report(recovered.key);continue;
+     }
+     messageText=recovered.text;
     }else{
      const question=typeof run.variables?.message==="string"?run.variables.message:"";
      // No customer question is not retryable (previous behaviour: skipped).

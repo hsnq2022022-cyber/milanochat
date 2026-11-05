@@ -6,7 +6,9 @@
  * their order. An effect may be dispatched only when every earlier provider
  * effect (message/question) of the SAME tenant and run is out of the way:
  *  - same commit (equal created_at), lower seq: must be sent (settled /
- *    charge_pending = provider 2xx) or terminally cancelled/dead_letter. A
+ *    charge_pending = provider 2xx) or terminally cancelled/dead_letter/
+ *    billing_blocked (e.g. a legacy knowledge_ai charge_pending row without a
+ *    stored answer, ended by knowledgeRetry.ts recoverKnowledgeCharge). A
  *    pending, leased, retry_wait or uncertain earlier effect HOLDS it;
  *  - earlier commit (smaller created_at): holds it only while not yet
  *    attempted (pending / retry_wait / leased). An older uncertain effect does
@@ -17,7 +19,7 @@ export type OrderRow={
  id:string;tenant_id:string;run_id:string;delivery_status:string;
  effect_kind:string;payload:unknown;created_at:string;
 };
-const SENT_OR_TERMINAL=new Set(["settled","charge_pending","cancelled","dead_letter"]);
+const SENT_OR_TERMINAL=new Set(["settled","charge_pending","cancelled","dead_letter","billing_blocked"]);
 export const ORDERED_KINDS=["message","question"];
 export const ORDER_SIBLING_LIMIT=1000;
 
@@ -61,5 +63,6 @@ export function statusAfterOutcome(outcome:string):string|undefined{
  if(outcome==="billing_pending")return "charge_pending";
  if(outcome==="uncertain")return "uncertain";
  if(outcome.startsWith("skipped_"))return "cancelled";
+ if(outcome.startsWith("billing_blocked_"))return "billing_blocked";
  return undefined;
 }

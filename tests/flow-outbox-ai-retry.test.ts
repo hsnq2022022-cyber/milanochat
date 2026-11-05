@@ -11,9 +11,12 @@ import {answerWithVerifiedKnowledge,answerWithVerifiedKnowledgeOutcome,
  classifyKnowledgeError,knowledgeHttpError,openAIKnowledgeDependencies,KnowledgeError,
  type KnowledgeOutcome} from "../supabase/functions/flow-outbox-worker/flowKnowledge.ts";
 import {AI_MAX_ATTEMPTS,AI_CLAIM_LEASE_SECONDS,aiRetryDelaySeconds,decideKnowledgeOutcome,
- resolveKnowledgeEffect,safeAiErrorCode,type AiClaim,type AiDecision} from
+ resolveKnowledgeEffect,safeAiErrorCode,recoverKnowledgeCharge,AI_ANSWER_MISSING_CODE,
+ BILLING_BLOCKED_ANSWER_MISSING,type AiClaim,type AiDecision} from
  "../supabase/functions/flow-outbox-worker/knowledgeRetry.ts";
 import {executeOnce} from "../supabase/functions/flow-outbox-worker/executeOnce.ts";
+import {heldByEarlierEffect,statusAfterOutcome,type OrderRow}
+ from "../supabase/functions/flow-outbox-worker/effectOrder.ts";
 
 // ------------------------------------------------------------ knowledge outcomes
 const rowId="77777777-7777-4777-8777-777777777771";
@@ -354,4 +357,127 @@ test("worker: list reads retry_wait only when due; AI claim precedes the model; 
  for(const s of ['env("FLOW_WORKERS_OPERATOR_RELEASE")!=="production-canary-approved"',
   'env("FLOW_OUTBOX_SEND_ENABLED")!=="true"','sb.rpc("flow_skip_blocked_outbox"','!canDispatchOutbox({'])
   assert(code.indexOf(s)>0&&code.indexOf(s)<claim,s);
+});
+
+// ------------------------------------------------------------ charge_pending recovery (B5)
+/** One billing-recovery tick for a charge_pending knowledge_ai row (mirrors index.ts). */
+async function recoverTick(db:FakeDb,tenant:string,id:string,hooks:{readError?:boolean;markError?:boolean;
+ storeBeforeMark?:string}={}){
+ const billed:string[]=[];
+ const res=await recoverKnowledgeCharge({
+  readStored:async()=>{
+   if(hooks.readError)return null;
+   const r=db.rows.get(id);
+   // .eq("tenant_id",tenant).eq("id",id): another tenant's row is not found.
+   return r&&r.tenant===tenant?{found:true,answerEncrypted:r.answer}:{found:false,answerEncrypted:null};
+  },
+  decrypt:async enc=>{if(!enc.startsWith("enc:v1:"))throw Error("bad key");return enc.slice(7);},
+  markAnswerMissing:async()=>{
+   if(hooks.markError)return false;
+   const r=db.rows.get(id);
+   if(hooks.storeBeforeMark&&r)r.answer=hooks.storeBeforeMark;
+   // tenant + id + delivery_status='charge_pending' + ai_answer_encrypted IS NULL
+   if(!r||r.tenant!==tenant||r.status!=="charge_pending"||r.answer!==null)return false;
+   Object.assign(r,{status:"billing_blocked",lastError:AI_ANSWER_MISSING_CODE});return true;
+  }
+ });
+ if(res.status!=="bill")return {key:res.key,billed};
+ db.bills++;billed.push(res.text);db.rows.get(id)!.status="settled";
+ return {key:"settled",billed};
+}
+function chargePending(db:FakeDb,id:string,tenant:string,answer:string|null,created=db.now){
+ db.rows.set(id,{id,tenant,created,status:"charge_pending",retryAt:null,aiAttempts:1,lastError:null,
+  leaseToken:null,leaseUntil:null,answer,cancelReason:null,delivered:true});
+}
+
+test("legacy charge_pending without stored answer ends once as billing_blocked: no model, no send, no debit", async()=>{
+ const db=new FakeDb();
+ chargePending(db,"legacy","A",null,db.now-5000);
+ db.add("next");
+ assert.deepEqual(db.list().map(x=>x.id),["legacy","next"]);
+ const first=await recoverTick(db,"A","legacy");
+ assert.equal(first.key,BILLING_BLOCKED_ANSWER_MISSING);
+ assert.equal(first.key,"billing_blocked_ai_answer_missing");
+ const r=db.rows.get("legacy")!;
+ assert.deepEqual([r.status,r.lastError,r.cancelReason,r.aiAttempts],
+  ["billing_blocked","ai_answer_missing",null,1]);
+ assert.match(r.lastError!,/^[a-z0-9_]{1,48}$/,"fits automation_flow_outbox_ai_state_chk");
+ assert.equal(db.modelCalls,0);assert.equal(db.sends,0);assert.equal(db.bills,0);
+ // Leaves the scan for good: no slot is taken any more, newer effects go first.
+ assert.deepEqual(db.list().map(x=>x.id),["next"]);
+ assert.deepEqual(db.list(1).map(x=>x.id),["next"]);
+ // Idempotent: a re-run (e.g. a concurrent worker that listed it earlier)
+ // changes nothing, bills nothing, calls nothing.
+ for(let i=0;i<3;i++){
+  const again=await recoverTick(db,"A","legacy");
+  assert.equal(again.key,"billing_pending");assert.deepEqual(again.billed,[]);
+ }
+ assert.equal(r.status,"billing_blocked");
+ assert.equal(db.modelCalls,0);assert.equal(db.sends,0);assert.equal(db.bills,0);
+ // The run's later effects are no longer held by it.
+ const order=(id:string,status:string,seq:number):OrderRow=>({id,tenant_id:"A",run_id:"run",
+  delivery_status:status,effect_kind:"message",payload:{kind:"message",seq},created_at:"T0"});
+ assert.equal(statusAfterOutcome(first.key),"billing_blocked");
+ assert.equal(heldByEarlierEffect(order("s1","pending",1),[order("legacy","billing_blocked",0),order("s1","pending",1)]),false);
+});
+
+test("charge_pending WITH stored answer bills exactly the stored text once, never regenerates or resends", async()=>{
+ const db=new FakeDb();
+ chargePending(db,"stored","A","enc:v1:Price is 1000 IQD");
+ const res=await recoverTick(db,"A","stored");
+ assert.equal(res.key,"settled");assert.deepEqual(res.billed,["Price is 1000 IQD"]);
+ assert.equal(db.rows.get("stored")!.status,"settled");
+ assert.equal(db.modelCalls,0);assert.equal(db.sends,0);assert.equal(db.bills,1);
+ assert.deepEqual(db.list().map(x=>x.id),[]);
+});
+
+test("charge_pending recovery is tenant-scoped and fails closed on errors, races and unreadable answers", async()=>{
+ const db=new FakeDb();
+ chargePending(db,"b-legacy","B",null);
+ // Tenant A cannot read or terminalize tenant B's row.
+ assert.equal((await recoverTick(db,"A","b-legacy")).key,"billing_pending");
+ assert.equal(db.rows.get("b-legacy")!.status,"charge_pending");
+ assert.equal((await recoverTick(db,"B","b-legacy")).key,BILLING_BLOCKED_ANSWER_MISSING);
+ // Read error: unchanged, retried later, never terminal.
+ chargePending(db,"e1","A",null);
+ assert.equal((await recoverTick(db,"A","e1",{readError:true})).key,"billing_pending");
+ assert.equal(db.rows.get("e1")!.status,"charge_pending");
+ // Mark failure (DB error / lost transition): unchanged.
+ assert.equal((await recoverTick(db,"A","e1",{markError:true})).key,"billing_pending");
+ assert.equal(db.rows.get("e1")!.status,"charge_pending");
+ // An answer stored concurrently wins over the terminal mark.
+ assert.equal((await recoverTick(db,"A","e1",{storeBeforeMark:"enc:v1:late"})).key,"billing_pending");
+ assert.equal(db.rows.get("e1")!.status,"charge_pending");
+ // A stored but unreadable answer is never regenerated and never terminalized.
+ chargePending(db,"bad","A","garbage");
+ assert.equal((await recoverTick(db,"A","bad")).key,"billing_pending");
+ assert.equal(db.rows.get("bad")!.status,"charge_pending");
+ assert.equal(db.modelCalls,0);assert.equal(db.sends,0);assert.equal(db.bills,0);
+ // Pure helper: throwing deps also fail closed.
+ const boom=async()=>{throw Error("db");};
+ assert.deepEqual(await recoverKnowledgeCharge({readStored:boom,decrypt:boom,markAnswerMissing:boom}),
+  {status:"report",key:"billing_pending"});
+ assert.deepEqual(await recoverKnowledgeCharge({readStored:async()=>({found:true,answerEncrypted:null}),
+  decrypt:boom,markAnswerMissing:boom}),{status:"report",key:"billing_pending"});
+});
+
+test("worker: charge_pending recovery terminalizes only legacy rows, tenant-scoped, without send/debit/model", ()=>{
+ const code=readFileSync("supabase/functions/flow-outbox-worker/index.ts","utf8");
+ const charge=code.indexOf('if(effect.delivery_status==="charge_pending"){');
+ const claim=code.indexOf('sb.rpc("flow_claim_outbox_ai"');
+ assert(charge>0&&claim>charge);
+ const block=code.slice(charge,claim);
+ assert.match(block,/recoverKnowledgeCharge\(\{/);
+ assert.match(block,/\.update\(\{delivery_status:"billing_blocked",ai_last_error_code:AI_ANSWER_MISSING_CODE\}\)\s*\.eq\("tenant_id",effect\.tenant_id\)\.eq\("id",effect\.id\)\s*\.eq\("delivery_status","charge_pending"\)\.is\("ai_answer_encrypted",null\)/);
+ assert.match(block,/if\(recovered\.status!=="bill"\)\{[\s\S]*?report\(recovered\.key\);continue;\s*\}\s*messageText=recovered\.text;/);
+ for(const banned of [/answerWithVerifiedKnowledge|openAIKnowledgeDependencies/,/sendProviderMessage/,
+  /consume_flow_reply|persistAndBill|reply_ledger|credits_remaining/,/cancel_reason/,/flow_reserve_outbox_delivery/])
+  assert.doesNotMatch(block,banned);
+ // The terminal status is one already allowed by the installed outbox CHECK
+ // and surfaced by delivery review; the code fits ai_state_chk.
+ const fixture=readFileSync("tests/sql/fixtures/installed-flow-runtime.sql","utf8");
+ assert.match(fixture,/'billing_blocked','dead_letter','cancelled'\)\)/);
+ const review=readFileSync("supabase/functions/flow-delivery-review/review.ts","utf8");
+ assert.match(review,/FAILED_OUTBOX_STATUSES = \["uncertain", "dead_letter", "billing_blocked"\]/);
+ assert.match(AI_ANSWER_MISSING_CODE,/^[a-z0-9_]{1,48}$/);
 });

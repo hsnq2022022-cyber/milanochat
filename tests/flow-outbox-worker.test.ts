@@ -284,7 +284,7 @@ test("a later seq waits until every earlier effect of the same run is sent or te
  assert.equal(heldByEarlierEffect(s2,[s0,s1,s2]),true);
  for(const status of ["pending","leased","retry_wait","uncertain","weird_new_status"])
   assert.equal(heldByEarlierEffect(s1,[row("s0",0,status),s1]),true,"held by "+status);
- for(const status of ["settled","charge_pending","cancelled","dead_letter"])
+ for(const status of ["settled","charge_pending","cancelled","dead_letter","billing_blocked"])
   assert.equal(heldByEarlierEffect(s1,[row("s0",0,status),s1]),false,"released by "+status);
  // Blocked earlier effect holds ALL later ones, also when only seq 1 is done.
  assert.equal(heldByEarlierEffect(s2,[row("s0",0,"pending"),row("s1",1,"settled"),s2]),true);
@@ -296,6 +296,7 @@ test("a later seq waits until every earlier effect of the same run is sent or te
  assert.equal(statusAfterOutcome("billing_pending"),"charge_pending");
  assert.equal(statusAfterOutcome("uncertain"),"uncertain");
  assert.equal(statusAfterOutcome("skipped_stale"),"cancelled");
+ assert.equal(statusAfterOutcome("billing_blocked_ai_answer_missing"),"billing_blocked");
  assert.equal(statusAfterOutcome("blocked"),undefined);
  assert.equal(statusAfterOutcome("not_reserved"),undefined);
  // Non-provider rows (delay/tag) never hold a message.
