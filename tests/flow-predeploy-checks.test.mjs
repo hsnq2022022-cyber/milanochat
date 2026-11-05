@@ -22,6 +22,8 @@ const CREDITS_RB="supabase/rollbacks/20261029160000_flow_credits_pause.rollback.
 const DURABLE="supabase/migrations/20261029125000_flow_durable_button_run.sql";
 const DURABLE_PROPOSAL="supabase/proposals/flow_durable_button_ingress.review.sql";
 const GUARDS="supabase/migrations/20261029180000_flow_durable_button_run_guards.sql";
+const STAFF="supabase/migrations/20261028227000_tenant_staff_memberships.sql";
+const INTERNAL="supabase/migrations/20261028228000_flow_internal_actions.sql";
 const BEGIN_SIG="flow_begin_durable_run(uuid,uuid,uuid,uuid,text,text,bigint,text,text,integer,text,jsonb,timestamptz,jsonb)";
 const RESUME_SIG="flow_resume_button_run(uuid,uuid,text,uuid,integer,text,text,integer,text,jsonb,timestamptz,jsonb)";
 const script=readFileSync(CHECKS,"utf8");
@@ -104,8 +106,34 @@ test("function_version hashes equal md5 of the exact 130000 / 150000 bodies (and
   assert.ok(script.includes(`('${sig}',\n  '${md5(norm(g.slice(a,g.indexOf(`$${tag}$`,a))))}')`),`${sig} 180000 normalized hash embedded in checks`);
  }
 });
+test("(g) embeds the exact 20261028227000 / 20261028228000 function body hashes, markers and object names",()=>{
+ const md5=x=>createHash("md5").update(x).digest("hex");
+ const body=(f,tag)=>{const s=readFileSync(f,"utf8");const o=`AS $${tag}$`;const a=s.indexOf(o)+o.length;
+  return s.slice(a,s.indexOf(`$${tag}$`,a));};
+ for(const [sig,f,tag,marker] of [
+  ["flow_staff_can(uuid,uuid,text,uuid)",STAFF,"can","CREATED_BY_20261028227000_TENANT_STAFF"],
+  ["flow_apply_internal_effect(uuid,uuid)",INTERNAL,"apply","CREATED_BY_20261028228000_INTERNAL_ACTIONS"]]){
+  const src=readFileSync(f,"utf8");
+  assert.ok(src.includes(`COMMENT ON FUNCTION public.${sig}\n IS '${marker}';`),`${sig} marker in the migration`);
+  assert.ok(script.includes(`('${sig}','${f.match(/\/(\d{14})_/)[1]}','${marker}',\n  '${md5(body(f,tag))}',`),
+   `${sig} body hash embedded in checks`);
+ }
+ // Every table/index the two migrations create is checked, with its marker.
+ const created=f=>[...readFileSync(f,"utf8").matchAll(/^CREATE (?:UNIQUE )?(?:TABLE|INDEX) (?:public\.)?([a-z_]+)/gm)].map(m=>m[1]);
+ for(const name of [...created(STAFF),...created(INTERNAL)])
+  assert.match(script,new RegExp(`\\('${name}',`),name);
+ assert.deepEqual(created(STAFF).sort(),["conversations_staff_scope_uq","tenant_conversation_assignments",
+  "tenant_conversation_assignments_user_idx","tenant_staff_memberships","tenant_staff_memberships_user_idx"]);
+ assert.deepEqual(created(INTERNAL).sort(),["flow_conversation_tags","flow_staff_notifications","flow_staff_notifications_recipient_idx"]);
+ // (g) is catalog only: it never reads a row of any table.
+ const at=noComments.indexOf("\\echo '== (g)");
+ assert.ok(at>0,"(g) label");
+ const g=noComments.slice(at).replace(/'(?:[^']|'')*'/g,"''");
+ assert.match(g,/FROM pg_catalog\.pg_policy/,"(g) slice is SQL");
+ assert.doesNotMatch(g,/\b(public|auth)\./,"no table read in (g)");
+});
 test("every section is labeled and has a MISSING fallback",()=>{
- for(const s of ["(a)","(b)","(c)","(d)","(e)","(f)"])assert.ok(noComments.includes(`\\echo '== ${s}`),s);
+ for(const s of ["(a)","(b)","(c)","(d)","(e)","(f)","(g)"])assert.ok(noComments.includes(`\\echo '== ${s}`),s);
  assert.equal((noComments.match(/^\\if :pdc_(outbox|runs)_ok$/gm)??[]).length,3);
  // (d) canary_registration (20261029170000) has its own gated block.
  assert.equal((noComments.match(/^\\if :pdc_canary_ok$/gm)??[]).length,1);
@@ -798,6 +826,123 @@ test("live PG: (f) inbound dedupe index: global/tenant scope, missing index with
  ({rows}=assertReadOnlyRun("pdc_f",{user:"pdc_f_nobody"}));
  assert.deepEqual(rows.filter(r=>r.section==="f_inbound_dedupe").map(r=>[r.item,r.status]),
   [["prerequisite","MISSING: read privilege on public.messages"]]);
+});
+test("live PG: (g) 20261028227000/228000 objects: absent, preflight, installed, tampering, partial state, rollback order",{skip},()=>{
+ const g=(rs,item)=>one(rs,"g_staff_internal_actions",item);
+ const gRows=rs=>rs.filter(r=>r.section==="g_staff_internal_actions");
+ const TABLES=["tenant_staff_memberships","tenant_conversation_assignments","flow_conversation_tags","flow_staff_notifications"];
+ const INDEXES=["conversations_staff_scope_uq","tenant_staff_memberships_user_idx","tenant_conversation_assignments_user_idx",
+  "flow_staff_notifications_recipient_idx"];
+ const FNS=["flow_staff_can(uuid,uuid,text,uuid)","flow_apply_internal_effect(uuid,uuid)"];
+ const objItems=[...TABLES.map(t=>`table:public.${t}`),...INDEXES.map(i=>`index:public.${i}`),...FNS.map(f=>`function:public.${f}`)];
+ prepare("pdc_g",{roles:false});
+ // Before: nothing installed, no auth schema yet.
+ let {rows}=assertReadOnlyRun("pdc_g");
+ assert.equal(gRows(rows).length,2+2+objItems.length+1,"one row per migration, preflight, object and lock estimate");
+ for(const i of ["migration:20261028227000","migration:20261028228000",...objItems])assert.equal(g(rows,i).status,"ABSENT",i);
+ assert.equal(g(rows,"preflight:20261028227000").status,"INFO");
+ assert.match(g(rows,"preflight:20261028227000").detail,/^unmet .*column public\.tenants\.user_id .*table auth\.users/);
+ assert.equal(g(rows,"preflight:20261028228000").status,"INFO");
+ assert.equal(g(rows,"lock_impact:public.conversations").status,"INFO");
+ assert.match(g(rows,"lock_impact:public.conversations").detail,/builds the unique index conversations_staff_scope_uq non-concurrently/);
+ // Bootstrap (auth.users stub, auth.uid(), tenants.user_id): 227000 preflight met.
+ ok("pdc_g",{file:"tests/sql/flow-staff-membership-bootstrap.sql"},"staff bootstrap");
+ ({rows}=assertReadOnlyRun("pdc_g"));
+ assert.equal(g(rows,"preflight:20261028227000").status,"OK",g(rows,"preflight:20261028227000").detail);
+ assert.deepEqual([g(rows,"preflight:20261028228000").status,g(rows,"preflight:20261028228000").n],["INFO",1]);
+ assert.match(g(rows,"preflight:20261028228000").detail,/20261028227000 markers on/);
+ ok("pdc_g",{file:STAFF},"227000");
+ ({rows}=assertReadOnlyRun("pdc_g"));
+ assert.equal(g(rows,"migration:20261028227000").status,"OK");
+ assert.equal(g(rows,"preflight:20261028228000").status,"OK",g(rows,"preflight:20261028228000").detail);
+ assert.equal(g(rows,"migration:20261028228000").status,"ABSENT");
+ assert.equal(g(rows,"lock_impact:public.conversations").status,"OK");
+ assert.match(g(rows,"table:public.tenant_staff_memberships").detail,
+  /policies=tenant_staff_self_read client_privileges=authenticated=r \(expected authenticated=r\) service_role=arwd/);
+ ok("pdc_g",{file:INTERNAL},"228000");
+ ({rows}=assertReadOnlyRun("pdc_g"));
+ for(const r of gRows(rows))assert.equal(r.status,"OK",`${r.item}: ${r.detail}`);
+ assert.match(g(rows,"function:public.flow_staff_can(uuid,uuid,text,uuid)").detail,
+  /security_definer=f config=search_path="" public_or_client_privilege=f service_role_may_run=t/);
+ // Re-apply is refused by the migration guards; nothing changes.
+ for(const f of [STAFF,INTERNAL])assert.notEqual(psql("pdc_g",{file:f}).status,0,`${f} re-apply refused`);
+ assert.deepEqual(gRows(assertReadOnlyRun("pdc_g").rows),gRows(rows));
+ // Tampering -> CONFLICT rows.
+ const tamper=(sql,undo,item,status)=>{
+  ok("pdc_g",{sql},`tamper ${item}`);
+  assert.equal(g(assertReadOnlyRun("pdc_g").rows,item).status,status,item);
+  ok("pdc_g",{sql:undo},`undo ${item}`);
+  assert.equal(g(assertReadOnlyRun("pdc_g").rows,item).status,"OK",item);
+ };
+ tamper("GRANT SELECT ON public.flow_staff_notifications TO authenticated;",
+  "REVOKE SELECT ON public.flow_staff_notifications FROM authenticated;",
+  "table:public.flow_staff_notifications","CONFLICT: public.flow_staff_notifications privileges");
+ tamper("GRANT SELECT ON public.tenant_conversation_assignments TO anon;",
+  "REVOKE SELECT ON public.tenant_conversation_assignments FROM anon;",
+  "table:public.tenant_conversation_assignments","CONFLICT: public.tenant_conversation_assignments privileges");
+ tamper("REVOKE DELETE ON public.flow_conversation_tags FROM service_role;",
+  "GRANT DELETE ON public.flow_conversation_tags TO service_role;",
+  "table:public.flow_conversation_tags","CONFLICT: public.flow_conversation_tags privileges");
+ tamper("CREATE POLICY pdc_open ON public.tenant_staff_memberships FOR SELECT TO authenticated USING (true);",
+  "DROP POLICY pdc_open ON public.tenant_staff_memberships;",
+  "table:public.tenant_staff_memberships","CONFLICT: public.tenant_staff_memberships privileges");
+ tamper("ALTER TABLE public.flow_staff_notifications DISABLE ROW LEVEL SECURITY;",
+  "ALTER TABLE public.flow_staff_notifications ENABLE ROW LEVEL SECURITY;",
+  "table:public.flow_staff_notifications","CONFLICT: public.flow_staff_notifications privileges");
+ tamper("GRANT EXECUTE ON FUNCTION public.flow_staff_can(uuid,uuid,text,uuid) TO authenticated;",
+  "REVOKE EXECUTE ON FUNCTION public.flow_staff_can(uuid,uuid,text,uuid) FROM authenticated;",
+  "function:public.flow_staff_can(uuid,uuid,text,uuid)","CONFLICT: public.flow_staff_can(uuid,uuid,text,uuid) privileges");
+ tamper("COMMENT ON INDEX public.conversations_staff_scope_uq IS 'operator note';",
+  "COMMENT ON INDEX public.conversations_staff_scope_uq IS 'CREATED_BY_20261028227000_TENANT_STAFF';",
+  "index:public.conversations_staff_scope_uq","CONFLICT: public.conversations_staff_scope_uq");
+ // A different body under the same marker (CREATE OR REPLACE keeps the marker).
+ const orig=ok("pdc_g",{sql:"SELECT pg_get_functiondef('public.flow_staff_can(uuid,uuid,text,uuid)'::regprocedure);"},"def").stdout+";";
+ ok("pdc_g",{sql:`CREATE OR REPLACE FUNCTION public.flow_staff_can(p_tenant uuid,p_actor uuid,p_action text,p_conversation uuid DEFAULT NULL)
+  RETURNS boolean LANGUAGE plpgsql SET search_path='' AS $x$BEGIN RETURN true; END$x$;`},"tamper body");
+ ({rows}=assertReadOnlyRun("pdc_g"));
+ assert.equal(g(rows,"function:public.flow_staff_can(uuid,uuid,text,uuid)").status,"CONFLICT: public.flow_staff_can(uuid,uuid,text,uuid) body");
+ ok("pdc_g",{sql:orig},"restore body");
+ assert.equal(g(assertReadOnlyRun("pdc_g").rows,"function:public.flow_staff_can(uuid,uuid,text,uuid)").status,"OK");
+ // A runtime column the functions and workers read disappears after install -> MISSING.
+ ok("pdc_g",{sql:"ALTER TABLE public.tenants RENAME COLUMN user_id TO pdc_user_id;"},"rename user_id");
+ ({rows}=assertReadOnlyRun("pdc_g"));
+ assert.match(g(rows,"preflight:20261028227000").status,/^MISSING: column public\.tenants\.user_id/);
+ assert.match(g(rows,"preflight:20261028228000").status,/^MISSING: column public\.tenants\.user_id/);
+ ok("pdc_g",{sql:"ALTER TABLE public.tenants RENAME COLUMN pdc_user_id TO user_id;"},"restore user_id");
+ // Rollback order: 227000 first is refused (228000 foreign keys depend on its index); then 228000, 227000.
+ const RB227="supabase/rollbacks/20261028227000_tenant_staff_memberships.rollback.sql";
+ const RB228="supabase/rollbacks/20261028228000_flow_internal_actions.rollback.sql";
+ const wrong=psql("pdc_g",{file:RB227});
+ assert.notEqual(wrong.status,0,"227000 rollback before 228000 refused");
+ assert.match(wrong.stderr,/depend/);
+ assert.equal(g(assertReadOnlyRun("pdc_g").rows,"migration:20261028227000").status,"OK","unchanged");
+ ok("pdc_g",{file:RB228},"228000 rollback");
+ ({rows}=assertReadOnlyRun("pdc_g"));
+ assert.equal(g(rows,"migration:20261028228000").status,"ABSENT");
+ assert.equal(g(rows,"migration:20261028227000").status,"OK");
+ // A nonempty membership table blocks the 227000 rollback.
+ ok("pdc_g",{sql:`INSERT INTO public.tenant_staff_memberships(tenant_id,user_id,role)
+  VALUES('${A}','77777777-7777-4777-8777-777777777777','agent');`},"member");
+ const busy=psql("pdc_g",{file:RB227});
+ assert.notEqual(busy.status,0);assert.match(busy.stderr,/Nonempty staff history/);
+ ok("pdc_g",{sql:"TRUNCATE public.tenant_staff_memberships CASCADE;"},"empty");
+ // Partial state: one 227000 object gone -> CONFLICT (its guard and rollback both refuse).
+ ok("pdc_g",{sql:"DROP FUNCTION public.flow_staff_can(uuid,uuid,text,uuid);"},"drop fn");
+ ({rows}=assertReadOnlyRun("pdc_g"));
+ assert.equal(g(rows,"migration:20261028227000").status,"CONFLICT: 20261028227000 objects");
+ assert.match(g(rows,"migration:20261028227000").detail,/present=3\/4 with marker=3\/4/);
+ assert.equal(g(rows,"function:public.flow_staff_can(uuid,uuid,text,uuid)").status,"ABSENT");
+ assert.notEqual(psql("pdc_g",{file:STAFF}).status,0,"227000 guard refuses the partial state");
+ ok("pdc_g",{sql:orig},"restore fn");
+ ok("pdc_g",{sql:`COMMENT ON FUNCTION public.flow_staff_can(uuid,uuid,text,uuid) IS 'CREATED_BY_20261028227000_TENANT_STAFF';
+  REVOKE ALL ON FUNCTION public.flow_staff_can(uuid,uuid,text,uuid) FROM PUBLIC,anon,authenticated;
+  GRANT EXECUTE ON FUNCTION public.flow_staff_can(uuid,uuid,text,uuid) TO service_role;`},"re-mark fn");
+ assert.equal(g(assertReadOnlyRun("pdc_g").rows,"migration:20261028227000").status,"OK");
+ ok("pdc_g",{file:RB227},"227000 rollback");
+ ({rows}=assertReadOnlyRun("pdc_g"));
+ for(const i of ["migration:20261028227000","migration:20261028228000",...objItems])assert.equal(g(rows,i).status,"ABSENT",i);
+ assert.equal(g(rows,"preflight:20261028227000").status,"OK");
+ assert.ok(!rows.some(r=>r.status.startsWith("CONFLICT")),"no conflicts after both rollbacks");
 });
 test("live PG: other sessions' locks are reported, and a blocking lock makes the checks fail fast instead of queueing",{skip},async()=>{
  prepare("pdc_locks",{roles:false});

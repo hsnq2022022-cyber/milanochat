@@ -1,7 +1,9 @@
 -- REVIEW ONLY: READ-ONLY pre-deployment checks for Flow V3/V4
 -- (20261029125000_flow_durable_button_run, 20261029130000_flow_run_lifecycle,
 -- 20261029140000_flow_outbox_ai_retry, and the 20261029150000 /
--- 20261029160000 / 20261029170000 / 20261029180000 follow-ups).
+-- 20261029160000 / 20261029170000 / 20261029180000 follow-ups; section (g):
+-- 20261028227000_tenant_staff_memberships and
+-- 20261028228000_flow_internal_actions).
 -- NOT a migration.
 -- Changes nothing.
 --
@@ -41,6 +43,8 @@
 --   legacy charge_pending rows are resolved. FOUND in (b)/(c) is handled by
 --   the cleanup functions after 20261029130000 (see each section). Before
 --   FLOW_DURABLE_INGRESS_ENABLED=true: (f) unique_index must be OK.
+--   (g): any CONFLICT or MISSING row is blocking; ABSENT/INFO only means
+--   20261028227000 / 20261028228000 are not applied (separate GO).
 --
 -- OPERATOR RULE (20261029150000 hazard; enforced only by these checks):
 --   Never re-apply 20261029130000_flow_run_lifecycle after
@@ -1099,5 +1103,269 @@ FROM (
     AND a.attname=col AND a.attnum>0 AND NOT a.attisdropped)
 ) m;
 \endif
+
+-- ===========================================================================
+-- (g) 20261028227000_tenant_staff_memberships and
+-- 20261028228000_flow_internal_actions (staff roles / conversation
+-- assignments; internal tag, untag and staff_notification effects). Catalog
+-- only: no table is read (row counts are planner estimates), so it never
+-- needs RLS bypass and works before and after both migrations. Both are
+-- separately approved ("Separate production migration GO required"); no
+-- 20261029125000..180000 migration depends on them, but flow-staff-inbox and
+-- flow-internal-worker do (the worker writes flow_conversation_tags /
+-- flow_staff_notifications directly as service_role).
+--  * migration:<version>: ABSENT = not applied; OK = every object present
+--    with its ownership marker; CONFLICT = partial or unrecognized (the
+--    migration guard refuses a re-apply while any object exists, and the
+--    rollbacks require the markers). Rollback order: 228000, then 227000;
+--    each rollback refuses while its tables hold rows.
+--  * preflight:<version>: the migration's requirements plus the runtime
+--    columns its functions read (tenants.user_id = the tenant's primary
+--    user). INFO while unmet and not applied; MISSING once applied.
+--  * table:*: marker, columns, primary key, foreign keys (tenant-scoped
+--    composite keys to conversations / automation_flow_outbox), RLS enabled,
+--    policies (only tenant_staff_self_read on tenant_staff_memberships),
+--    no PUBLIC/anon privilege, authenticated only SELECT on
+--    tenant_staff_memberships, service_role at least the privileges the
+--    workers need.
+--  * index:*, function:* (exact body md5, not security definer,
+--    search_path='', no PUBLIC/anon/authenticated privilege, service_role
+--    may run it).
+--  * lock_impact:public.conversations: 227000 builds a unique index on
+--    conversations inside its transaction (writes blocked meanwhile).
+-- ===========================================================================
+\echo '== (g) staff memberships and internal actions (20261028227000 / 20261028228000)'
+WITH
+st(name,mig,marker,svc,client,pol,cols,pk,fks) AS (VALUES
+ ('tenant_staff_memberships','20261028227000','CREATED_BY_20261028227000_TENANT_STAFF','arwd','authenticated=r',
+  'tenant_staff_self_read',ARRAY['tenant_id','user_id','role','status','invited_by','created_at','updated_at'],
+  'tenant_id,user_id','invited_by>auth.users(id);tenant_id>public.tenants(id);user_id>auth.users(id)'),
+ ('tenant_conversation_assignments','20261028227000','CREATED_BY_20261028227000_TENANT_STAFF','arwd','',
+  NULL,ARRAY['tenant_id','conversation_id','user_id','assigned_by','status','created_at'],
+  'tenant_id,conversation_id,user_id',
+  'assigned_by>auth.users(id);tenant_id,conversation_id>public.conversations(tenant_id,id);tenant_id,user_id>public.tenant_staff_memberships(tenant_id,user_id)'),
+ ('flow_conversation_tags','20261028228000','CREATED_BY_20261028228000_INTERNAL_ACTIONS','ard','',
+  NULL,ARRAY['tenant_id','conversation_id','tag','created_by_outbox','created_at'],
+  'tenant_id,conversation_id,tag',
+  'tenant_id,conversation_id>public.conversations(tenant_id,id);tenant_id,created_by_outbox>public.automation_flow_outbox(tenant_id,id)'),
+ ('flow_staff_notifications','20261028228000','CREATED_BY_20261028228000_INTERNAL_ACTIONS','arw','',
+  NULL,ARRAY['tenant_id','outbox_id','conversation_id','recipient_user_id','body','status','created_at'],
+  'tenant_id,outbox_id',
+  'recipient_user_id>auth.users(id);tenant_id,conversation_id>public.conversations(tenant_id,id);tenant_id,outbox_id>public.automation_flow_outbox(tenant_id,id)')),
+sc AS (
+ SELECT st.*,c.oid,obj_description(c.oid,'pg_class') AS m,c.relrowsecurity AS rls,c.reltuples,
+  coalesce((SELECT string_agg(split_part(e::text,'/',1),',' ORDER BY split_part(e::text,'/',1) COLLATE "C")
+   FROM unnest(c.relacl) e
+   WHERE e::text LIKE '=%' OR e::text LIKE 'anon=%' OR e::text LIKE 'authenticated=%'),'') AS cl,
+  coalesce((SELECT string_agg(split_part(split_part(e::text,'/',1),'=',2),'')
+   FROM unnest(c.relacl) e WHERE e::text LIKE 'service_role=%'),'') AS sv,
+  (SELECT count(*) FROM pg_catalog.pg_policy po WHERE po.polrelid=c.oid) AS npol,
+  coalesce((SELECT string_agg(po.polname::text,',' ORDER BY po.polname) FROM pg_catalog.pg_policy po
+   WHERE po.polrelid=c.oid),'-') AS pols,
+  EXISTS(SELECT 1 FROM pg_catalog.pg_policy po
+   WHERE po.polrelid=c.oid AND po.polname=st.pol AND po.polcmd='r' AND po.polpermissive
+    AND po.polwithcheck IS NULL
+    AND (SELECT array_agg(r.rolname::text) FROM pg_catalog.pg_roles r WHERE r.oid=ANY(po.polroles))=ARRAY['authenticated']
+    AND position('user_id' IN coalesce(pg_catalog.pg_get_expr(po.polqual,po.polrelid),''))>0
+    AND position('auth.uid()' IN coalesce(pg_catalog.pg_get_expr(po.polqual,po.polrelid),''))>0) AS pol_ok,
+  (SELECT string_agg(x,',') FROM unnest(st.cols) x
+   WHERE NOT EXISTS(SELECT 1 FROM pg_catalog.pg_attribute a
+    WHERE a.attrelid=c.oid AND a.attname=x AND a.attnum>0 AND NOT a.attisdropped)) AS miss_cols,
+  (SELECT string_agg(a.attname::text,',' ORDER BY k.n)
+   FROM pg_catalog.pg_constraint pc
+   CROSS JOIN LATERAL unnest(pc.conkey) WITH ORDINALITY k(attnum,n)
+   JOIN pg_catalog.pg_attribute a ON a.attrelid=pc.conrelid AND a.attnum=k.attnum
+   WHERE pc.conrelid=c.oid AND pc.contype='p') AS pkc,
+  (SELECT string_agg(f.sig,';' ORDER BY f.sig COLLATE "C") FROM (
+    SELECT format('%s>%s.%s(%s)',
+     (SELECT string_agg(a.attname::text,',' ORDER BY k.n) FROM unnest(pc.conkey) WITH ORDINALITY k(attnum,n)
+      JOIN pg_catalog.pg_attribute a ON a.attrelid=pc.conrelid AND a.attnum=k.attnum),
+     rn.nspname,rc.relname,
+     (SELECT string_agg(a.attname::text,',' ORDER BY k.n) FROM unnest(pc.confkey) WITH ORDINALITY k(attnum,n)
+      JOIN pg_catalog.pg_attribute a ON a.attrelid=pc.confrelid AND a.attnum=k.attnum)) AS sig
+    FROM pg_catalog.pg_constraint pc
+    JOIN pg_catalog.pg_class rc ON rc.oid=pc.confrelid
+    JOIN pg_catalog.pg_namespace rn ON rn.oid=rc.relnamespace
+    WHERE pc.conrelid=c.oid AND pc.contype='f') f) AS fkc,
+  (SELECT string_agg(x,';' ORDER BY x COLLATE "C") FROM unnest(string_to_array(st.fks,';')) x) AS fkw
+ FROM st LEFT JOIN pg_catalog.pg_class c ON c.oid=to_regclass('public.'||st.name)
+),
+sx AS (
+ SELECT sc.*,
+  CASE WHEN sc.pol IS NULL THEN sc.npol>0 ELSE NOT(sc.npol=1 AND sc.pol_ok) END AS pol_bad,
+  EXISTS(SELECT 1 FROM regexp_split_to_table(sc.svc,'') ch WHERE position(ch IN sc.sv)=0) AS svc_bad
+ FROM sc
+),
+ix(name,tbl,mig,cols,uniq,marker) AS (VALUES
+ ('conversations_staff_scope_uq','conversations','20261028227000','tenant_id,id',true,'CREATED_BY_20261028227000_TENANT_STAFF'),
+ ('tenant_staff_memberships_user_idx','tenant_staff_memberships','20261028227000','user_id,status',false,NULL),
+ ('tenant_conversation_assignments_user_idx','tenant_conversation_assignments','20261028227000','tenant_id,user_id,status',false,NULL),
+ ('flow_staff_notifications_recipient_idx','flow_staff_notifications','20261028228000','tenant_id,recipient_user_id,created_at',false,NULL)),
+ic AS (
+ SELECT ix.*,to_regclass('public.'||ix.name) AS oid,obj_description(to_regclass('public.'||ix.name),'pg_class') AS m,
+  i.indrelid=to_regclass('public.'||ix.tbl) AS on_tbl,i.indisunique,(i.indisvalid AND i.indisready) AS usable,
+  i.indpred IS NULL AND i.indexprs IS NULL AS plain,
+  (SELECT string_agg(a.attname::text,',' ORDER BY k.n)
+   FROM unnest((i.indkey::int2[])[0:i.indnkeyatts-1]) WITH ORDINALITY k(attnum,n)
+   JOIN pg_catalog.pg_attribute a ON a.attrelid=i.indrelid AND a.attnum=k.attnum) AS icols
+ FROM ix LEFT JOIN pg_catalog.pg_index i ON i.indexrelid=to_regclass('public.'||ix.name)
+),
+fx(sig,mig,marker,h,why) AS (VALUES
+ ('flow_staff_can(uuid,uuid,text,uuid)','20261028227000','CREATED_BY_20261028227000_TENANT_STAFF',
+  '02d990366a9e299a14424af08813b278','server-only permission decision (actor from auth.getUser, never a request field)'),
+ ('flow_apply_internal_effect(uuid,uuid)','20261028228000','CREATED_BY_20261028228000_INTERNAL_ACTIONS',
+  'fa8c86694f1c74dd10b1679b7ac0a237','test_only tenants; flow-internal-worker now writes the tables directly')),
+fc AS (
+ SELECT fx.*,p.oid,obj_description(p.oid,'pg_proc') AS m,md5(p.prosrc) AS ph,p.prosecdef,
+  coalesce(array_to_string(p.proconfig,','),'') AS cfg,
+  p.oid IS NOT NULL AND (p.proacl IS NULL OR EXISTS(SELECT 1 FROM unnest(p.proacl) e
+   WHERE e::text LIKE '=%' OR e::text LIKE 'anon=%' OR e::text LIKE 'authenticated=%')) AS exposed,
+  EXISTS(SELECT 1 FROM unnest(p.proacl) e WHERE split_part(e::text,'/',1) LIKE 'service_role=%X%') AS svc_ok
+ FROM fx LEFT JOIN pg_catalog.pg_proc p ON p.oid=to_regprocedure('public.'||fx.sig)
+),
+ob(mig,name,kind,marker) AS (VALUES
+ ('20261028227000','conversations_staff_scope_uq','r','CREATED_BY_20261028227000_TENANT_STAFF'),
+ ('20261028227000','tenant_staff_memberships','r','CREATED_BY_20261028227000_TENANT_STAFF'),
+ ('20261028227000','tenant_conversation_assignments','r','CREATED_BY_20261028227000_TENANT_STAFF'),
+ ('20261028227000','flow_staff_can(uuid,uuid,text,uuid)','f','CREATED_BY_20261028227000_TENANT_STAFF'),
+ ('20261028228000','flow_conversation_tags','r','CREATED_BY_20261028228000_INTERNAL_ACTIONS'),
+ ('20261028228000','flow_staff_notifications','r','CREATED_BY_20261028228000_INTERNAL_ACTIONS'),
+ ('20261028228000','flow_apply_internal_effect(uuid,uuid)','f','CREATED_BY_20261028228000_INTERNAL_ACTIONS')),
+oc AS (
+ SELECT ob.*,
+  CASE WHEN ob.kind='f' THEN to_regprocedure('public.'||ob.name)::oid ELSE to_regclass('public.'||ob.name)::oid END AS oid,
+  CASE WHEN ob.kind='f' THEN obj_description(to_regprocedure('public.'||ob.name),'pg_proc')
+   ELSE obj_description(to_regclass('public.'||ob.name),'pg_class') END AS m
+ FROM ob
+),
+mg AS (
+ SELECT oc.mig,count(*) AS total,count(oc.oid) AS present,count(*) FILTER(WHERE oc.m IS NOT DISTINCT FROM oc.marker) AS marked
+ FROM oc GROUP BY oc.mig
+),
+uid_col AS (
+ SELECT EXISTS(SELECT 1 FROM pg_catalog.pg_attribute a WHERE a.attrelid=to_regclass('public.tenants')
+  AND a.attname='user_id' AND a.attnum>0 AND NOT a.attisdropped) AS ok
+),
+pf AS (
+ SELECT r.mig,r.label FROM uid_col CROSS JOIN LATERAL (VALUES
+  ('20261028227000','table public.tenants',to_regclass('public.tenants') IS NOT NULL),
+  ('20261028227000','table public.conversations',to_regclass('public.conversations') IS NOT NULL),
+  ('20261028227000','table auth.users',to_regclass('auth.users') IS NOT NULL),
+  ('20261028227000','function auth.uid() (tenant_staff_self_read policy)',to_regprocedure('auth.uid()') IS NOT NULL),
+  ('20261028227000','roles anon, authenticated, service_role',
+   (SELECT count(*) FROM pg_catalog.pg_roles r WHERE r.rolname IN('anon','authenticated','service_role'))=3),
+  ('20261028227000','column public.tenants.user_id (read by flow_staff_can, flow-staff-inbox, flow-internal-worker)',uid_col.ok),
+  ('20261028228000','20261028227000 markers on tenant_staff_memberships, tenant_conversation_assignments, conversations_staff_scope_uq',
+   obj_description(to_regclass('public.tenant_staff_memberships'),'pg_class') IS NOT DISTINCT FROM 'CREATED_BY_20261028227000_TENANT_STAFF'
+   AND obj_description(to_regclass('public.tenant_conversation_assignments'),'pg_class') IS NOT DISTINCT FROM 'CREATED_BY_20261028227000_TENANT_STAFF'
+   AND obj_description(to_regclass('public.conversations_staff_scope_uq'),'pg_class') IS NOT DISTINCT FROM 'CREATED_BY_20261028227000_TENANT_STAFF'),
+  ('20261028228000','unique key (tenant_id,id) on public.automation_flow_outbox (foreign key target)',
+   EXISTS(SELECT 1 FROM pg_catalog.pg_index i
+    WHERE i.indrelid=to_regclass('public.automation_flow_outbox')
+     AND i.indisunique AND i.indisvalid AND i.indpred IS NULL AND i.indexprs IS NULL
+     AND (SELECT array_agg(a.attname::text ORDER BY a.attname::text)
+          FROM unnest(i.indkey::int2[]) k(attnum)
+          JOIN pg_catalog.pg_attribute a ON a.attrelid=i.indrelid AND a.attnum=k.attnum)=ARRAY['id','tenant_id'])),
+  ('20261028228000','outbox effect_kind check allowing tag, untag, staff_notification',
+   EXISTS(SELECT 1 FROM pg_catalog.pg_constraint c
+    WHERE c.conrelid=to_regclass('public.automation_flow_outbox') AND c.contype='c'
+     AND pg_get_constraintdef(c.oid) LIKE '%effect_kind%' AND pg_get_constraintdef(c.oid) LIKE '%''tag''%'
+     AND pg_get_constraintdef(c.oid) LIKE '%''untag''%' AND pg_get_constraintdef(c.oid) LIKE '%''staff_notification''%')),
+  ('20261028228000','outbox delivery_status check allowing settled',
+   EXISTS(SELECT 1 FROM pg_catalog.pg_constraint c
+    WHERE c.conrelid=to_regclass('public.automation_flow_outbox') AND c.contype='c'
+     AND pg_get_constraintdef(c.oid) LIKE '%delivery_status%' AND pg_get_constraintdef(c.oid) LIKE '%''settled''%')),
+  ('20261028228000','tables automation_flow_runs, automation_flow_activations, automation_flow_global_switch, automation_flow_tenant_switches',
+   to_regclass('public.automation_flow_runs') IS NOT NULL AND to_regclass('public.automation_flow_activations') IS NOT NULL
+   AND to_regclass('public.automation_flow_global_switch') IS NOT NULL AND to_regclass('public.automation_flow_tenant_switches') IS NOT NULL),
+  ('20261028228000','column public.tenants.user_id (staff_notification fallback recipient)',uid_col.ok)
+ ) r(mig,label,ok) WHERE NOT r.ok
+)
+SELECT section,item,status,tenant_id,n,ids,detail FROM (
+ SELECT 0 AS ord,'g_staff_internal_actions'::text AS section,'migration:'||mg.mig AS item,
+  CASE WHEN mg.present=0 THEN 'ABSENT'
+   WHEN mg.present=mg.total AND mg.marked=mg.total THEN 'OK'
+   ELSE 'CONFLICT: '||mg.mig||' objects' END AS status,
+  NULL::uuid AS tenant_id,mg.present AS n,NULL::text AS ids,
+  CASE WHEN mg.present=0
+    THEN mg.mig||' not applied (separately approved; no 20261029125000..180000 migration depends on it; '
+     ||CASE WHEN mg.mig='20261028227000' THEN 'flow-staff-inbox and 20261028228000 need it)'
+      ELSE 'flow-internal-worker tag/untag/staff_notification effects need it)' END
+   WHEN mg.present=mg.total AND mg.marked=mg.total
+    THEN format('installed (%s of %s objects carry its marker); a re-apply is refused by its guard (expected); '
+     'rollback order: 20261028228000 then 20261028227000; each rollback refuses while its tables hold rows',mg.marked,mg.total)
+   ELSE format('partial or unrecognized state: present=%s/%s with marker=%s/%s; its guard refuses a re-apply while any object exists '
+     'and its rollback requires the markers',mg.present,mg.total,mg.marked,mg.total) END AS detail
+ FROM mg
+ UNION ALL
+ SELECT 1,'g_staff_internal_actions','preflight:'||mg.mig,
+  CASE WHEN NOT EXISTS(SELECT 1 FROM pf WHERE pf.mig=mg.mig) THEN 'OK'
+   WHEN mg.present>0 THEN 'MISSING: '||(SELECT min(pf.label) FROM pf WHERE pf.mig=mg.mig)
+   ELSE 'INFO' END,
+  NULL,(SELECT count(*) FROM pf WHERE pf.mig=mg.mig),NULL,
+  CASE WHEN NOT EXISTS(SELECT 1 FROM pf WHERE pf.mig=mg.mig) THEN 'all '||mg.mig||' requirements satisfied'
+   WHEN mg.present>0 THEN 'installed but unmet: '||(SELECT string_agg(pf.label,'; ' ORDER BY pf.label) FROM pf WHERE pf.mig=mg.mig)
+   ELSE 'unmet (normal until its prerequisites are applied): '||(SELECT string_agg(pf.label,'; ' ORDER BY pf.label) FROM pf WHERE pf.mig=mg.mig) END
+ FROM mg
+ UNION ALL
+ SELECT 2,'g_staff_internal_actions','table:public.'||sx.name,
+  CASE WHEN sx.oid IS NULL THEN 'ABSENT'
+   WHEN sx.m IS DISTINCT FROM sx.marker THEN 'CONFLICT: public.'||sx.name
+   WHEN sx.miss_cols IS NOT NULL OR sx.pkc IS DISTINCT FROM sx.pk OR sx.fkc IS DISTINCT FROM sx.fkw
+    THEN 'CONFLICT: public.'||sx.name||' definition'
+   WHEN NOT sx.rls OR sx.pol_bad OR sx.cl<>sx.client OR sx.svc_bad
+    THEN 'CONFLICT: public.'||sx.name||' privileges'
+   ELSE 'OK' END,
+  NULL,CASE WHEN sx.reltuples>=0 THEN sx.reltuples::bigint END,NULL,
+  CASE WHEN sx.oid IS NULL THEN 'created by '||sx.mig
+   ELSE format('marker=%s rls=%s policies=%s client_privileges=%s (expected %s) service_role=%s (needs %s) '
+    'estimated_rows=%s%s%s%s',
+    coalesce(sx.m,'-'),sx.rls,sx.pols,coalesce(nullif(sx.cl,''),'none'),coalesce(nullif(sx.client,''),'none'),
+    coalesce(nullif(sx.sv,''),'none'),sx.svc,
+    CASE WHEN sx.reltuples<0 THEN 'unknown' ELSE sx.reltuples::bigint::text END,
+    CASE WHEN sx.miss_cols IS NOT NULL THEN '; missing columns: '||sx.miss_cols ELSE '' END,
+    CASE WHEN sx.pkc IS DISTINCT FROM sx.pk THEN format('; primary key (%s) expected (%s)',coalesce(sx.pkc,'none'),sx.pk) ELSE '' END,
+    CASE WHEN sx.fkc IS DISTINCT FROM sx.fkw THEN format('; foreign keys %s expected %s',coalesce(sx.fkc,'none'),sx.fkw) ELSE '' END) END
+ FROM sx
+ UNION ALL
+ SELECT 3,'g_staff_internal_actions','index:public.'||ic.name,
+  CASE WHEN ic.oid IS NULL THEN 'ABSENT'
+   WHEN ic.marker IS NOT NULL AND ic.m IS DISTINCT FROM ic.marker THEN 'CONFLICT: public.'||ic.name
+   WHEN NOT coalesce(ic.on_tbl,false) OR ic.icols IS DISTINCT FROM ic.cols OR ic.indisunique IS DISTINCT FROM ic.uniq
+     OR NOT coalesce(ic.usable,false) OR NOT coalesce(ic.plain,false)
+    THEN 'CONFLICT: public.'||ic.name||' definition'
+   ELSE 'OK' END,
+  NULL,NULL,NULL,
+  CASE WHEN ic.oid IS NULL THEN 'built by '||ic.mig
+   ELSE format('marker=%s columns=%s unique=%s valid=%s plain=%s (expected public.%s(%s) unique=%s)',
+    coalesce(ic.m,'-'),coalesce(ic.icols,'-'),ic.indisunique,ic.usable,ic.plain,ic.tbl,ic.cols,ic.uniq) END
+ FROM ic
+ UNION ALL
+ SELECT 4,'g_staff_internal_actions','function:public.'||fc.sig,
+  CASE WHEN fc.oid IS NULL THEN 'ABSENT'
+   WHEN fc.m IS DISTINCT FROM fc.marker THEN 'CONFLICT: public.'||fc.sig
+   WHEN fc.ph IS DISTINCT FROM fc.h OR fc.prosecdef OR fc.cfg<>'search_path=""' THEN 'CONFLICT: public.'||fc.sig||' body'
+   WHEN fc.exposed OR NOT fc.svc_ok THEN 'CONFLICT: public.'||fc.sig||' privileges'
+   ELSE 'OK' END,
+  NULL,NULL,NULL,
+  CASE WHEN fc.oid IS NULL THEN 'created by '||fc.mig||'; '||fc.why
+   ELSE format('marker=%s body_md5=%s security_definer=%s config=%s public_or_client_privilege=%s service_role_may_run=%s; %s',
+    coalesce(fc.m,'-'),fc.ph,fc.prosecdef,fc.cfg,fc.exposed,fc.svc_ok,fc.why) END
+ FROM fc
+ UNION ALL
+ SELECT 5,'g_staff_internal_actions','lock_impact:public.conversations',
+  CASE WHEN c.oid IS NULL THEN 'MISSING: public.conversations'
+   WHEN to_regclass('public.conversations_staff_scope_uq') IS NOT NULL THEN 'OK' ELSE 'INFO' END,
+  NULL,CASE WHEN c.reltuples>=0 THEN c.reltuples::bigint END,NULL,
+  CASE WHEN c.oid IS NULL THEN '20261028227000 requires public.conversations'
+   WHEN to_regclass('public.conversations_staff_scope_uq') IS NOT NULL THEN 'conversations_staff_scope_uq already built'
+   ELSE format('estimated_rows=%s total_size=%s (%s bytes); 20261028227000 builds the unique index conversations_staff_scope_uq '
+    'non-concurrently in its transaction (writes to conversations, i.e. inbound handling, wait until it ends) and adds '
+    'foreign keys referencing conversations; 20261028228000 adds foreign keys referencing conversations and '
+    'automation_flow_outbox. Neither sets lock_timeout: run with PGOPTIONS=''-c lock_timeout=3s -c statement_timeout=60s''',
+    CASE WHEN c.reltuples<0 THEN 'unknown (never analyzed)' ELSE c.reltuples::bigint::text END,
+    pg_size_pretty(pg_total_relation_size(c.oid)),pg_total_relation_size(c.oid)) END
+ FROM (SELECT 1) one LEFT JOIN pg_catalog.pg_class c ON c.oid=to_regclass('public.conversations')
+) x ORDER BY ord,item;
 
 ROLLBACK;
