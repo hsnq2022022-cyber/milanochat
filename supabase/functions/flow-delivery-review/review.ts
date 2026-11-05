@@ -11,6 +11,12 @@ type Result = { data?: unknown; error?: unknown; count?: number | null };
 export const RUN_STATUSES = ["ready", "awaiting_input", "sleeping", "handoff", "completed", "blocked"] as const;
 export const ATTENTION_RUN_STATUSES = ["awaiting_input", "sleeping", "handoff", "blocked"] as const;
 export const FAILED_OUTBOX_STATUSES = ["uncertain", "dead_letter", "billing_blocked"] as const;
+// Internal (non-provider) actions; same kind names as INTERNAL_KINDS in
+// supabase/functions/flow-internal-worker/internalEffects.ts. Shown to the owner in their
+// in-flight and finished states too (failure states already come through flowFailures).
+export const INTERNAL_EFFECT_KINDS = ["tag", "untag", "staff_notification", "handoff"] as const;
+export const INTERNAL_VIEW_STATUSES = ["pending", "leased", "retry_wait", "settled", "cancelled"] as const;
+export const INTERNAL_VIEW_LIMIT = 100;
 const ATTEMPT_STATUSES = ["attempting", "confirmed", "uncertain"];
 const REVIEW_STATUSES = ["none", "queued", "resolved"];
 const OUTBOX_STATUSES = ["pending", "retry_wait", "leased", "uncertain", "charge_pending", "settled",
@@ -61,6 +67,14 @@ export function mapRun(r: Record<string, unknown>) {
     ended_reason: str(r.ended_reason, 64), ended_at: str(r.ended_at, 64),
   };
 }
+/** mapOutbox restricted to internal kinds in the internal view statuses (defence in depth). */
+export function mapInternal(r: Record<string, unknown>) {
+  const m = mapOutbox(r);
+  if (!m || !m.effect_kind) return null;
+  if (!(INTERNAL_EFFECT_KINDS as readonly string[]).includes(m.effect_kind)) return null;
+  if (!(INTERNAL_VIEW_STATUSES as readonly string[]).includes(m.delivery_status)) return null;
+  return m;
+}
 const mapAll = <T>(rows: unknown, fn: (r: Record<string, unknown>) => T | null) =>
   rowsOf(rows).map(fn).filter((x): x is T => x !== null);
 
@@ -82,12 +96,18 @@ export async function loadFlowReview(sb: ReviewClient, tenantId: string) {
   const outboxQ = selectDefensive(sb, "automation_flow_outbox", [OUTBOX_LIFECYCLE_COLUMNS, OUTBOX_BASE_COLUMNS],
     q => q.eq("tenant_id", tenantId).in("delivery_status", [...FAILED_OUTBOX_STATUSES])
       .order("created_at", { ascending: false }).limit(100));
+  // Internal actions (no payload selected: tag values / notification text never leave the DB).
+  const internalQ = selectDefensive(sb, "automation_flow_outbox", [OUTBOX_LIFECYCLE_COLUMNS, OUTBOX_BASE_COLUMNS],
+    q => q.eq("tenant_id", tenantId).in("effect_kind", [...INTERNAL_EFFECT_KINDS])
+      .in("delivery_status", [...INTERNAL_VIEW_STATUSES])
+      .order("created_at", { ascending: false }).order("id", { ascending: false }).limit(INTERNAL_VIEW_LIMIT));
   const runsQ = selectDefensive(sb, "automation_flow_runs", [RUN_LIFECYCLE_COLUMNS, RUN_BASE_COLUMNS],
     q => q.eq("tenant_id", tenantId).in("run_status", [...ATTENTION_RUN_STATUSES])
       .order("updated_at", { ascending: false }).limit(50));
   const countQs = RUN_STATUSES.map(s => sb.from("automation_flow_runs")
     .select("id", { count: "exact", head: true }).eq("tenant_id", tenantId).eq("run_status", s));
-  const [attempts, outbox, runs, ...counts] = await Promise.all([attemptsQ, outboxQ, runsQ, ...countQs]) as Result[];
+  const [attempts, outbox, runs, internal, ...counts] =
+    await Promise.all([attemptsQ, outboxQ, runsQ, internalQ, ...countQs]) as Result[];
   const runCounts: Record<string, number> = {};
   let countsOk = true;
   RUN_STATUSES.forEach((s, i) => {
@@ -101,5 +121,9 @@ export async function loadFlowReview(sb: ReviewClient, tenantId: string) {
     flowRuns: runs.error ? [] : mapAll(runs.data, mapRun),
     runCounts,
     flowAvailable: !attempts.error && !outbox.error && !runs.error && countsOk,
+    // Additive: internal actions in pending/leased/retry_wait/settled/cancelled. Separate from
+    // flowFailures so existing consumers keep their "failures only" semantics.
+    flowInternal: internal.error ? [] : mapAll(internal.data, mapInternal).slice(0, INTERNAL_VIEW_LIMIT),
+    flowInternalAvailable: !internal.error,
   };
 }

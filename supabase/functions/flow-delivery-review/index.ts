@@ -68,7 +68,8 @@ export async function handle(req:Request){
   // Additive V3/V4 fields; same owner-verified tenant.id. Failures here never break the V2 queue.
   let flow;
   try{flow=await loadFlowReview(sb,tenant.id);}
-  catch{flow={flowItems:[],flowFailures:[],flowRuns:[],runCounts:{},flowAvailable:false};}
+  catch{flow={flowItems:[],flowFailures:[],flowRuns:[],runCounts:{},flowAvailable:false,
+   flowInternal:[],flowInternalAvailable:false};}
   return json({items:rows??[],readOnly:true,...flow});
  }
  const since=new Date(Date.now()-30*86400000).toISOString();
