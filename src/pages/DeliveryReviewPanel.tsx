@@ -9,7 +9,7 @@ type ReviewItem={
 type FlowAttempt={outbox_id:string;claim_id:string|null;status:"attempting"|"uncertain"|"confirmed";
  provider_message_id:string|null;attempted_at:string|null;review_status:string};
 type FlowFailure={id:string;effect_kind:string|null;delivery_status:string;attempts:number;
- created_at:string|null;cancel_reason:string|null;cancelled_at?:string|null};
+ created_at:string|null;cancel_reason:string|null;cancelled_at?:string|null;ai_last_error_code?:string|null};
 type FlowRun={id:string;flow_key:string|null;platform:string;run_status:string;
  wake_at:string|null;updated_at:string|null;ended_reason:string|null};
 type Inbox={items:ReviewItem[];readOnly:true;flowItems?:FlowAttempt[];flowFailures?:FlowFailure[];flowInternal?:FlowFailure[];flowInternalAvailable?:boolean;
@@ -101,7 +101,7 @@ export default function DeliveryReviewPanel({token,tenantId}:{token:string|null;
    <h3 className="text-sm font-bold">رسائل تدفقات فاشلة أو غير مؤكدة</h3>
    <ul className="space-y-2">{flow!.flowFailures!.map(f=><li key={f.id} className={container}>
     {f.effect_kind&&<span data-testid="flow-effect-kind" data-effect-kind={f.effect_kind} className={"me-2 rounded-md px-2 py-1 text-xs "+(INTERNAL_KINDS.includes(f.effect_kind)?"bg-sky-500/15 text-sky-100":"bg-white/10 text-white/80")}>{INTERNAL_KINDS.includes(f.effect_kind)?"إجراء داخلي: ":""}{effectKindLabel(f.effect_kind)}</span>}
-    <span data-testid="flow-delivery-status" data-status-code={f.delivery_status} className={"rounded-md px-2 py-1 text-xs "+statusTone(f.delivery_status)}>{Object.prototype.hasOwnProperty.call(failureNames,f.delivery_status)?failureNames[f.delivery_status]:"حالة غير معروفة"}</span>
+    <span data-testid="flow-delivery-status" data-status-code={f.delivery_status} className={"rounded-md px-2 py-1 text-xs "+statusTone(f.delivery_status)}>{f.delivery_status==="billing_blocked"&&f.ai_last_error_code==="ai_answer_missing"?"موقوف: إجابة مفقودة":Object.prototype.hasOwnProperty.call(failureNames,f.delivery_status)?failureNames[f.delivery_status]:"حالة غير معروفة"}</span>
     <p className="mt-2 break-all text-xs text-white/65">مرجع الرسالة: {f.id}</p>
     <p className="mt-1 text-xs text-white/65">المحاولات: {f.attempts} — الوقت: {fmt(f.created_at)}</p>
     {f.delivery_status!=="billing_blocked"&&(f.cancel_reason||f.delivery_status==="dead_letter")&&<p data-testid="flow-cancel-reason" data-reason-code={f.cancel_reason??""} className="mt-1 text-xs text-amber-100">{f.delivery_status==="dead_letter"?"سبب الفشل":"سبب الإلغاء"}: {f.cancel_reason?cancelReasonLabel(f.cancel_reason):"السبب غير محدد"}</p>}

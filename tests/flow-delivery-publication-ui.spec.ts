@@ -58,6 +58,7 @@ test("delivery review shows cancel_reason labels for V3/V4 flow failures and tol
         { id: "f-known", effect_kind: "text", delivery_status: "dead_letter", attempts: 2, created_at: null, cancel_reason: "ai_retries_exhausted" },
         { id: "f-ai", effect_kind: "text", delivery_status: "dead_letter", attempts: 2, created_at: null, cancel_reason: "ai_unavailable" },
         { id: "f-bill", effect_kind: "text", delivery_status: "billing_blocked", attempts: 0, created_at: null, cancel_reason: null },
+        { id: "f-bill-missing", effect_kind: "text", delivery_status: "billing_blocked", attempts: 0, created_at: null, cancel_reason: null, ai_last_error_code: "ai_answer_missing" },
         { id: "f-unknown", effect_kind: null, delivery_status: "uncertain", attempts: 1, created_at: null, cancel_reason: "brand_new_code" },
         { id: "f-null", effect_kind: null, delivery_status: "dead_letter", attempts: 1, created_at: null, cancel_reason: null },
       ],
@@ -73,13 +74,16 @@ test("delivery review shows cancel_reason labels for V3/V4 flow failures and tol
   await expect(panel).toBeVisible();
   const failures = panel.getByRole("region", { name: "رسائل التدفقات الفاشلة أو غير المؤكدة" });
   const items = failures.getByRole("listitem");
-  await expect(items).toHaveCount(5);
+  await expect(items).toHaveCount(6);
   await expect(items.nth(0).getByTestId("flow-cancel-reason")).toHaveText("سبب الفشل: تعذّر إنتاج رد آلي بعد عدة محاولات");
   await expect(items.nth(1).getByTestId("flow-cancel-reason")).toContainText("خدمة الرد الآلي لم تكن متاحة");
   await expect(items.nth(2).getByTestId("flow-cancel-reason")).toHaveCount(0);
   await expect(items.nth(2)).toContainText("موقوف بسبب الرصيد");
-  await expect(items.nth(3).getByTestId("flow-cancel-reason")).toHaveText("سبب الإلغاء: سبب غير معروف");
-  await expect(items.nth(4).getByTestId("flow-cancel-reason")).toHaveText("سبب الفشل: السبب غير محدد");
+  await expect(items.nth(3)).toContainText("موقوف: إجابة مفقودة");
+  await expect(items.nth(3)).not.toContainText("موقوف بسبب الرصيد");
+  await expect(items.nth(2)).not.toContainText("إجابة مفقودة");
+  await expect(items.nth(4).getByTestId("flow-cancel-reason")).toHaveText("سبب الإلغاء: سبب غير معروف");
+  await expect(items.nth(5).getByTestId("flow-cancel-reason")).toHaveText("سبب الفشل: السبب غير محدد");
   await expect(panel).not.toContainText("brand_new_code");
   expect(await panel.evaluate((el) => el.outerHTML.includes('title="brand_new_code"') || el.outerHTML.includes('aria-label="brand_new_code"'))).toBe(false);
   await expect(panel).toContainText("c-v2-1");

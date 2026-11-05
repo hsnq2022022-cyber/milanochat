@@ -31,11 +31,15 @@ export const ATTEMPT_COLUMNS =
   "outbox_id,claim_id,status,provider_message_id,attempted_at,uncertain_at,review_status,review_requested_at";
 export const OUTBOX_BASE_COLUMNS = "id,run_id,effect_kind,delivery_status,attempts,retry_at,created_at";
 export const OUTBOX_LIFECYCLE_COLUMNS = OUTBOX_BASE_COLUMNS + ",cancel_reason,cancelled_at";
+// Failure rows also carry the short AI error code (never message bodies / answers).
+export const OUTBOX_FAILURE_COLUMNS = OUTBOX_LIFECYCLE_COLUMNS + ",ai_last_error_code";
 export const RUN_BASE_COLUMNS = "id,flow_key,platform,run_status,wake_at,updated_at";
 export const RUN_LIFECYCLE_COLUMNS = RUN_BASE_COLUMNS + ",ended_reason,ended_at";
 
 const str = (v: unknown, max = 255) => typeof v === "string" && v.length > 0 && v.length <= max ? v : null;
 const oneOf = (v: unknown, allowed: readonly string[]) => typeof v === "string" && allowed.includes(v) ? v : null;
+// Short machine codes only (e.g. "ai_answer_missing"); anything else is dropped to null.
+const code = (v: unknown) => typeof v === "string" && /^[a-z0-9_]{1,64}$/.test(v) ? v : null;
 const num = (v: unknown) => typeof v === "number" && Number.isFinite(v) ? v : 0;
 const rowsOf = (v: unknown) => Array.isArray(v) ? v.filter(r => r && typeof r === "object") as Record<string, unknown>[] : [];
 
@@ -57,6 +61,11 @@ export function mapOutbox(r: Record<string, unknown>) {
     attempts: num(r.attempts), retry_at: str(r.retry_at, 64), created_at: str(r.created_at, 64),
     cancel_reason: str(r.cancel_reason, 64), cancelled_at: str(r.cancelled_at, 64),
   };
+}
+/** Failure rows: mapOutbox plus the sanitized ai_last_error_code (string|null). */
+export function mapFailure(r: Record<string, unknown>) {
+  const m = mapOutbox(r);
+  return m ? { ...m, ai_last_error_code: code(r.ai_last_error_code) } : null;
 }
 export function mapRun(r: Record<string, unknown>) {
   const id = str(r.id, 64), run_status = oneOf(r.run_status, RUN_STATUSES);
@@ -93,7 +102,8 @@ export async function loadFlowReview(sb: ReviewClient, tenantId: string) {
   const attemptsQ = sb.from("automation_flow_delivery_attempts").select(ATTEMPT_COLUMNS)
     .eq("tenant_id", tenantId).or("status.eq.uncertain,review_status.eq.queued")
     .order("attempted_at", { ascending: false }).limit(100);
-  const outboxQ = selectDefensive(sb, "automation_flow_outbox", [OUTBOX_LIFECYCLE_COLUMNS, OUTBOX_BASE_COLUMNS],
+  const outboxQ = selectDefensive(sb, "automation_flow_outbox",
+    [OUTBOX_FAILURE_COLUMNS, OUTBOX_LIFECYCLE_COLUMNS, OUTBOX_BASE_COLUMNS],
     q => q.eq("tenant_id", tenantId).in("delivery_status", [...FAILED_OUTBOX_STATUSES])
       .order("created_at", { ascending: false }).limit(100));
   // Internal actions (no payload selected: tag values / notification text never leave the DB).
@@ -117,7 +127,7 @@ export async function loadFlowReview(sb: ReviewClient, tenantId: string) {
   });
   return {
     flowItems: attempts.error ? [] : mapAll(attempts.data, mapAttempt),
-    flowFailures: outbox.error ? [] : mapAll(outbox.data, mapOutbox),
+    flowFailures: outbox.error ? [] : mapAll(outbox.data, mapFailure),
     flowRuns: runs.error ? [] : mapAll(runs.data, mapRun),
     runCounts,
     flowAvailable: !attempts.error && !outbox.error && !runs.error && countsOk,

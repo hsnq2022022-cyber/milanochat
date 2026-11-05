@@ -184,3 +184,41 @@ test("mapInternal rejects provider kinds, failure states and unknown values",()=
  assert.equal((mapInternal({id:"o",effect_kind:"handoff",delivery_status:"leased",payload:{x:1}}) as any)?.payload,undefined);
  assert.equal(mapInternal({id:"o",effect_kind:"handoff",delivery_status:"leased"})?.delivery_status,"leased");
 });
+
+test("failure rows expose a sanitized ai_last_error_code, tenant-scoped, without answer/body fields",async()=>{
+ const rows=[
+  ob(T,"f1","message","billing_blocked",{ai_last_error_code:"ai_answer_missing",ai_answer:"secret answer",payload:{text:"secret body"}}),
+  ob(T,"f2","message","dead_letter",{payload:{text:"secret body 2"}}),
+  ob(T,"f3","message","uncertain",{ai_last_error_code:"Bad code with secret text!"}),
+  ob(B,"g1","message","billing_blocked",{ai_last_error_code:"ai_answer_missing"}),
+ ];
+ const {calls,client}=storeClient({automation_flow_outbox:rows,automation_flow_delivery_attempts:[],automation_flow_runs:[]});
+ const out=await loadFlowReview(client,T);
+ const byId=Object.fromEntries(out.flowFailures.map(f=>[f.id,f]));
+ assert.deepEqual(Object.keys(byId).sort(),["f1","f2","f3"]);
+ assert.equal(byId.f1.ai_last_error_code,"ai_answer_missing");
+ assert.equal(byId.f2.ai_last_error_code,null);
+ assert.equal(byId.f3.ai_last_error_code,null);
+ for(const f of out.flowFailures)assert.deepEqual(Object.keys(f).sort(),
+  ["ai_last_error_code","attempts","cancel_reason","cancelled_at","created_at","delivery_status","effect_kind","id","retry_at","run_id"]);
+ const shown=JSON.stringify(out);
+ for(const s of ["secret","payload","ai_answer\"","g1"])assert.equal(shown.includes(s),false,s);
+ const failCall=calls.find(c=>c.table==="automation_flow_outbox"&&c.ops.some(([o,a])=>o==="in"&&a[0]==="delivery_status"&&(a[1] as string[]).includes("billing_blocked")))!;
+ assert.match(sel(failCall),/(^|,)ai_last_error_code(,|$)/);
+ assert.doesNotMatch(sel(failCall),/payload|answer|body|text/);
+ assert.ok(eqs(failCall).some(([k,v])=>k==="tenant_id"&&v===T));
+ // internal view shape is unchanged
+ for(const f of out.flowInternal)assert.equal((f as any).ai_last_error_code,undefined);
+ // tenant B sees only its own row
+ const outB=await loadFlowReview(storeClient({automation_flow_outbox:rows}).client,B);
+ assert.deepEqual(outB.flowFailures.map(f=>[f.id,f.ai_last_error_code]),[["g1","ai_answer_missing"]]);
+});
+
+test("failures fall back to lifecycle columns when ai_last_error_code is not installed",async()=>{
+ const {calls,client}=fakeClient(c=>/ai_last_error_code/.test(sel(c))?{error:{message:"column does not exist"}}:
+  c.table==="automation_flow_outbox"?{data:[{id:"x1",effect_kind:"message",delivery_status:"billing_blocked",attempts:1}]}:{data:[],count:0});
+ const out=await loadFlowReview(client,T);
+ assert.equal(out.flowAvailable,true);
+ assert.equal(out.flowFailures[0].ai_last_error_code,null);
+ assert.ok(calls.some(c=>c.table==="automation_flow_outbox"&&/cancel_reason/.test(sel(c))&&!/ai_last_error_code/.test(sel(c))));
+});

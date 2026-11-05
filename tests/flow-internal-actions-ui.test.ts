@@ -20,6 +20,8 @@ test("delivery review labels internal kinds and keeps billing_blocked label",()=
  for(const k of ["tag","untag","staff_notification","handoff"])assert.match(review,new RegExp(k+":\"")) ;
  assert.match(review,/billing_blocked:"موقوف بسبب الرصيد"/);
  assert.match(review,/f\.delivery_status!=="billing_blocked"/);
+ assert.match(review,/ai_last_error_code\?:string\|null/);
+ assert.match(review,/billing_blocked"&&f\.ai_last_error_code==="ai_answer_missing"\?"موقوف: إجابة مفقودة"/);
  for(const s of ["pending","leased","retry_wait","settled","cancelled","dead_letter"])assert.match(review,new RegExp(s+":\""));
 });
 test("staff inbox uses only the edge function and handles 423",()=>{
