@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Trash2, ArrowUp, ArrowDown, Type, Image as ImageIcon, FileText, Clock3, ClipboardList } from "lucide-react";
 import type { ContentBlock, FlowNode } from "./model";
 import { useFlowStore } from "./store";
+import { getSupabase } from "../lib/supabase";
 
 const types: Array<{id:ContentBlock["type"];label:string;note:string;icon:typeof Type}>=[
   {id:"text",label:"نص",note:"رسالة نصية إضافية",icon:Type},
@@ -17,6 +18,7 @@ export default function MessageBlocksEditor({node}:{node:FlowNode}){
   const store=useFlowStore();
   const blocks=node.data.contentBlocks||[];
   const [status,setStatus]=useState("");
+  const [uploading,setUploading]=useState("");
   const edit=(items:ContentBlock[])=>store.changeNode(node.id,{contentBlocks:items});
   const patch=(id:string,part:Partial<ContentBlock>)=>edit(blocks.map(b=>b.id===id?{...b,...part}:b));
   const add=(type:ContentBlock["type"])=>{
@@ -37,8 +39,10 @@ export default function MessageBlocksEditor({node}:{node:FlowNode}){
       reader.readAsDataURL(file);
       return;
     }
-    if(!["image/jpeg","image/png","image/webp"].includes(file.type)||file.size>5*1024*1024){setStatus("اختر JPG أو PNG أو WebP بحجم أقصى 5MB.");return;}
+    if(!["image/jpeg","image/png","image/webp"].includes(file.type)){setStatus("صيغة غير مدعومة. اختر JPG أو PNG أو WebP فقط.");return;}
+    if(file.size>5*1024*1024){setStatus("حجم الصورة أكبر من 5MB، اختر صورة أصغر.");return;}
     const url=URL.createObjectURL(file);
+    setUploading(block.id);
     try{
       const image=new Image();
       await new Promise<void>((resolve,reject)=>{image.onload=()=>resolve();image.onerror=()=>reject(new Error());image.src=url;});
@@ -46,10 +50,21 @@ export default function MessageBlocksEditor({node}:{node:FlowNode}){
       const canvas=document.createElement("canvas");canvas.width=Math.max(1,Math.round(image.naturalWidth*size));canvas.height=Math.max(1,Math.round(image.naturalHeight*size));
       const ctx=canvas.getContext("2d");if(!ctx)throw new Error();
       ctx.drawImage(image,0,0,canvas.width,canvas.height);
-      const output=canvas.toDataURL("image/webp",.68);
-      if(output.length>700000){setStatus("الصورة كبيرة بعد الضغط، اختر صورة أصغر.");return;}
-      patch(block.id,{url:output});setStatus("أُضيفت الصورة بنجاح إلى الرسالة.");
-    }catch{setStatus("لم نتمكن من معالجة هذه الصورة.");}finally{URL.revokeObjectURL(url);}
+      const blob=await new Promise<Blob|null>(resolve=>canvas.toBlob(resolve,"image/webp",.68));
+      if(!blob)throw new Error();
+      if(blob.size>2*1024*1024){setStatus("الصورة كبيرة بعد الضغط (أكثر من 2MB)، اختر صورة أصغر.");return;}
+      const client=getSupabase();
+      const uid=client?(await client.auth.getSession()).data.session?.user?.id:undefined;
+      if(!client||!uid){
+        const output=canvas.toDataURL("image/webp",.68);
+        if(output.length>700000){setStatus("الصورة كبيرة بعد الضغط، اختر صورة أصغر.");return;}
+        patch(block.id,{url:output});setStatus("الصورة مسودة محلية فقط ولا يمكن إرسالها فعليًا قبل تسجيل الدخول.");return;
+      }
+      const path=`${uid}/${crypto.randomUUID()}.webp`;
+      const {error}=await client.storage.from("flow-media").upload(path,blob,{contentType:"image/webp",upsert:false});
+      if(error){setStatus("فشل رفع الصورة: "+(error.message||"خطأ غير معروف"));return;}
+      patch(block.id,{url:client.storage.from("flow-media").getPublicUrl(path).data.publicUrl});setStatus("رُفعت الصورة بنجاح وأُضيفت إلى الرسالة.");
+    }catch{setStatus("لم نتمكن من معالجة هذه الصورة.");}finally{URL.revokeObjectURL(url);setUploading("");}
   };
   return <section className="mt-5 rounded-2xl border border-[#275443] bg-[#061A14]/50 p-3" dir="rtl">
     <div className="mb-1 flex items-center justify-between gap-2"><h3 className="text-sm font-bold">محتويات الرسالة</h3><span className="text-[11px] text-[#8B9E96]">{blocks.length} / 24</span></div>
@@ -82,7 +97,7 @@ export default function MessageBlocksEditor({node}:{node:FlowNode}){
           {block.type==="text"&&<textarea className={input} rows={3} maxLength={2000} aria-label="نص المكوّن" value={block.text||""} onChange={e=>patch(block.id,{text:e.target.value})}/>}
           {block.type==="image"&&<>
             <input className={input} dir="ltr" aria-label="رابط صورة المكوّن" placeholder="https://example.com/image.jpg" value={block.url?.startsWith("data:")?"":block.url||""} onChange={e=>patch(block.id,{url:e.target.value})}/>
-            <label className={btn+" mt-2 cursor-pointer"}><ImageIcon size={15}/> اختر صورة من الجهاز<input type="file" accept="image/jpeg,image/png,image/webp" className="hidden" onChange={e=>{void upload(block,e.target.files?.[0]);e.target.value="";}}/></label>
+            <label className={btn+" mt-2 "+(uploading?"cursor-not-allowed opacity-60":"cursor-pointer")}><ImageIcon size={15}/> {uploading===block.id?"جارٍ رفع الصورة...":"اختر صورة من الجهاز"}<input type="file" accept="image/jpeg,image/png,image/webp" className="hidden" disabled={!!uploading} onChange={e=>{void upload(block,e.target.files?.[0]);e.target.value="";}}/></label>
             {!!block.url&&<img alt="معاينة المكوّن" src={block.url} className="mt-2 max-h-40 w-full rounded-lg object-contain"/>}
           </>}
           {block.type==="pdf"&&<>

@@ -644,3 +644,83 @@ test("typed question with reserved live field name shows a live-engine warning i
   await page.getByTitle("فحص التدفق").click();
   await expect(page.getByText(/⚠ تحذير: .*اسم حقل الإجابة غير مقبول — الاسم «message» محجوز/).first()).toBeVisible();
 });
+
+/* ---- image block upload to Supabase Storage (mock host only; run with VITE_SUPABASE_URL=http://mock.supabase.test VITE_SUPABASE_ANON_KEY=fake-anon-key) ---- */
+const SB_URL = process.env.VITE_SUPABASE_URL ?? "";
+const UP_UID = "33333333-3333-4333-8333-333333333333";
+const upB64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString("base64url");
+const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
+async function openImageBlock(page: import("@playwright/test").Page, signedIn: boolean) {
+  if (signedIn) {
+    const ref = new URL(SB_URL).hostname.split(".")[0];
+    await page.addInitScript(([key, value]) => localStorage.setItem(key, value), [
+      `sb-${ref}-auth-token`,
+      JSON.stringify({
+        access_token: `${upB64({ alg: "none" })}.${upB64({ sub: UP_UID, exp: 4102444800, role: "authenticated" })}.sig`,
+        refresh_token: "r", token_type: "bearer", expires_in: 3600, expires_at: 4102444800,
+        user: { id: UP_UID, aud: "authenticated", role: "authenticated", email: "t@example.test", app_metadata: {}, user_metadata: {}, created_at: "2024-01-01T00:00:00Z" },
+      }),
+    ]);
+  }
+  await page.goto("/milanochat/#/flows");
+  await page.locator(".react-flow__node").nth(1).click();
+  const aside = page.locator("aside");
+  await aside.getByTestId("content-block-menu").getByRole("button").filter({ hasText: "صورة" }).click();
+  await expect(aside.getByTestId("content-block-image")).toBeVisible();
+  return aside;
+}
+const pngFile = { name: "x.png", mimeType: "image/png", buffer: PNG };
+
+test.describe("image block storage upload", () => {
+  test.skip(!SB_URL.startsWith("http://mock."), "needs VITE_SUPABASE_URL=http://mock.supabase.test (fake host)");
+
+  test("uploads resized WebP to flow-media under the user folder and stores the public https URL", async ({ page }) => {
+    const uploads: { path: string; ct: string }[] = [];
+    await page.route("**/storage/v1/object/flow-media/**", async (route) => {
+      const req = route.request();
+      if (req.method() === "OPTIONS") return route.fulfill({ status: 204, headers: { "access-control-allow-origin": "*", "access-control-allow-headers": "*", "access-control-allow-methods": "*" } });
+      uploads.push({ path: new URL(req.url()).pathname, ct: req.headers()["content-type"] ?? "" });
+      return route.fulfill({ status: 200, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify({ Key: "flow-media/x", Id: "i" }) });
+    });
+    const aside = await openImageBlock(page, true);
+    await aside.locator('[data-testid="content-block-image"] input[type=file]').setInputFiles(pngFile);
+    await expect(aside.getByText("رُفعت الصورة بنجاح")).toBeVisible();
+    expect(uploads.length).toBe(1);
+    expect(uploads[0].path).toMatch(new RegExp(`^/storage/v1/object/flow-media/${UP_UID}/[0-9a-f-]{36}\\.webp$`));
+    const src = await aside.getByAltText("معاينة المكوّن").getAttribute("src");
+    expect(src).toMatch(new RegExp(`^${SB_URL.replace(/[.]/g, "\\.")}/storage/v1/object/public/flow-media/${UP_UID}/[0-9a-f-]{36}\\.webp$`));
+    expect(src!.startsWith("data:")).toBe(false);
+  });
+
+  test("rejects unsupported file types without uploading", async ({ page }) => {
+    let hits = 0;
+    await page.route("**/storage/v1/object/flow-media/**", (route) => { hits++; return route.fulfill({ status: 200, body: "{}" }); });
+    const aside = await openImageBlock(page, true);
+    await aside.locator('[data-testid="content-block-image"] input[type=file]').setInputFiles({ name: "a.gif", mimeType: "image/gif", buffer: Buffer.from("GIF89a") });
+    await expect(aside.getByText("صيغة غير مدعومة")).toBeVisible();
+    await expect(aside.getByAltText("معاينة المكوّن")).toHaveCount(0);
+    expect(hits).toBe(0);
+  });
+
+  test("upload failure shows the error and leaves the block url unchanged", async ({ page }) => {
+    await page.route("**/storage/v1/object/flow-media/**", (route) => {
+      if (route.request().method() === "OPTIONS") return route.fulfill({ status: 204, headers: { "access-control-allow-origin": "*", "access-control-allow-headers": "*", "access-control-allow-methods": "*" } });
+      return route.fulfill({ status: 403, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify({ statusCode: "403", error: "Unauthorized", message: "new row violates row-level security policy" }) });
+    });
+    const aside = await openImageBlock(page, true);
+    await aside.getByRole("textbox", { name: "رابط صورة المكوّن" }).fill("https://example.com/keep.jpg");
+    await aside.locator('[data-testid="content-block-image"] input[type=file]').setInputFiles(pngFile);
+    await expect(aside.getByText("فشل رفع الصورة")).toBeVisible();
+    await expect(aside.getByRole("textbox", { name: "رابط صورة المكوّن" })).toHaveValue("https://example.com/keep.jpg");
+  });
+
+  test("without a session the image stays a local base64 draft with a notice", async ({ page }) => {
+    let hits = 0;
+    await page.route("**/storage/v1/**", (route) => { hits++; return route.fulfill({ status: 200, body: "{}" }); });
+    const aside = await openImageBlock(page, false);
+    await aside.locator('[data-testid="content-block-image"] input[type=file]').setInputFiles(pngFile);
+    await expect(aside.getByText("مسودة محلية فقط")).toBeVisible();
+    expect(await aside.getByAltText("معاينة المكوّن").getAttribute("src")).toMatch(/^data:image\/webp/);
+    expect(hits).toBe(0);
+  });
+});
