@@ -6,7 +6,7 @@
 --
 -- Order: run right after the 20261029180000_flow_durable_button_run_guards
 -- rollback (refused while a 180000-marked function exists), then this one.
--- Required rollback order is 180000, 170000, then
+-- Required rollback order is 20261029190000, 180000, 170000, then
 -- 20261029160000_flow_credits_pause, 20261029150000_flow_takeover_resume,
 -- 20261029140000_flow_outbox_ai_retry, 20261029130000_flow_run_lifecycle
 -- (the older rollbacks refuse while any 170000 object exists).
@@ -35,6 +35,9 @@ DECLARE
  v_n_reg bigint := 0;
  v_n_aud bigint := 0;
 BEGIN
+ -- 20261029190000 (superseding begin; requires the 130000..180000 chain) is newer: roll it back first.
+ IF to_regprocedure('public.flow_begin_durable_run_superseding(uuid,uuid,uuid,uuid,text,text,bigint,text,text,integer,text,jsonb,timestamptz,jsonb)') IS NOT NULL
+ THEN RAISE EXCEPTION 'Refusing canary claim rollback: 20261029190000 objects still exist; roll back 20261029190000_flow_begin_durable_run_superseding first'; END IF;
  -- 20261029180000 (durable button run guards) requires 170000: roll it back first.
  IF split_part(coalesce(obj_description(to_regprocedure('public.flow_begin_durable_run(uuid,uuid,uuid,uuid,text,text,bigint,text,text,integer,text,jsonb,timestamptz,jsonb)'),'pg_proc'),''),' ',1)
      ='CREATED_BY_20261029180000_FLOW_DURABLE_BUTTON_RUN_GUARDS'

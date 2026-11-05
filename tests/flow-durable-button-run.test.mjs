@@ -48,9 +48,10 @@ test("version sorts after every dependency and before every migration that requi
  assert.equal(stamps.filter(s=>s==="20261029125000").length,1);
  for(const dep of ["20261028220000","20261028225000","20261028226000","20261029122000"])
   assert.ok(stamps.includes(dep)&&dep<"20261029125000",dep);
- // 20261029180000_flow_durable_button_run_guards replaces these bodies (tests/flow-durable-button-run-guards.test.mjs).
+ // 20261029180000_flow_durable_button_run_guards replaces these bodies (tests/flow-durable-button-run-guards.test.mjs);
+ // 20261029190000_flow_begin_durable_run_superseding only calls begin (tests/flow-begin-durable-run-superseding.test.mjs).
  for(const s of stamps)if(s>"20261029125000")assert.ok(["20261029130000","20261029140000","20261029150000",
-  "20261029160000","20261029170000","20261029180000"].includes(s),`only the unapplied 130000..180000 follow: ${s}`);
+  "20261029160000","20261029170000","20261029180000","20261029190000"].includes(s),`only the unapplied 130000..190000 follow: ${s}`);
  // 170000 still names the proposal in its message; the requirement itself is existence of both functions.
  const cc=src(CC);
  assert.ok(cc.includes(`to_regprocedure('${BEGIN_SIG}') IS NULL`)&&cc.includes(`to_regprocedure('${RESUME_SIG}') IS NULL`));

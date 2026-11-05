@@ -29,7 +29,8 @@ test("AI retry migration is the newest migration and later than the lifecycle mi
  // 20261029160000_flow_credits_pause requires 150000 (and this migration).
  // 20261029170000_flow_canary_claim_durable requires 160000 (and this migration).
  // 20261029180000_flow_durable_button_run_guards requires 170000 (and this migration).
- const successors=["20261029150000","20261029160000","20261029170000","20261029180000"];
+ // 20261029190000_flow_begin_durable_run_superseding requires 180000 (and this migration).
+ const successors=["20261029150000","20261029160000","20261029170000","20261029180000","20261029190000"];
  for(const s of stamps)if(s!==mine&&!successors.includes(s))
   assert.ok(s<mine,`older migration ${s} must precede ${mine}`);
  assert.ok(existsSync(LIFECYCLE));

@@ -22,6 +22,9 @@ const CREDITS_RB="supabase/rollbacks/20261029160000_flow_credits_pause.rollback.
 const DURABLE="supabase/migrations/20261029125000_flow_durable_button_run.sql";
 const DURABLE_PROPOSAL="supabase/proposals/flow_durable_button_ingress.review.sql";
 const GUARDS="supabase/migrations/20261029180000_flow_durable_button_run_guards.sql";
+const SUPERSEDING="supabase/migrations/20261029190000_flow_begin_durable_run_superseding.sql";
+const SUPERSEDING_RB="supabase/rollbacks/20261029190000_flow_begin_durable_run_superseding.rollback.sql";
+const SUPER_SIG="flow_begin_durable_run_superseding(uuid,uuid,uuid,uuid,text,text,bigint,text,text,integer,text,jsonb,timestamptz,jsonb)";
 const STAFF="supabase/migrations/20261028227000_tenant_staff_memberships.sql";
 const INTERNAL="supabase/migrations/20261028228000_flow_internal_actions.sql";
 const BEGIN_SIG="flow_begin_durable_run(uuid,uuid,uuid,uuid,text,text,bigint,text,text,integer,text,jsonb,timestamptz,jsonb)";
@@ -104,6 +107,24 @@ test("function_version hashes equal md5 of the exact 130000 / 150000 bodies (and
   // 20261029180000 guards body: also accepted (body_version=20261029180000).
   const g=readFileSync(GUARDS,"utf8"),o=`v_${tag}_180 constant text := $${tag}$`,a=g.indexOf(o)+o.length;
   assert.ok(script.includes(`('${sig}',\n  '${md5(norm(g.slice(a,g.indexOf(`$${tag}$`,a))))}')`),`${sig} 180000 normalized hash embedded in checks`);
+ }
+});
+test("20261029190000: exact superseding body hash embedded; timeout rule matches the migrations (B3)",()=>{
+ const md5=x=>createHash("md5").update(x).digest("hex");
+ const m=readFileSync(SUPERSEDING,"utf8"),o="AS $superseding$",a=m.indexOf(o)+o.length;
+ assert.ok(script.includes(`WHEN sp.h IS DISTINCT FROM '${md5(m.slice(a,m.indexOf("$superseding$",a)))}'`),"190000 body hash embedded in checks");
+ assert.ok(script.includes(`'superseding_begin:public.${SUPER_SIG}'`));
+ assert.ok(script.includes("'preflight:20261029190000'"));
+ // Doc (B3): 125000..190000 and their rollbacks set 3s/60s themselves; PGOPTIONS only for 227000/228000.
+ assert.doesNotMatch(script,/130000\/140000 set no lock_timeout/);
+ assert.match(script,/including\n-- +130000\/140000, since audit B3\) and their rollbacks set SET LOCAL\n-- +lock_timeout='3s' and statement_timeout='60s' right after BEGIN/);
+ assert.match(script,/is still required only for 20261028227000 \/\n-- +20261028228000 and their rollbacks, which set no timeout themselves/);
+ const head=/^BEGIN;\nSET LOCAL lock_timeout='3s';\nSET LOCAL statement_timeout='60s';\n/m;
+ for(const d of ["supabase/migrations","supabase/rollbacks"])for(const f of readdirSync(d)){
+  const stamp=f.split("_")[0];
+  if(stamp>="20261029125000"&&stamp<="20261029190000")assert.match(readFileSync(`${d}/${f}`,"utf8"),head,`${d}/${f}`);
+  if(stamp==="20261028227000"||stamp==="20261028228000")
+   assert.doesNotMatch(readFileSync(`${d}/${f}`,"utf8"),/lock_timeout/,`${d}/${f} sets no timeout (PGOPTIONS still required)`);
  }
 });
 test("(g) embeds the exact 20261028227000 / 20261028228000 function body hashes, markers and object names",()=>{
@@ -615,8 +636,8 @@ test("live PG: 150000 coverage, canonical takeover columns, 130000-after-150000 
     "canary_table:public.automation_flow_canary_accounts","canary_table:public.automation_flow_canary_claims",
     "function:public.flow_claim_inbound_durable(uuid,uuid,text,text,uuid,uuid)",
     `durable_button_run:public.${BEGIN_SIG}`,`durable_button_run:public.${RESUME_SIG}`,
-    "durable_ingress_for_20261029170000","durable_button_run_guards"].includes(r.item)||
-   r.status==="INFO"&&r.item==="preflight:20261029180000",
+    "durable_ingress_for_20261029170000","durable_button_run_guards",`superseding_begin:public.${SUPER_SIG}`].includes(r.item)||
+   r.status==="INFO"&&["preflight:20261029180000","preflight:20261029190000"].includes(r.item),
    `${r.item}: ${r.status} ${r.detail}`);
  assert.equal(d(rows,"credits_pause").status,"ABSENT");
  assert.match(d(rows,"credits_pause").detail,/20261029160000 not applied/);
@@ -763,11 +784,49 @@ test("live PG: 20261029180000 guards rows: preflight, body_version 125000 -> 180
  assert.equal(d(rows,"durable_button_run_guards").status,"CONFLICT: 20261029180000 objects");
  assert.match(d(rows,"durable_button_run_guards").detail,/1 of 2 functions carry its marker, 2 of 2 have its body/);
  ok("pdc_180",{sql:`COMMENT ON FUNCTION public.${BEGIN_SIG} IS 'CREATED_BY_20261029180000_FLOW_DURABLE_BUTTON_RUN_GUARDS previous_comment="CREATED_BY_20261029125000_FLOW_DURABLE_BUTTON_RUN"';`},"re-mark");
+ // 20261029190000: preflight OK once 180000 is in; superseding_begin ABSENT -> OK -> partial states -> rollback.
+ const sb=rs=>d(rs,`superseding_begin:public.${SUPER_SIG}`);
+ ({rows}=assertReadOnlyRun("pdc_180"));
+ assert.equal(sb(rows).status,"ABSENT");assert.match(sb(rows).detail,/20261029190000 not applied/);
+ assert.equal(d(rows,"preflight:20261029190000").status,"OK",d(rows,"preflight:20261029190000").detail);
+ ok("pdc_180",{file:SUPERSEDING},"190000");
+ ({rows}=assertReadOnlyRun("pdc_180"));
+ assert.equal(sb(rows).status,"OK",sb(rows).detail);
+ assert.match(sb(rows).detail,/^marker=CREATED_BY_20261029190000_FLOW_BEGIN_DURABLE_RUN_SUPERSEDING body_md5=[0-9a-f]{32} security_definer=f config=search_path="" public_or_client_privilege=f service_role=t other_overloads=0 durable_button_run_guards_ok=t; rollback/);
+ assert.equal(d(rows,"preflight:20261029190000").status,"OK");
+ assert.ok(!rows.some(r=>r.status.startsWith("CONFLICT")),"no conflicts after 190000");
+ // Partial / tampered states are CONFLICT (read only: the checks never fix anything).
+ for(const [label,sql,undo,status] of [
+  ["client privilege",`GRANT EXECUTE ON FUNCTION public.${SUPER_SIG} TO anon;`,`REVOKE EXECUTE ON FUNCTION public.${SUPER_SIG} FROM anon;`,`CONFLICT: public.${SUPER_SIG} privileges`],
+  ["service_role privilege missing",`REVOKE EXECUTE ON FUNCTION public.${SUPER_SIG} FROM service_role;`,`GRANT EXECUTE ON FUNCTION public.${SUPER_SIG} TO service_role;`,`CONFLICT: public.${SUPER_SIG} privileges`],
+  ["unmarked",`COMMENT ON FUNCTION public.${SUPER_SIG} IS 'operator';`,`COMMENT ON FUNCTION public.${SUPER_SIG} IS 'CREATED_BY_20261029190000_FLOW_BEGIN_DURABLE_RUN_SUPERSEDING';`,`CONFLICT: public.${SUPER_SIG}`],
+  ["search_path changed",`ALTER FUNCTION public.${SUPER_SIG} SET search_path=public;`,`ALTER FUNCTION public.${SUPER_SIG} SET search_path='';`,`CONFLICT: public.${SUPER_SIG} body`],
+  ["overload","CREATE FUNCTION public.flow_begin_durable_run_superseding(uuid) RETURNS uuid LANGUAGE sql AS 'SELECT $1';",
+   "DROP FUNCTION public.flow_begin_durable_run_superseding(uuid);","CONFLICT: public.flow_begin_durable_run_superseding overload"],
+  ["190000 without 180000 (begin marker lost)",`COMMENT ON FUNCTION public.${BEGIN_SIG} IS 'operator note';`,
+   `COMMENT ON FUNCTION public.${BEGIN_SIG} IS 'CREATED_BY_20261029180000_FLOW_DURABLE_BUTTON_RUN_GUARDS previous_comment="CREATED_BY_20261029125000_FLOW_DURABLE_BUTTON_RUN"';`,
+   "CONFLICT: 20261029190000 without 20261029180000"]]){
+  ok("pdc_180",{sql},label);
+  ({rows}=assertReadOnlyRun("pdc_180"));
+  assert.equal(sb(rows).status,status,`${label}: ${sb(rows).detail}`);
+  ok("pdc_180",{sql:undo},`undo ${label}`);
+ }
+ ({rows}=assertReadOnlyRun("pdc_180"));
+ assert.equal(sb(rows).status,"OK",sb(rows).detail);
+ // Older rollback refused while 190000 is installed; its own rollback first.
+ const early=psql("pdc_180",{file:"supabase/rollbacks/20261029180000_flow_durable_button_run_guards.rollback.sql"});
+ assert.notEqual(early.status,0);assert.match(early.stderr,/roll back 20261029190000_flow_begin_durable_run_superseding first/);
+ ok("pdc_180",{file:SUPERSEDING_RB},"190000 rollback");
+ ({rows}=assertReadOnlyRun("pdc_180"));
+ assert.equal(sb(rows).status,"ABSENT");
+ assert.equal(d(rows,"durable_button_run_guards").status,"OK");
  // Rollback: back to the 125000 bodies.
  ok("pdc_180",{file:"supabase/rollbacks/20261029180000_flow_durable_button_run_guards.rollback.sql"},"180000 rollback");
  ({rows}=assertReadOnlyRun("pdc_180"));
  assert.equal(d(rows,"durable_button_run_guards").status,"ABSENT");
  for(const r of fnRows(rows)){assert.equal(r.status,"OK");assert.match(r.detail,/^installed_by=20261029125000 .* body_version=20261029125000 /);}
+ assert.equal(d(rows,"preflight:20261029190000").status,"INFO");
+ assert.match(d(rows,"preflight:20261029190000").detail,/^unmet \(normal until 20261029130000\.\.180000 are applied\): 20261029180000 marker on both durable functions/);
  // A 180000 marker on the 125000 body is a CONFLICT.
  ok("pdc_180",{sql:`COMMENT ON FUNCTION public.${RESUME_SIG} IS 'CREATED_BY_20261029180000_FLOW_DURABLE_BUTTON_RUN_GUARDS previous_comment=null';`},"marker on 125000 body");
  ({rows}=assertReadOnlyRun("pdc_180"));

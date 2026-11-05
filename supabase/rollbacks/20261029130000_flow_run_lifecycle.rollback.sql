@@ -19,7 +19,10 @@ SET LOCAL statement_timeout='60s';
 DO $g$
 DECLARE v_fn regprocedure;
 BEGIN
- -- Required rollback order: 20261029180000, 20261029170000, 20261029160000, 20261029150000, then 20261029140000, then this.
+ -- Required rollback order: 20261029190000, 20261029180000, 20261029170000, 20261029160000, 20261029150000, then 20261029140000, then this.
+ -- 20261029190000 (superseding begin; requires the 130000..180000 chain) is newer: roll it back first.
+ IF to_regprocedure('public.flow_begin_durable_run_superseding(uuid,uuid,uuid,uuid,text,text,bigint,text,text,integer,text,jsonb,timestamptz,jsonb)') IS NOT NULL
+ THEN RAISE EXCEPTION 'Refusing lifecycle rollback: 20261029190000 objects still exist; roll back 20261029190000_flow_begin_durable_run_superseding first'; END IF;
  IF split_part(coalesce(obj_description(to_regprocedure('public.flow_begin_durable_run(uuid,uuid,uuid,uuid,text,text,bigint,text,text,integer,text,jsonb,timestamptz,jsonb)'),'pg_proc'),''),' ',1)
      ='CREATED_BY_20261029180000_FLOW_DURABLE_BUTTON_RUN_GUARDS'
   OR split_part(coalesce(obj_description(to_regprocedure('public.flow_resume_button_run(uuid,uuid,text,uuid,integer,text,text,integer,text,jsonb,timestamptz,jsonb)'),'pg_proc'),''),' ',1)

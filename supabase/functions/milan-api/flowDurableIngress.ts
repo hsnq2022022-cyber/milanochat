@@ -315,8 +315,7 @@ async function priorDelivery(db:Db,event:DurableEvent):Promise<Prior>{
  if(inbound.data.some(m=>!record(m)||m.id!==event.inboundId))return "redelivered";
  return "new";
 }
-type CancelReason="free_text"|"revision_inactive"|"superseded";
-const ACTIVE_RUN_STATUSES=["ready","awaiting_input","sleeping"] as const;
+type CancelReason="free_text"|"revision_inactive";
 const activeRunConflict=(error:unknown)=>record(error)&&error.code==="23505"&&
  typeof error.message==="string"&&error.message.includes("flow_active_run_exists");
 /** Tenant-scoped cancel; true only when the RPC itself succeeded. */
@@ -337,25 +336,6 @@ async function cancelThenFallback(db:Db,tenantId:string,runId:string,
  if(await cancelRun(db,tenantId,runId,reason,"awaiting_input"))return "fallback";
  console.warn("[flow-durable] waiting run cancel unconfirmed");
  return "handled";
-}
-/** Supersedes every active run of this tenant conversation; false = fail closed. */
-async function supersedeActiveRuns(db:Db,event:DurableEvent):Promise<boolean>{
- const active=await db.from("automation_flow_runs")
-  .select("id,tenant_id,conversation_id,run_status")
-  .eq("tenant_id",event.tenantId).eq("conversation_id",event.conversationId)
-  .in("run_status",[...ACTIVE_RUN_STATUSES]).limit(20);
- if(active.error||!Array.isArray(active.data))return false;
- for(const run of active.data){
-  if(!record(run)||run.tenant_id!==event.tenantId||
-     run.conversation_id!==event.conversationId||typeof run.id!=="string"||
-     !ACTIVE_RUN_STATUSES.includes(run.run_status as never))return false;
- }
- for(const run of active.data as RecordValue[]){
-  // Ignore result=false (already ended); the DB trigger still guards races.
-  if(!await cancelRun(db,event.tenantId,run.id as string,"superseded",
-     run.run_status as string))return false;
- }
- return true;
 }
 /** Bound of the tenant-wide queued-handoff read (a full page fails closed). */
 export const PENDING_HANDOFF_SCAN=100;
@@ -655,9 +635,11 @@ export async function attemptDurableInstagram(
   const claimed=await claimInbound(db,event,canaryMode);
   if(claimed!=="acquired")return claimed;
   // Only after this inbound is exclusively claimed (duplicate deliveries stop
-  // above): end any older active run so its delayed reply is never sent.
-  if(!await supersedeActiveRuns(db,event))return "handled";
-  const begin=await db.rpc("flow_begin_durable_run",{
+  // above): ONE transaction (20261029190000) ends every older active run of
+  // this tenant conversation ('superseded', so its delayed reply is never
+  // sent) and starts the new run. If the start is refused (NULL) or fails,
+  // the supersede is rolled back with it: the older run keeps its reply.
+  const begin=await db.rpc("flow_begin_durable_run_superseding",{
    p_tenant:event.tenantId,p_account:event.accountId,
    p_conversation:event.conversationId,p_inbound:event.inboundId,
    p_event:event.eventId,p_flow:selection.flow_key,p_revision:selection.revision,

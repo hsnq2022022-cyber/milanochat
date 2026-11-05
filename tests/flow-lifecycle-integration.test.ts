@@ -406,7 +406,9 @@ const CHAIN=[
  "supabase/migrations/20261029160000_flow_credits_pause.sql",
  "supabase/migrations/20261029170000_flow_canary_claim_durable.sql",
  // Final durable start/button bodies (resume flag re-check, claim conversation check).
- "supabase/migrations/20261029180000_flow_durable_button_run_guards.sql"
+ "supabase/migrations/20261029180000_flow_durable_button_run_guards.sql",
+ // Atomic supersede + start that milan-api now calls for a new durable run.
+ "supabase/migrations/20261029190000_flow_begin_durable_run_superseding.sql"
 ];
 const repo=new URL("..",import.meta.url).pathname;
 let dbSeq=0;

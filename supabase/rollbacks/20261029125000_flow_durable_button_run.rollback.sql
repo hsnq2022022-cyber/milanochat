@@ -1,9 +1,9 @@
 -- REVIEW ONLY rollback for 20261029125000_flow_durable_button_run.
 -- NOT applied anywhere by this repository.
 --
--- Order: run LAST, after the 20261029180000, 170000, 160000, 150000, 140000
--- and 130000 rollbacks (20261029170000 requires these functions in its
--- preflight). Refuses while any object carrying a 130000..180000 ownership
+-- Order: run LAST, after the 20261029190000, 180000, 170000, 160000, 150000,
+-- 140000 and 130000 rollbacks (20261029170000 requires these functions in its
+-- preflight). Refuses while any object carrying a 130000..190000 ownership
 -- marker exists.
 --
 -- Drops ONLY functions carrying the CREATED_BY_20261029125000_FLOW_DURABLE_BUTTON_RUN
@@ -26,6 +26,9 @@ DECLARE
  v_fn regprocedure;
  v_dropped integer := 0;
 BEGIN
+ -- 20261029190000 (superseding begin; requires the 130000..180000 chain) is newer: roll it back first.
+ IF to_regprocedure('public.flow_begin_durable_run_superseding(uuid,uuid,uuid,uuid,text,text,bigint,text,text,integer,text,jsonb,timestamptz,jsonb)') IS NOT NULL
+ THEN RAISE EXCEPTION 'Refusing durable button run rollback: 20261029190000 objects still exist; roll back 20261029190000_flow_begin_durable_run_superseding first'; END IF;
  -- 20261029180000 replaced these functions' bodies; its rollback restores the 125000 bodies first.
  IF split_part(coalesce(obj_description(to_regprocedure('public.flow_begin_durable_run(uuid,uuid,uuid,uuid,text,text,bigint,text,text,integer,text,jsonb,timestamptz,jsonb)'),'pg_proc'),''),' ',1)
      ='CREATED_BY_20261029180000_FLOW_DURABLE_BUTTON_RUN_GUARDS'

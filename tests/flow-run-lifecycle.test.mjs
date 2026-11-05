@@ -28,7 +28,8 @@ test("lifecycle migration is the newest migration",()=>{
  // 20261029160000_flow_credits_pause replaces only the 150000 pause probe.
  // 20261029170000_flow_canary_claim_durable only adds objects (requires this chain).
  // 20261029180000_flow_durable_button_run_guards replaces only the two durable RPC bodies (requires this chain).
- const successors=["20261029140000","20261029150000","20261029160000","20261029170000","20261029180000"];
+ // 20261029190000_flow_begin_durable_run_superseding only adds one function calling flow_cancel_run (requires this chain).
+ const successors=["20261029140000","20261029150000","20261029160000","20261029170000","20261029180000","20261029190000"];
  for(const s of stamps)if(s!==mine&&!successors.includes(s))
   assert.ok(s<mine,`older migration ${s} must precede ${mine}`);
 });

@@ -25,7 +25,8 @@ test("150000 follows 130000/140000; only 160000 (credits pause) and 170000 (cana
  const stamps=readdirSync("supabase/migrations").filter(f=>f.endsWith(".sql"))
   .map(f=>f.split("_")[0].padEnd(14,"0"));
  // 20261029180000_flow_durable_button_run_guards requires 170000 (and this migration).
- const successors=["20261029160000","20261029170000","20261029180000"];
+ // 20261029190000_flow_begin_durable_run_superseding requires 180000 (and this migration).
+ const successors=["20261029160000","20261029170000","20261029180000","20261029190000"];
  for(const s of stamps)if(s!=="20261029150000"&&!successors.includes(s))assert.ok(s<"20261029150000",s);
  assert.ok(existsSync(LC)&&existsSync(AI));
 });

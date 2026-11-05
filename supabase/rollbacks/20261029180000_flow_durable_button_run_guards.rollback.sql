@@ -1,9 +1,10 @@
 -- REVIEW ONLY rollback for 20261029180000_flow_durable_button_run_guards.
 -- NOT applied anywhere by this repository.
 --
--- Order: run FIRST (180000 is the newest migration). Required rollback order:
--- 180000, then 20261029170000, 160000, 150000, 140000, 130000, 125000 (each of
--- those rollbacks refuses while a function carries the 180000 marker).
+-- Order: run right after the 20261029190000_flow_begin_durable_run_superseding
+-- rollback (refused while that function exists). Required rollback order:
+-- 190000, 180000, then 20261029170000, 160000, 150000, 140000, 130000, 125000
+-- (each of those rollbacks refuses while a function carries the 180000 marker).
 --
 -- Restores, ONLY for a function whose comment carries the marker
 -- CREATED_BY_20261029180000_FLOW_DURABLE_BUTTON_RUN_GUARDS and whose body is
@@ -270,7 +271,9 @@ AS $head$;
 ) RETURNS boolean LANGUAGE plpgsql SECURITY INVOKER SET search_path=''
 AS $head$;
 BEGIN
- -- 20261029180000 is the newest migration: no later rollback must run first.
+ -- 20261029190000 (superseding begin; requires the 130000..180000 chain) is newer: roll it back first.
+ IF to_regprocedure('public.flow_begin_durable_run_superseding(uuid,uuid,uuid,uuid,text,text,bigint,text,text,integer,text,jsonb,timestamptz,jsonb)') IS NOT NULL
+ THEN RAISE EXCEPTION 'Refusing 20261029180000 rollback: 20261029190000 objects still exist; roll back 20261029190000_flow_begin_durable_run_superseding first'; END IF;
  FOR r IN SELECT * FROM (VALUES
   ('flow_begin_durable_run','public.flow_begin_durable_run(uuid,uuid,uuid,uuid,text,text,bigint,text,text,integer,text,jsonb,timestamptz,jsonb)',
    v_begin_125,v_begin_180,v_begin_head,'begin','uuid'::regtype,

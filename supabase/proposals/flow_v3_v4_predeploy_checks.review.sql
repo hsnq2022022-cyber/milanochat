@@ -1,7 +1,8 @@
 -- REVIEW ONLY: READ-ONLY pre-deployment checks for Flow V3/V4
 -- (20261029125000_flow_durable_button_run, 20261029130000_flow_run_lifecycle,
 -- 20261029140000_flow_outbox_ai_retry, and the 20261029150000 /
--- 20261029160000 / 20261029170000 / 20261029180000 follow-ups; section (g):
+-- 20261029160000 / 20261029170000 / 20261029180000 / 20261029190000
+-- follow-ups; section (g):
 -- 20261028227000_tenant_staff_memberships and
 -- 20261028228000_flow_internal_actions).
 -- NOT a migration.
@@ -54,9 +55,14 @@
 --   preflight and silently restores the 130000 bodies (paused runs are ended
 --   'ineligible' again; the takeover expiry column is ignored). Section (d)
 --   detects this by body hash (function_version:* = CONFLICT). Recovery:
---   re-apply 20261029150000 (idempotent) and re-run these checks. Every
---   migration run must use PGOPTIONS='-c lock_timeout=3s -c
---   statement_timeout=60s' (130000/140000 set no lock_timeout themselves).
+--   re-apply 20261029150000 (idempotent) and re-run these checks.
+--   Lock/statement timeouts: 20261029125000 .. 20261029190000 (including
+--   130000/140000, since audit B3) and their rollbacks set SET LOCAL
+--   lock_timeout='3s' and statement_timeout='60s' right after BEGIN, so no
+--   PGOPTIONS is needed for them. PGOPTIONS='-c lock_timeout=3s -c
+--   statement_timeout=60s' is still required only for 20261028227000 /
+--   20261028228000 and their rollbacks, which set no timeout themselves
+--   (see (g) lock_impact:public.conversations).
 --   With 20261029160000_flow_credits_pause installed, a re-applied 150000 is
 --   refused by its own preflight (the pause probe carries the 160000 marker):
 --   recover with the 160000 rollback, then 150000, then 160000 again.
@@ -73,11 +79,16 @@
 --   proposal installed them; durable_ingress_for_20261029170000 must be OK
 --   before 20261029170000. OK with installed_by=proposal is expected where the
 --   proposal was applied earlier (the migration is then a no-op).
---   20261029180000_flow_durable_button_run_guards (newest; applied after
---   170000) replaces both bodies: durable_button_run:* then shows
+--   20261029180000_flow_durable_button_run_guards (applied after 170000)
+--   replaces both bodies: durable_button_run:* then shows
 --   body_version=20261029180000. preflight:20261029180000 must be OK before
---   applying it, durable_button_run_guards must be OK after. Rollback order:
---   180000, 170000, 160000, 150000, 140000, 130000, 125000.
+--   applying it, durable_button_run_guards must be OK after.
+--   20261029190000_flow_begin_durable_run_superseding (newest; applied after
+--   180000, BEFORE deploying the milan-api build that calls it) adds the
+--   atomic supersede + start RPC (audit B4). preflight:20261029190000 must be
+--   OK before applying it; superseding_begin:* must be OK after (ABSENT = not
+--   applied). Rollback order (revert milan-api first): 190000, 180000,
+--   170000, 160000, 150000, 140000, 130000, 125000.
 BEGIN READ ONLY;
 SET LOCAL statement_timeout = '15s';
 SET LOCAL lock_timeout = '2s';
@@ -713,12 +724,38 @@ SELECT section,item,status,tenant_id,n,ids,detail FROM (
 --  * preflight:20261029180000: its prerequisites (125000/proposal or 180000
 --    bodies, the 20261029130000..170000 markers, messages.conversation_id);
 --    INFO while unmet (normal until 125000..170000 are applied).
+--  * superseding_begin:<fn> (20261029190000): the atomic supersede + start
+--    RPC flow_begin_durable_run_superseding. OK = marker, exact body (md5 of
+--    prosrc), not security definer, search_path='', no PUBLIC/anon/
+--    authenticated privilege, service_role privilege present, no other
+--    overload, AND 20261029180000 installed (ordering: 190000 requires the
+--    180000 bodies; durable_button_run_guards OK). ABSENT = not applied.
+--    CONFLICT otherwise (unmarked function of that name, other body,
+--    privileges, overload, or 190000 present without 180000).
+--  * preflight:20261029190000: its prerequisites (20261029130000
+--    flow_cancel_run / flow_guard_one_active_run markers and the enabled
+--    flow_one_active_run_guard trigger; 20261029180000 marker on both durable
+--    functions and its flow_begin_durable_run body; no foreign function or
+--    overload of the name); INFO while unmet (normal until 130000..180000
+--    are applied).
 WITH
 g180(sig,h180) AS (VALUES
  ('flow_begin_durable_run(uuid,uuid,uuid,uuid,text,text,bigint,text,text,integer,text,jsonb,timestamptz,jsonb)',
   '80953ca6c0b52e627699748b59f383f9'),
  ('flow_resume_button_run(uuid,uuid,text,uuid,integer,text,text,integer,text,jsonb,timestamptz,jsonb)',
   '7a65417ddf106671862eea0da80d8c73')
+),
+sp AS (
+ SELECT p.oid,obj_description(p.oid,'pg_proc') AS marker,md5(p.prosrc) AS h,p.prosecdef,
+  coalesce(array_to_string(p.proconfig,','),'') AS cfg,
+  p.oid IS NOT NULL AND (p.proacl IS NULL OR EXISTS(SELECT 1 FROM unnest(p.proacl) e
+   WHERE e::text LIKE '=%' OR e::text LIKE 'anon=%' OR e::text LIKE 'authenticated=%')) AS exposed,
+  coalesce(EXISTS(SELECT 1 FROM unnest(p.proacl) e WHERE e::text LIKE 'service_role=X%'),false) AS svc,
+  (SELECT count(*) FROM pg_catalog.pg_proc x
+   WHERE x.pronamespace='public'::regnamespace AND x.proname='flow_begin_durable_run_superseding'
+    AND x.oid IS DISTINCT FROM f.oid) AS overloads
+ FROM (SELECT to_regprocedure('public.flow_begin_durable_run_superseding(uuid,uuid,uuid,uuid,text,text,bigint,text,text,integer,text,jsonb,timestamptz,jsonb)') AS oid) f
+ LEFT JOIN pg_catalog.pg_proc p ON p.oid=f.oid
 ),
 dr AS (
  SELECT f.sig,f.h,(SELECT g.h180 FROM g180 g WHERE g.sig=f.sig) AS h180,p.oid,obj_description(p.oid,'pg_proc') AS marker,
@@ -779,6 +816,23 @@ pf180 AS (
    AND obj_description(to_regclass('public.automation_flow_canary_accounts'),'pg_class') IS NOT DISTINCT FROM 'CREATED_BY_20261029170000_FLOW_CANARY_CLAIM_DURABLE'
    AND obj_description(to_regclass('public.automation_flow_canary_claims'),'pg_class') IS NOT DISTINCT FROM 'CREATED_BY_20261029170000_FLOW_CANARY_CLAIM_DURABLE')
  ) r(label,ok) WHERE NOT r.ok
+),
+pf190 AS (
+ SELECT r.label FROM (VALUES
+  ('20261029130000 marker on flow_cancel_run / flow_guard_one_active_run',
+   obj_description(to_regprocedure('public.flow_cancel_run(uuid,uuid,text,text)'),'pg_proc') IS NOT DISTINCT FROM 'CREATED_BY_20261029130000_FLOW_RUN_LIFECYCLE'
+   AND obj_description(to_regprocedure('public.flow_guard_one_active_run()'),'pg_proc') IS NOT DISTINCT FROM 'CREATED_BY_20261029130000_FLOW_RUN_LIFECYCLE'),
+  ('20261029130000 trigger flow_one_active_run_guard enabled on automation_flow_runs',
+   EXISTS(SELECT 1 FROM pg_catalog.pg_trigger t
+    WHERE t.tgrelid=to_regclass('public.automation_flow_runs') AND t.tgname='flow_one_active_run_guard'
+     AND t.tgfoid=to_regprocedure('public.flow_guard_one_active_run()') AND t.tgenabled<>'D'
+     AND obj_description(t.oid,'pg_trigger') IS NOT DISTINCT FROM 'CREATED_BY_20261029130000_FLOW_RUN_LIFECYCLE')),
+  ('20261029180000 marker on both durable functions and its flow_begin_durable_run body',
+   (SELECT count(*) FROM dr WHERE dr.m180)=2
+   AND EXISTS(SELECT 1 FROM dr WHERE dr.sig LIKE 'flow_begin_durable_run(%' AND dr.ph=dr.h180)),
+  ('no unmarked function or other overload named flow_begin_durable_run_superseding',
+   (SELECT sp.overloads=0 AND (sp.oid IS NULL OR sp.marker IS NOT DISTINCT FROM 'CREATED_BY_20261029190000_FLOW_BEGIN_DURABLE_RUN_SUPERSEDING') FROM sp))
+ ) r(label,ok) WHERE NOT r.ok
 )
 SELECT section,item,status,tenant_id,n,ids,detail FROM (
  SELECT 0 AS ord,'d_prerequisites'::text AS section,'durable_button_run:public.'||dr.sig AS item,
@@ -835,6 +889,32 @@ SELECT section,item,status,tenant_id,n,ids,detail FROM (
   NULL,(SELECT count(*) FROM pf180),NULL,
   CASE WHEN (SELECT count(*) FROM pf180)=0 THEN 'all 20261029180000 preflight requirements satisfied'
    ELSE 'unmet (normal until 20261029125000..170000 are applied): '||(SELECT string_agg(label,'; ' ORDER BY label) FROM pf180) END
+ UNION ALL
+ SELECT 5,'d_prerequisites','superseding_begin:public.flow_begin_durable_run_superseding(uuid,uuid,uuid,uuid,text,text,bigint,text,text,integer,text,jsonb,timestamptz,jsonb)',
+  CASE WHEN sp.oid IS NULL THEN
+    CASE WHEN sp.overloads>0 THEN 'CONFLICT: public.flow_begin_durable_run_superseding overload' ELSE 'ABSENT' END
+   WHEN sp.marker IS DISTINCT FROM 'CREATED_BY_20261029190000_FLOW_BEGIN_DURABLE_RUN_SUPERSEDING'
+    THEN 'CONFLICT: public.flow_begin_durable_run_superseding(uuid,uuid,uuid,uuid,text,text,bigint,text,text,integer,text,jsonb,timestamptz,jsonb)'
+   WHEN sp.h IS DISTINCT FROM '526c9b3c04d9632fbf7d187ce9c5c658' OR sp.prosecdef OR sp.cfg<>'search_path=""'
+    THEN 'CONFLICT: public.flow_begin_durable_run_superseding(uuid,uuid,uuid,uuid,text,text,bigint,text,text,integer,text,jsonb,timestamptz,jsonb) body'
+   WHEN sp.overloads>0 THEN 'CONFLICT: public.flow_begin_durable_run_superseding overload'
+   WHEN sp.exposed OR NOT sp.svc THEN 'CONFLICT: public.flow_begin_durable_run_superseding(uuid,uuid,uuid,uuid,text,text,bigint,text,text,integer,text,jsonb,timestamptz,jsonb) privileges'
+   WHEN (SELECT count(*) FROM dr WHERE dr.m180 AND dr.ph=dr.h180)<>2
+    THEN 'CONFLICT: 20261029190000 without 20261029180000'
+   ELSE 'OK' END,
+  NULL,sp.overloads,NULL,
+  CASE WHEN sp.oid IS NULL
+    THEN '20261029190000 not applied: the atomic supersede + start RPC is missing; a milan-api build that calls it fails closed on a new durable run (no reply from that path), older builds supersede before the start (audit B4)'
+   ELSE format('marker=%s body_md5=%s security_definer=%s config=%s public_or_client_privilege=%s service_role=%s other_overloads=%s durable_button_run_guards_ok=%s; rollback (revert milan-api first): supabase/rollbacks/20261029190000_flow_begin_durable_run_superseding.rollback.sql FIRST, before 20261029180000',
+    coalesce(sp.marker,'-'),sp.h,sp.prosecdef,sp.cfg,sp.exposed,sp.svc,sp.overloads,
+    (SELECT count(*) FROM dr WHERE dr.m180 AND dr.ph=dr.h180)=2) END
+ FROM sp
+ UNION ALL
+ SELECT 6,'d_prerequisites','preflight:20261029190000',
+  CASE WHEN (SELECT count(*) FROM pf190)=0 THEN 'OK' ELSE 'INFO' END,
+  NULL,(SELECT count(*) FROM pf190),NULL,
+  CASE WHEN (SELECT count(*) FROM pf190)=0 THEN 'all 20261029190000 preflight requirements satisfied'
+   ELSE 'unmet (normal until 20261029130000..180000 are applied): '||(SELECT string_agg(label,'; ' ORDER BY label) FROM pf190) END
  UNION ALL
  SELECT 2,'d_prerequisites','preflight:20261029125000',
   CASE WHEN (SELECT count(*) FROM pf125)=0 THEN 'OK' ELSE 'MISSING: '||(SELECT min(label) FROM pf125) END,

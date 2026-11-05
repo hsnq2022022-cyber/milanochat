@@ -3,7 +3,7 @@
 // 20261029150000_flow_takeover_resume and their rollbacks (150000 -> 140000 -> 130000).
 //
 //  (a) lock-timeout handling (130000/140000 set their own SET LOCAL timeouts,
-//      like 150000..180000; PGOPTIONS is no longer required): a conflicting
+//      like 125000 and 150000..190000; PGOPTIONS is no longer required): a conflicting
 //      lock makes the apply fail fast with
 //      lock_not_available, leaves no partial change and succeeds on retry.
 //  (b) MEASURES (prints, never asserts tight timings) the heaviest steps on a
@@ -42,6 +42,9 @@ const DB="supabase/migrations/20261029125000_flow_durable_button_run.sql";
 const DB_RB="supabase/rollbacks/20261029125000_flow_durable_button_run.rollback.sql";
 const GD="supabase/migrations/20261029180000_flow_durable_button_run_guards.sql";
 const GD_RB="supabase/rollbacks/20261029180000_flow_durable_button_run_guards.rollback.sql";
+// Atomic superseding start (190000; requires 180000): newest migration.
+const SP="supabase/migrations/20261029190000_flow_begin_durable_run_superseding.sql";
+const SP_RB="supabase/rollbacks/20261029190000_flow_begin_durable_run_superseding.rollback.sql";
 // Former operator rule for 130000/140000 (they now set the same values via SET LOCAL).
 const PGOPTIONS="-c lock_timeout=3s -c statement_timeout=60s";
 const OPTS={PGOPTIONS};
@@ -52,14 +55,16 @@ const md5=x=>createHash("md5").update(x).digest("hex");
 const body=(f,tag)=>{const s=src(f),o=`AS $${tag}$`,a=s.indexOf(o)+o.length;return s.slice(a,s.indexOf(`$${tag}$`,a));};
 
 // ---------------------------------------------------------------- static
-test("125000..180000 (incl. 130000/140000) and all rollbacks set bounded timeouts right after BEGIN",()=>{
- for(const f of [DB,LC,AI,TK,CP,CC,GD,DB_RB,LC_RB,AI_RB,TK_RB,CP_RB,CC_RB,GD_RB])
+test("125000..190000 (incl. 130000/140000) and all rollbacks set bounded timeouts right after BEGIN",()=>{
+ for(const f of [DB,LC,AI,TK,CP,CC,GD,SP,DB_RB,LC_RB,AI_RB,TK_RB,CP_RB,CC_RB,GD_RB,SP_RB])
   assert.match(src(f),/^BEGIN;\nSET LOCAL lock_timeout='3s';\nSET LOCAL statement_timeout='60s';\n/m,f);
- // 20261029180000 (durable button run guards; requires the whole chain) is the
- // newest migration, then 20261029170000 (canary claim).
+ // 20261029190000 (atomic superseding start; requires 180000) is the newest
+ // migration, then 20261029180000 (durable button run guards; requires the
+ // whole chain), then 20261029170000 (canary claim).
  const stamps=readdirSync("supabase/migrations").filter(f=>f.endsWith(".sql")).map(f=>f.split("_")[0].padEnd(14,"0"));
- for(const s of stamps)if(s!=="20261029170000"&&s!=="20261029180000")assert.ok(s<"20261029170000",s);
- for(const f of [DB,LC,AI,TK,CP,CC,GD,DB_RB,LC_RB,AI_RB,TK_RB,CP_RB,CC_RB,GD_RB]){
+ for(const s of stamps)if(!["20261029170000","20261029180000","20261029190000"].includes(s))assert.ok(s<"20261029170000",s);
+ assert.ok(stamps.every(s=>s<="20261029190000"),"190000 is the newest");
+ for(const f of [DB,LC,AI,TK,CP,CC,GD,SP,DB_RB,LC_RB,AI_RB,TK_RB,CP_RB,CC_RB,GD_RB,SP_RB]){
   const s=src(f).split("\n").map(l=>l.replace(/--.*$/,"")).join("\n");
   assert.equal((s.match(/^BEGIN;$/gm)??[]).length,1,`${f}: one transaction`);
   assert.equal((s.match(/^COMMIT;$/gm)??[]).length,1,`${f}: one commit`);

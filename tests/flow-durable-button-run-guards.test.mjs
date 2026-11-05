@@ -45,10 +45,11 @@ const B125=lit(M125,"v_begin_src","begin"),R125=lit(M125,"v_resume_src","resume"
 const B180=lit(MIG,"v_begin_180","begin"),R180=lit(MIG,"v_resume_180","resume");
 
 // ---------------------------------------------------------------- static
-test("180000 is the newest migration and follows the whole 125000..170000 chain",()=>{
+test("180000 follows the whole 125000..170000 chain; only 190000 (requires 180000) is newer",()=>{
  const stamps=readdirSync("supabase/migrations").filter(f=>f.endsWith(".sql")).map(f=>f.split("_")[0].padEnd(14,"0"));
  assert.equal(stamps.filter(s=>s==="20261029180000").length,1);
- for(const s of stamps)if(s!=="20261029180000")assert.ok(s<"20261029180000",s);
+ // 20261029190000_flow_begin_durable_run_superseding (tests/flow-begin-durable-run-superseding.test.mjs).
+ for(const s of stamps)if(s!=="20261029180000"&&s!=="20261029190000")assert.ok(s<"20261029180000",s);
  for(const f of [M125,...LATER])assert.ok(existsSync(f),f);
 });
 test("bodies: 125000 copies are byte-identical (migration, rollback, proposal); 180000 adds exactly the guards",()=>{
