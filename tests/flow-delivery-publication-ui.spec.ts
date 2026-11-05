@@ -149,6 +149,47 @@ test("delivery review labels internal effect kinds and statuses, unknown values 
   await expect(page.getByTestId("delivery-review-panel")).not.toContainText("brand_new_");
 });
 
+test("delivery review lists flowInternal rows with Arabic labels and status badges", async ({ page }) => {
+  await setup(page, {
+    review: { ...EMPTY_REVIEW, flowInternalAvailable: true, flowInternal: [
+      { id: "n-pending", effect_kind: "tag", delivery_status: "pending", attempts: 0, created_at: null, cancel_reason: null },
+      { id: "n-leased", effect_kind: "untag", delivery_status: "leased", attempts: 1, created_at: null, cancel_reason: null },
+      { id: "n-retry", effect_kind: "staff_notification", delivery_status: "retry_wait", attempts: 2, created_at: null, cancel_reason: null },
+      { id: "n-settled", effect_kind: "handoff", delivery_status: "settled", attempts: 1, created_at: null, cancel_reason: null },
+      { id: "n-cancel", effect_kind: "tag", delivery_status: "cancelled", attempts: 0, created_at: null, cancel_reason: "human_takeover", cancelled_at: null },
+    ] },
+  });
+  await page.goto("/milanochat/#/dashboard");
+  const sec = page.getByRole("region", { name: "الإجراءات الداخلية" });
+  const rows = sec.getByTestId("flow-internal-row");
+  await expect(rows).toHaveCount(5);
+  const exp: Array<[string, string]> = [["إجراء داخلي: إضافة وسم", "بانتظار التنفيذ"], ["إجراء داخلي: إزالة وسم", "قيد التنفيذ"], ["إجراء داخلي: إشعار للموظف", "بانتظار إعادة المحاولة"], ["إجراء داخلي: تحويل لموظف", "نُفّذ"], ["إجراء داخلي: إضافة وسم", "أُلغي"]];
+  for (let i = 0; i < exp.length; i++) {
+    await expect(rows.nth(i).getByTestId("flow-internal-kind")).toHaveText(exp[i][0]);
+    await expect(rows.nth(i).getByTestId("flow-internal-status")).toHaveText(exp[i][1]);
+  }
+  await expect(rows.nth(4).getByTestId("flow-internal-cancel-reason")).toHaveText("سبب الإلغاء: تولّى موظف المحادثة");
+  await expect(sec.getByTestId("flow-internal-unavailable")).toHaveCount(0);
+});
+
+test("delivery review internal section: empty when available, neutral note when unavailable or missing", async ({ page }) => {
+  await setup(page, { review: { ...EMPTY_REVIEW, flowInternalAvailable: true, flowInternal: [] } });
+  await page.goto("/milanochat/#/dashboard");
+  await expect(page.getByTestId("flow-internal-empty")).toHaveText("لا توجد إجراءات داخلية حديثة.");
+  await expect(page.getByTestId("flow-internal-unavailable")).toHaveCount(0);
+  await page.unroute(`${URL_}/**`);
+  await setup(page, { review: { ...EMPTY_REVIEW, flowInternalAvailable: false, flowInternal: [] } });
+  await page.reload();
+  await expect(page.getByTestId("flow-internal-unavailable")).toHaveText("حالة الإجراءات الداخلية غير متاحة حاليًا.");
+  await expect(page.getByTestId("flow-internal-empty")).toHaveCount(0);
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  await page.unroute(`${URL_}/**`);
+  await setup(page, { review: EMPTY_REVIEW });
+  await page.reload();
+  await expect(page.getByTestId("flow-internal-unavailable")).toBeVisible();
+  await expect(page.getByTestId("flow-internal-empty")).toHaveCount(0);
+});
+
 test("staff inbox shows items from flow-staff-inbox and an empty state", async ({ page }) => {
   const calls = await setup(page, {
     review: EMPTY_REVIEW,

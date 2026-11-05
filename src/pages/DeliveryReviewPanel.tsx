@@ -9,10 +9,10 @@ type ReviewItem={
 type FlowAttempt={outbox_id:string;claim_id:string|null;status:"attempting"|"uncertain"|"confirmed";
  provider_message_id:string|null;attempted_at:string|null;review_status:string};
 type FlowFailure={id:string;effect_kind:string|null;delivery_status:string;attempts:number;
- created_at:string|null;cancel_reason:string|null};
+ created_at:string|null;cancel_reason:string|null;cancelled_at?:string|null};
 type FlowRun={id:string;flow_key:string|null;platform:string;run_status:string;
  wake_at:string|null;updated_at:string|null;ended_reason:string|null};
-type Inbox={items:ReviewItem[];readOnly:true;flowItems?:FlowAttempt[];flowFailures?:FlowFailure[];
+type Inbox={items:ReviewItem[];readOnly:true;flowItems?:FlowAttempt[];flowFailures?:FlowFailure[];flowInternal?:FlowFailure[];flowInternalAvailable?:boolean;
  flowRuns?:FlowRun[];runCounts?:Record<string,number>;flowAvailable?:boolean};
 type Totals={events:Record<string,number>;periodDays:number;truncated:boolean};
 const runStatusNames:Record<string,string>={
@@ -106,6 +106,20 @@ export default function DeliveryReviewPanel({token,tenantId}:{token:string|null;
     <p className="mt-1 text-xs text-white/65">المحاولات: {f.attempts} — الوقت: {fmt(f.created_at)}</p>
     {f.delivery_status!=="billing_blocked"&&(f.cancel_reason||f.delivery_status==="dead_letter")&&<p data-testid="flow-cancel-reason" data-reason-code={f.cancel_reason??""} className="mt-1 text-xs text-amber-100">{f.delivery_status==="dead_letter"?"سبب الفشل":"سبب الإلغاء"}: {f.cancel_reason?cancelReasonLabel(f.cancel_reason):"السبب غير محدد"}</p>}
    </li>)}</ul>
+  </section>}
+  {flow&&<section aria-label="الإجراءات الداخلية" data-testid="flow-internal-section" className="space-y-2">
+   <h3 className="text-sm font-bold">الإجراءات الداخلية</h3>
+   {flow.flowInternalAvailable!==true
+    ?<p data-testid="flow-internal-unavailable" className={container+" text-xs text-white/70"}>حالة الإجراءات الداخلية غير متاحة حاليًا.</p>
+    :(flow.flowInternal?.length??0)===0
+     ?<p data-testid="flow-internal-empty" className={container+" text-xs text-white/70"}>لا توجد إجراءات داخلية حديثة.</p>
+     :<ul className="space-y-2">{flow.flowInternal!.map(f=><li key={f.id} data-testid="flow-internal-row" className={container}>
+      {f.effect_kind&&<span data-testid="flow-internal-kind" data-effect-kind={f.effect_kind} className="me-2 rounded-md bg-sky-500/15 px-2 py-1 text-xs text-sky-100">{INTERNAL_KINDS.includes(f.effect_kind)?"إجراء داخلي: ":""}{effectKindLabel(f.effect_kind)}</span>}
+      <span data-testid="flow-internal-status" data-status-code={f.delivery_status} className={"rounded-md px-2 py-1 text-xs "+statusTone(f.delivery_status)}>{Object.prototype.hasOwnProperty.call(failureNames,f.delivery_status)?failureNames[f.delivery_status]:"حالة غير معروفة"}</span>
+      <p className="mt-2 break-all text-xs text-white/65">مرجع الإجراء: {f.id}</p>
+      <p className="mt-1 text-xs text-white/65">المحاولات: {f.attempts} — الوقت: {fmt(f.created_at??null)}</p>
+      {f.cancel_reason&&<p data-testid="flow-internal-cancel-reason" data-reason-code={f.cancel_reason} className="mt-1 text-xs text-amber-100">سبب الإلغاء: {cancelReasonLabel(f.cancel_reason)}</p>}
+     </li>)}</ul>}
   </section>}
   {(flow?.flowItems?.length??0)>0&&<section aria-label="محاولات إرسال التدفقات بانتظار المراجعة" className="space-y-2">
    <h3 className="text-sm font-bold">محاولات إرسال تدفقات تحتاج مراجعة</h3>

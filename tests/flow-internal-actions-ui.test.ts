@@ -31,3 +31,12 @@ test("staff inbox uses only the edge function and handles 423",()=>{
  assert.match(inbox,/لا توجد إشعارات للموظفين الآن/);
  assert.match(dash,/<StaffInboxPanel token=\{token\} tenantId=\{st\.tenantId\} \/>/);
 });
+test("delivery review renders flowInternal section separately with available/empty/unavailable states",()=>{
+ assert.match(review,/flowInternal\?:FlowFailure\[\];flowInternalAvailable\?:boolean/);
+ assert.match(review,/aria-label="الإجراءات الداخلية"/);
+ assert.match(review,/flow\.flowInternalAvailable!==true/);
+ assert.match(review,/حالة الإجراءات الداخلية غير متاحة حاليًا/);
+ assert.match(review,/لا توجد إجراءات داخلية حديثة/);
+ assert.match(review,/flow\.flowInternal!\.map/);
+ assert.doesNotMatch(review,/flowFailures[^\n]*flowInternal\b.*concat/);
+});
