@@ -136,6 +136,27 @@ function liveFieldNameProblem(name:string):string{
   if(!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name))return "استخدم أحرفًا إنجليزية وأرقامًا و_ فقط، ولا تبدأ برقم";
   return "";
 }
+const FLOW_MEDIA_PATH="/storage/v1/object/public/flow-media/";
+const configuredSupabaseUrl=():string=>{
+  try{return String(((import.meta as any).env??{}).VITE_SUPABASE_URL??"");}catch{return "";}
+};
+/** Publish-time image rule: https, no credentials, our flow-media public objects, no traversal. */
+export function isAllowedImageUrl(raw:unknown,supabaseUrl?:string):boolean{
+  if(typeof raw!=="string"||!raw||raw!==raw.trim())return false;
+  let u:URL;
+  try{u=new URL(raw);}catch{return false;}
+  if(u.protocol!=="https:"||u.username||u.password)return false;
+  const base=supabaseUrl===undefined?configuredSupabaseUrl():supabaseUrl;
+  if(base){
+    try{if(u.host!==new URL(base).host)return false;}catch{return false;}
+  }
+  if(!u.pathname.startsWith(FLOW_MEDIA_PATH)||u.pathname.length===FLOW_MEDIA_PATH.length)return false;
+  let decoded=u.pathname;
+  try{for(let i=0;i<3;i++)decoded=decodeURIComponent(decoded);}catch{return false;}
+  if(/(^|[\\/])\.\.?([\\/]|$)/.test(decoded)||decoded.includes("\\")||/%2e|%2f|%5c/i.test(u.pathname))return false;
+  return true;
+}
+const IMAGE_PUBLISH_MSG="رابط الصورة يجب أن يكون https وبعنوان مشروعنا قبل النشر";
 export type ValidationIssue = { message: string; nodeId?: string; severity: "error" | "warning" };
 export type ValidationLibraryItem = { id: string; doc?: FlowDocument };
 /** One issue per affected node/port. Existing v3 document fields remain unchanged. */
@@ -191,9 +212,11 @@ export function validateDocument(doc: FlowDocument, library?: readonly Validatio
          block.type==="image"&&/^data:image\/(?:webp|jpeg|png);base64,/i.test(block.url||"")||
          block.type==="pdf"&&/^data:application\/pdf;base64,/i.test(block.url||"")))
         error("رابط "+(block.type==="pdf"?"PDF":"الصورة")+" غير صالح");
+      else if(block.type==="image"&&!isAllowedImageUrl(block.url))error(IMAGE_PUBLISH_MSG);
     }
     if(d.image&&!/^https:\/\//i.test(d.image)&&!/^data:image\/(?:png|jpeg|webp);base64,/i.test(d.image))
       error("رابط صورة غير آمن");
+    else if(d.image&&!isAllowedImageUrl(d.image))error(IMAGE_PUBLISH_MSG);
     if(d.kind==="question"&&d.inputMode==="buttons"&&d.options.length===0)error("أضف خيارًا للسؤال");
     if(d.kind==="randomizer"&&Math.abs(d.options.reduce((sum,o)=>sum+(o.weight||0),0)-100)>.01)
       error("مجموع نسب التوزيع يجب أن يساوي 100%");

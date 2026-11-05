@@ -208,3 +208,41 @@ test("legacy invalid port on typed question warns, valid port does not",()=>{
 test("example flow yields no live-engine warnings",()=>{
  assert.equal(validateDocument(exampleFlow()).filter(i=>i.message.includes("المحرك المباشر")||i.message.includes("غير مقبول")).length,0);
 });
+
+import { isAllowedImageUrl } from "./model.ts";
+const SB="https://abc.supabase.co", FM=SB+"/storage/v1/object/public/flow-media/";
+test("isAllowedImageUrl accepts flow-media public https URL on our host",()=>{
+ assert.equal(isAllowedImageUrl(FM+"t1/a.png",SB),true);
+ assert.equal(isAllowedImageUrl(FM+"t1/a.png"),true);
+});
+test("isAllowedImageUrl rejects unsafe or foreign URLs",()=>{
+ for(const u of ["","data:image/png;base64,AAAA","http://abc.supabase.co/storage/v1/object/public/flow-media/a.png","javascript:alert(1)","ftp://abc.supabase.co/x",
+  "https://evil.com/storage/v1/object/public/flow-media/a.png",SB+"/storage/v1/object/public/other/a.png",SB+"/storage/v1/object/public/flow-media/",
+  "https://u:p@abc.supabase.co/storage/v1/object/public/flow-media/a.png",FM+"../x.png",FM+"%2e%2e/x.png",FM+"a/%252e%252e/x.png",FM+"a%2f..%2fb.png","not a url"," "+FM+"a.png"])
+  assert.equal(isAllowedImageUrl(u,SB),false,u);
+ assert.equal(isAllowedImageUrl(undefined,SB),false);
+});
+function imgDoc(url:string,legacy=false){
+ const doc=exampleFlow(),m=doc.nodes.find(n=>n.data.kind==="message")!;
+ m.data=legacy?{...m.data,image:url}:{...m.data,contentBlocks:[{id:"b1",type:"image",url}]};
+ return {doc,m};
+}
+test("image block publish rule: error for bad URL, absent for valid",()=>{
+ const bad=imgDoc("http://x.com/a.png"),ok=imgDoc(FM+"t/a.png");
+ const find=(d:ReturnType<typeof exampleFlow>)=>validateDocument(d).filter(i=>i.severity==="error"&&i.message.includes("رابط الصورة"));
+ assert.ok(find(bad.doc).length>0);
+ assert.equal(find(ok.doc).length,0);
+ assert.ok(find(imgDoc(SB+"/other/a.png").doc).some(i=>i.nodeId));
+ assert.equal(validateDocument(ok.doc).filter(i=>i.severity==="error").length,0);
+});
+test("legacy image field also gated; empty legacy image is fine; pdf unchanged",()=>{
+ assert.ok(validateDocument(imgDoc("data:image/png;base64,AAAA",true).doc).some(i=>i.severity==="error"&&i.message.includes("رابط الصورة")));
+ assert.equal(validateDocument(imgDoc(FM+"a.png",true).doc).filter(i=>i.severity==="error").length,0);
+ assert.equal(validateDocument(imgDoc("",true).doc).filter(i=>i.severity==="error").length,0);
+});
+test("draft sanitising of image blocks unchanged",()=>{
+ const {doc}=imgDoc("data:image/png;base64,AAAA");
+ const back=importFlow(JSON.parse(JSON.stringify(doc)));
+ assert.ok(back);
+ assert.equal(back!.nodes.find(n=>n.data.kind==="message")!.data.contentBlocks?.[0]?.url,"data:image/png;base64,AAAA");
+});
