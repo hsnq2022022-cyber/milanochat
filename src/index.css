@@ -12,8 +12,8 @@
 
 @theme {
   --font-Handicrafts: "Handicrafts", "Lalezar", "Aref Ruqaa", sans-serif;
-  --font-display: "Changa", "IBM Plex Sans Arabic", sans-serif;
-  --font-body: "IBM Plex Sans Arabic", "Changa", sans-serif;
+  --font-display: "Handicrafts", "Tajawal", "Changa", "IBM Plex Sans Arabic", sans-serif;
+  --font-body: "Handicrafts", "Tajawal", "IBM Plex Sans Arabic", "Changa", sans-serif;
 
   --color-night: #06201a;
   --color-pine: #0a2c22;
@@ -35,6 +35,14 @@
 
 html {
   scroll-behavior: smooth;
+}
+
+/* Custom font is the app-wide default. Elements that set their own font (font-body / font-display
+   utilities) follow it through the --font-body / --font-display tokens in @theme above. */
+body,
+html,
+#root {
+  font-family: "Handicrafts", "Tajawal", sans-serif !important;
 }
 
 body {
