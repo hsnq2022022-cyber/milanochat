@@ -44,7 +44,8 @@ import { flowShadowMayObserve } from "./flowShadowGate.ts";
 import { persistInboundOnce } from "./persistInboundOnce.ts";
 import { processExclusiveEvent } from "./exclusiveMessageClaim.ts";
 import { prepareSimpleFlowReply } from "./flowPrepareMessage.ts";
-import {attemptDurableInstagram,selectedFlowChoice} from "./flowDurableIngress.ts";
+import {attemptDurableInstagram,selectedFlowChoice,multichannelEnabled} from "./flowDurableIngress.ts";
+import { normalizeMetaMessages } from "./normalizeMetaMessage.ts";
 import { chargeWidgetReply } from "./widgetCredit.ts";
 import { verifyMetaWebhookSignature } from "./metaSignature.ts";
 import { recordVerifiedMetaReceipts } from "./metaDeliveryReceipts.ts";
@@ -1788,7 +1789,10 @@ async function handleIncomingWebhookMessage(
   // The durable engine is strictly isolated to the operator-selected
   // Instagram account and defaults OFF. No direct send is made in this path:
   // the atomic Outbox and an authenticated worker own actual provider calls.
-  if(channel==="instagram"){
+  // FLOW_MULTICHANNEL_ENABLED (default OFF): WhatsApp / Facebook events may
+  // also try the durable path (same canary, claim and SQL re-checks).
+  if(channel==="instagram"||
+     ((channel==="whatsapp"||channel==="facebook")&&multichannelEnabled())){
     const durable=await attemptDurableInstagram(sb,{
       tenantId,accountId:String(account.id),conversationId:String(conv.id),
       inboundId:inboundMessageId,eventId:externalMsgId,platform:channel,
@@ -2342,6 +2346,26 @@ Deno.serve(async (req) => {
               continue;
             }
 
+            // FLOW_MULTICHANNEL_ENABLED (default OFF), and ONLY for the
+            // operator-selected durable canary account: signed interactive
+            // button replies carrying "flow-choice:<id>" (parsed by
+            // normalizeMetaMessage.ts) reach the durable path as their title
+            // + choice id. OFF or any other account: null, and the text-only
+            // handling below is unchanged.
+            const durableReplies =
+              multichannelEnabled() &&
+              typeof account.id === "string" &&
+              account.id === env("FLOW_DURABLE_CANARY_ACCOUNT_ID")
+                ? new Map(
+                    normalizeMetaMessages({
+                      object: "whatsapp_business_account",
+                      entry: [{ changes: [change] }],
+                    })
+                      .filter((m) => m.choiceId !== null && m.providerMessageId !== null)
+                      .map((m) => [String(m.providerMessageId), m] as const)
+                  )
+                : null;
+
             const customerNameOf = (waId: string) => {
               const c = (value.contacts ?? []).find(
                 (x: any) => x.wa_id === waId
@@ -2368,7 +2392,12 @@ Deno.serve(async (req) => {
                   ? message.id
                   : null;
 
-              if (!text) {
+              const durableReply =
+                durableReplies && msgId
+                  ? durableReplies.get(msgId) ?? null
+                  : null;
+
+              if (!text && !durableReply) {
                 /*
                  * أنواع غير نصية — نسجلها الواردة فقط إن وُجد نص،
                  * وإلا نتجاهلها (كما في extractText القديم).
@@ -2402,10 +2431,12 @@ Deno.serve(async (req) => {
                 sb,
                 account,
                 chatId,
-                text,
+                durableReply && !text ? durableReply.text : text,
                 msgId,
                 "whatsapp",
-                phoneId
+                phoneId,
+                durableReplies ? durableReply?.choiceId ?? null : undefined,
+                durableReplies ? typeof msgId === "string" && msgId.length > 0 : undefined
               );
 
               if (name) {
@@ -2494,6 +2525,14 @@ Deno.serve(async (req) => {
         );
 
         if (!sigOk) {
+          // Facebook Page events (object "page"): a missing or bad signature
+          // is rejected like WhatsApp (401), before any parsing side effect
+          // or DB access. The Instagram object keeps its behaviour below.
+          if (body.object === "page") {
+            console.error("[instagram_webhook] invalid page signature");
+            return json({ error: "Invalid webhook signature" }, 401);
+          }
+
           console.error(
             "[instagram_webhook] invalid signature — ignored"
           );
@@ -2519,15 +2558,60 @@ Deno.serve(async (req) => {
 
           const msgs = extractIgMessages(entry);
 
-          for (const msg of msgs) {
+          // FLOW_MULTICHANNEL_ENABLED only: signed Facebook postbacks carrying
+          // "flow-choice:<id>" and a Meta mid (normalizeMetaMessage.ts). They
+          // are processed below ONLY for the durable canary account. OFF: [].
+          const pagePostbacks =
+            body.object === "page" && multichannelEnabled()
+              ? normalizeMetaMessages({ object: "page", entry: [entry] })
+                  .filter((m) => m.kind === "postback" && m.choiceId !== null &&
+                    m.providerMessageId !== null)
+                  .map((m) => ({
+                    senderId: m.senderId,
+                    recipientId: m.recipientId,
+                    text: m.text,
+                    mid: m.providerMessageId,
+                    choiceId: m.choiceId,
+                    postback: true as const,
+                  }))
+              : [];
+
+          for (const msg of [...msgs, ...pagePostbacks]) {
             const candidates = [
               entryId,
               msg.recipientId,
             ].filter((x) => x && x !== "0");
 
             let account: any = null;
+            // Facebook Page events: a channel='facebook' account ONLY (never
+            // an Instagram one); a page id shared by several accounts (e.g.
+            // several tenants) is never assigned to one of them: ignored.
+            let ambiguousPage = false;
 
             for (const candidate of candidates) {
+              if (body.object === "page") {
+                const { data: pageAccounts } = await sb
+                  .from("channel_accounts")
+                  .select(
+                    "id, tenant_id, channel, external_id, status, agent_enabled, auto_reply, access_token_encrypted"
+                  )
+                  .eq("external_id", candidate)
+                  .eq("channel", "facebook")
+                  .limit(2);
+
+                if (Array.isArray(pageAccounts) && pageAccounts.length > 1) {
+                  ambiguousPage = true;
+                  break;
+                }
+
+                if (Array.isArray(pageAccounts) && pageAccounts.length === 1) {
+                  account = pageAccounts[0];
+                  break;
+                }
+
+                continue;
+              }
+
               const { data } = await sb
                 .from("channel_accounts")
                 .select(
@@ -2546,6 +2630,13 @@ Deno.serve(async (req) => {
               }
             }
 
+            if (ambiguousPage) {
+              console.warn(
+                "[instagram_webhook] page id matches several accounts — event ignored"
+              );
+              continue;
+            }
+
             if (!account) {
               console.warn(
                 `[instagram_webhook] no matching account | entryId=${entryId} recipient=${msg.recipientId}`
@@ -2557,6 +2648,12 @@ Deno.serve(async (req) => {
               console.warn(
                 `[instagram_webhook] account not active — skipped | status=${account.status}`
               );
+              continue;
+            }
+
+            // Postbacks (flag ON only) reach the durable canary account only.
+            if ("postback" in msg &&
+                String(account.id) !== env("FLOW_DURABLE_CANARY_ACCOUNT_ID")) {
               continue;
             }
 

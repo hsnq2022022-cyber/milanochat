@@ -1328,3 +1328,35 @@ test("website buttons: planner emits label/url, safePlan commits only while the 
  const tooMany={...plan,effects:[{...plan.effects[0],websiteButtons:[0,1,2,3].map(i=>({label:"x",url:"https://e.example/"+i}))},plan.effects[1]]};
  withMediaEnv(RICH_ON,()=>assert.equal(safePlan(tooMany as any),false));
 });
+
+// ---- FLOW_MULTICHANNEL_ENABLED (WhatsApp/Facebook durable ingress) never changes Instagram.
+test("multichannel flag: Instagram start, tap, free text and test mode are identical with the flag on or off",async()=>{
+ const runWith=async(flag:string|undefined,ev:any,o:Opts)=>{
+  const old=(globalThis as any).Deno;
+  (globalThis as any).Deno={env:{get:(k:string)=>k==="FLOW_MULTICHANNEL_ENABLED"?flag:canaryEnv.env.get(k)}};
+  try{
+   const {db,calls,reads,writes}=lifecycleDb(o);
+   const r=await attemptDurableInstagram(db,ev);
+   return {r,calls,writes,reads:reads.map(x=>({table:x.table,filters:x.filters}))};
+  }finally{(globalThis as any).Deno=old;}
+ };
+ const cases:Array<[any,Opts]>=[[baseEvent,{switches:PROD}],[baseEvent,{}],
+  [{...baseEvent,selectedChoiceId:"prices"},{switches:PROD,awaiting:[waitingRun()]}],
+  [{...baseEvent,selectedChoiceId:null},{awaiting:[waitingRun()]}],
+  [{...baseEvent,selectedChoiceId:"prices"},{awaiting:[waitingRun({platform:"whatsapp"})]}],
+  [baseEvent,{switches:{enabled:true,test_only:false,production_approved:false}}]];
+ for(const [ev,o] of cases){
+  const off=await runWith(undefined,ev,o),on=await runWith("true",ev,o);
+  assert.deepEqual(on,off,JSON.stringify(ev));
+  for(const x of off.reads)if("platform" in x.filters)assert.equal(x.filters.platform,"instagram",x.table);
+  for(const c of off.calls)if("p_platform" in c.args)assert.equal(c.args.p_platform,"instagram");
+ }
+ // The Instagram whitelist (default platform) is the same with the flag on.
+ const old=(globalThis as any).Deno;
+ (globalThis as any).Deno={env:{get:(k:string)=>k==="FLOW_MULTICHANNEL_ENABLED"?"true":undefined}};
+ try{
+  assert.equal(supportedDurableDocument(doc),true);
+  assert.equal(supportedDurableDocument(doc,"instagram"),true);
+  assert.equal(supportedDurableDocument(doc,"whatsapp"),false,"Instagram trigger never runs on WhatsApp");
+ }finally{(globalThis as any).Deno=old;}
+});

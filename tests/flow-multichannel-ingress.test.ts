@@ -7,6 +7,7 @@ import {supportedDurableDocument,attemptDurableInstagram}
 import {multichannelCapabilityProblem,DOCUMENT_PLATFORM}
  from "../supabase/functions/milan-api/flowPlatformCapabilities.ts";
 import {verifyMetaWebhookSignature} from "../supabase/functions/milan-api/metaSignature.ts";
+import {normalizeMetaMessages} from "../supabase/functions/milan-api/normalizeMetaMessage.ts";
 
 const ids={tenantId:"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",accountId:"11111111-1111-4111-8111-111111111111",
  conversationId:"44444444-4444-4444-8444-444444444444",inboundId:"77777777-7777-4777-8777-777777777771"};
@@ -19,26 +20,216 @@ const docFor=(platform:string,extra:Record<string,unknown>[]=[])=>({version:3,no
 ],edges:[{source:"start",target:"choose",sourceHandle:"next"},
  {source:"choose",target:"yes",sourceHandle:"prices"},{source:"choose",target:"no",sourceHandle:"support"}]});
 
-test("durable whitelist stays Instagram-only (WhatsApp/Messenger triggers fall back to V2)",()=>{
+test("durable whitelist default (Instagram) is unchanged: WhatsApp/Messenger triggers fall back to V2",()=>{
  assert.equal(supportedDurableDocument(docFor("instagram")),true);
  for(const p of ["whatsapp","messenger","facebook"])assert.equal(supportedDurableDocument(docFor(p)),false);
 });
-test("durable ingress never touches the DB for WhatsApp/Facebook events, flag ON or OFF",async()=>{
- const old=(globalThis as any).Deno;
- const db={from(){throw Error("db touched");},rpc(){throw Error("db touched");}} as any;
- try{
-  for(const multichannel of ["true",undefined]){
-   (globalThis as any).Deno={env:{get:(k:string)=>k==="FLOW_DURABLE_INGRESS_ENABLED"?"true":
-    k==="FLOW_DURABLE_CANARY_ACCOUNT_ID"?ids.accountId:
-    k==="FLOW_MULTICHANNEL_ENABLED"?multichannel:undefined}};
+const ENV=(over:Record<string,string|undefined>={})=>({env:{get:(k:string)=>({
+ FLOW_DURABLE_INGRESS_ENABLED:"true",FLOW_DURABLE_CANARY_ACCOUNT_ID:ids.accountId,
+ FLOW_MULTICHANNEL_ENABLED:"true",...over} as Record<string,string|undefined>)[k]}});
+async function withEnv<T>(e:unknown,fn:()=>T|Promise<T>):Promise<T>{
+ const old=(globalThis as any).Deno;(globalThis as any).Deno=e;
+ try{return await fn();}finally{(globalThis as any).Deno=old;}
+}
+const noDb={from(){throw Error("db touched");},rpc(){throw Error("db touched");}} as any;
+test("flag OFF (or not exactly true): WhatsApp/Facebook events never touch the DB",async()=>{
+ for(const flag of [undefined,"false","1","TRUE"]){
+  await withEnv(ENV({FLOW_MULTICHANNEL_ENABLED:flag}),async()=>{
+   for(const platform of ["whatsapp","facebook"]){
+    assert.equal(await attemptDurableInstagram(noDb,{...ids,eventId:"wamid.1",platform,
+     providerEventIdGenuine:true}),"fallback",`${platform} flag=${flag}`);
+    assert.equal(supportedDurableDocument(docFor(DOCUMENT_PLATFORM[platform as "whatsapp"]),platform),false);
+   }
+  });
+ }
+ // No Deno runtime: the flag reader itself is fail-closed.
+ await withEnv(undefined,()=>{
+  assert.equal(supportedDurableDocument(docFor("whatsapp"),"whatsapp"),false);
+ });
+});
+test("flag ON: unknown platform, synthetic id, wrong canary account or ingress OFF never touch the DB",async()=>{
+ await withEnv(ENV(),async()=>{
+  for(const platform of ["telegram","messenger","Instagram",""])
+   assert.equal(await attemptDurableInstagram(noDb,{...ids,eventId:"m.1",platform,providerEventIdGenuine:true}),"fallback",platform);
+  assert.equal(await attemptDurableInstagram(noDb,{...ids,eventId:"wamid.1",platform:"whatsapp",
+   providerEventIdGenuine:false}),"fallback");
+ });
+ for(const over of [{FLOW_DURABLE_CANARY_ACCOUNT_ID:"22222222-2222-4222-8222-222222222222"},
+  {FLOW_DURABLE_CANARY_ACCOUNT_ID:undefined},{FLOW_DURABLE_INGRESS_ENABLED:undefined}])
+  await withEnv(ENV(over),async()=>{
    for(const platform of ["whatsapp","facebook"])
-    assert.equal(await attemptDurableInstagram(db,{...ids,eventId:"wamid.1",platform,
-     providerEventIdGenuine:true}),"fallback");
+    assert.equal(await attemptDurableInstagram(noDb,{...ids,eventId:"wamid.1",platform,
+     providerEventIdGenuine:true}),"fallback",JSON.stringify(over));
+  });
+});
+test("flag ON whitelist: own trigger platform (facebook <-> messenger), capabilities, no delay/internal actions",async()=>{
+ await withEnv(ENV(),()=>{
+  // Instagram rules are unchanged (default platform).
+  assert.equal(supportedDurableDocument(docFor("instagram")),true);
+  assert.equal(supportedDurableDocument(docFor("whatsapp")),false);
+  assert.equal(supportedDurableDocument(docFor("whatsapp"),"whatsapp"),true);
+  assert.equal(supportedDurableDocument(docFor("messenger"),"facebook"),true);
+  for(const [doc,platform] of [["instagram","whatsapp"],["messenger","whatsapp"],["whatsapp","facebook"],
+   ["facebook","facebook"],["instagram","facebook"],["whatsapp","instagram"],["whatsapp","telegram"]])
+   assert.equal(supportedDurableDocument(docFor(doc),platform),false,`${doc} on ${platform}`);
+  const four={id:"q4",data:{kind:"question",inputMode:"buttons",text:"x",image:"",contentBlocks:[],
+   options:[1,2,3,4].map(i=>({id:"o"+i,label:"L"+i}))}};
+  const withNode=(p:string,node:any)=>{const d=docFor(p);return {...d,nodes:[...d.nodes,node],
+   edges:[...d.edges,{source:"yes",target:node.id,sourceHandle:"next"}]};};
+  const end4=(p:string)=>{const d=withNode(p,four);return {...d,nodes:[...d.nodes,...[1,2,3,4].map(i=>
+   ({id:"e"+i,data:{kind:"end"}}))],edges:[...d.edges,...[1,2,3,4].map(i=>({source:"q4",target:"e"+i,sourceHandle:"o"+i}))]};};
+  assert.equal(supportedDurableDocument(end4("whatsapp"),"whatsapp"),false,"WhatsApp: at most 3 reply buttons");
+  assert.equal(supportedDurableDocument(end4("messenger"),"facebook"),true,"Messenger: up to 13 quick replies");
+  for(const [label,node] of [
+   ["delay",{id:"d",data:{kind:"delay",delayValue:1,delayUnit:"minutes"}}],
+   ["tag",{id:"d",data:{kind:"action",actionType:"tag",actionValue:"vip"}}],
+   ["notify",{id:"d",data:{kind:"action",actionType:"notify",actionValue:"hi"}}],
+   ["image",{id:"d",data:{kind:"message",text:"x",image:"https://x.example/a.png",options:[],contentBlocks:[]}}],
+   ["typed",{id:"d",data:{kind:"question",inputMode:"email",inputField:"email",text:"x",image:"",contentBlocks:[],options:[]}}],
+   ["website",{id:"d",data:{kind:"message",text:"x",image:"",contentBlocks:[],options:[
+    {id:"w",label:"Open",action:"website",buttonType:"button",url:"https://a.example"}]}}]]){
+   const wa=withNode("whatsapp",node),fb=withNode("messenger",node);
+   assert.equal(supportedDurableDocument(wa,"whatsapp"),false,"whatsapp "+label);
+   assert.equal(supportedDurableDocument(fb,"facebook"),false,"facebook "+label);
   }
- }finally{(globalThis as any).Deno=old;}
- // index.ts only calls the durable path for Instagram.
+  // set_field is internal to the run: allowed.
+  const sf=withNode("whatsapp",{id:"d",data:{kind:"action",actionType:"set_field",actionValue:"plan=gold"}});
+  assert.equal(supportedDurableDocument(sf,"whatsapp"),true);
+  // V2 shape (lone trigger -> text) stays with V2 on every platform.
+  const v2=(p:string)=>({version:3,nodes:[{id:"s",data:{kind:"trigger",platform:p,triggerMode:"message"}},
+   {id:"t",data:{kind:"message",text:"hi",image:"",options:[],contentBlocks:[]}}],
+   edges:[{source:"s",target:"t",sourceHandle:"next"}]});
+  assert.equal(supportedDurableDocument(v2("whatsapp"),"whatsapp"),false);
+  assert.equal(supportedDurableDocument(v2("messenger"),"facebook"),false);
+ });
+});
+
+// Recording database double: every read filter and RPC argument is kept.
+function mcDb(platform:string,o:{switches?:any;waiting?:any;document?:unknown}={}){
+ const calls:Array<{name:string;args:any}>=[];
+ const reads:Array<{table:string;filters:Record<string,unknown>}>=[];
+ let waiting=o.waiting??null;
+ const db={
+  from:(table:string)=>{
+   const filters:Record<string,unknown>={};
+   const q:any={select:()=>q,eq:(k:string,v:unknown)=>{filters[k]=v;return q;},
+    in:(k:string,v:unknown)=>{filters[k]=v;return q;},gt:()=>q,
+    maybeSingle:async()=>{reads.push({table,filters});return {data:
+     table==="automation_flow_global_switch"?{enabled:true}:
+     table==="automation_flow_tenant_switches"?(o.switches??{enabled:true,test_only:false,production_approved:true}):
+     table==="automation_flow_publications"?{document:o.document??docFor(DOCUMENT_PLATFORM[platform as "whatsapp"])}:null,
+     error:null};},
+    limit:async()=>{reads.push({table,filters});
+     if(table==="automation_flow_runs")return {data:waiting&&!Array.isArray(filters.id)?[waiting]:[],error:null};
+     if(table==="automation_flow_activations")return {data:[{flow_key:"flow",revision:1,is_active:true}],error:null};
+     return {data:[],error:null};}};
+   return q;
+  },
+  rpc:async(name:string,args:any)=>{
+   calls.push({name,args});
+   if(name==="flow_claim_inbound_durable"||name==="flow_claim_inbound")
+    return {data:[{acquired:true,route:"flow"}],error:null};
+   if(name==="flow_begin_durable_run_superseding"){
+    waiting={id:"99999999-9999-4999-8999-999999999999",tenant_id:ids.tenantId,channel_account_id:ids.accountId,
+     platform,conversation_id:ids.conversationId,provider_event_id:args.p_event,flow_key:"flow",
+     publication_revision:1,current_node_id:args.p_next,run_status:"awaiting_input",
+     step_count:args.p_next_step,variables:args.p_variables,wake_at:null};
+    return {data:waiting.id,error:null};
+   }
+   if(name==="flow_resume_button_run"){waiting=null;return {data:true,error:null};}
+   if(name==="flow_cancel_run")return {data:true,error:null};
+   throw Error("Unexpected RPC "+name);
+  }
+ } as any;
+ return {db,calls,reads};
+}
+for(const platform of ["whatsapp","facebook"]){
+ test(`flag ON ${platform}: start + tap resume the SAME run with platform ${platform} everywhere`,async()=>{
+  await withEnv(ENV(),async()=>{
+   const {db,calls,reads}=mcDb(platform);
+   const ev={...ids,platform,providerEventIdGenuine:true};
+   assert.equal(await attemptDurableInstagram(db,{...ev,eventId:"mid.start"}),"handled");
+   assert.deepEqual(calls.map(c=>c.name),["flow_claim_inbound_durable","flow_begin_durable_run_superseding"]);
+   assert.deepEqual(calls[0].args,{p_tenant_id:ids.tenantId,p_account_id:ids.accountId,p_platform:platform,
+    p_provider_event_id:"mid.start",p_conversation_id:ids.conversationId,p_inbound_message_id:ids.inboundId});
+   const begin=calls[1].args;
+   assert.equal(begin.p_tenant,ids.tenantId);assert.equal(begin.p_account,ids.accountId);
+   assert.equal(begin.p_status,"awaiting_input");
+   assert.equal(begin.p_effects[0].payload.kind,"question");
+   // Tap: WhatsApp button_reply id / Facebook quick_reply or postback payload "flow-choice:prices".
+   const tap={...ev,eventId:"mid.tap",inboundId:"77777777-7777-4777-8777-777777777772",selectedChoiceId:"prices"};
+   assert.equal(await attemptDurableInstagram(db,tap),"handled");
+   assert.deepEqual(calls.map(c=>c.name),["flow_claim_inbound_durable","flow_begin_durable_run_superseding",
+    "flow_claim_inbound_durable","flow_resume_button_run"]);
+   assert.equal(calls[2].args.p_platform,platform);
+   const resume=calls[3].args;
+   assert.equal(resume.p_run,"99999999-9999-4999-8999-999999999999");
+   assert.equal(resume.p_tenant,ids.tenantId);assert.equal(resume.p_status,"completed");
+   assert.equal(resume.p_effects[0].payload.text,"هذه الأسعار");
+   // Every platform-scoped read uses the event's own platform and tenant.
+   const scoped=reads.filter(r=>"platform" in r.filters);
+   assert.ok(scoped.length>=4);
+   for(const r of scoped)assert.equal(r.filters.platform,platform,r.table);
+   for(const r of reads.filter(r=>"tenant_id" in r.filters))assert.equal(r.filters.tenant_id,ids.tenantId,r.table);
+  });
+ });
+}
+test("flag ON isolation: a waiting run of another platform/account/tenant is never resumed or cancelled",async()=>{
+ await withEnv(ENV(),async()=>{
+  const base={id:"99999999-9999-4999-8999-999999999999",tenant_id:ids.tenantId,channel_account_id:ids.accountId,
+   platform:"whatsapp",conversation_id:ids.conversationId,provider_event_id:"mid.old",flow_key:"flow",
+   publication_revision:1,current_node_id:"choose",run_status:"awaiting_input",step_count:2,variables:{},wake_at:null};
+  for(const over of [{platform:"instagram"},{platform:"facebook"},{tenant_id:"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"},
+   {channel_account_id:"22222222-2222-4222-8222-222222222222"},{conversation_id:"55555555-5555-4555-8555-555555555555"}]){
+   const {db,calls}=mcDb("whatsapp",{waiting:{...base,...over}});
+   assert.equal(await attemptDurableInstagram(db,{...ids,platform:"whatsapp",eventId:"mid.tap",
+    providerEventIdGenuine:true,selectedChoiceId:"prices"}),"handled",JSON.stringify(over));
+   assert.deepEqual(calls,[],JSON.stringify(over));
+  }
+  // A document of another platform (or one the platform cannot show) never starts a run.
+  for(const document of [docFor("instagram"),docFor("messenger")]){
+   const {db,calls}=mcDb("whatsapp",{document});
+   assert.equal(await attemptDurableInstagram(db,{...ids,platform:"whatsapp",eventId:"mid.x",
+    providerEventIdGenuine:true}),"fallback");
+   assert.deepEqual(calls,[]);
+  }
+  // Not production approved (and not test_only): nothing is claimed.
+  const {db,calls}=mcDb("facebook",{switches:{enabled:true,test_only:false,production_approved:false}});
+  assert.equal(await attemptDurableInstagram(db,{...ids,platform:"facebook",eventId:"mid.y",
+   providerEventIdGenuine:true}),"fallback");
+  assert.deepEqual(calls,[]);
+ });
+});
+test("statuses, receipts and echoes are never customer events (normalizer), so they never reach the durable path",()=>{
+ assert.deepEqual(normalizeMetaMessages({object:"whatsapp_business_account",entry:[{changes:[{field:"messages",
+  value:{metadata:{phone_number_id:"123"},statuses:[{id:"wamid.s",status:"read",recipient_id:"9"}]}}]}]}),[]);
+ assert.deepEqual(normalizeMetaMessages({object:"page",entry:[{id:"555",messaging:[
+  {sender:{id:"555"},recipient:{id:"7"},message:{mid:"m.echo",text:"x",is_echo:true}},
+  {sender:{id:"7"},recipient:{id:"555"},delivery:{mids:["m.1"]}},
+  {sender:{id:"7"},recipient:{id:"555"},read:{watermark:1}}]}]}),[]);
+ const tap=normalizeMetaMessages({object:"whatsapp_business_account",entry:[{changes:[{field:"messages",value:{
+  metadata:{phone_number_id:"123"},messages:[{from:"9647",id:"wamid.t",type:"interactive",
+   interactive:{type:"button_reply",button_reply:{id:"flow-choice:prices",title:"الأسعار"}}}]}}]}]});
+ assert.equal(tap[0].choiceId,"prices");assert.equal(tap[0].providerMessageId,"wamid.t");
+ const pb=normalizeMetaMessages({object:"page",entry:[{id:"555",messaging:[{sender:{id:"7"},recipient:{id:"555"},
+  postback:{mid:"m.pb",title:"الأسعار",payload:"flow-choice:prices"}}]}]});
+ assert.equal(pb[0].choiceId,"prices");assert.equal(pb[0].kind,"postback");
+});
+test("index.ts wiring: every multichannel path is behind multichannelEnabled(); Instagram call unchanged",()=>{
  const src=readFileSync("supabase/functions/milan-api/index.ts","utf8");
- assert.match(src,/if\(channel==="instagram"\)\{\n\s+const durable=await attemptDurableInstagram\(/);
+ assert.match(src,/if\(channel==="instagram"\|\|\n\s+\(\(channel==="whatsapp"\|\|channel==="facebook"\)&&multichannelEnabled\(\)\)\)\{\n\s+const durable=await attemptDurableInstagram\(/);
+ const wa=src.slice(src.indexOf('case "whatsapp_webhook": {'),src.indexOf('case "instagram_webhook": {'));
+ // Interactive replies only for the canary account and only with the flag; after the signature.
+ assert.match(wa,/const durableReplies =\n\s+multichannelEnabled\(\) &&\n\s+typeof account\.id === "string" &&\n\s+account\.id === env\("FLOW_DURABLE_CANARY_ACCOUNT_ID"\)/);
+ assert.ok(wa.indexOf("verifyMetaWebhookSignature(")<wa.indexOf("normalizeMetaMessages("));
+ assert.match(wa,/\.filter\(\(m\) => m\.choiceId !== null && m\.providerMessageId !== null\)/);
+ assert.match(wa,/if \(!text && !durableReply\) \{/);
+ assert.match(wa,/durableReplies \? durableReply\?\.choiceId \?\? null : undefined,\n\s+durableReplies \? typeof msgId === "string" && msgId\.length > 0 : undefined\n/);
+ const ig=src.slice(src.indexOf('case "instagram_webhook": {'),src.indexOf("default:",src.indexOf('case "instagram_webhook": {')));
+ assert.match(ig,/const pagePostbacks =\n\s+body\.object === "page" && multichannelEnabled\(\)/);
+ assert.ok(ig.indexOf("verifyMetaSignature(")<ig.indexOf("normalizeMetaMessages("));
+ assert.match(ig,/if \("postback" in msg &&\n\s+String\(account\.id\) !== env\("FLOW_DURABLE_CANARY_ACCOUNT_ID"\)\) \{\n\s+continue;/);
+ assert.match(ig,/for \(const msg of \[\.\.\.msgs, \.\.\.pagePostbacks\]\) \{/);
 });
 test("capabilities: WhatsApp accepts text, <=3 reply buttons, ONE cta_url",()=>{
  assert.equal(multichannelCapabilityProblem(docFor("whatsapp"),"whatsapp"),null);

@@ -25,6 +25,22 @@ DECLARE
  v_marker constant text := 'CREATED_BY_20261029190000_FLOW_BEGIN_DURABLE_RUN_SUPERSEDING';
  v_fn regprocedure := to_regprocedure('public.flow_begin_durable_run_superseding(uuid,uuid,uuid,uuid,text,text,bigint,text,text,integer,text,jsonb,timestamptz,jsonb)');
 BEGIN
+ -- 20261029230000 (multichannel support; requires 220000) is newer: roll it back first.
+ IF EXISTS(SELECT 1 FROM pg_catalog.pg_constraint c WHERE c.conrelid=to_regclass('public.automation_flow_canary_accounts')
+   AND c.conname='automation_flow_canary_accounts_platform_chk'
+   AND split_part(coalesce(obj_description(c.oid,'pg_constraint'),''),' ',1)='CREATED_BY_20261029230000_FLOW_MULTICHANNEL_SUPPORT')
+ OR EXISTS(SELECT 1 FROM pg_catalog.pg_proc p WHERE p.oid IN(
+   to_regprocedure('public.flow_claim_inbound_durable(uuid,uuid,text,text,uuid,uuid)'),
+   to_regprocedure('public.flow_begin_durable_run(uuid,uuid,uuid,uuid,text,text,bigint,text,text,integer,text,jsonb,timestamptz,jsonb)'),
+   to_regprocedure('public.flow_resume_button_run(uuid,uuid,text,uuid,integer,text,text,integer,text,jsonb,timestamptz,jsonb)'),
+   to_regprocedure('public.flow_end_stale_paused_runs(integer,integer)'),
+   to_regprocedure('public.flow_lease_due_runs(integer)'),
+   to_regprocedure('public.flow_commit_run_step(uuid,uuid,integer,text,text,integer,text,jsonb,timestamptz,jsonb,text,uuid)'),
+   to_regprocedure('public.flow_reserve_outbox_delivery(uuid,uuid)'))
+  AND md5(btrim(regexp_replace(p.prosrc,'[[:space:]]+',' ','g'))) IN(
+   'c9299f42239a6a4f275ba4be61e04b9d','d0fea89cd85053ee62276bccf4156d43','0d4917f27cece556b549c5ca0c7046a2','c7a764911307aefeb1f593312364d440',
+   '7cddbd9a4964716eec402f399e878a78','f5b147309700470f8b9f410dda5a6df0','4a8882ddd7ad430c4187db821cc3de99'))
+ THEN RAISE EXCEPTION 'Refusing 20261029190000 rollback: 20261029230000 objects still exist; roll back 20261029230000_flow_multichannel_support first'; END IF;
  -- 20261029220000 (media stale sweep; requires 210000) is newer: roll it back first.
  IF EXISTS(SELECT 1 FROM pg_catalog.pg_proc p WHERE p.oid=to_regprocedure('public.flow_skip_blocked_outbox(integer,integer)')
   AND md5(btrim(regexp_replace(p.prosrc,'[[:space:]]+',' ','g')))='dacdf7bb582a7d380651d478f47c6b97')

@@ -13,6 +13,8 @@ import {durableAnswerMode,normalizeDurableAnswer,reaskText,type DurableAnswerMod
  from "./flowDurableAnswer.ts";
 import {isAllowedFlowImageUrl} from "../flow-outbox-worker/mediaPolicy.ts";
 import {instagramButtonTemplateProblem} from "../flow-outbox-worker/flowRichActions.ts";
+import {multichannelCapabilityProblem,DOCUMENT_PLATFORM,type MultichannelPlatform}
+ from "./flowPlatformCapabilities.ts";
 
 type RecordValue=Record<string,unknown>;
 const record=(v:unknown):v is RecordValue=>!!v&&typeof v==="object"&&!Array.isArray(v);
@@ -78,6 +80,32 @@ const websiteMessage=(d:RecordValue)=>{
  return instagramButtonTemplateProblem(d.text.trim(),
   (opts as RecordValue[]).map(o=>({label:o.label,url:o.url})))===null;
 };
+/**
+ * FLOW_MULTICHANNEL_ENABLED (default OFF), read fail-closed like the media
+ * flag (no Deno runtime or any error = OFF). OFF: only Instagram events can
+ * reach the durable path (exactly as before). ON: WhatsApp and Facebook
+ * Messenger events of the operator-selected canary account may too, with the
+ * stricter per-platform whitelist below; the SQL side re-verifies the
+ * registered canary (tenant, account, platform), switches and activation.
+ * Requires migration 20261029230000_flow_multichannel_support.
+ */
+export const multichannelEnabled=()=>{
+ try{return Deno.env.get("FLOW_MULTICHANNEL_ENABLED")==="true";}catch{return false;}
+};
+const isMultichannel=(p:unknown):p is MultichannelPlatform=>p==="whatsapp"||p==="facebook";
+/** Document trigger platform of an account platform ("facebook" -> "messenger"). */
+const triggerPlatformOf=(platform:string)=>
+ isMultichannel(platform)?DOCUMENT_PLATFORM[platform]:platform;
+/**
+ * WhatsApp/Facebook only: node kinds whose live execution exists for every
+ * platform. Delays (flow-runtime-worker wakes Instagram runs only) and the
+ * internal actions tag/untag/notify/handoff (flow-internal-worker runs
+ * Instagram only) are refused, so such a graph falls back to V2 instead of
+ * stalling; website buttons, images and typed questions are refused too.
+ */
+const MULTICHANNEL_NODE_KINDS=["trigger","message","question","condition","randomizer","goto","end"];
+const multichannelNodeOk=(d:RecordValue)=>MULTICHANNEL_NODE_KINDS.includes(String(d.kind))||
+ (d.kind==="action"&&d.actionType==="set_field");
 /** Run variable names usable by set_field/condition. "message" (the inbound text) is never allowed. */
 const fieldOk=(f:unknown):f is string=>typeof f==="string"&&
  /^[a-zA-Z_][a-zA-Z0-9_]{0,63}$/.test(f)&&!f.startsWith("__")&&
@@ -109,18 +137,19 @@ const stepButtons=(opts:unknown,min:number)=>Array.isArray(opts)&&
  * Output ports a whitelisted node may have; null = node not supported live.
  * `required` ports must each have exactly one edge.
  */
-function durablePorts(d:RecordValue):{ports:string[];required:string[]}|null{
+function durablePorts(d:RecordValue,triggerPlatform="instagram"):{ports:string[];required:string[]}|null{
  switch(d.kind){
   case "trigger":
-   return d.platform==="instagram"&&d.triggerMode==="message"?
+   return d.platform===triggerPlatform&&d.triggerMode==="message"?
     {ports:["next"],required:["next"]}:null;
   case "message":{
    if(!textOk(d.text)||!Array.isArray(d.options))return null;
    // Image message (flag ON): no buttons, a single "next" port.
-   if(!plain(d))return imageMessage(d)&&d.options.length===0?{ports:["next"],required:[]}:null;
+   if(!plain(d))return triggerPlatform==="instagram"&&imageMessage(d)&&d.options.length===0?
+    {ports:["next"],required:[]}:null;
    if(d.options.length===0)return {ports:["next"],required:[]};
    // Website buttons leave the flow: the run continues through "next".
-   if(websiteMessage(d))return {ports:["next"],required:[]};
+   if(triggerPlatform==="instagram"&&websiteMessage(d))return {ports:["next"],required:[]};
    if(!stepButtons(d.options,1))return null;
    const ids=(d.options as RecordValue[]).map(o=>o.id as string);
    return {ports:ids,required:ids};
@@ -205,7 +234,12 @@ function durablePorts(d:RecordValue):{ports:string[];required:string[]}|null{
  * (flowPrepareMessage.ts) handles are NEVER accepted, so they keep falling
  * back to V2 unchanged.
  */
-export function supportedDurableDocument(raw:unknown):raw is FlowDocument{
+export function supportedDurableDocument(raw:unknown,platform:string="instagram"):raw is FlowDocument{
+ // Instagram (default): the rules above, unchanged. WhatsApp / Facebook
+ // (FLOW_MULTICHANNEL_ENABLED only): the same rules with the platform's own
+ // trigger, plus flowPlatformCapabilities.ts and MULTICHANNEL_NODE_KINDS.
+ const multichannel=isMultichannel(platform);
+ if(platform!=="instagram"&&!(multichannel&&multichannelEnabled()))return false;
  if(!record(raw)||raw.version!==3||!Array.isArray(raw.nodes)||
     !Array.isArray(raw.edges))return false;
  const nodes=raw.nodes as unknown[],edges=raw.edges as unknown[];
@@ -218,8 +252,9 @@ export function supportedDurableDocument(raw:unknown):raw is FlowDocument{
  if(triggers.length!==1)return false;
  const ports=new Map<string,{ports:string[];required:string[]}>();
  for(const [nodeId,data] of byId){
-  const p=durablePorts(data);
+  const p=durablePorts(data,triggerPlatformOf(platform));
   if(!p)return false;
+  if(multichannel&&!multichannelNodeOk(data))return false;
   ports.set(nodeId,p);
  }
  // Same port semantics as the planner: a missing sourceHandle means "next".
@@ -257,7 +292,9 @@ export function supportedDurableDocument(raw:unknown):raw is FlowDocument{
  }
  if(seen.size!==byId.size)return false;
  // V2 keeps its shapes (lone trigger->text, trigger->condition(message)->2 texts).
- if(simpleMessageFromDocument(raw,"instagram","")!==null)return false;
+ if(simpleMessageFromDocument(raw,multichannel?platform as MultichannelPlatform:"instagram","")!==null)return false;
+ // A node the platform cannot represent: V2 answers instead.
+ if(multichannel&&multichannelCapabilityProblem(raw,platform as MultichannelPlatform)!==null)return false;
  return true;
 }
 /** Operator flags a whitelisted graph needs (buttons sender, delay scheduler). */
@@ -370,7 +407,8 @@ const validEvent=(e:DurableEvent)=>
  [e.tenantId,e.accountId,e.conversationId,e.inboundId].every(x=>
   typeof x==="string"&&/^[a-f\d]{8}-[a-f\d-]{27,36}$/i.test(x))&&
  typeof e.eventId==="string"&&e.eventId.length>=1&&e.eventId.length<=256&&
- e.providerEventIdGenuine===true&&e.platform==="instagram";
+ e.providerEventIdGenuine===true&&(e.platform==="instagram"||
+  (isMultichannel(e.platform)&&multichannelEnabled()));
 type Prior="new"|"claimed"|"redelivered"|"error";
 /**
  * READ-ONLY "already received?" check, run before anything can cancel,
@@ -387,7 +425,7 @@ async function priorDelivery(db:Db,event:DurableEvent):Promise<Prior>{
  const [claim,inbound]=await Promise.all([
   db.from("automation_message_claims").select("id")
    .eq("tenant_id",event.tenantId).eq("channel_account_id",event.accountId)
-   .eq("platform","instagram").eq("provider_event_id",event.eventId).limit(1),
+   .eq("platform",event.platform).eq("provider_event_id",event.eventId).limit(1),
   db.from("messages").select("id")
    .eq("tenant_id",event.tenantId).eq("conversation_id",event.conversationId)
    .eq("direction","in").eq("wa_message_id",event.eventId).limit(2)
@@ -475,7 +513,7 @@ async function claimInbound(db:Db,event:DurableEvent,canary:boolean):Promise<Cla
  if(canary){
   const r=await db.rpc("flow_claim_inbound_durable",{
    p_tenant_id:event.tenantId,p_account_id:event.accountId,
-   p_platform:"instagram",p_provider_event_id:event.eventId,
+   p_platform:event.platform,p_provider_event_id:event.eventId,
    p_conversation_id:event.conversationId,p_inbound_message_id:event.inboundId
   });
   if(r.error||!Array.isArray(r.data))return "fallback";
@@ -485,7 +523,7 @@ async function claimInbound(db:Db,event:DurableEvent,canary:boolean):Promise<Cla
  }
  const claim=await db.rpc("flow_claim_inbound",{
   p_tenant_id:event.tenantId,p_account_id:event.accountId,
-  p_platform:"instagram",p_provider_event_id:event.eventId,
+  p_platform:event.platform,p_provider_event_id:event.eventId,
   p_conversation_id:event.conversationId,p_inbound_message_id:event.inboundId,
   p_engine_ready:true
  });
@@ -498,8 +536,8 @@ async function claimInbound(db:Db,event:DurableEvent,canary:boolean):Promise<Cla
 export const MAX_REASKS=3;
 type TypedQuestion={nodeId:string;mode:DurableAnswerMode;text:string};
 /** The whitelisted text/email/phone question the run waits at, else null. */
-function typedQuestionAt(raw:unknown,nodeId:unknown):TypedQuestion|null{
- if(typeof nodeId!=="string"||!supportedDurableDocument(raw))return null;
+function typedQuestionAt(raw:unknown,nodeId:unknown,platform="instagram"):TypedQuestion|null{
+ if(typeof nodeId!=="string"||!supportedDurableDocument(raw,platform))return null;
  const n=(raw.nodes as unknown as RecordValue[]).find(x=>x.id===nodeId);
  const d=n?.data as RecordValue|undefined;
  return d&&d.kind==="question"&&durableAnswerMode(d.inputMode)&&typeof d.text==="string"?
@@ -621,14 +659,14 @@ export async function attemptDurableInstagram(
    if(!record(run)||run.tenant_id!==event.tenantId||
       run.channel_account_id!==event.accountId||
       run.conversation_id!==event.conversationId||
-      typeof run.id!=="string"||run.platform!=="instagram")return "handled";
+      typeof run.id!=="string"||run.platform!==event.platform)return "handled";
    // A replay of the event that started this run is already claimed and
    // answered by it: never let it end the wait as "free text".
    if(run.provider_event_id===event.eventId)return "handled";
    const tapped=typeof choice==="string"&&safeId(choice);
    const readPublication=()=>db.from("automation_flow_publications")
     .select("document").eq("tenant_id",event.tenantId)
-    .eq("channel_account_id",event.accountId).eq("platform","instagram")
+    .eq("channel_account_id",event.accountId).eq("platform",event.platform)
     .eq("flow_key",run.flow_key).eq("revision",run.publication_revision).maybeSingle();
    let publication:Awaited<ReturnType<typeof readPublication>>|null=null;
    if(!tapped){
@@ -637,12 +675,12 @@ export async function attemptDurableInstagram(
     // answers (unchanged behaviour).
     publication=await readPublication();
     if(publication.error)return "handled";
-    if(!typedQuestionAt(publication.data?.document,run.current_node_id))
+    if(!typedQuestionAt(publication.data?.document,run.current_node_id,event.platform))
      return cancelThenFallback(db,event.tenantId,run.id,"free_text");
    }
    const live=await db.from("automation_flow_activations")
     .select("flow_key,revision,is_active").eq("tenant_id",event.tenantId)
-    .eq("channel_account_id",event.accountId).eq("platform","instagram")
+    .eq("channel_account_id",event.accountId).eq("platform",event.platform)
     .eq("flow_key",run.flow_key).eq("revision",run.publication_revision)
     .eq("is_active",true).limit(2);
    if(live.error)return "handled";
@@ -653,7 +691,7 @@ export async function attemptDurableInstagram(
     publication=await readPublication();
     if(publication.error)return "handled";
    }
-   if(!supportedDurableDocument(publication.data?.document))
+   if(!supportedDurableDocument(publication.data?.document,event.platform))
     return cancelThenFallback(db,event.tenantId,run.id,"revision_inactive");
    const doc=publication.data.document;
    const state:RuntimeState={
@@ -661,7 +699,7 @@ export async function attemptDurableInstagram(
     nodeId:run.current_node_id,status:"awaiting_input",stepCount:Number(run.step_count),
     variables:run.variables??{},wakeAt:null
    };
-   const typed=typedQuestionAt(doc,state.nodeId);
+   const typed=typedQuestionAt(doc,state.nodeId,event.platform);
    if(typed){
     // A button tap (current or stale) is not an answer to a typed question:
     // the run keeps waiting unchanged and V2 answers this message.
@@ -697,7 +735,7 @@ export async function attemptDurableInstagram(
   if(handoff!=="none")return "handled";
   const active=await db.from("automation_flow_activations")
    .select("flow_key,revision,is_active").eq("tenant_id",event.tenantId)
-   .eq("channel_account_id",event.accountId).eq("platform","instagram")
+   .eq("channel_account_id",event.accountId).eq("platform",event.platform)
    .eq("is_active",true).limit(2);
   if(active.error)return "handled";
   if(!Array.isArray(active.data)||active.data.length!==1)return "fallback";
@@ -705,10 +743,10 @@ export async function attemptDurableInstagram(
   if(!Number.isSafeInteger(Number(selection.revision)))return "handled";
   const pub=await db.from("automation_flow_publications").select("document")
    .eq("tenant_id",event.tenantId).eq("channel_account_id",event.accountId)
-   .eq("platform","instagram").eq("flow_key",selection.flow_key)
+   .eq("platform",event.platform).eq("flow_key",selection.flow_key)
    .eq("revision",selection.revision).maybeSingle();
   if(pub.error)return "handled";
-  if(!supportedDurableDocument(pub.data?.document))return "fallback";
+  if(!supportedDurableDocument(pub.data?.document,event.platform))return "fallback";
   const doc=pub.data.document;
   const state=createRuntimeState(doc,selection.flow_key,Number(selection.revision));
   const plan=planUntilWait(doc,state,{

@@ -213,7 +213,8 @@ Deno.serve(async req=>{
        agentEnabled:account.agent_enabled,autoReply:account.auto_reply,
        tenantActive:tenant.is_active,credits:tenant.credits_remaining,
        revisionActive:activationResult.data?.is_active,
-       humanTakeover:takeover
+       humanTakeover:takeover,
+       multichannelEnabled:env("FLOW_MULTICHANNEL_ENABLED")==="true"
       })){
     report("blocked");continue;
    }

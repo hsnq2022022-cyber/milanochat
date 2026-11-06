@@ -50,10 +50,11 @@ const body=(f,tag="skip_many")=>{const s=src(f),o=`AS $${tag}$`,a=s.indexOf(o);a
 const H_OLD=md5(norm(body(M130))),H_NEW=md5(norm(body(MIG)));
 
 // ---------------------------------------------------------------- static
-test("220000 is the newest migration; 200000 (storage) is independent; 125000..210000 precede it",()=>{
+test("220000 follows 125000..210000; 200000 (storage) is independent; only 230000 (requires 220000) is newer",()=>{
  const stamps=readdirSync("supabase/migrations").filter(f=>f.endsWith(".sql")).map(f=>f.split("_")[0].padEnd(14,"0"));
  assert.equal(stamps.filter(s=>s==="20261029220000").length,1);
- for(const s of stamps)if(s!=="20261029220000")assert.ok(s<"20261029220000",s);
+ // 20261029230000_flow_multichannel_support requires 220000 (tests/flow-multichannel-support.test.mjs).
+ for(const s of stamps)if(s!=="20261029220000"&&s!=="20261029230000")assert.ok(s<"20261029220000",s);
  for(const f of [...CHAIN125_190,M210,RB,...OLDER_RB])assert.ok(existsSync(f),f);
  // No later migration than 130000 (other than this one) redefines the sweep.
  for(const f of readdirSync("supabase/migrations")){

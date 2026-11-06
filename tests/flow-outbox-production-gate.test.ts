@@ -44,3 +44,20 @@ test("worker reads server switches and exact revision, persists provider MID onc
  assert.match(worker,/external_message_id:providerId/);
  assert.match(worker,/env\("FLOW_OUTBOX_SEND_ENABLED"\)!=="true"/);
 });
+test("FLOW_MULTICHANNEL_ENABLED: WhatsApp/Facebook production dispatch needs the flag, approval and the exact canary",()=>{
+ for(const platform of ["whatsapp","facebook"]){
+  for(const flag of [undefined,false,"true",1])
+   assert.equal(canDispatchOutbox({...eligible,platform,multichannelEnabled:flag}),false,`${platform} flag=${flag}`);
+  const on={...eligible,platform,multichannelEnabled:true};
+  assert.equal(canDispatchOutbox(on),true,platform);
+  for(const [name,value] of [["productionApproved",false],["canaryAccountId","other"],["canaryAccountId",""],
+   ["revisionActive",false],["humanTakeover",true],["credits",0]] as const)
+   assert.equal(canDispatchOutbox({...on,[name]:value}),false,`${platform} ${name}`);
+ }
+ assert.equal(canDispatchOutbox({...eligible,platform:"telegram",multichannelEnabled:true}),false);
+ // Instagram is unchanged by the flag.
+ for(const flag of [undefined,true,false])
+  assert.equal(canDispatchOutbox({...eligible,multichannelEnabled:flag}),true);
+ const worker=readFileSync("supabase/functions/flow-outbox-worker/index.ts","utf8");
+ assert.match(worker,/humanTakeover:takeover,\n\s+multichannelEnabled:env\("FLOW_MULTICHANNEL_ENABLED"\)==="true"\n\s+\}\)\)\{/);
+});

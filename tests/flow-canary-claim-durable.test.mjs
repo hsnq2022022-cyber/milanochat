@@ -46,8 +46,9 @@ test("170000 is the newest migration and follows 130000/140000/150000/160000",()
  // 20261029190000_flow_begin_durable_run_superseding (requires 180000) and
  // 20261029200000_flow_media_storage (independent storage bucket) and
  // 20261029210000_flow_media_effects (requires 190000) and
- // 20261029220000_flow_media_stale_sweep (requires 210000) are newer.
- for(const s of stamps)if(!["20261029170000","20261029180000","20261029190000","20261029200000","20261029210000","20261029220000"].includes(s))assert.ok(s<"20261029170000",s);
+ // 20261029220000_flow_media_stale_sweep (requires 210000) and
+ // 20261029230000_flow_multichannel_support (requires 220000) are newer.
+ for(const s of stamps)if(!["20261029170000","20261029180000","20261029190000","20261029200000","20261029210000","20261029220000","20261029230000"].includes(s))assert.ok(s<"20261029170000",s);
  for(const f of [CLAIM,LC,AI,TK,CP])assert.ok(existsSync(f),f);
 });
 test("migration: bounded, additive, service_role only, never touches flow_claim_inbound or billing",()=>{
@@ -92,31 +93,54 @@ test("TypeScript: only the durable ingress calls the new function; V2 call site 
  if(g.status!==null&&g.error===undefined&&existsSync(".git")){
   assert.equal(g.status,0,"20261028220000 has no diff against HEAD");
   // milan-api/index.ts may differ from HEAD ONLY by the explicitly authorized
-  // provider-id provenance flag (derivation, its pass-through parameter and
-  // the attemptDurableInstagram argument) plus the inbound text passed to
-  // attemptDurableInstagram for typed-answer questions. Undoing exactly these hunks must
-  // reproduce HEAD byte for byte, so every V2 section stays unchanged.
+  // hunks below (the earlier provider-id provenance / typed-answer hunks are
+  // part of HEAD): 20261029230000 multichannel ingress behind
+  // FLOW_MULTICHANNEL_ENABLED and the object=page webhook hardening (401 on a
+  // bad signature, facebook-only account lookup, ambiguous page id ignored).
+  // Undoing exactly these hunks must reproduce HEAD byte for byte, so every
+  // V2 and Instagram section stays unchanged.
   const IDX="supabase/functions/milan-api/index.ts";
   const head=spawnSync("git",["show","HEAD:"+IDX],{encoding:"utf8",maxBuffer:64<<20});
   assert.equal(head.status,0);
   const allowed=[
-   ["  selectedChoiceId?: string | null,\n  providerEventIdGenuine?: boolean\n) {","  selectedChoiceId?: string | null\n) {"],
-   // + the typed-answer text (durable text/email/phone questions only).
-   ["      text:customerText,\n      selectedChoiceId,providerEventIdGenuine:providerEventIdGenuine===true\n    });","      selectedChoiceId\n    });"],
-   ["              msg.mid || `ig_${Date.now()}`;\n"+
-    "            // Provenance, never inferred from the id's shape: true only when\n"+
-    "            // Meta itself supplied a non-empty mid (msgId is then that mid).\n"+
-    "            const providerEventIdGenuine =\n"+
-    "              typeof msg.mid === \"string\" && msg.mid.length > 0;\n",
-    "              msg.mid || `ig_${Date.now()}`;\n"],
-   ["              msg.choiceId,\n              providerEventIdGenuine\n            );","              msg.choiceId\n            );"]
+   // FLOW_MULTICHANNEL_ENABLED (WhatsApp/Facebook durable ingress, default OFF): import
+   ["import {attemptDurableInstagram,selectedFlowChoice,multichannelEnabled} from \"./flowDurableIngress.ts\";\nimport { normalizeMetaMessages } from \"./normalizeMetaMessage.ts\";\n",
+    "import {attemptDurableInstagram,selectedFlowChoice} from \"./flowDurableIngress.ts\";\n"],
+   // durable path also for whatsapp/facebook, only while the flag is on
+   ["  // FLOW_MULTICHANNEL_ENABLED (default OFF): WhatsApp / Facebook events may\n  // also try the durable path (same canary, claim and SQL re-checks).\n  if(channel===\"instagram\"||\n     ((channel===\"whatsapp\"||channel===\"facebook\")&&multichannelEnabled())){\n",
+    "  if(channel===\"instagram\"){\n"],
+   // WhatsApp: flow-choice interactive replies of the canary account (flag ON only)
+   ["            // FLOW_MULTICHANNEL_ENABLED (default OFF), and ONLY for the\n            // operator-selected durable canary account: signed interactive\n            // button replies carrying \"flow-choice:<id>\" (parsed by\n            // normalizeMetaMessage.ts) reach the durable path as their title\n            // + choice id. OFF or any other account: null, and the text-only\n            // handling below is unchanged.\n            const durableReplies =\n              multichannelEnabled() &&\n              typeof account.id === \"string\" &&\n              account.id === env(\"FLOW_DURABLE_CANARY_ACCOUNT_ID\")\n                ? new Map(\n                    normalizeMetaMessages({\n                      object: \"whatsapp_business_account\",\n                      entry: [{ changes: [change] }],\n                    })\n                      .filter((m) => m.choiceId !== null && m.providerMessageId !== null)\n                      .map((m) => [String(m.providerMessageId), m] as const)\n                  )\n                : null;\n\n            const customerNameOf = (waId: string) => {",
+    "            const customerNameOf = (waId: string) => {"],
+   ["              const durableReply =\n                durableReplies && msgId\n                  ? durableReplies.get(msgId) ?? null\n                  : null;\n\n              if (!text && !durableReply) {",
+    "              if (!text) {"],
+   ["                durableReply && !text ? durableReply.text : text,\n",
+    "                text,\n"],
+   ["                phoneId,\n                durableReplies ? durableReply?.choiceId ?? null : undefined,\n                durableReplies ? typeof msgId === \"string\" && msgId.length > 0 : undefined\n",
+    "                phoneId\n"],
+   // object=page: bad/missing signature -> 401 (Instagram object unchanged)
+   ["        if (!sigOk) {\n          // Facebook Page events (object \"page\"): a missing or bad signature\n          // is rejected like WhatsApp (401), before any parsing side effect\n          // or DB access. The Instagram object keeps its behaviour below.\n          if (body.object === \"page\") {\n            console.error(\"[instagram_webhook] invalid page signature\");\n            return json({ error: \"Invalid webhook signature\" }, 401);\n          }\n\n",
+    "        if (!sigOk) {\n"],
+   // object=page: flow-choice postbacks (flag ON only)
+   ["          // FLOW_MULTICHANNEL_ENABLED only: signed Facebook postbacks carrying\n          // \"flow-choice:<id>\" and a Meta mid (normalizeMetaMessage.ts). They\n          // are processed below ONLY for the durable canary account. OFF: [].\n          const pagePostbacks =\n            body.object === \"page\" && multichannelEnabled()\n              ? normalizeMetaMessages({ object: \"page\", entry: [entry] })\n                  .filter((m) => m.kind === \"postback\" && m.choiceId !== null &&\n                    m.providerMessageId !== null)\n                  .map((m) => ({\n                    senderId: m.senderId,\n                    recipientId: m.recipientId,\n                    text: m.text,\n                    mid: m.providerMessageId,\n                    choiceId: m.choiceId,\n                    postback: true as const,\n                  }))\n              : [];\n\n          for (const msg of [...msgs, ...pagePostbacks]) {",
+    "          for (const msg of msgs) {"],
+   // object=page: facebook-only account lookup, ambiguous page id ignored
+   ["            let account: any = null;\n            // Facebook Page events: a channel='facebook' account ONLY (never\n            // an Instagram one); a page id shared by several accounts (e.g.\n            // several tenants) is never assigned to one of them: ignored.\n            let ambiguousPage = false;\n",
+    "            let account: any = null;\n"],
+   ["            for (const candidate of candidates) {\n              if (body.object === \"page\") {\n                const { data: pageAccounts } = await sb\n                  .from(\"channel_accounts\")\n                  .select(\n                    \"id, tenant_id, channel, external_id, status, agent_enabled, auto_reply, access_token_encrypted\"\n                  )\n                  .eq(\"external_id\", candidate)\n                  .eq(\"channel\", \"facebook\")\n                  .limit(2);\n\n                if (Array.isArray(pageAccounts) && pageAccounts.length > 1) {\n                  ambiguousPage = true;\n                  break;\n                }\n\n                if (Array.isArray(pageAccounts) && pageAccounts.length === 1) {\n                  account = pageAccounts[0];\n                  break;\n                }\n\n                continue;\n              }\n\n",
+    "            for (const candidate of candidates) {\n"],
+   ["            if (ambiguousPage) {\n              console.warn(\n                \"[instagram_webhook] page id matches several accounts — event ignored\"\n              );\n              continue;\n            }\n\n            if (!account) {\n",
+    "            if (!account) {\n"],
+   // postbacks only for the durable canary account
+   ["            // Postbacks (flag ON only) reach the durable canary account only.\n            if (\"postback\" in msg &&\n                String(account.id) !== env(\"FLOW_DURABLE_CANARY_ACCOUNT_ID\")) {\n              continue;\n            }\n\n",
+    ""]
   ];
   let cur=src(IDX);
   if(cur!==head.stdout)for(const [now,was] of allowed){
-   assert.equal(cur.split(now).length,2,"allowed hunk present exactly once: "+was.trim().slice(0,40));
+   assert.equal(cur.split(now).length,2,"allowed hunk present exactly once: "+now.trim().slice(0,60));
    cur=cur.replace(now,()=>was);
   }
-  assert.equal(cur,head.stdout,"milan-api/index.ts differs from HEAD only by the authorized provenance-flag hunks");
+  assert.equal(cur,head.stdout,"milan-api/index.ts differs from HEAD only by the authorized multichannel / page-hardening hunks");
  }
  assert.match(src(CHECKS),new RegExp(`cf\\.h IS DISTINCT FROM '${md5(body(MIG,"claim"))}'`),"170000 body hash embedded in checks");
  assert.match(src(CHECKS),new RegExp(`v2\\.h='${md5(body(CLAIM,"claim"))}'`),"220000 body hash embedded in checks");

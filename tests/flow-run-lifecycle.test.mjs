@@ -32,8 +32,9 @@ test("lifecycle migration is the newest migration",()=>{
  // 20261029200000_flow_media_storage is an independent storage bucket (no flow object).
  // 20261029210000_flow_media_effects requires 190000 (and this migration) (tests/flow-media-effects.test.mjs).
  // 20261029220000_flow_media_stale_sweep replaces only this migration's flow_skip_blocked_outbox body (requires 210000).
+ // 20261029230000_flow_multichannel_support replaces the 150000/210000 lease, sweep, commit and reserve bodies (requires 220000).
  const successors=["20261029140000","20261029150000","20261029160000","20261029170000","20261029180000","20261029190000",
-  "20261029200000","20261029210000","20261029220000"];
+  "20261029200000","20261029210000","20261029220000","20261029230000"];
  for(const s of stamps)if(s!==mine&&!successors.includes(s))
   assert.ok(s<mine,`older migration ${s} must precede ${mine}`);
 });

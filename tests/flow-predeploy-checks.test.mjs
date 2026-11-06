@@ -29,6 +29,8 @@ const MEDIA="supabase/migrations/20261029210000_flow_media_effects.sql";
 const MEDIA_RB="supabase/rollbacks/20261029210000_flow_media_effects.rollback.sql";
 const SWEEP="supabase/migrations/20261029220000_flow_media_stale_sweep.sql";
 const SWEEP_RB="supabase/rollbacks/20261029220000_flow_media_stale_sweep.rollback.sql";
+const MULTI="supabase/migrations/20261029230000_flow_multichannel_support.sql";
+const MULTI_RB="supabase/rollbacks/20261029230000_flow_multichannel_support.rollback.sql";
 const STAFF="supabase/migrations/20261028227000_tenant_staff_memberships.sql";
 const INTERNAL="supabase/migrations/20261028228000_flow_internal_actions.sql";
 const BEGIN_SIG="flow_begin_durable_run(uuid,uuid,uuid,uuid,text,text,bigint,text,text,integer,text,jsonb,timestamptz,jsonb)";
@@ -126,7 +128,7 @@ test("20261029190000: exact superseding body hash embedded; timeout rule matches
  const head=/^BEGIN;\nSET LOCAL lock_timeout='3s';\nSET LOCAL statement_timeout='60s';\n/m;
  for(const d of ["supabase/migrations","supabase/rollbacks"])for(const f of readdirSync(d)){
   const stamp=f.split("_")[0];
-  if(stamp>="20261029125000"&&stamp<="20261029220000")assert.match(readFileSync(`${d}/${f}`,"utf8"),head,`${d}/${f}`);
+  if(stamp>="20261029125000"&&stamp<="20261029230000")assert.match(readFileSync(`${d}/${f}`,"utf8"),head,`${d}/${f}`);
   if(stamp==="20261028227000"||stamp==="20261028228000")
    assert.doesNotMatch(readFileSync(`${d}/${f}`,"utf8"),/lock_timeout/,`${d}/${f} sets no timeout (PGOPTIONS still required)`);
  }
@@ -177,6 +179,31 @@ test("20261029220000: previous and stale-sweep body hashes embedded, equal to th
  // Read-only section: no DDL/DML in the new block.
  const blk=script.slice(script.indexOf("-- (d) 20261029220000_flow_media_stale_sweep"),script.indexOf("-- (d) Canary registration"));
  assert.ok(blk.length>500);
+ assert.doesNotMatch(blk,/\b(INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|GRANT|REVOKE|COMMENT ON)\b/);
+});
+test("20261029230000: previous and multichannel body hashes embedded, equal to the migration's and the rollback's",()=>{
+ const md5=x=>createHash("md5").update(x).digest("hex");
+ const norm=x=>x.replace(/[ \t\n\r\f\v]+/g," ").replace(/^ +| +$/g,"");
+ const body=(f,tag)=>{const s=readFileSync(f,"utf8");const o=`AS $${tag}$`;const a=s.indexOf(o)+o.length;
+  return s.slice(a,s.indexOf(`$${tag}$`,a));};
+ const m=readFileSync(MULTI,"utf8"),rb=readFileSync(MULTI_RB,"utf8");
+ const blk=script.slice(script.indexOf("-- (d) 20261029230000_flow_multichannel_support"),script.indexOf("-- (e) Lock-impact estimators"));
+ assert.ok(blk.length>1000);
+ for(const [sig,tag] of [["flow_claim_inbound_durable(uuid,uuid,text,text,uuid,uuid)","claim"],[BEGIN_SIG,"begin"],[RESUME_SIG,"resume"],
+  ["flow_end_stale_paused_runs(integer,integer)","stale"],["flow_lease_due_runs(integer)","lease"],
+  ["flow_commit_run_step(uuid,uuid,integer,text,text,integer,text,jsonb,timestamptz,jsonb,text,uuid)","advance"],
+  ["flow_reserve_outbox_delivery(uuid,uuid)","reserve"]]){
+  const hOld=md5(norm(body(MULTI_RB,tag))),hNew=md5(norm(body(MULTI,tag)));
+  assert.notEqual(hOld,hNew,sig);
+  assert.ok(blk.includes(`('${sig}',\n`)&&blk.includes(`'${hOld}','${hNew}')`),`${sig} hashes embedded in the 230000 block`);
+  assert.ok(m.includes(`'${hOld}','${hNew}')`)&&rb.includes(`'${hOld}','${hNew}')`),`${sig}: same hashes in the migration and the rollback`);
+ }
+ // Rows pinning earlier bodies accept the 230000 bodies.
+ assert.ok(script.includes(`cf.h IS DISTINCT FROM '${md5(body(MULTI,"claim"))}'`));
+ assert.ok(script.includes(`ver.h='${md5(body(MULTI,"lease"))}' THEN '20261029230000'`));
+ for(const tag of ["begin","resume"])assert.ok(script.includes(`'${md5(norm(body(MULTI,tag)))}')`),tag);
+ for(const tag of ["advance","reserve"])assert.ok(script.includes(`,'${md5(norm(body(MULTI,tag)))}')`),tag);
+ assert.ok(script.includes("'preflight:20261029230000'")&&script.includes("'multichannel_support'"));
  assert.doesNotMatch(blk,/\b(INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|GRANT|REVOKE|COMMENT ON)\b/);
 });
 test("(g) embeds the exact 20261028227000 / 20261028228000 function body hashes, markers and object names",()=>{
@@ -689,9 +716,9 @@ test("live PG: 150000 coverage, canonical takeover columns, 130000-after-150000 
     "function:public.flow_claim_inbound_durable(uuid,uuid,text,text,uuid,uuid)",
     `durable_button_run:public.${BEGIN_SIG}`,`durable_button_run:public.${RESUME_SIG}`,
     "durable_ingress_for_20261029170000","durable_button_run_guards",`superseding_begin:public.${SUPER_SIG}`,
-    "media_effects","media_stale_sweep"].includes(r.item)||
+    "media_effects","media_stale_sweep","multichannel_support"].includes(r.item)||
    r.status==="INFO"&&["preflight:20261029180000","preflight:20261029190000","preflight:20261029210000",
-    "preflight:20261029220000"].includes(r.item),
+    "preflight:20261029220000","preflight:20261029230000"].includes(r.item),
    `${r.item}: ${r.status} ${r.detail}`);
  assert.equal(d(rows,"credits_pause").status,"ABSENT");
  assert.match(d(rows,"credits_pause").detail,/20261029160000 not applied/);
@@ -1007,6 +1034,81 @@ test("live PG: 20261029220000 media stale sweep rows: preflight, 130000 -> 22000
  assert.equal(d(rows,"media_stale_sweep").status,"ABSENT");
  assert.match(d(rows,ITEM).detail,/body_version=20261029130000/);
  assert.ok(!rows.some(r=>r.status.startsWith("CONFLICT")),"no conflicts after the 220000 rollback");
+});
+test("live PG: 20261029230000 multichannel rows: preflight, previous -> 230000 bodies, existing rows stay OK, tampering, rollback",{skip},()=>{
+ const d=(rs,item)=>one(rs,"d_prerequisites",item);
+ prepare("pdc_230",{roles:false});
+ let {rows}=assertReadOnlyRun("pdc_230");
+ assert.equal(d(rows,"multichannel_support").status,"ABSENT");
+ assert.equal(d(rows,"preflight:20261029230000").status,"INFO");
+ assert.match(d(rows,"preflight:20261029230000").detail,/^unmet \(normal until 20261029130000\.\.220000 are applied\): /);
+ ok("pdc_230",{file:DURABLE},"125000");ok("pdc_230",{file:LIFECYCLE},"130000");ok("pdc_230",{file:AI_RETRY},"140000");
+ ok("pdc_230",{sql:`ALTER TABLE public.tenants ADD COLUMN is_active boolean NOT NULL DEFAULT true;
+  ALTER TABLE public.channel_accounts ADD COLUMN is_active boolean NOT NULL DEFAULT true,
+  ADD COLUMN agent_enabled boolean NOT NULL DEFAULT true,ADD COLUMN auto_reply boolean NOT NULL DEFAULT true;
+  ALTER TABLE public.conversations ADD COLUMN transferred boolean NOT NULL DEFAULT false,
+  ADD COLUMN auto_paused_reason text,ADD COLUMN human_agent_expires_at timestamptz;
+  ALTER TABLE public.automation_flow_tenant_switches ADD COLUMN IF NOT EXISTS production_approved boolean NOT NULL DEFAULT false;`},"production-shape columns");
+ for(const f of [TAKEOVER,CREDITS,"supabase/migrations/20261029170000_flow_canary_claim_durable.sql",GUARDS,SUPERSEDING,MEDIA])ok("pdc_230",{file:f},f);
+ ({rows}=assertReadOnlyRun("pdc_230"));
+ assert.equal(d(rows,"preflight:20261029230000").status,"INFO","220000 still missing");
+ assert.match(d(rows,"preflight:20261029230000").detail,/20261029220000 body of flow_skip_blocked_outbox/);
+ ok("pdc_230",{file:SWEEP},"220000");
+ ({rows}=assertReadOnlyRun("pdc_230"));
+ assert.equal(d(rows,"preflight:20261029230000").status,"OK",d(rows,"preflight:20261029230000").detail);
+ assert.equal(d(rows,"multichannel_support").status,"ABSENT");
+ assert.match(d(rows,"multichannel_support").detail,/flow_claim_inbound_durable=previous .*flow_reserve_outbox_delivery=previous/);
+ ok("pdc_230",{file:MULTI},"230000");
+ ({rows}=assertReadOnlyRun("pdc_230"));
+ assert.equal(d(rows,"multichannel_support").status,"OK",d(rows,"multichannel_support").detail);
+ assert.equal((d(rows,"multichannel_support").detail.match(/=20261029230000/g)??[]).length,7);
+ assert.equal(d(rows,"preflight:20261029230000").status,"OK",d(rows,"preflight:20261029230000").detail);
+ // Every row that pins an earlier body stays OK and names the 230000 version.
+ // (MISSING rows here are only worker-selected columns this fixture lacks, as in the 220000 test.)
+ assert.ok(!rows.some(r=>r.status.startsWith("CONFLICT")),JSON.stringify(rows.filter(r=>r.status.startsWith("CONFLICT"))));
+ for(const f of [BEGIN_SIG,RESUME_SIG]){const r=d(rows,`durable_button_run:public.${f}`);assert.equal(r.status,"OK");
+  assert.match(r.detail,/ body_version=20261029230000 /);}
+ assert.match(d(rows,"canary_claim_function").detail,/ body_version=20261029230000 /);
+ assert.equal(d(rows,"canary_claim_function").status,"OK");
+ assert.match(d(rows,"function_version:public.flow_lease_due_runs(integer)").detail,/^installed_version=20261029230000 /);
+ for(const item of ["durable_button_run_guards",`superseding_begin:public.${SUPER_SIG}`,"media_effects","media_stale_sweep",
+  "function_version:public.flow_lease_due_runs(integer)"])assert.equal(d(rows,item).status,"OK",`${item}: ${d(rows,item).detail}`);
+ for(const f of ["flow_commit_run_step(uuid,uuid,integer,text,text,integer,text,jsonb,timestamptz,jsonb,text,uuid)","flow_reserve_outbox_delivery(uuid,uuid)"])
+  assert.match(d(rows,`media_effects:public.${f}`).detail,/ body_version=20261029230000 /,f);
+ // Re-applying an older migration is refused over the 230000 bodies: its preflight row is INFO (expected).
+ for(const item of ["preflight:20261029180000","preflight:20261029190000","preflight:20261029210000","preflight:20261029220000"])
+  assert.equal(d(rows,item).status,"INFO",item);
+ // Tampering (read only: the checks never fix anything).
+ const CON="automation_flow_canary_accounts_platform_chk ON public.automation_flow_canary_accounts";
+ const savedCmt=ok("pdc_230",{sql:`SELECT obj_description(oid,'pg_constraint') FROM pg_constraint WHERE conname='automation_flow_canary_accounts_platform_chk';`},"save").stdout.trim();
+ const saved=ok("pdc_230",{sql:"SELECT pg_get_functiondef('public.flow_reserve_outbox_delivery(uuid,uuid)'::regprocedure);"},"save fn").stdout;
+ for(const [label,sql,undo] of [
+  ["CHECK marker removed",`COMMENT ON CONSTRAINT ${CON} IS NULL;`,`COMMENT ON CONSTRAINT ${CON} IS '${savedCmt}';`],
+  ["reserve body tampered","CREATE OR REPLACE FUNCTION public.flow_reserve_outbox_delivery(p_tenant uuid,p_outbox uuid)\nRETURNS boolean LANGUAGE plpgsql SECURITY INVOKER SET search_path='' AS $x$BEGIN RETURN false; END$x$;",saved+";"],
+  ["client privilege","GRANT EXECUTE ON FUNCTION public.flow_lease_due_runs(integer) TO anon;","REVOKE EXECUTE ON FUNCTION public.flow_lease_due_runs(integer) FROM anon;"]]){
+  ok("pdc_230",{sql},label);
+  ({rows}=assertReadOnlyRun("pdc_230"));
+  assert.equal(d(rows,"multichannel_support").status,"CONFLICT: 20261029230000 objects",`${label}: ${d(rows,"multichannel_support").detail}`);
+  ok("pdc_230",{sql:undo},`undo ${label}`);
+ }
+ ({rows}=assertReadOnlyRun("pdc_230"));
+ assert.equal(d(rows,"multichannel_support").status,"OK");
+ // Rollback data guard: the fixture holds active non-Instagram runs (and an open effect).
+ const early=psql("pdc_230",{file:MULTI_RB});
+ assert.notEqual(early.status,0);
+ assert.match(early.stderr,/Refusing 20261029230000 rollback: non-Instagram durable data still depends on it \(0 WhatsApp\/Facebook canary registration\(s\), [1-9]\d* active run\(s\)/);
+ ok("pdc_230",{sql:`
+  SELECT public.flow_cancel_run(tenant_id,id,'manual',run_status) FROM public.automation_flow_runs
+  WHERE platform<>'instagram' AND run_status IN('ready','awaiting_input','sleeping');
+  SELECT public.flow_skip_outbox_effect(o.tenant_id,o.id,'manual') FROM public.automation_flow_outbox o
+  JOIN public.automation_flow_runs r ON r.tenant_id=o.tenant_id AND r.id=o.run_id
+  WHERE r.platform<>'instagram' AND o.delivery_status IN('pending','retry_wait');`},"end non-Instagram runs");
+ // Rollback: previous bodies and CHECK; nothing in conflict.
+ ok("pdc_230",{file:MULTI_RB},"230000 rollback");
+ ({rows}=assertReadOnlyRun("pdc_230"));
+ assert.equal(d(rows,"multichannel_support").status,"ABSENT");
+ assert.equal(d(rows,"preflight:20261029220000").status,"OK");
+ assert.ok(!rows.some(r=>r.status.startsWith("CONFLICT")),"no conflicts after the 230000 rollback");
 });
 test("live PG: (f) inbound dedupe index: global/tenant scope, missing index with duplicate counts, failed concurrent build, counts only",{skip},()=>{
  const f=(rs,item)=>one(rs,"f_inbound_dedupe",item);

@@ -64,10 +64,11 @@ test("125000..190000 (incl. 130000/140000) and all rollbacks set bounded timeout
  const stamps=readdirSync("supabase/migrations").filter(f=>f.endsWith(".sql")).map(f=>f.split("_")[0].padEnd(14,"0"));
  // 20261029200000 (flow-media storage bucket; independent of the flow chain)
  // follows 190000; 20261029210000 (media effects; requires the 125000..190000
- // chain) follows; 20261029220000 (media stale sweep; requires 210000) is now
+ // chain) follows; 20261029220000 (media stale sweep; requires 210000)
+ // follows; 20261029230000 (multichannel support; requires 220000) is now
  // the newest migration overall.
- for(const s of stamps)if(!["20261029170000","20261029180000","20261029190000","20261029200000","20261029210000","20261029220000"].includes(s))assert.ok(s<"20261029170000",s);
- assert.ok(stamps.every(s=>s<="20261029220000"),"220000 is the newest");
+ for(const s of stamps)if(!["20261029170000","20261029180000","20261029190000","20261029200000","20261029210000","20261029220000","20261029230000"].includes(s))assert.ok(s<"20261029170000",s);
+ assert.ok(stamps.every(s=>s<="20261029230000"),"230000 is the newest");
  for(const f of [DB,LC,AI,TK,CP,CC,GD,SP,DB_RB,LC_RB,AI_RB,TK_RB,CP_RB,CC_RB,GD_RB,SP_RB]){
   const s=src(f).split("\n").map(l=>l.replace(/--.*$/,"")).join("\n");
   assert.equal((s.match(/^BEGIN;$/gm)??[]).length,1,`${f}: one transaction`);

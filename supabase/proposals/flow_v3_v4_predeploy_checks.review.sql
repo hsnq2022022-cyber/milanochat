@@ -2,7 +2,7 @@
 -- (20261029125000_flow_durable_button_run, 20261029130000_flow_run_lifecycle,
 -- 20261029140000_flow_outbox_ai_retry, and the 20261029150000 /
 -- 20261029160000 / 20261029170000 / 20261029180000 / 20261029190000 /
--- 20261029210000 / 20261029220000 follow-ups; section (g):
+-- 20261029210000 / 20261029220000 / 20261029230000 follow-ups; section (g):
 -- 20261028227000_tenant_staff_memberships and
 -- 20261028228000_flow_internal_actions).
 -- NOT a migration.
@@ -105,6 +105,22 @@
 --   runs FIRST: 220000, then 210000, 190000 .. 125000 (each refuses while the
 --   220000 body is installed); it refuses while message_image effects are
 --   still pending / retry_wait / leased.
+--   20261029230000_flow_multichannel_support (newest flow migration; applied
+--   after 220000) lets the durable claim / begin / resume / lease / commit /
+--   reserve functions and the canary registration CHECK accept 'whatsapp'
+--   and 'facebook' besides 'instagram' (account 'facebook' <-> document
+--   trigger 'messenger'). preflight:20261029230000 must be OK before applying
+--   it; multichannel_support must be OK after (ABSENT = not applied). The
+--   rows that pin earlier bodies (canary_claim_function, durable_button_run:*,
+--   durable_button_run_guards, superseding_begin:*, media_effects:*,
+--   function_version:public.flow_lease_due_runs(integer)) accept the 230000
+--   body (body_version / installed_version=20261029230000); the
+--   preflight:20261029180000 / 190000 / 210000 / 220000 rows then show INFO
+--   (a re-apply of those migrations is refused over the 230000 bodies: expected).
+--   Keep FLOW_MULTICHANNEL_ENABLED off until the operator GO. Its rollback
+--   runs FIRST: 230000, then 220000, 210000, 190000 .. 125000 (each refuses
+--   while a 230000 body or the marked CHECK is installed); it refuses while
+--   non-Instagram canary registrations, active runs or open effects exist.
 BEGIN READ ONLY;
 SET LOCAL statement_timeout = '15s';
 SET LOCAL lock_timeout = '2s';
@@ -407,6 +423,8 @@ vv AS (
    WHEN ver.marker IS DISTINCT FROM 'CREATED_BY_20261029130000_FLOW_RUN_LIFECYCLE' THEN 'unrecognized'
    WHEN ver.h=ver.h150 THEN '20261029150000'
    WHEN ver.h=ver.h130 THEN '20261029130000'
+   -- 20261029230000 replaces the 150000 lease body (md5 of prosrc).
+   WHEN ver.sig='flow_lease_due_runs(integer)' AND ver.h='130bba5dd3c48c1e16398d921e53c6af' THEN '20261029230000'
    ELSE 'unrecognized' END AS v
  FROM ver
 ),
@@ -514,17 +532,17 @@ SELECT section,item,status,tenant_id,n,ids,detail FROM (
   CASE
    WHEN vv.v='absent' AND vv.sig='flow_lease_due_runs(integer)' THEN 'MISSING: public.'||vv.sig
    WHEN vv.v='absent' AND s150.n=0 THEN 'ABSENT'
-   WHEN s150.n>0 AND vv.v<>'20261029150000' THEN 'CONFLICT: public.'||vv.sig||' body'
-   WHEN s150.n=0 AND vv.v='20261029150000' THEN 'CONFLICT: public.'||vv.sig||' body'
+   WHEN s150.n>0 AND vv.v NOT IN('20261029150000','20261029230000') THEN 'CONFLICT: public.'||vv.sig||' body'
+   WHEN s150.n=0 AND vv.v IN('20261029150000','20261029230000') THEN 'CONFLICT: public.'||vv.sig||' body'
    WHEN vv.v='unrecognized' THEN 'CONFLICT: public.'||vv.sig||' body'
    ELSE 'OK' END,
   NULL,s150.n,NULL,
   format('installed_version=%s body_md5=%s; 150000 helper functions present=%s/2%s',vv.v,coalesce(vv.h,'-'),s150.n,
    CASE
-    WHEN s150.n>0 AND vv.v<>'20261029150000' THEN '; body is not the 20261029150000 version while 150000 objects exist: '
+    WHEN s150.n>0 AND vv.v NOT IN('20261029150000','20261029230000') THEN '; body is not the 20261029150000 version while 150000 objects exist: '
      '20261029130000 was most likely re-applied after 20261029150000 (same ownership marker, so its preflight passes). '
      'Re-apply 20261029150000 (idempotent) to restore it; never re-apply 20261029130000 after 20261029150000'
-    WHEN s150.n=0 AND vv.v='20261029150000' THEN '; 20261029150000 body without its helper functions (partial rollback?): '
+    WHEN s150.n=0 AND vv.v IN('20261029150000','20261029230000') THEN '; 20261029150000 body without its helper functions (partial rollback?): '
      'run the 20261029150000 rollback or re-apply 20261029150000'
     WHEN vv.v='unrecognized' THEN '; body or marker matches no known migration version'
     ELSE '' END)
@@ -691,14 +709,16 @@ SELECT section,item,status,tenant_id,n,ids,detail FROM (
   CASE WHEN cf.oid IS NULL THEN 'ABSENT'
    WHEN cf.marker IS DISTINCT FROM 'CREATED_BY_20261029170000_FLOW_CANARY_CLAIM_DURABLE'
     THEN 'CONFLICT: public.flow_claim_inbound_durable(uuid,uuid,text,text,uuid,uuid)'
-   WHEN cf.h IS DISTINCT FROM '1ecee844f09b8c505800015a9e02158b' OR cf.prosecdef OR cf.cfg<>'search_path=""'
+   WHEN cf.h IS DISTINCT FROM '1ecee844f09b8c505800015a9e02158b' AND cf.h IS DISTINCT FROM '513ba8d3e94680dc0e97e8958501230c'
+    OR cf.prosecdef OR cf.cfg<>'search_path=""'
     THEN 'CONFLICT: public.flow_claim_inbound_durable(uuid,uuid,text,text,uuid,uuid) body'
    WHEN cf.exposed THEN 'CONFLICT: public.flow_claim_inbound_durable(uuid,uuid,text,text,uuid,uuid) privileges'
    ELSE 'OK' END,
   NULL,NULL,NULL,
   CASE WHEN cf.oid IS NULL THEN '20261029170000 not applied: production canary inbound always falls back to V2'
-   ELSE format('marker=%s body_md5=%s security_definer=%s config=%s public_or_client_privilege=%s',
-    coalesce(cf.marker,'-'),cf.h,cf.prosecdef,cf.cfg,cf.exposed) END
+   ELSE format('marker=%s body_md5=%s body_version=%s security_definer=%s config=%s public_or_client_privilege=%s',
+    coalesce(cf.marker,'-'),cf.h,CASE WHEN cf.h='513ba8d3e94680dc0e97e8958501230c' THEN '20261029230000' ELSE '20261029170000' END,
+    cf.prosecdef,cf.cfg,cf.exposed) END
  FROM cf
  UNION ALL
  SELECT 2,'d_prerequisites','canary_table:public.'||ct.name,
@@ -773,8 +793,16 @@ sp AS (
  FROM (SELECT to_regprocedure('public.flow_begin_durable_run_superseding(uuid,uuid,uuid,uuid,text,text,bigint,text,text,integer,text,jsonb,timestamptz,jsonb)') AS oid) f
  LEFT JOIN pg_catalog.pg_proc p ON p.oid=f.oid
 ),
+-- 20261029230000 bodies (whitespace-normalized md5): same 180000 marker, accepted like the 180000 body.
+g230(sig,h230) AS (VALUES
+ ('flow_begin_durable_run(uuid,uuid,uuid,uuid,text,text,bigint,text,text,integer,text,jsonb,timestamptz,jsonb)',
+  'd0fea89cd85053ee62276bccf4156d43'),
+ ('flow_resume_button_run(uuid,uuid,text,uuid,integer,text,text,integer,text,jsonb,timestamptz,jsonb)',
+  '0d4917f27cece556b549c5ca0c7046a2')
+),
 dr AS (
- SELECT f.sig,f.h,(SELECT g.h180 FROM g180 g WHERE g.sig=f.sig) AS h180,p.oid,obj_description(p.oid,'pg_proc') AS marker,
+ SELECT f.sig,f.h,(SELECT g.h180 FROM g180 g WHERE g.sig=f.sig) AS h180,
+  (SELECT g.h230 FROM g230 g WHERE g.sig=f.sig) AS h230,p.oid,obj_description(p.oid,'pg_proc') AS marker,
   split_part(coalesce(obj_description(p.oid,'pg_proc'),''),' ',1)='CREATED_BY_20261029180000_FLOW_DURABLE_BUTTON_RUN_GUARDS' AS m180,
   md5(btrim(regexp_replace(p.prosrc,'[[:space:]]+',' ','g'))) AS ph,p.prosecdef,
   coalesce(array_to_string(p.proconfig,','),'') AS cfg,
@@ -853,8 +881,10 @@ pf190 AS (
 SELECT section,item,status,tenant_id,n,ids,detail FROM (
  SELECT 0 AS ord,'d_prerequisites'::text AS section,'durable_button_run:public.'||dr.sig AS item,
   CASE WHEN dr.oid IS NULL THEN 'ABSENT'
-   WHEN dr.ph IS DISTINCT FROM dr.h AND dr.ph IS DISTINCT FROM dr.h180 OR dr.prosecdef OR dr.cfg<>'search_path=""'
-    OR dr.m180 AND dr.ph IS DISTINCT FROM dr.h180
+   WHEN dr.ph IS DISTINCT FROM dr.h AND dr.ph IS DISTINCT FROM dr.h180 AND dr.ph IS DISTINCT FROM dr.h230
+    OR dr.prosecdef OR dr.cfg<>'search_path=""'
+    OR dr.m180 AND dr.ph IS DISTINCT FROM dr.h180 AND dr.ph IS DISTINCT FROM dr.h230
+    OR dr.ph=dr.h230 AND NOT dr.m180
     THEN 'CONFLICT: public.'||dr.sig||' body'
    WHEN dr.overloads>0 THEN 'CONFLICT: public.'||split_part(dr.sig,'(',1)||' overload'
    WHEN dr.exposed THEN 'CONFLICT: public.'||dr.sig||' privileges'
@@ -868,12 +898,16 @@ SELECT section,item,status,tenant_id,n,ids,detail FROM (
      WHEN dr.marker IS NULL THEN 'proposal flow_durable_button_ingress.review.sql (pre-existing; 20261029125000 keeps it unchanged and its rollback keeps it)'
      ELSE 'unknown' END,
     coalesce(dr.marker,'-'),dr.ph,
-    CASE WHEN dr.ph=dr.h THEN '20261029125000' WHEN dr.ph=dr.h180 THEN '20261029180000' ELSE 'unrecognized' END,
+    CASE WHEN dr.ph=dr.h THEN '20261029125000' WHEN dr.ph=dr.h180 THEN '20261029180000'
+     WHEN dr.ph=dr.h230 THEN '20261029230000' ELSE 'unrecognized' END,
     dr.prosecdef,dr.cfg,dr.exposed,dr.overloads,
-    CASE WHEN dr.ph IS DISTINCT FROM dr.h AND dr.ph IS DISTINCT FROM dr.h180 OR dr.prosecdef OR dr.cfg<>'search_path=""'
+    CASE WHEN dr.ph IS DISTINCT FROM dr.h AND dr.ph IS DISTINCT FROM dr.h180 AND dr.ph IS DISTINCT FROM dr.h230
+      OR dr.prosecdef OR dr.cfg<>'search_path=""'
       THEN '; not the reviewed definition: 20261029125000 refuses to overwrite it (and 20261029180000 refuses to replace it)'
-     WHEN dr.m180 AND dr.ph IS DISTINCT FROM dr.h180
+     WHEN dr.m180 AND dr.ph IS DISTINCT FROM dr.h180 AND dr.ph IS DISTINCT FROM dr.h230
       THEN '; carries the 20261029180000 marker without its body: 20261029180000 and its rollback refuse'
+     WHEN dr.ph=dr.h230 AND NOT dr.m180
+      THEN '; 20261029230000 body without the 20261029180000 marker: 20261029230000 and its rollback refuse'
      WHEN dr.overloads>0 THEN '; another overload exists: 20261029125000 refuses to install'
      WHEN dr.exposed THEN '; re-applying 20261029125000 restores service_role-only privileges'
      ELSE '' END) END AS detail
@@ -888,16 +922,18 @@ SELECT section,item,status,tenant_id,n,ids,detail FROM (
  FROM dr
  UNION ALL
  SELECT 3,'d_prerequisites','durable_button_run_guards',
-  CASE WHEN count(*) FILTER(WHERE dr.m180 OR dr.ph=dr.h180)=0 THEN 'ABSENT'
-   WHEN count(*) FILTER(WHERE dr.m180 AND dr.ph=dr.h180)=2 THEN 'OK'
+  CASE WHEN count(*) FILTER(WHERE dr.m180 OR dr.ph IN(dr.h180,dr.h230))=0 THEN 'ABSENT'
+   WHEN count(*) FILTER(WHERE dr.m180 AND dr.ph IN(dr.h180,dr.h230))=2 THEN 'OK'
    ELSE 'CONFLICT: 20261029180000 objects' END,
   NULL,count(*) FILTER(WHERE dr.m180),NULL,
-  CASE WHEN count(*) FILTER(WHERE dr.m180 OR dr.ph=dr.h180)=0
+  CASE WHEN count(*) FILTER(WHERE dr.m180 OR dr.ph IN(dr.h180,dr.h230))=0
     THEN '20261029180000 not applied: flow_resume_button_run does not re-check the account/tenant flags and neither function checks that the claim message belongs to the conversation'
    WHEN count(*) FILTER(WHERE dr.m180 AND dr.ph=dr.h180)=2
     THEN 'installed by 20261029180000 (both functions carry its marker and body); rollback: supabase/rollbacks/20261029180000_flow_durable_button_run_guards.rollback.sql FIRST'
+   WHEN count(*) FILTER(WHERE dr.m180 AND dr.ph IN(dr.h180,dr.h230))=2
+    THEN 'installed by 20261029180000 and replaced by 20261029230000 (both carry the 180000 marker; '||count(*) FILTER(WHERE dr.ph=dr.h230)||' of 2 have the 230000 body); rollback: 20261029230000 FIRST'
    ELSE format('partial or inconsistent 20261029180000 state: %s of 2 functions carry its marker, %s of 2 have its body',
-    count(*) FILTER(WHERE dr.m180),count(*) FILTER(WHERE dr.ph=dr.h180)) END
+    count(*) FILTER(WHERE dr.m180),count(*) FILTER(WHERE dr.ph IN(dr.h180,dr.h230))) END
  FROM dr
  UNION ALL
  SELECT 4,'d_prerequisites','preflight:20261029180000',
@@ -915,7 +951,7 @@ SELECT section,item,status,tenant_id,n,ids,detail FROM (
     THEN 'CONFLICT: public.flow_begin_durable_run_superseding(uuid,uuid,uuid,uuid,text,text,bigint,text,text,integer,text,jsonb,timestamptz,jsonb) body'
    WHEN sp.overloads>0 THEN 'CONFLICT: public.flow_begin_durable_run_superseding overload'
    WHEN sp.exposed OR NOT sp.svc THEN 'CONFLICT: public.flow_begin_durable_run_superseding(uuid,uuid,uuid,uuid,text,text,bigint,text,text,integer,text,jsonb,timestamptz,jsonb) privileges'
-   WHEN (SELECT count(*) FROM dr WHERE dr.m180 AND dr.ph=dr.h180)<>2
+   WHEN (SELECT count(*) FROM dr WHERE dr.m180 AND dr.ph IN(dr.h180,dr.h230))<>2
     THEN 'CONFLICT: 20261029190000 without 20261029180000'
    ELSE 'OK' END,
   NULL,sp.overloads,NULL,
@@ -923,7 +959,7 @@ SELECT section,item,status,tenant_id,n,ids,detail FROM (
     THEN '20261029190000 not applied: the atomic supersede + start RPC is missing; a milan-api build that calls it fails closed on a new durable run (no reply from that path), older builds supersede before the start (audit B4)'
    ELSE format('marker=%s body_md5=%s security_definer=%s config=%s public_or_client_privilege=%s service_role=%s other_overloads=%s durable_button_run_guards_ok=%s; rollback (revert milan-api first): supabase/rollbacks/20261029190000_flow_begin_durable_run_superseding.rollback.sql FIRST, before 20261029180000',
     coalesce(sp.marker,'-'),sp.h,sp.prosecdef,sp.cfg,sp.exposed,sp.svc,sp.overloads,
-    (SELECT count(*) FROM dr WHERE dr.m180 AND dr.ph=dr.h180)=2) END
+    (SELECT count(*) FROM dr WHERE dr.m180 AND dr.ph IN(dr.h180,dr.h230))=2) END
  FROM sp
  UNION ALL
  SELECT 6,'d_prerequisites','preflight:20261029190000',
@@ -973,8 +1009,14 @@ mf(sig,marker,h_old,h_new,v_old) AS (VALUES
  ('flow_finish_outbox_delivery(uuid,uuid,text,text)',
   'CREATED_BY_20261028226000_FLOW_OUTBOX_DELIVERY','4cc4008c25291a1db951b595514efc56','1c6ec477519f8c91c24fc2ab82d4b9c4','20261028226000')
 ),
+-- 20261029230000 bodies of flow_commit_run_step / flow_reserve_outbox_delivery
+-- (same 225000/226000 markers; the 210000 message_image support is kept).
+mf230(sig,h230) AS (VALUES
+ ('flow_commit_run_step(uuid,uuid,integer,text,text,integer,text,jsonb,timestamptz,jsonb,text,uuid)','f5b147309700470f8b9f410dda5a6df0'),
+ ('flow_reserve_outbox_delivery(uuid,uuid)','4a8882ddd7ad430c4187db821cc3de99')
+),
 mfx AS (
- SELECT mf.*,p.oid,obj_description(p.oid,'pg_proc') AS m,
+ SELECT mf.*,(SELECT x.h230 FROM mf230 x WHERE x.sig=mf.sig) AS h230,p.oid,obj_description(p.oid,'pg_proc') AS m,
   md5(btrim(regexp_replace(p.prosrc,'[[:space:]]+',' ','g'))) AS ph,p.prosecdef,
   coalesce(array_to_string(p.proconfig,','),'') AS cfg,
   p.oid IS NOT NULL AND (p.proacl IS NULL OR EXISTS(SELECT 1 FROM unnest(p.proacl) e
@@ -1021,7 +1063,8 @@ mfs AS (
  SELECT mfx.*,
   CASE WHEN mfx.oid IS NULL THEN 'MISSING: public.'||mfx.sig
    WHEN mfx.m IS DISTINCT FROM mfx.marker THEN 'CONFLICT: public.'||mfx.sig
-   WHEN mfx.ph IS DISTINCT FROM mfx.h_old AND mfx.ph IS DISTINCT FROM mfx.h_new OR mfx.prosecdef OR mfx.cfg<>'search_path=""'
+   WHEN mfx.ph IS DISTINCT FROM mfx.h_old AND mfx.ph IS DISTINCT FROM mfx.h_new AND mfx.ph IS DISTINCT FROM mfx.h230
+    OR mfx.prosecdef OR mfx.cfg<>'search_path=""'
     THEN 'CONFLICT: public.'||mfx.sig||' body'
    WHEN mfx.overloads>0 THEN 'CONFLICT: public.'||split_part(mfx.sig,'(',1)||' overload'
    WHEN mfx.exposed THEN 'CONFLICT: public.'||mfx.sig||' privileges'
@@ -1029,7 +1072,7 @@ mfs AS (
  FROM mfx
 ),
 mtot AS (
- SELECT (SELECT count(*) FROM mfs WHERE mfs.ph=mfs.h_new) AS fn_new,
+ SELECT (SELECT count(*) FROM mfs WHERE mfs.ph=mfs.h_new OR mfs.ph=mfs.h230) AS fn_new,
   (SELECT count(*) FROM mcs WHERE mcs.is_new) AS ck_new
 ),
 pf210 AS (
@@ -1071,7 +1114,8 @@ SELECT section,item,status,tenant_id,n,ids,detail FROM (
   CASE WHEN mfs.oid IS NULL THEN mfs.v_old||' not applied: 20261029210000 requires it'
    ELSE format('marker=%s body_md5=%s body_version=%s security_definer=%s config=%s public_or_client_privilege=%s other_overloads=%s',
     coalesce(mfs.m,'-'),mfs.ph,
-    CASE WHEN mfs.ph=mfs.h_new THEN '20261029210000' WHEN mfs.ph=mfs.h_old THEN mfs.v_old ELSE 'unrecognized' END,
+    CASE WHEN mfs.ph=mfs.h_new THEN '20261029210000' WHEN mfs.ph=mfs.h_old THEN mfs.v_old
+     WHEN mfs.ph=mfs.h230 THEN '20261029230000' ELSE 'unrecognized' END,
     mfs.prosecdef,mfs.cfg,mfs.exposed,mfs.overloads) END AS detail
  FROM mfs
  UNION ALL
@@ -1294,6 +1338,128 @@ SELECT 'd_prerequisites' AS section,'canary_registration' AS item,
  CASE WHEN to_regclass('public.automation_flow_canary_accounts') IS NULL
   THEN '20261029170000 not applied' ELSE 'section skipped' END AS detail;
 \endif
+
+-- (d) 20261029230000_flow_multichannel_support (durable WhatsApp / Facebook
+-- canary support; ingress and sending stay behind FLOW_MULTICHANNEL_ENABLED,
+-- default OFF). Catalog only.
+--  * multichannel_support: OK = all seven replaced functions
+--    (flow_claim_inbound_durable, flow_begin_durable_run,
+--    flow_resume_button_run, flow_end_stale_paused_runs, flow_lease_due_runs,
+--    flow_commit_run_step, flow_reserve_outbox_delivery) have the
+--    20261029230000 body (md5 of the whitespace-normalized prosrc) with their
+--    unchanged ownership marker, not security definer, search_path='', no
+--    PUBLIC/anon/authenticated privilege, AND the canary platform CHECK has
+--    the 230000 list (instagram, whatsapp, facebook) with its marker.
+--    ABSENT = no 230000 body and no 230000 CHECK (not applied, or the objects
+--    are not installed yet). CONFLICT = any partial or inconsistent state
+--    (230000 re-apply and its rollback refuse it). detail lists the body
+--    version of every function (previous / 20261029230000 / absent /
+--    unrecognized).
+--  * preflight:20261029230000: its prerequisites (20261029130000 ..
+--    20261029190000 markers and the 170000 canary tables, the 20261029220000
+--    sweep body, the seven functions with their markers, attributes and the
+--    previous or 230000 body, no other overload, the 170000 or the marked
+--    230000 CHECK); INFO while unmet.
+WITH
+mcf(sig,marker,prefix,h_old,h_new) AS (VALUES
+ ('flow_claim_inbound_durable(uuid,uuid,text,text,uuid,uuid)',
+  'CREATED_BY_20261029170000_FLOW_CANARY_CLAIM_DURABLE',false,'6fc0c342af5bfc155c9057428791e1fd','c9299f42239a6a4f275ba4be61e04b9d'),
+ ('flow_begin_durable_run(uuid,uuid,uuid,uuid,text,text,bigint,text,text,integer,text,jsonb,timestamptz,jsonb)',
+  'CREATED_BY_20261029180000_FLOW_DURABLE_BUTTON_RUN_GUARDS',true,'80953ca6c0b52e627699748b59f383f9','d0fea89cd85053ee62276bccf4156d43'),
+ ('flow_resume_button_run(uuid,uuid,text,uuid,integer,text,text,integer,text,jsonb,timestamptz,jsonb)',
+  'CREATED_BY_20261029180000_FLOW_DURABLE_BUTTON_RUN_GUARDS',true,'7a65417ddf106671862eea0da80d8c73','0d4917f27cece556b549c5ca0c7046a2'),
+ ('flow_end_stale_paused_runs(integer,integer)',
+  'CREATED_BY_20261029150000_FLOW_TAKEOVER_RESUME',false,'ca56c8772ed58e2952f5b7da61c25b77','c7a764911307aefeb1f593312364d440'),
+ ('flow_lease_due_runs(integer)',
+  'CREATED_BY_20261029130000_FLOW_RUN_LIFECYCLE',false,'c54246eacd947ae32841ae3995a4a7a7','7cddbd9a4964716eec402f399e878a78'),
+ ('flow_commit_run_step(uuid,uuid,integer,text,text,integer,text,jsonb,timestamptz,jsonb,text,uuid)',
+  'CREATED_BY_20261028225000_FLOW_RUNTIME_ADVANCE',false,'94a87bc016ad93e609897025d259bf3e','f5b147309700470f8b9f410dda5a6df0'),
+ ('flow_reserve_outbox_delivery(uuid,uuid)',
+  'CREATED_BY_20261028226000_FLOW_OUTBOX_DELIVERY',false,'1b7a6fe3f6a9ee97203d50d5e0e0baa7','4a8882ddd7ad430c4187db821cc3de99')
+),
+mcfx AS (
+ SELECT mcf.*,p.oid,
+  CASE WHEN mcf.prefix THEN split_part(coalesce(obj_description(p.oid,'pg_proc'),''),' ',1)
+   ELSE obj_description(p.oid,'pg_proc') END AS m,
+  md5(btrim(regexp_replace(p.prosrc,'[[:space:]]+',' ','g'))) AS ph,p.prosecdef,
+  coalesce(array_to_string(p.proconfig,','),'') AS cfg,
+  p.oid IS NOT NULL AND (p.proacl IS NULL OR EXISTS(SELECT 1 FROM unnest(p.proacl) e
+   WHERE e::text LIKE '=%' OR e::text LIKE 'anon=%' OR e::text LIKE 'authenticated=%')) AS exposed,
+  (SELECT count(*) FROM pg_catalog.pg_proc x
+   WHERE x.pronamespace='public'::regnamespace AND x.proname=split_part(mcf.sig,'(',1)
+    AND x.oid IS DISTINCT FROM p.oid) AS overloads
+ FROM mcf LEFT JOIN pg_catalog.pg_proc p ON p.oid=to_regprocedure('public.'||mcf.sig)
+),
+mcfs AS (
+ SELECT mcfx.*,
+  CASE WHEN mcfx.oid IS NULL THEN 'absent' WHEN mcfx.ph=mcfx.h_new THEN '20261029230000'
+   WHEN mcfx.ph=mcfx.h_old THEN 'previous' ELSE 'unrecognized' END AS v,
+  mcfx.oid IS NOT NULL AND mcfx.m IS NOT DISTINCT FROM mcfx.marker AND NOT mcfx.prosecdef
+   AND mcfx.cfg='search_path=""' AND mcfx.overloads=0 AS sound
+ FROM mcfx
+),
+mcc AS (
+ SELECT (SELECT count(*) FROM pg_catalog.pg_constraint c
+   WHERE c.conrelid=to_regclass('public.automation_flow_canary_accounts') AND c.contype='c'
+    AND pg_catalog.pg_get_constraintdef(c.oid) LIKE '%platform%') AS n,
+  c.oid,pg_catalog.pg_get_constraintdef(c.oid) AS def,
+  split_part(coalesce(obj_description(c.oid,'pg_constraint'),''),' ',1) AS mk,
+  'CHECK ((platform = ''instagram''::text))'::text AS def_old,
+  'CHECK ((platform = ANY (ARRAY[''instagram''::text, ''whatsapp''::text, ''facebook''::text])))'::text AS def_new
+ FROM (SELECT 1) one
+ LEFT JOIN pg_catalog.pg_constraint c ON c.conrelid=to_regclass('public.automation_flow_canary_accounts')
+  AND c.conname='automation_flow_canary_accounts_platform_chk' AND c.contype='c'
+),
+mct AS (
+ SELECT (SELECT count(*) FROM mcfs WHERE mcfs.v='20261029230000') AS fn_new,
+  (SELECT count(*) FROM mcfs WHERE mcfs.v='20261029230000' AND mcfs.sound AND NOT mcfs.exposed) AS fn_new_ok,
+  (SELECT string_agg(split_part(mcfs.sig,'(',1)||'='||mcfs.v,' ' ORDER BY mcfs.sig) FROM mcfs) AS versions,
+  coalesce(mcc.n=1 AND mcc.def=mcc.def_new AND mcc.mk='CREATED_BY_20261029230000_FLOW_MULTICHANNEL_SUPPORT',false) AS ck_new,
+  coalesce(mcc.def=mcc.def_new OR mcc.mk='CREATED_BY_20261029230000_FLOW_MULTICHANNEL_SUPPORT',false) AS ck_touched,
+  mcc.n,coalesce(mcc.def,'-') AS def
+ FROM mcc
+),
+pf230 AS (
+ SELECT r.label FROM (VALUES
+  ('20261029130000 .. 20261029190000 markers and the 20261029170000 canary tables',
+   obj_description(to_regprocedure('public.flow_cancel_run(uuid,uuid,text,text)'),'pg_proc') IS NOT DISTINCT FROM 'CREATED_BY_20261029130000_FLOW_RUN_LIFECYCLE'
+   AND obj_description(to_regprocedure('public.flow_claim_outbox_ai(uuid,uuid,integer,integer)'),'pg_proc') IS NOT DISTINCT FROM 'CREATED_BY_20261029140000_FLOW_OUTBOX_AI_RETRY'
+   AND obj_description(to_regprocedure('public.flow_channel_temporarily_paused(uuid,uuid)'),'pg_proc') IS NOT DISTINCT FROM 'CREATED_BY_20261029160000_FLOW_CREDITS_PAUSE'
+   AND obj_description(to_regprocedure('public.flow_begin_durable_run_superseding(uuid,uuid,uuid,uuid,text,text,bigint,text,text,integer,text,jsonb,timestamptz,jsonb)'),'pg_proc')
+    IS NOT DISTINCT FROM 'CREATED_BY_20261029190000_FLOW_BEGIN_DURABLE_RUN_SUPERSEDING'
+   AND obj_description(to_regclass('public.automation_flow_canary_accounts'),'pg_class') IS NOT DISTINCT FROM 'CREATED_BY_20261029170000_FLOW_CANARY_CLAIM_DURABLE'
+   AND obj_description(to_regclass('public.automation_flow_canary_claims'),'pg_class') IS NOT DISTINCT FROM 'CREATED_BY_20261029170000_FLOW_CANARY_CLAIM_DURABLE'),
+  ('20261029220000 body of flow_skip_blocked_outbox',
+   (SELECT md5(btrim(regexp_replace(p.prosrc,'[[:space:]]+',' ','g'))) FROM pg_catalog.pg_proc p
+    WHERE p.oid=to_regprocedure('public.flow_skip_blocked_outbox(integer,integer)'))
+    IS NOT DISTINCT FROM 'dacdf7bb582a7d380651d478f47c6b97'),
+  ('the seven replaced functions with their markers, attributes and the previous or 20261029230000 body',
+   (SELECT count(*) FROM mcfs WHERE mcfs.sound AND mcfs.v IN('previous','20261029230000'))=7),
+  ('canary platform CHECK: the 20261029170000 definition, or the 20261029230000 definition with its marker',
+   (SELECT mcc.n=1 AND (mcc.def=mcc.def_old AND mcc.mk IS DISTINCT FROM 'CREATED_BY_20261029230000_FLOW_MULTICHANNEL_SUPPORT'
+     OR mcc.def=mcc.def_new AND mcc.mk='CREATED_BY_20261029230000_FLOW_MULTICHANNEL_SUPPORT') FROM mcc))
+ ) r(label,ok) WHERE NOT r.ok
+)
+SELECT section,item,status,tenant_id,n,ids,detail FROM (
+ SELECT 0 AS ord,'d_prerequisites'::text AS section,'multichannel_support'::text AS item,
+  CASE WHEN t.fn_new=7 AND t.fn_new_ok=7 AND t.ck_new THEN 'OK'
+   WHEN t.fn_new=0 AND NOT t.ck_touched THEN 'ABSENT'
+   ELSE 'CONFLICT: 20261029230000 objects' END AS status,
+  NULL::uuid AS tenant_id,t.fn_new AS n,NULL::text AS ids,
+  CASE WHEN t.fn_new=7 AND t.fn_new_ok=7 AND t.ck_new
+    THEN 'installed by 20261029230000 (durable claim, begin, resume, run lease, step and outbox reservation accept instagram, whatsapp and facebook; canary registrations accept the three platforms); ingress and sending still need FLOW_MULTICHANNEL_ENABLED; rollback: supabase/rollbacks/20261029230000_flow_multichannel_support.rollback.sql FIRST, before 20261029220000; '||t.versions
+   WHEN t.fn_new=0 AND NOT t.ck_touched
+    THEN '20261029230000 not applied: the durable path accepts instagram only (a WhatsApp/Facebook canary registration is refused by the CHECK); '||coalesce(t.versions,'-')
+   ELSE format('partial or inconsistent 20261029230000 state: %s of 7 functions have its body (%s with marker, attributes and privileges intact), platform CHECK count=%s definition=%s; %s',
+    t.fn_new,t.fn_new_ok,t.n,t.def,t.versions) END AS detail
+ FROM mct t
+ UNION ALL
+ SELECT 1,'d_prerequisites','preflight:20261029230000',
+  CASE WHEN (SELECT count(*) FROM pf230)=0 THEN 'OK' ELSE 'INFO' END,
+  NULL,(SELECT count(*) FROM pf230),NULL,
+  CASE WHEN (SELECT count(*) FROM pf230)=0 THEN 'all 20261029230000 preflight requirements satisfied'
+   ELSE 'unmet (normal until 20261029130000..220000 are applied): '||(SELECT string_agg(label,'; ' ORDER BY label) FROM pf230) END
+) x ORDER BY ord,item;
 
 -- ===========================================================================
 -- (e) Lock-impact estimators. Planner statistics only (no table scans).
