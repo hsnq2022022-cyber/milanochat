@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 import Navbar from "./components/Navbar";
+import FlowErrorBoundary from "./components/FlowErrorBoundary";
 import Hero from "./components/Hero";
 import { Marquee, Footer } from "./components/Extras";
 import Guarantees from "./components/Guarantees";
@@ -24,7 +25,7 @@ export default function App() {
 
   /* معاينة مستقلة لمصمم التدفقات؛ لا تغيّر لوحة التحكم أو الدوال المنشورة. */
   if (route.startsWith("#/flows")) {
-    return <Suspense fallback={<div className="min-h-screen bg-night" />}><FlowBuilder /></Suspense>;
+    return <FlowErrorBoundary><Suspense fallback={<div className="min-h-screen bg-night" />}><FlowBuilder /></Suspense></FlowErrorBoundary>;
   }
 
   /* لوحة التحكم: #/dashboard */

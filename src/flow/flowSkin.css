@@ -8,6 +8,11 @@
  */
 @layer theme, base, components, utilities;
 
+/* Older mobile browsers ignore dvh units; without a height React Flow collapses to 0px (blank screen).
+   Unlayered on purpose so the vh fallback applies, then dvh wins where supported. */
+.flow-skin{height:100vh;min-height:0}
+@supports (height:100dvh){.flow-skin{height:100dvh}}
+
 /* The "Handicrafts" @font-face lives in src/index.css (bundled by Vite); it is only APPLIED here via --fs-display. */
 
 .flow-skin{
