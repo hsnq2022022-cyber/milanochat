@@ -15,6 +15,8 @@ import {isAllowedFlowImageUrl} from "../flow-outbox-worker/mediaPolicy.ts";
 import {instagramButtonTemplateProblem} from "../flow-outbox-worker/flowRichActions.ts";
 import {multichannelCapabilityProblem,DOCUMENT_PLATFORM,type MultichannelPlatform}
  from "./flowPlatformCapabilities.ts";
+import {whatsappCtaProblem,facebookButtonTemplateProblem}
+ from "../flow-outbox-worker/multichannelSend.ts";
 
 type RecordValue=Record<string,unknown>;
 const record=(v:unknown):v is RecordValue=>!!v&&typeof v==="object"&&!Array.isArray(v);
@@ -101,11 +103,35 @@ const triggerPlatformOf=(platform:string)=>
  * platform. Delays (flow-runtime-worker wakes Instagram runs only) and the
  * internal actions tag/untag/notify/handoff (flow-internal-worker runs
  * Instagram only) are refused, so such a graph falls back to V2 instead of
- * stalling; website buttons, images and typed questions are refused too.
+ * stalling; typed questions are refused too. Image messages need
+ * FLOW_MEDIA_SEND_ENABLED and website buttons FLOW_RICH_BUTTONS_ENABLED on
+ * top of FLOW_MULTICHANNEL_ENABLED (multichannelWebsiteMessage / durablePorts).
  */
 const MULTICHANNEL_NODE_KINDS=["trigger","message","question","condition","randomizer","goto","end"];
 const multichannelNodeOk=(d:RecordValue)=>MULTICHANNEL_NODE_KINDS.includes(String(d.kind))||
  (d.kind==="action"&&d.actionType==="set_field");
+/** Document trigger platforms of the multichannel accounts. */
+const multichannelTrigger=(p:string)=>p==="whatsapp"||p==="messenger";
+/**
+ * WhatsApp / Messenger message whose options are ONLY website buttons, only
+ * while FLOW_MULTICHANNEL_ENABLED and FLOW_RICH_BUTTONS_ENABLED are both on.
+ * The node platform must be the trigger platform (the planner picks the
+ * format from it). Limits = the Outbox builders (multichannelSend.ts):
+ * WhatsApp exactly ONE cta_url button; Messenger 1..3 button-template
+ * buttons (flowPlatformCapabilities.ts keeps the Messenger text <= 80).
+ */
+const multichannelWebsiteMessage=(d:RecordValue,triggerPlatform:string)=>{
+ const opts=d.options;
+ if(!multichannelTrigger(triggerPlatform)||!multichannelEnabled()||!richButtonsEnabled()||
+    d.platform!==triggerPlatform||typeof d.text!=="string"||
+    !Array.isArray(opts)||opts.length<1)return false;
+ if(!opts.every(o=>record(o)&&safeId(o.id)&&o.action==="website"&&o.buttonType==="button"&&
+    (o.targetFlowId===undefined||o.targetFlowId==="")))return false;
+ if(new Set(opts.map(o=>(o as RecordValue).id)).size!==opts.length)return false;
+ const buttons=(opts as RecordValue[]).map(o=>({label:o.label,url:o.url}));
+ return (triggerPlatform==="whatsapp"?whatsappCtaProblem(d.text.trim(),buttons):
+  facebookButtonTemplateProblem(d.text.trim(),buttons))===null;
+};
 /** Run variable names usable by set_field/condition. "message" (the inbound text) is never allowed. */
 const fieldOk=(f:unknown):f is string=>typeof f==="string"&&
  /^[a-zA-Z_][a-zA-Z0-9_]{0,63}$/.test(f)&&!f.startsWith("__")&&
@@ -144,12 +170,16 @@ function durablePorts(d:RecordValue,triggerPlatform="instagram"):{ports:string[]
     {ports:["next"],required:["next"]}:null;
   case "message":{
    if(!textOk(d.text)||!Array.isArray(d.options))return null;
-   // Image message (flag ON): no buttons, a single "next" port.
-   if(!plain(d))return triggerPlatform==="instagram"&&imageMessage(d)&&d.options.length===0?
+   // Image message (flag ON): no buttons, a single "next" port. WhatsApp /
+   // Messenger additionally need FLOW_MULTICHANNEL_ENABLED.
+   if(!plain(d))return (triggerPlatform==="instagram"||
+     (multichannelTrigger(triggerPlatform)&&multichannelEnabled()))&&
+    imageMessage(d)&&d.options.length===0?
     {ports:["next"],required:[]}:null;
    if(d.options.length===0)return {ports:["next"],required:[]};
    // Website buttons leave the flow: the run continues through "next".
    if(triggerPlatform==="instagram"&&websiteMessage(d))return {ports:["next"],required:[]};
+   if(multichannelWebsiteMessage(d,triggerPlatform))return {ports:["next"],required:[]};
    if(!stepButtons(d.options,1))return null;
    const ids=(d.options as RecordValue[]).map(o=>o.id as string);
    return {ports:ids,required:ids};
@@ -353,28 +383,37 @@ export const liveEffectKinds=():string[]=>
  * project's public flow-media bucket, mediaPolicy.ts) and a safe node id; the
  * worker validates the stored url again before sending.
  */
-const imageEffectOk=(e:ChainPlan["effects"][number])=>e.kind!=="message_image"||
- (safeId(e.nodeId)&&isAllowedFlowImageUrl(e.url,supabaseHost()));
-/** Website buttons are committed only while FLOW_RICH_BUTTONS_ENABLED is on and representable on Instagram. */
-const websiteEffectOk=(e:ChainPlan["effects"][number])=>!("websiteButtons" in e)||
+const imageEffectOk=(e:ChainPlan["effects"][number],platform:string)=>e.kind!=="message_image"||
+ ((platform==="instagram"||(isMultichannel(platform)&&multichannelEnabled()))&&
+  safeId(e.nodeId)&&isAllowedFlowImageUrl(e.url,supabaseHost()));
+/**
+ * Website buttons are committed only while FLOW_RICH_BUTTONS_ENABLED is on and
+ * representable on the event platform: Instagram button template (unchanged);
+ * WhatsApp cta_url / Messenger button template only with FLOW_MULTICHANNEL_ENABLED.
+ */
+const websiteEffectOk=(e:ChainPlan["effects"][number],platform:string)=>!("websiteButtons" in e)||
  (e.kind==="message"&&richButtonsEnabled()&&
-  instagramButtonTemplateProblem(e.text,e.websiteButtons)===null);
+  (platform==="instagram"?instagramButtonTemplateProblem(e.text,e.websiteButtons)===null:
+   platform==="whatsapp"?multichannelEnabled()&&whatsappCtaProblem(e.text,e.websiteButtons)===null:
+   platform==="facebook"?multichannelEnabled()&&facebookButtonTemplateProblem(e.text,e.websiteButtons)===null:
+   false));
 /**
  * A handoff ends the automated flow: it must be the LAST effect and the run
  * must end in status "handoff" (and "handoff" only with that effect).
+ * `platform` = the event's account platform (default Instagram, unchanged).
  */
-export const safePlan=(plan:ChainPlan)=>{
+export const safePlan=(plan:ChainPlan,platform:string="instagram")=>{
  const kinds=liveEffectKinds();
  return !plan.error&&plan.state.status!=="blocked"&&
  ["completed","sleeping","awaiting_input","handoff"].includes(plan.state.status)&&
  plan.effects.length>=1&&plan.effects.length<=MAX_CHAIN_EFFECTS&&
  plan.effects.every((e,i)=>e.seq===i&&
-  kinds.includes(e.kind)&&!("source" in e)&&imageEffectOk(e)&&websiteEffectOk(e)&&
+  kinds.includes(e.kind)&&!("source" in e)&&imageEffectOk(e,platform)&&websiteEffectOk(e,platform)&&
   (e.kind!=="handoff"||i===plan.effects.length-1))&&
  (plan.state.status==="handoff")===(plan.effects[plan.effects.length-1].kind==="handoff");
 };
 /** After a typed answer a flow may also end silently (answer -> end). */
-const safeAnswerPlan=(plan:ChainPlan)=>safePlan(plan)||
+const safeAnswerPlan=(plan:ChainPlan,platform:string="instagram")=>safePlan(plan,platform)||
  (!plan.error&&plan.state.status==="completed"&&plan.effects.length===0);
 
 export type DurableEvent={
@@ -589,7 +628,7 @@ async function answerTypedQuestion(db:Db,event:DurableEvent,canary:boolean,runId
   const plan=planUntilWait(doc,{...state,variables:withoutReaskCounters(variables)},{
    eventKey:event.eventId,nowMs:Date.now(),seed:seedFromEventKey(event.eventId),answer
   });
-  if(!safeAnswerPlan(plan))return "handled";
+  if(!safeAnswerPlan(plan,event.platform))return "handled";
   return commit(plan.state,effectsPayload(plan.effects));
  }
  const key=reaskField(q.nodeId);
@@ -712,7 +751,7 @@ export async function attemptDurableInstagram(
    // A stale/unknown button for this question behaves like free text.
    if(plan.error==="unsupported button response")
     return cancelThenFallback(db,event.tenantId,run.id,"free_text");
-   if(!safePlan(plan))return "handled";
+   if(!safePlan(plan,event.platform))return "handled";
    const tapClaim=await claimInbound(db,event,canaryMode);
    if(tapClaim!=="acquired")return tapClaim;
    const commit=await db.rpc("flow_resume_button_run",{
@@ -752,7 +791,7 @@ export async function attemptDurableInstagram(
   const plan=planUntilWait(doc,state,{
    eventKey:event.eventId,nowMs:Date.now(),seed:seedFromEventKey(event.eventId)
   });
-  if(!safePlan(plan))return "handled";
+  if(!safePlan(plan,event.platform))return "handled";
   const claimed=await claimInbound(db,event,canaryMode);
   if(claimed!=="acquired")return claimed;
   // Only after this inbound is exclusively claimed (duplicate deliveries stop

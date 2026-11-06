@@ -4,11 +4,15 @@
  * (flow-outbox-worker/multichannelSend.ts) so a graph a platform cannot show
  * is refused up front (V2 fallback) instead of being sent degraded.
  *
- * NOT WIRED into flowDurableIngress.ts yet: the durable SQL chain
- * (automation_flow_canary_accounts CHECK, flow_claim_inbound_durable,
- * flow_begin_durable_run, flow_resume_button_run, outbox lease) is hard-coded
- * to platform 'instagram'. Use together with the generic whitelist once that
- * SQL is generalized. Instagram rules stay in supportedDurableDocument.
+ * Used by flowDurableIngress.ts supportedDurableDocument (WhatsApp/Facebook
+ * only, FLOW_MULTICHANNEL_ENABLED); Instagram rules stay there unchanged.
+ * Representable (message_image / website_buttons): text + image content
+ * blocks (no buttons) and website-only buttons within PLATFORM_LIMITS. This
+ * module is pure: the operator flags (FLOW_MEDIA_SEND_ENABLED for images,
+ * FLOW_RICH_BUTTONS_ENABLED for website buttons) and the image URL allowlist
+ * are enforced by the ingress whitelist, safePlan and the Outbox worker.
+ * Still refused: legacy node images, pdf/collection/delay blocks, delays and
+ * internal actions (ingress), typed questions.
  *
  * Note the id mapping: channel_accounts / runs use "facebook", the flow
  * document trigger uses "messenger" (src/flow/model.ts Platform).
@@ -57,8 +61,18 @@ export function multichannelCapabilityProblem(raw:unknown,platform:MultichannelP
   const d=n.data;
   if(d.kind==="trigger"&&d.platform!==DOCUMENT_PLATFORM[platform])return "trigger_platform_mismatch";
   if(d.kind==="message"){
-   if(!(d.image===""||d.image===undefined)||
-      (Array.isArray(d.contentBlocks)&&d.contentBlocks.length>0))return "media_unsupported";
+   if(!(d.image===""||d.image===undefined))return "media_unsupported";
+   if(Array.isArray(d.contentBlocks)&&d.contentBlocks.length>0){
+    // message_image: text + image blocks only, at least one image, no buttons.
+    const blocks=d.contentBlocks as unknown[];
+    if((Array.isArray(d.options)&&d.options.length>0)||
+       !blocks.every(b=>rec(b)&&(b.type==="image"||b.type==="text"))||
+       !blocks.some(b=>rec(b)&&b.type==="image"))return "media_unsupported";
+    const max=PLATFORM_LIMITS[platform].textPlain;
+    if(chars(d.text)>max||blocks.some(b=>rec(b)&&b.type==="text"&&chars(b.text)>max))
+     return "text_too_long";
+    continue;
+   }
    const p=optionsProblem(platform,d.text,Array.isArray(d.options)?d.options:[]);
    if(p)return p;
   }

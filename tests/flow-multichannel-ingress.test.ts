@@ -290,3 +290,173 @@ test("routes: both objects verify the signature before any parsing side effect o
   ig.indexOf("verifyMetaSignature(")<ig.indexOf('.from("channel_accounts")'));
  assert.match(ig,/Webhook signing secret unavailable" \}, 503/);
 });
+
+// ---- Images and URL buttons on WhatsApp / Facebook: FLOW_MULTICHANNEL_ENABLED AND
+// FLOW_MEDIA_SEND_ENABLED (images) / FLOW_RICH_BUTTONS_ENABLED (website buttons).
+import {safePlan} from "../supabase/functions/milan-api/flowDurableIngress.ts";
+import {planUntilWait,seedFromEventKey} from "../src/flow/runtimeChain.ts";
+import {createRuntimeState} from "../src/flow/runtimePlan.ts";
+const PROJECT="https://abcd1234.supabase.co";
+const MIMG=PROJECT+"/storage/v1/object/public/flow-media/u1/0f8c2b1e-1111-4222-8333-444455556666.png";
+const MWEBP=MIMG.replace(".png",".webp");
+type DocPlatform="whatsapp"|"messenger"|"instagram";
+const imgDoc=(p:DocPlatform,blocks:unknown[]=[{id:"b1",type:"image",url:MIMG},{id:"b2",type:"text",text:"السعر 10"}],
+ over:Record<string,unknown>={})=>({version:3,nodes:[
+ {id:"start",data:{kind:"trigger",platform:p,triggerMode:"message"}},
+ {id:"pic",data:{kind:"message",platform:p,text:"صورة المنتج",image:"",options:[],contentBlocks:blocks,...over}},
+ {id:"after",data:{kind:"message",platform:p,text:"شكرا",image:"",options:[],contentBlocks:[]}}],
+ edges:[{source:"start",target:"pic",sourceHandle:"next"},{source:"pic",target:"after",sourceHandle:"next"}]});
+const webOpt=(i:number,over:Record<string,unknown>={})=>({id:"w"+i,label:"زر "+i,buttonType:"button",
+ action:"website",url:"https://example.com/p"+i,targetFlowId:"",...over});
+const webDoc=(p:DocPlatform,opts:unknown[],text="زوروا متجرنا",over:Record<string,unknown>={})=>({version:3,nodes:[
+ {id:"start",data:{kind:"trigger",platform:p,triggerMode:"message"}},
+ {id:"card",data:{kind:"message",platform:p,text,image:"",contentBlocks:[],options:opts,...over}},
+ {id:"after",data:{kind:"message",platform:p,text:"شكرا",image:"",options:[],contentBlocks:[]}}],
+ edges:[{source:"start",target:"card",sourceHandle:"next"},{source:"card",target:"after",sourceHandle:"next"}]});
+const MEDIA={FLOW_MEDIA_SEND_ENABLED:"true",SUPABASE_URL:PROJECT};
+const RICH={FLOW_RICH_BUTTONS_ENABLED:"true"};
+const ACCOUNT_OF={whatsapp:"whatsapp",messenger:"facebook"} as const;
+const plain=(e:Record<string,string|undefined>)=>({env:{get:(k:string)=>e[k]}});
+
+test("ingress flag matrix: images / URL buttons on WhatsApp and Facebook need multichannel AND the feature flag",async()=>{
+ const cases:Array<[string,unknown,Record<string,string>]>=[
+  ["wa image",imgDoc("whatsapp"),MEDIA],["fb image",imgDoc("messenger"),MEDIA],
+  ["wa url",webDoc("whatsapp",[webOpt(0)]),RICH],["fb url",webDoc("messenger",[webOpt(0),webOpt(1),webOpt(2)]),RICH]];
+ for(const [why,doc,feature] of cases){
+  const docPlatform=(doc as any).nodes[0].data.platform as "whatsapp"|"messenger";
+  const platform=ACCOUNT_OF[docPlatform];
+  const check=(e:Record<string,string|undefined>)=>withEnv(plain(e),()=>supportedDurableDocument(doc,platform));
+  // Multichannel OFF (feature ON or OFF): refused exactly as today (V2 fallback).
+  for(const mc of [undefined,"false","1"]){
+   assert.equal(await check({...feature,FLOW_MULTICHANNEL_ENABLED:mc}),false,why+" multichannel="+mc);
+   assert.equal(await check({FLOW_MULTICHANNEL_ENABLED:mc}),false,why);
+  }
+  // Multichannel ON, feature flag OFF / not exactly "true": refused.
+  for(const off of [undefined,"false","TRUE"]){
+   const e:Record<string,string|undefined>={...feature,FLOW_MULTICHANNEL_ENABLED:"true"};
+   for(const k of Object.keys(feature))if(k!=="SUPABASE_URL")e[k]=off;
+   assert.equal(await check(e),false,why+" feature="+off);
+  }
+  // Both ON: accepted.
+  assert.equal(await check({...feature,FLOW_MULTICHANNEL_ENABLED:"true"}),true,why+" ON+ON");
+  // Never on the wrong account platform.
+  const other=platform==="whatsapp"?"facebook":"whatsapp";
+  assert.equal(await withEnv(plain({...MEDIA,...RICH,FLOW_MULTICHANNEL_ENABLED:"true"}),
+   ()=>supportedDurableDocument(doc,other)),false,why+" on "+other);
+  assert.equal(await withEnv(plain({...MEDIA,...RICH,FLOW_MULTICHANNEL_ENABLED:"true"}),
+   ()=>supportedDurableDocument(doc)),false,why+" on instagram");
+ }
+ // No Deno runtime: fail closed.
+ await withEnv(undefined,()=>assert.equal(supportedDurableDocument(imgDoc("whatsapp"),"whatsapp"),false));
+});
+test("ingress: Instagram image / URL-button documents are identical with the multichannel flag on or off",async()=>{
+ const docs=[imgDoc("instagram"),webDoc("instagram",[webOpt(0)]),webDoc("instagram",[webOpt(0),webOpt(1),webOpt(2)]),
+  webDoc("instagram",[webOpt(0)],"a".repeat(641)),imgDoc("instagram",[{id:"b",type:"image",url:MWEBP}]),
+  webDoc("instagram",[webOpt(0)],undefined,{platform:"whatsapp"})];
+ for(const feature of [{},MEDIA,RICH,{...MEDIA,...RICH}] as Record<string,string>[]){
+  const run=(mc:string|undefined)=>withEnv(plain({...feature,FLOW_MULTICHANNEL_ENABLED:mc}),
+   ()=>docs.map(d=>[supportedDurableDocument(d),supportedDurableDocument(d,"instagram")]));
+  assert.deepEqual(await run("true"),await run(undefined),JSON.stringify(feature));
+ }
+ assert.deepEqual(await withEnv(plain({...MEDIA,...RICH}),()=>docs.map(d=>supportedDurableDocument(d))),
+  [true,true,true,false,true,false],"Instagram rules unchanged");
+});
+test("ingress limits (all flags ON): WhatsApp one cta_url, Facebook 1..3 / text <= 80, flow-media images only",async()=>{
+ await withEnv(plain({...MEDIA,...RICH,FLOW_MULTICHANNEL_ENABLED:"true"}),()=>{
+  const bad:Array<[string,unknown,string]>=[
+   ["wa 2 buttons",webDoc("whatsapp",[webOpt(0),webOpt(1)]),"whatsapp"],
+   ["wa label 21",webDoc("whatsapp",[webOpt(0,{label:"a".repeat(21)})]),"whatsapp"],
+   ["wa http",webDoc("whatsapp",[webOpt(0,{url:"http://example.com"})]),"whatsapp"],
+   ["wa credentials",webDoc("whatsapp",[webOpt(0,{url:"https://u:p@example.com"})]),"whatsapp"],
+   ["wa empty body",webDoc("whatsapp",[webOpt(0)],"  "),"whatsapp"],
+   ["wa url + step",webDoc("whatsapp",[webOpt(0),{id:"s",label:"step"}]),"whatsapp"],
+   ["wa quick_reply type",webDoc("whatsapp",[webOpt(0,{buttonType:"quick_reply"})]),"whatsapp"],
+   ["wa node platform instagram",webDoc("whatsapp",[webOpt(0)],undefined,{platform:"instagram"}),"whatsapp"],
+   ["fb 4 buttons",webDoc("messenger",[0,1,2,3].map(i=>webOpt(i))),"facebook"],
+   ["fb text 81",webDoc("messenger",[webOpt(0)],"a".repeat(81)),"facebook"],
+   ["fb title 21",webDoc("messenger",[webOpt(0,{label:"a".repeat(21)})]),"facebook"],
+   ["fb http",webDoc("messenger",[webOpt(0,{url:"http://example.com"})]),"facebook"],
+   ["fb duplicate ids",webDoc("messenger",[webOpt(0),webOpt(0)]),"facebook"],
+   ["fb node platform whatsapp",webDoc("messenger",[webOpt(0)],undefined,{platform:"whatsapp"}),"facebook"],
+   ["wa image other host",imgDoc("whatsapp",[{id:"b",type:"image",url:MIMG.replace("abcd1234.supabase.co","evil.example.com")}]),"whatsapp"],
+   ["fb image other bucket",imgDoc("messenger",[{id:"b",type:"image",url:PROJECT+"/storage/v1/object/public/avatars/a.png"}]),"facebook"],
+   ["wa image http",imgDoc("whatsapp",[{id:"b",type:"image",url:MIMG.replace("https:","http:")}]),"whatsapp"],
+   ["wa image + buttons",imgDoc("whatsapp",undefined,{options:[{id:"o",label:"x"}]}),"whatsapp"],
+   ["fb pdf block",imgDoc("messenger",[{id:"b",type:"pdf",url:MIMG},{id:"c",type:"image",url:MIMG}]),"facebook"],
+   ["wa text blocks only",imgDoc("whatsapp",[{id:"b",type:"text",text:"x"}]),"whatsapp"],
+   ["wa legacy d.image",imgDoc("whatsapp",[],{image:MIMG}),"whatsapp"],
+  ];
+  for(const [why,doc,platform] of bad)assert.equal(supportedDurableDocument(doc,platform),false,why);
+  assert.equal(supportedDurableDocument(webDoc("whatsapp",[webOpt(0,{label:"😀".repeat(20)})]),"whatsapp"),true);
+  assert.equal(supportedDurableDocument(webDoc("messenger",[webOpt(0)],"a".repeat(80)),"facebook"),true);
+  // WebP passes the ingress allowlist; the WhatsApp worker refuses it (wa_image_format_unsupported, no request).
+  assert.equal(supportedDurableDocument(imgDoc("whatsapp",[{id:"b",type:"image",url:MWEBP}]),"whatsapp"),true);
+ });
+ // Capabilities (pure): images / website buttons representable, limits kept.
+ assert.equal(multichannelCapabilityProblem(imgDoc("whatsapp"),"whatsapp"),null);
+ assert.equal(multichannelCapabilityProblem(imgDoc("messenger"),"facebook"),null);
+ assert.equal(multichannelCapabilityProblem(imgDoc("whatsapp",[{id:"b",type:"pdf",url:MIMG}]),"whatsapp"),"media_unsupported");
+ assert.equal(multichannelCapabilityProblem(imgDoc("whatsapp",undefined,{options:[{id:"o",label:"x"}]}),"whatsapp"),"media_unsupported");
+ assert.equal(multichannelCapabilityProblem(imgDoc("messenger",[{id:"b",type:"image",url:MIMG},{id:"t",type:"text",text:"x".repeat(2001)}]),"facebook"),"text_too_long");
+ assert.equal(multichannelCapabilityProblem(webDoc("whatsapp",[webOpt(0)]),"whatsapp"),null);
+ assert.equal(multichannelCapabilityProblem(webDoc("whatsapp",[webOpt(0),webOpt(1)]),"whatsapp"),"website_buttons_invalid");
+ assert.equal(multichannelCapabilityProblem(webDoc("messenger",[0,1,2,3].map(i=>webOpt(i))),"facebook"),"website_buttons_invalid");
+});
+const planOf=(doc:any,key="mid.start")=>planUntilWait(doc,createRuntimeState(doc,"flow",1),
+ {eventKey:key,nowMs:1750000000000,seed:seedFromEventKey(key)});
+test("planner + safePlan per platform: same effects as Instagram, committed only behind the flags",async()=>{
+ const wa=planOf(webDoc("whatsapp",[webOpt(0)])),fb=planOf(webDoc("messenger",[webOpt(0),webOpt(1),webOpt(2)]));
+ assert.deepEqual(wa.effects.map(e=>e.kind),["message","message"]);
+ assert.deepEqual((wa.effects[0] as any).websiteButtons,[{label:"زر 0",url:"https://example.com/p0"}]);
+ assert.equal((fb.effects[0] as any).websiteButtons.length,3);
+ const img=planOf(imgDoc("whatsapp")),fbImg=planOf(imgDoc("messenger"));
+ assert.deepEqual(img.effects.map(e=>[e.kind,e.seq]),[["message",0],["message_image",1],["message",2],["message",3]]);
+ assert.equal((img.effects[1] as any).url,MIMG);
+ assert.deepEqual(fbImg.effects.map(e=>e.kind),img.effects.map(e=>e.kind));
+ const ALL={...MEDIA,...RICH,FLOW_MULTICHANNEL_ENABLED:"true"};
+ const sp=(e:Record<string,string|undefined>,plan:any,platform:string)=>withEnv(plain(e),()=>safePlan(plan,platform));
+ for(const [plan,platform,feature] of [[wa,"whatsapp","FLOW_RICH_BUTTONS_ENABLED"],[fb,"facebook","FLOW_RICH_BUTTONS_ENABLED"],
+  [img,"whatsapp","FLOW_MEDIA_SEND_ENABLED"],[fbImg,"facebook","FLOW_MEDIA_SEND_ENABLED"]] as const){
+  assert.equal(await sp(ALL,plan,platform),true,platform+" ON");
+  assert.equal(await sp({...ALL,FLOW_MULTICHANNEL_ENABLED:undefined},plan,platform),false,platform+" multichannel OFF");
+  assert.equal(await sp({...ALL,[feature]:undefined},plan,platform),false,platform+" "+feature+" OFF");
+  assert.equal(await sp(ALL,plan,"telegram"),false);
+ }
+ // Re-validated at commit time (tampered / out-of-limit effects are never committed).
+ const tamper=(plan:any,over:Record<string,unknown>)=>({...plan,effects:plan.effects.map((e:any,i:number)=>i===0?{...e,...over}:e)});
+ assert.equal(await sp(ALL,tamper(wa,{websiteButtons:[{label:"a",url:"https://a.example"},{label:"b",url:"https://b.example"}]}),"whatsapp"),false);
+ assert.equal(await sp(ALL,tamper(wa,{websiteButtons:[{label:"a",url:"http://a.example"}]}),"whatsapp"),false);
+ assert.equal(await sp(ALL,tamper(wa,{text:"x".repeat(1025)}),"whatsapp"),false);
+ assert.equal(await sp(ALL,tamper(fb,{websiteButtons:[0,1,2,3].map(i=>({label:"b",url:"https://a.example/"+i}))}),"facebook"),false);
+ assert.equal(await sp(ALL,tamper(fb,{text:"x".repeat(641)}),"facebook"),false);
+ const badImg={...img,effects:img.effects.map((e:any)=>e.kind==="message_image"?{...e,url:MIMG.replace("abcd1234.supabase.co","evil.example.com")}:e)};
+ assert.equal(await sp(ALL,badImg,"whatsapp"),false);
+ assert.equal(await sp({...ALL,SUPABASE_URL:"https://other9999.supabase.co"},img,"whatsapp"),false,"other project");
+ // Default platform (Instagram) keeps its rule: a 1-button plan is valid there, a 4-button one is not.
+ assert.equal(await sp({...RICH},wa,"instagram"),true);
+ assert.equal(await sp({...ALL},wa),await sp({...RICH},wa));
+});
+for(const [platform,docPlatform] of [["whatsapp","whatsapp"],["facebook","messenger"]] as const){
+ test(`end-to-end ${platform}: image and URL-button runs commit their effects only with every flag ON`,async()=>{
+  const ALL={...MEDIA,...RICH,FLOW_MULTICHANNEL_ENABLED:"true",FLOW_DURABLE_INGRESS_ENABLED:"true",
+   FLOW_DURABLE_CANARY_ACCOUNT_ID:ids.accountId};
+  const ev={...ids,platform,providerEventIdGenuine:true,eventId:"mid.start"};
+  for(const [doc,feature,kinds] of [
+   [imgDoc(docPlatform),"FLOW_MEDIA_SEND_ENABLED",["message","message_image","message","message"]],
+   [webDoc(docPlatform,[webOpt(0)]),"FLOW_RICH_BUTTONS_ENABLED",["message","message"]]] as const){
+   const on=mcDb(platform,{document:doc});
+   assert.equal(await withEnv(plain(ALL),()=>attemptDurableInstagram(on.db,ev)),"handled");
+   assert.deepEqual(on.calls.map(c=>c.name),["flow_claim_inbound_durable","flow_begin_durable_run_superseding"]);
+   const effects=on.calls[1].args.p_effects;
+   assert.deepEqual(effects.map((e:any)=>e.kind),kinds);
+   assert.equal(on.calls[0].args.p_platform,platform);
+   if(feature==="FLOW_MEDIA_SEND_ENABLED")assert.equal(effects[1].payload.url,MIMG);
+   else assert.deepEqual(effects[0].payload.websiteButtons,[{label:"زر 0",url:"https://example.com/p0"}]);
+   for(const off of [{FLOW_MULTICHANNEL_ENABLED:undefined},{[feature]:undefined}]){
+    const h=mcDb(platform,{document:doc});
+    assert.equal(await withEnv(plain({...ALL,...off}),()=>attemptDurableInstagram(h.db,ev)),"fallback",JSON.stringify(off));
+    assert.deepEqual(h.calls,[],"nothing claimed or committed");
+   }
+  }
+ });
+}

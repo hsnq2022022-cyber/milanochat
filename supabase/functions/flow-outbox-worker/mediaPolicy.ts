@@ -39,10 +39,16 @@ export function isAllowedFlowImageUrl(raw:unknown,supabaseUrl?:string|null):bool
 export type MediaGate={action:"send";url:string}|{action:"hold"}|
  {action:"fail";code:"media_platform_unsupported"|"media_url_invalid"};
 export function mediaEffectGate(input:{flagEnabled:boolean;platform:unknown;
- payload:unknown;supabaseUrl?:string|null}):MediaGate{
+ payload:unknown;supabaseUrl?:string|null;
+ /** FLOW_MULTICHANNEL_ENABLED==="true" (WhatsApp/Facebook images, multichannelSend.ts). */
+ multichannelEnabled?:boolean}):MediaGate{
  // Flag OFF: leave the row untouched (like the other operator gates).
  if(!input.flagEnabled)return {action:"hold"};
- if(input.platform!=="instagram")return {action:"fail",code:"media_platform_unsupported"};
+ // WhatsApp/Facebook: sent only by the multichannel builders while
+ // FLOW_MULTICHANNEL_ENABLED is on; that flag OFF also leaves the row untouched.
+ const multichannel=input.platform==="whatsapp"||input.platform==="facebook";
+ if(multichannel&&input.multichannelEnabled!==true)return {action:"hold"};
+ if(input.platform!=="instagram"&&!multichannel)return {action:"fail",code:"media_platform_unsupported"};
  const p=input.payload as Record<string,unknown>|null;
  const url=p&&typeof p==="object"?p.url:undefined;
  if(!isAllowedFlowImageUrl(url,input.supabaseUrl))return {action:"fail",code:"media_url_invalid"};

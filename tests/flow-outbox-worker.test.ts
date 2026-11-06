@@ -413,9 +413,30 @@ test("worker media gate: flag OFF holds, other platforms and bad URLs fail perma
  const p={kind:"message_image",url:IMG,seq:0};
  assert.deepEqual(mediaEffectGate({flagEnabled:false,platform:"instagram",payload:p,supabaseUrl:PROJECT}),{action:"hold"});
  assert.deepEqual(mediaEffectGate({flagEnabled:false,platform:"whatsapp",payload:{url:"x"},supabaseUrl:PROJECT}),{action:"hold"});
- for(const platform of ["facebook","whatsapp","",undefined])
-  assert.deepEqual(mediaEffectGate({flagEnabled:true,platform,payload:p,supabaseUrl:PROJECT}),
-   {action:"fail",code:"media_platform_unsupported"},String(platform));
+ for(const platform of ["",undefined,"telegram","Instagram"])
+  for(const multichannelEnabled of [undefined,false,true])
+   assert.deepEqual(mediaEffectGate({flagEnabled:true,platform,payload:p,supabaseUrl:PROJECT,multichannelEnabled}),
+    {action:"fail",code:"media_platform_unsupported"},String(platform));
+ // WhatsApp/Facebook: FLOW_MULTICHANNEL_ENABLED OFF (or media OFF) leaves the row untouched (hold, no request);
+ // ON: the same allowlist as Instagram decides (multichannelSend.ts builds the request).
+ for(const platform of ["facebook","whatsapp"]){
+  for(const multichannelEnabled of [undefined,false])
+   assert.deepEqual(mediaEffectGate({flagEnabled:true,platform,payload:p,supabaseUrl:PROJECT,multichannelEnabled}),
+    {action:"hold"},platform);
+  assert.deepEqual(mediaEffectGate({flagEnabled:false,platform,payload:p,supabaseUrl:PROJECT,multichannelEnabled:true}),
+   {action:"hold"},platform);
+  assert.deepEqual(mediaEffectGate({flagEnabled:true,platform,payload:p,supabaseUrl:PROJECT,multichannelEnabled:true}),
+   {action:"send",url:IMG},platform);
+  for(const url of BAD_URLS)
+   assert.deepEqual(mediaEffectGate({flagEnabled:true,platform,payload:{...p,url},supabaseUrl:PROJECT,multichannelEnabled:true}),
+    {action:"fail",code:"media_url_invalid"},platform+" "+String(url));
+ }
+ // Instagram is identical with the multichannel flag on or off.
+ for(const multichannelEnabled of [undefined,false,true]){
+  assert.deepEqual(mediaEffectGate({flagEnabled:true,platform:"instagram",payload:p,supabaseUrl:PROJECT,multichannelEnabled}),{action:"send",url:IMG});
+  assert.deepEqual(mediaEffectGate({flagEnabled:true,platform:"instagram",payload:{...p,url:BAD_URLS[0]},supabaseUrl:PROJECT,multichannelEnabled}),
+   {action:"fail",code:"media_url_invalid"});
+ }
  for(const url of BAD_URLS)
   assert.deepEqual(mediaEffectGate({flagEnabled:true,platform:"instagram",payload:{...p,url},supabaseUrl:PROJECT}),
    {action:"fail",code:"media_url_invalid"},String(url));
@@ -537,9 +558,11 @@ test("worker wiring: finish maps media_rejected to 'rejected' (fallback uncertai
  assert.match(c,/if\(rejected===null\)return false;/);
  assert.match(c,/return await finish\(status\)===true;/);
  assert.match(code,/report\(media\.rejected\?"dead_letter_media_rejected":res\);/);
- // media.failure is set only by the image send's catch: text sends never become 'rejected'.
- assert.equal((code.match(/media\.failure=(?!=)/g)??[]).length,1);
+ // media.failure is set only by the image sends' catch (Instagram; multichannel only when
+ // imageUrl is set): text sends never become 'rejected'.
+ assert.equal((code.match(/media\.failure=(?!=)/g)??[]).length,2);
  assert.match(code,/\.catch\(e=>\{media\.failure=classifyMediaFailure\(e\);throw e;\}\)/);
+ assert.match(code,/\n\s+if\(imageUrl!==undefined\)media\.failure=classifyMediaFailure\(e\);\n/);
  assert.equal((code.match(/sb\.rpc\("consume_flow_reply"/g)??[]).length,1,"billing untouched");
  const eo=readFileSync("supabase/functions/flow-outbox-worker/executeOnce.ts","utf8");
  assert.match(eo,/confirm\(status:"confirmed"\|"uncertain",providerId:string\|null\):Promise<boolean>;/,"executeOnce unchanged");

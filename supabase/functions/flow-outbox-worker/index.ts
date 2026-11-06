@@ -17,7 +17,8 @@
  */
 import {createClient} from "npm:@supabase/supabase-js@2";
 import {acceptsFlowWorkerBearer} from "../flowWorkerAuth.ts";
-import {sendProviderMessage,decryptAccountToken,encryptMessageBody,deliveredText} from "./deliveryCore.ts";
+import {sendProviderMessage,decryptAccountToken,encryptMessageBody,deliveredText,type ProviderRequest}
+ from "./deliveryCore.ts";
 import {answerWithVerifiedKnowledgeOutcome,knowledgeQuestionValid,openAIKnowledgeDependencies}
  from "./flowKnowledge.ts";
 import {resolveKnowledgeEffect,recoverKnowledgeCharge,AI_MAX_ATTEMPTS,AI_CLAIM_LEASE_SECONDS,
@@ -247,14 +248,16 @@ Deno.serve(async req=>{
        payload.inputMode!=="buttons")){
     report("blocked");continue;
    }
-   // Instagram image attachment (mediaPolicy.ts), decided before any send.
-   // Flag OFF: row untouched (any status). Other platform / URL outside the
-   // allowlist: cancelled for good without a request. Already sent
-   // (charge_pending): billing recovery below, never a send.
+   // Image attachment (mediaPolicy.ts), decided before any send. Instagram:
+   // deliveryCore as before; WhatsApp/Facebook: multichannelSend.ts only while
+   // FLOW_MULTICHANNEL_ENABLED is on too. A flag OFF: row untouched (any
+   // status). Other platform / URL outside the allowlist: cancelled for good
+   // without a request. Already sent (charge_pending): billing recovery below.
    let imageUrl:string|undefined;
    if(effect.effect_kind==="message_image"){
     const media=mediaEffectGate({flagEnabled:env("FLOW_MEDIA_SEND_ENABLED")==="true",
-     platform:account.platform,payload,supabaseUrl:base});
+     platform:account.platform,payload,supabaseUrl:base,
+     multichannelEnabled:env("FLOW_MULTICHANNEL_ENABLED")==="true"});
     if(media.action==="hold"||(effect.delivery_status==="charge_pending"&&media.action!=="send")){
      report("blocked");continue;
     }
@@ -374,12 +377,16 @@ Deno.serve(async req=>{
    }
    // WhatsApp/Facebook (flag ON only, multichannelSend.ts): not representable
    // (more than 3 WhatsApp reply buttons, cta_url mixed or with several URLs,
-   // text/title over the platform limit, ...) is cancelled for good BEFORE any
-   // reservation and without a request. Already sent: left for review.
-   if(multichannel && imageUrl===undefined){
-     const problem=multichannelPayloadProblem({platform:account.platform,
-      externalId:String(account.external_id??""),token:"validation-only",recipient,
-      text:messageText,quickReplies,websiteButtons});
+   // text/title over the platform limit, WhatsApp .webp image, ...) is
+   // cancelled for good BEFORE any reservation and without a request.
+   // Already sent: left for review.
+   const multichannelRequest=(token:string):ProviderRequest=>imageUrl!==undefined?
+    {platform:account.platform,externalId:String(account.external_id??""),
+     token,recipient,text:"",imageUrl,imageHost:base}:
+    {platform:account.platform,externalId:String(account.external_id??""),
+     token,recipient,text:messageText,quickReplies,websiteButtons};
+   if(multichannel){
+     const problem=multichannelPayloadProblem(multichannelRequest("validation-only"));
      if(problem){
       if(effect.delivery_status==="charge_pending"){report("blocked");continue;}
       console.warn("[outbox] multichannel payload not sendable",{id:effect.id,code:problem});
@@ -469,9 +476,10 @@ Deno.serve(async req=>{
    const media:{failure:MediaFailure|null;rejected:boolean}={failure:null,rejected:false};
    // WhatsApp/Facebook (FLOW_MULTICHANNEL_ENABLED only): same reserve ->
    // send once -> finish -> persist/bill sequence. Failures are classified for
-   // the report only: the delivery finishes 'uncertain' (never resent;
-   // 'rejected' is image-only in SQL).
-   if(multichannel && imageUrl===undefined){
+   // the report; text finishes 'uncertain' (never resent). An image (also
+   // FLOW_MEDIA_SEND_ENABLED) permanently rejected by Meta (4xx, e.g. 131047
+   // or 100) is finished 'rejected' (dead_letter) exactly like Instagram images.
+   if(multichannel){
     let multichannelFailure:MultichannelFailure|null=null;
     const sent=await executeOnce({
      reserve:async()=>{
@@ -481,21 +489,31 @@ Deno.serve(async req=>{
       if(error){console.error("[outbox] reserve error",{code:error.code});return false;}
       return data===true;
      },
-     send:()=>sendMultichannelMessage({
-      platform:account.platform,externalId:String(account.external_id??""),
-      token,recipient,text:messageText,quickReplies,websiteButtons
-     }).catch(e=>{multichannelFailure=classifyMultichannelFailure(e);throw e;}),
+     send:()=>sendMultichannelMessage(multichannelRequest(token)).catch(e=>{
+      multichannelFailure=classifyMultichannelFailure(e);
+      if(imageUrl!==undefined)media.failure=classifyMediaFailure(e);
+      throw e;
+     }),
      confirm:async(status,providerId)=>{
-      const {data,error}=await sb.rpc("flow_finish_outbox_delivery",{
-       p_tenant:effect.tenant_id,p_outbox:effect.id,p_result:status,
-       p_provider_message_id:providerId
-      });
-      if(error){console.error("[outbox] finish error",{code:error.code});return false;}
-      return data===true;
+      const finish=async(result:FinishOutcome):Promise<boolean|null>=>{
+       const {data,error}=await sb.rpc("flow_finish_outbox_delivery",{
+        p_tenant:effect.tenant_id,p_outbox:effect.id,p_result:result,
+        p_provider_message_id:providerId
+       });
+       if(error){console.error("[outbox] finish error",{code:error.code});return null;}
+       return data===true;
+      };
+      // Text: media.failure stays null, so this is exactly finish(status).
+      if(finishOutcome(status,media.failure)==="rejected"){
+       const rejected=await finish("rejected");
+       if(rejected===true){media.rejected=true;return true;}
+       if(rejected===null)return false;
+      }
+      return await finish(status)===true;
      },
      persistAndBill
     });
-    report(sent);
+    report(media.rejected?"dead_letter_media_rejected":sent);
     if(multichannelFailure){
      console.warn("[outbox] multichannel send failed",{id:effect.id,code:multichannelFailure});
      report("multichannel_"+multichannelFailure);

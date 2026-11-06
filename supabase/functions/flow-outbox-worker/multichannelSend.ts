@@ -10,7 +10,8 @@
  * sent text. No implicit retry: any failed send is classified, never resent.
  */
 import {scrubPlaceholders,ProviderHttpError,type ProviderRequest} from "./deliveryCore.ts";
-import {metaQuickReplies,messengerWebsiteButtons} from "./flowRichActions.ts";
+import {metaQuickReplies} from "./flowRichActions.ts";
+import {isAllowedFlowImageUrl} from "./mediaPolicy.ts";
 
 /**
  * Same Graph version as every other worker call (deliveryCore.ts uses v21.0).
@@ -22,16 +23,19 @@ const GRAPH="https://graph.facebook.com/"+GRAPH_VERSION;
 export const WA_TEXT_MAX=4096,WA_BODY_MAX=1024,WA_BUTTONS_MAX=3,WA_BUTTON_TITLE_MAX=20,
  WA_CTA_DISPLAY_MAX=20,WA_URL_MAX=2000;
 export const FB_TEXT_MAX=2000;
+/** Messenger button template (template_type "button"): text <= 640, 1..3 web_url buttons, title <= 20. */
+export const FB_BUTTON_TEXT_MAX=640,FB_BUTTONS_MAX=3,FB_BUTTON_TITLE_MAX=20;
 /** Meta error code: free-form message outside the 24h customer-service window. */
 export const WA_OUTSIDE_WINDOW_CODE=131047;
 
 export type MultichannelProblem=
- "mc_platform_invalid"|"mc_request_invalid"|"mc_image_unsupported"|
+ "mc_platform_invalid"|"mc_request_invalid"|"mc_image_request_invalid"|"mc_image_url_invalid"|
  "wa_phone_id_invalid"|"wa_text_invalid"|"wa_text_too_long"|"wa_body_too_long"|
  "wa_mixed_buttons"|"wa_too_many_buttons"|"wa_button_title_invalid"|"wa_button_id_invalid"|
  "wa_button_duplicate"|"wa_cta_url_single_only"|"wa_cta_display_text_invalid"|"wa_cta_url_invalid"|
+ "wa_image_format_unsupported"|
  "fb_text_invalid"|"fb_text_too_long"|"fb_mixed_buttons"|"fb_quick_replies_invalid"|
- "fb_website_buttons_invalid";
+ "fb_website_buttons_invalid"|"fb_button_text_too_long"|"fb_button_title_invalid"|"fb_button_url_invalid";
 export type BuiltRequest={url:string;headers:Record<string,string>;payload:Record<string,unknown>};
 export type BuildResult={ok:true;request:BuiltRequest}|{ok:false;code:MultichannelProblem};
 
@@ -60,6 +64,51 @@ const baseOk=(i:ProviderRequest)=>!!i&&typeof i==="object"&&
  typeof i.text==="string";
 
 /**
+ * WhatsApp interactive cta_url (pure, shared with milan-api/flowDurableIngress.ts):
+ * exactly ONE website button, display_text <= 20 code points, https url
+ * (no credentials/localhost), body text non-empty and <= 1024 code points.
+ * Meta requires interactive.body.text for cta_url, so an empty body is refused.
+ */
+export function whatsappCtaProblem(text:unknown,buttons:unknown):MultichannelProblem|null{
+ if(!nonEmpty(text))return "wa_text_invalid";
+ if(!Array.isArray(buttons)||buttons.length!==1)return "wa_cta_url_single_only";
+ if(chars(text)>WA_BODY_MAX)return "wa_body_too_long";
+ const b=buttons[0] as {label?:unknown;url?:unknown}|null;
+ if(!b||typeof b!=="object"||!titleOk(b.label,WA_CTA_DISPLAY_MAX))return "wa_cta_display_text_invalid";
+ if(!httpsUrl(b.url))return "wa_cta_url_invalid";
+ return null;
+}
+/**
+ * Messenger button template (pure, shared with the ingress): text non-empty
+ * and <= 640 code points, 1..3 web_url buttons, title <= 20 code points, https url.
+ */
+export function facebookButtonTemplateProblem(text:unknown,buttons:unknown):MultichannelProblem|null{
+ if(!nonEmpty(text))return "fb_text_invalid";
+ if(!Array.isArray(buttons)||buttons.length<1||buttons.length>FB_BUTTONS_MAX)return "fb_website_buttons_invalid";
+ if(chars(text)>FB_BUTTON_TEXT_MAX)return "fb_button_text_too_long";
+ for(const raw of buttons as unknown[]){
+  const b=raw&&typeof raw==="object"?raw as {label?:unknown;url?:unknown}:null;
+  if(!b||!titleOk(b.label,FB_BUTTON_TITLE_MAX))return "fb_button_title_invalid";
+  if(!httpsUrl(b.url))return "fb_button_url_invalid";
+ }
+ return null;
+}
+/**
+ * Image request (message_image): text "" and no buttons, imageHost (SUPABASE_URL)
+ * present and the URL inside the project's public flow-media bucket
+ * (mediaPolicy.ts isAllowedFlowImageUrl, the same allowlist as Instagram).
+ */
+function imageProblem(input:ProviderRequest):MultichannelProblem|null{
+ if(input.text!==""||input.quickReplies!==undefined||input.websiteButtons!==undefined)
+  return "mc_image_request_invalid";
+ if(typeof input.imageHost!=="string"||!input.imageHost||
+    !isAllowedFlowImageUrl(input.imageUrl,input.imageHost))return "mc_image_url_invalid";
+ return null;
+}
+/** WhatsApp image messages accept JPEG/PNG only; the editor uploads WebP (refused, no request). */
+const webpPath=(url:string)=>{try{return /\.webp$/i.test(new URL(url).pathname);}catch{return true;}};
+
+/**
  * WhatsApp Cloud API body:
  *  text:     {messaging_product,recipient_type,to,type:"text",text:{body}}      body <= 4096
  *  buttons:  type:"interactive", interactive:{type:"button",body:{text},
@@ -68,19 +117,30 @@ const baseOk=(i:ProviderRequest)=>!!i&&typeof i==="object"&&
  *  cta_url:  type:"interactive", interactive:{type:"cta_url",body:{text},
  *            action:{name:"cta_url",parameters:{display_text,url}}}
  *            exactly ONE website button, display_text <= 20, https url, body <= 1024
+ *  image:    {messaging_product,recipient_type,to,type:"image",image:{link}}   (no caption)
+ *            flow-media allowlist; .webp refused (WhatsApp: JPEG/PNG only)
  */
 export function buildWhatsAppRequest(raw:ProviderRequest):BuildResult{
  if(!raw||raw.platform!=="whatsapp")return {ok:false,code:"mc_platform_invalid"};
- if(raw.imageUrl!==undefined)return {ok:false,code:"mc_image_unsupported"};
- const input=scrubPlaceholders(raw);
+ const image=raw.imageUrl!==undefined;
+ const input=image?raw:scrubPlaceholders(raw);
  if(!baseOk(input))return {ok:false,code:"mc_request_invalid"};
  if(typeof input.externalId!=="string"||!/^[0-9]{5,30}$/.test(input.externalId))
   return {ok:false,code:"wa_phone_id_invalid"};
+ const head={messaging_product:"whatsapp",recipient_type:"individual",to:input.recipient};
+ const done=(payload:Record<string,unknown>):BuildResult=>({ok:true,request:{
+  url:GRAPH+"/"+input.externalId+"/messages",
+  headers:{"content-type":"application/json",authorization:"Bearer "+input.token},payload}});
+ if(image){
+  const problem=imageProblem(input);
+  if(problem)return {ok:false,code:problem};
+  if(webpPath(input.imageUrl as string))return {ok:false,code:"wa_image_format_unsupported"};
+  return done({...head,type:"image",image:{link:input.imageUrl}});
+ }
  const text=input.text;
  if(!nonEmpty(text))return {ok:false,code:"wa_text_invalid"};
  const replies=input.quickReplies,sites=input.websiteButtons;
  if(replies!==undefined&&sites!==undefined)return {ok:false,code:"wa_mixed_buttons"};
- const head={messaging_product:"whatsapp",recipient_type:"individual",to:input.recipient};
  let payload:Record<string,unknown>;
  if(replies!==undefined){
   if(!Array.isArray(replies)||replies.length<1)return {ok:false,code:"wa_button_id_invalid"};
@@ -97,35 +157,43 @@ export function buildWhatsAppRequest(raw:ProviderRequest):BuildResult{
   }
   payload={...head,type:"interactive",interactive:{type:"button",body:{text},action:{buttons}}};
  }else if(sites!==undefined){
-  if(!Array.isArray(sites)||sites.length!==1)return {ok:false,code:"wa_cta_url_single_only"};
-  if(chars(text)>WA_BODY_MAX)return {ok:false,code:"wa_body_too_long"};
+  const problem=whatsappCtaProblem(text,sites);
+  if(problem)return {ok:false,code:problem};
   const b=sites[0];
-  if(!b||!titleOk(b.label,WA_CTA_DISPLAY_MAX))return {ok:false,code:"wa_cta_display_text_invalid"};
-  const url=httpsUrl(b.url);
-  if(!url)return {ok:false,code:"wa_cta_url_invalid"};
   payload={...head,type:"interactive",interactive:{type:"cta_url",body:{text},
-   action:{name:"cta_url",parameters:{display_text:b.label,url}}}};
+   action:{name:"cta_url",parameters:{display_text:b.label,url:httpsUrl(b.url) as string}}}};
  }else{
   if(chars(text)>WA_TEXT_MAX)return {ok:false,code:"wa_text_too_long"};
   payload={...head,type:"text",text:{body:text}};
  }
- return {ok:true,request:{url:GRAPH+"/"+input.externalId+"/messages",
-  headers:{"content-type":"application/json",authorization:"Bearer "+input.token},payload}};
+ return done(payload);
 }
 
 /**
  * Facebook Messenger Send API body:
  *  {recipient:{id},messaging_type:"RESPONSE",message:{text}}                  text <= 2000
  *  + quick_replies:[{content_type:"text",title,payload:"flow-choice:<id>"}]    1..13, title <= 20
- *  website buttons: message = existing generic template (messengerWebsiteButtons:
- *  1..3 web_url buttons, title <= 20, card title <= 80). Never mixed.
+ *  website buttons: button template {attachment:{type:"template",payload:{
+ *   template_type:"button",text,buttons:[{type:"web_url",url,title}]}}}
+ *   text <= 640, 1..3 buttons, title <= 20, https. Never mixed with quick replies.
+ *   (The legacy non-multichannel Messenger path keeps its generic template,
+ *   flowRichActions.ts messengerWebsiteButtons, unchanged.)
+ *  image: message:{attachment:{type:"image",payload:{url}}} (flow-media allowlist).
  * Token in the Authorization header (never in the URL or body).
  */
 export function buildFacebookRequest(raw:ProviderRequest):BuildResult{
  if(!raw||raw.platform!=="facebook")return {ok:false,code:"mc_platform_invalid"};
- if(raw.imageUrl!==undefined)return {ok:false,code:"mc_image_unsupported"};
- const input=scrubPlaceholders(raw);
+ const image=raw.imageUrl!==undefined;
+ const input=image?raw:scrubPlaceholders(raw);
  if(!baseOk(input))return {ok:false,code:"mc_request_invalid"};
+ const envelope=(message:Record<string,unknown>):BuildResult=>({ok:true,request:{url:GRAPH+"/me/messages",
+  headers:{"content-type":"application/json",authorization:"Bearer "+input.token},
+  payload:{recipient:{id:input.recipient},messaging_type:"RESPONSE",message}}});
+ if(image){
+  const problem=imageProblem(input);
+  if(problem)return {ok:false,code:problem};
+  return envelope({attachment:{type:"image",payload:{url:input.imageUrl}}});
+ }
  const text=input.text;
  if(!nonEmpty(text))return {ok:false,code:"fb_text_invalid"};
  if(chars(text)>FB_TEXT_MAX)return {ok:false,code:"fb_text_too_long"};
@@ -135,12 +203,13 @@ export function buildFacebookRequest(raw:ProviderRequest):BuildResult{
  try{
   if(replies!==undefined)message={text,quick_replies:metaQuickReplies(replies,"facebook")};
  }catch{return {ok:false,code:"fb_quick_replies_invalid"};}
- try{
-  if(sites!==undefined)message=messengerWebsiteButtons(text,sites);
- }catch{return {ok:false,code:"fb_website_buttons_invalid"};}
- return {ok:true,request:{url:GRAPH+"/me/messages",
-  headers:{"content-type":"application/json",authorization:"Bearer "+input.token},
-  payload:{recipient:{id:input.recipient},messaging_type:"RESPONSE",message}}};
+ if(sites!==undefined){
+  const problem=facebookButtonTemplateProblem(text,sites);
+  if(problem)return {ok:false,code:problem};
+  message={attachment:{type:"template",payload:{template_type:"button",text,
+   buttons:sites.map(b=>({type:"web_url",url:httpsUrl(b.url) as string,title:b.label}))}}};
+ }
+ return envelope(message);
 }
 
 /** Pre-reservation check used by the worker: null = representable. */
@@ -186,8 +255,9 @@ export function sendMultichannelMessage(input:ProviderRequest,fetcher:typeof fet
 
 /**
  * Failure classification after a reserved send (reported in the tick outcome).
- * NONE of these leads to a resend; the delivery is finished 'uncertain'
- * (flow_finish_outbox_delivery 'rejected' is image-only in SQL).
+ * NONE of these leads to a resend; a text delivery is finished 'uncertain'
+ * (flow_finish_outbox_delivery 'rejected' is image-only in SQL; image effects
+ * additionally use mediaPolicy.ts classifyMediaFailure/finishOutcome).
  *  wa_outside_service_window: Meta 131047 (free-form outside the 24h window), permanent;
  *  provider_rejected:         other 4xx (not 408/429), permanent;
  *  auth:                      401/403 or code 190;

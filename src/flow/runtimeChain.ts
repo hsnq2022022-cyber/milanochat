@@ -187,8 +187,8 @@ export function renderCollectedTemplate(text: string, variables: Record<string, 
   if (!hasPlaceholder(text)) return text;
   return clipUtf8Bytes(replacePlaceholders(text, customerResolver(variables, fields)), MAX_RENDERED_BYTES);
 }
-/** Instagram button template text limit (code points) / Messenger generic title (chars). */
-const IG_WEB_TEXT_MAX = 640, MESSENGER_WEB_TEXT_MAX = 80;
+/** Instagram button template text limit (code points) / WhatsApp cta_url body / Messenger card (chars). */
+const IG_WEB_TEXT_MAX = 640, WA_WEB_TEXT_MAX = 1024, MESSENGER_WEB_TEXT_MAX = 80;
 /** Max characters of a staff notification body (flow_staff_notifications CHECK 1..500). */
 export const MAX_NOTIFICATION_CHARS = 500;
 function rendered(effect: PlannedEffect, variables: Record<string, string>, fields: Set<string>,
@@ -212,8 +212,9 @@ function rendered(effect: PlannedEffect, variables: Record<string, string>, fiel
   }
   if (!effect.websiteButtons) return text === effect.text ? effect : { ...effect, text };
   // Website card text: rendering must not exceed the publish-time limit
-  // (Instagram 640 code points, Messenger 80 chars); clipped like other texts.
-  if (text !== effect.text) text = clipChars(text, platform === "instagram" ? IG_WEB_TEXT_MAX : MESSENGER_WEB_TEXT_MAX);
+  // (Instagram 640 code points, WhatsApp 1024, Messenger 80 chars); clipped like other texts.
+  if (text !== effect.text) text = clipChars(text, platform === "instagram" ? IG_WEB_TEXT_MAX :
+    platform === "whatsapp" ? WA_WEB_TEXT_MAX : MESSENGER_WEB_TEXT_MAX);
   const buttons = effect.websiteButtons.map(b => {
     const l = label(b.label);
     return l === b.label ? b : { ...b, label: l };
