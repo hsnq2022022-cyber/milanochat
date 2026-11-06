@@ -29,7 +29,10 @@ test("lifecycle migration is the newest migration",()=>{
  // 20261029170000_flow_canary_claim_durable only adds objects (requires this chain).
  // 20261029180000_flow_durable_button_run_guards replaces only the two durable RPC bodies (requires this chain).
  // 20261029190000_flow_begin_durable_run_superseding only adds one function calling flow_cancel_run (requires this chain).
- const successors=["20261029140000","20261029150000","20261029160000","20261029170000","20261029180000","20261029190000"];
+ // 20261029200000_flow_media_storage is an independent storage bucket (no flow object).
+ // 20261029210000_flow_media_effects requires 190000 (and this migration) (tests/flow-media-effects.test.mjs).
+ const successors=["20261029140000","20261029150000","20261029160000","20261029170000","20261029180000","20261029190000",
+  "20261029200000","20261029210000"];
  for(const s of stamps)if(s!==mine&&!successors.includes(s))
   assert.ok(s<mine,`older migration ${s} must precede ${mine}`);
 });

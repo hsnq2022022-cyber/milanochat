@@ -490,3 +490,57 @@ test("worker wiring: image gate precedes reservation, flag default OFF, retry qu
  const mp=readFileSync("supabase/functions/flow-outbox-worker/mediaPolicy.ts","utf8");
  assert.match(mp,/DO NOT ENABLE/);
 });
+// ---- 20261029210000: a permanent image rejection ends as dead_letter ('rejected'), never resent.
+import {finishOutcome} from "../supabase/functions/flow-outbox-worker/mediaPolicy.ts";
+test("finish outcome: only media_rejected becomes 'rejected'; confirmed, auth and uncertain unchanged",()=>{
+ assert.equal(finishOutcome("uncertain","media_rejected"),"rejected");
+ for(const f of ["auth","uncertain",null] as const)assert.equal(finishOutcome("uncertain",f),"uncertain",String(f));
+ for(const f of ["media_rejected","auth","uncertain",null] as const)assert.equal(finishOutcome("confirmed",f),"confirmed",String(f));
+ assert.equal(statusAfterOutcome("dead_letter_media_rejected"),"dead_letter");
+ assert.equal(statusAfterOutcome("media_rejected"),undefined,"the classification key alone changes nothing");
+ assert.equal(statusAfterOutcome("dead_letter_ai_retries_exhausted"),undefined,"AI path unchanged");
+ // A dead-lettered image no longer holds the next effect of the same commit.
+ const img=row("i0",0,"leased",{effect_kind:"message_image",payload:{kind:"message_image",url:IMG,seq:0}}),txt=row("t1",1);
+ assert.equal(heldByEarlierEffect(txt,[img,txt],new Map([["i0","dead_letter"]])),false);
+ assert.equal(heldByEarlierEffect(txt,[img,txt],new Map([["i0","uncertain"]])),true);
+});
+test("worker: Meta 400/code 100 on an image is finished 'rejected' once; 5xx/429/auth stay 'uncertain'; never resent nor billed",async()=>{
+ const run=async(status:number,body:unknown,db:"new"|"old"="new")=>{
+  const r=recorder(status,body);const calls:string[]=[];const media={failure:null as string|null,rejected:false};
+  const finish=async(result:string)=>{calls.push(result);return db==="new"||result!=="rejected";};
+  const res=await executeOnce({
+   reserve:async()=>true,
+   send:()=>sendProviderMessage(imageReq,r.fake).catch(e=>{media.failure=classifyMediaFailure(e);throw e;}),
+   // Same decision as flow-outbox-worker/index.ts confirm.
+   confirm:async(s)=>{
+    if(finishOutcome(s,media.failure as any)==="rejected"){
+     if(await finish("rejected")){media.rejected=true;return true;}
+    }
+    return finish(s);
+   },
+   persistAndBill:async()=>{calls.push("UNEXPECTED_BILL");return true;}
+  });
+  return {report:media.rejected?"dead_letter_media_rejected":res,calls,requests:r.calls.length};
+ };
+ assert.deepEqual(await run(400,{error:{code:100}}),{report:"dead_letter_media_rejected",calls:["rejected"],requests:1});
+ assert.deepEqual(await run(404,{}),{report:"dead_letter_media_rejected",calls:["rejected"],requests:1});
+ for(const [s,b] of [[500,{}],[502,{}],[429,{}],[401,{error:{code:190}}],[400,{error:{code:190}}]] as const)
+  assert.deepEqual(await run(s,b),{report:"uncertain",calls:["uncertain"],requests:1},String(s));
+ // Database without the 'rejected' outcome (210000 not applied): falls back to uncertain, as before.
+ assert.deepEqual(await run(400,{error:{code:100}},"old"),{report:"uncertain",calls:["rejected","uncertain"],requests:1});
+});
+test("worker wiring: finish maps media_rejected to 'rejected' (fallback uncertain), text path and billing unchanged",()=>{
+ const code=readFileSync("supabase/functions/flow-outbox-worker/index.ts","utf8");
+ const c=code.slice(code.indexOf("confirm:async(status,providerId)=>{"),code.indexOf("persistAndBill\n   });"));
+ assert.match(c,/sb\.rpc\("flow_finish_outbox_delivery",\{\n\s+p_tenant:effect\.tenant_id,p_outbox:effect\.id,p_result:result,\n\s+p_provider_message_id:providerId\n\s+\}\)/);
+ assert.match(c,/if\(finishOutcome\(status,media\.failure\)==="rejected"\)\{\n\s+const rejected=await finish\("rejected"\);\n\s+if\(rejected===true\)\{media\.rejected=true;return true;\}/);
+ assert.match(c,/if\(rejected===null\)return false;/);
+ assert.match(c,/return await finish\(status\)===true;/);
+ assert.match(code,/report\(media\.rejected\?"dead_letter_media_rejected":res\);/);
+ // media.failure is set only by the image send's catch: text sends never become 'rejected'.
+ assert.equal((code.match(/media\.failure=(?!=)/g)??[]).length,1);
+ assert.match(code,/\.catch\(e=>\{media\.failure=classifyMediaFailure\(e\);throw e;\}\)/);
+ assert.equal((code.match(/sb\.rpc\("consume_flow_reply"/g)??[]).length,1,"billing untouched");
+ const eo=readFileSync("supabase/functions/flow-outbox-worker/executeOnce.ts","utf8");
+ assert.match(eo,/confirm\(status:"confirmed"\|"uncertain",providerId:string\|null\):Promise<boolean>;/,"executeOnce unchanged");
+});

@@ -30,7 +30,9 @@ test("160000 follows 130000/140000/150000; only 170000 (canary claim, depends on
  // 20261029170000_flow_canary_claim_durable requires 160000 (its preflight).
  // 20261029180000_flow_durable_button_run_guards requires 170000 (and this migration).
  // 20261029190000_flow_begin_durable_run_superseding requires 180000 (and this migration).
- const successors=["20261029170000","20261029180000","20261029190000"];
+ // 20261029200000_flow_media_storage is an independent storage bucket (no flow object).
+ // 20261029210000_flow_media_effects requires 190000 (and this migration) (tests/flow-media-effects.test.mjs).
+ const successors=["20261029170000","20261029180000","20261029190000","20261029200000","20261029210000"];
  for(const s of stamps)if(s!=="20261029160000"&&!successors.includes(s))assert.ok(s<"20261029160000",s);
  assert.ok(existsSync(LC)&&existsSync(AI)&&existsSync(TK));
 });

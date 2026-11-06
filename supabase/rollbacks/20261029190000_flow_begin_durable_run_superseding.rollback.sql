@@ -11,10 +11,11 @@
 --
 -- Order: revert milan-api to the build that does not call this function
 -- FIRST (the new build's durable start fails closed without it: no run, no
--- reply from that path). Then run this rollback FIRST (190000 is the newest
--- migration); required rollback order: 190000, then 20261029180000, 170000,
--- 160000, 150000, 140000, 130000, 125000 (each of those rollbacks refuses
--- while this function exists).
+-- reply from that path). Then run this rollback right after the
+-- 20261029210000_flow_media_effects rollback (refused while a 210000 body is
+-- installed); required rollback order: 210000, 190000, then 20261029180000,
+-- 170000, 160000, 150000, 140000, 130000, 125000 (each of those rollbacks
+-- refuses while this function exists).
 BEGIN;
 SET LOCAL lock_timeout='3s';
 SET LOCAL statement_timeout='60s';
@@ -24,7 +25,14 @@ DECLARE
  v_marker constant text := 'CREATED_BY_20261029190000_FLOW_BEGIN_DURABLE_RUN_SUPERSEDING';
  v_fn regprocedure := to_regprocedure('public.flow_begin_durable_run_superseding(uuid,uuid,uuid,uuid,text,text,bigint,text,text,integer,text,jsonb,timestamptz,jsonb)');
 BEGIN
- -- 20261029190000 is the newest migration: no later rollback must run first.
+ -- 20261029210000 (media effects; requires the 130000..190000 chain) is newer: roll it back first.
+ IF EXISTS(SELECT 1 FROM pg_catalog.pg_proc p WHERE p.oid IN(
+   to_regprocedure('public.flow_commit_run_step(uuid,uuid,integer,text,text,integer,text,jsonb,timestamptz,jsonb,text,uuid)'),
+   to_regprocedure('public.flow_reserve_outbox_delivery(uuid,uuid)'),
+   to_regprocedure('public.flow_finish_outbox_delivery(uuid,uuid,text,text)'))
+  AND md5(btrim(regexp_replace(p.prosrc,'[[:space:]]+',' ','g'))) IN(
+   '94a87bc016ad93e609897025d259bf3e','1b7a6fe3f6a9ee97203d50d5e0e0baa7','1c6ec477519f8c91c24fc2ab82d4b9c4'))
+ THEN RAISE EXCEPTION 'Refusing 20261029190000 rollback: 20261029210000 objects still exist; roll back 20261029210000_flow_media_effects first'; END IF;
  IF v_fn IS NULL THEN
   RAISE EXCEPTION '20261029190000_flow_begin_durable_run_superseding not installed; nothing to roll back';
  END IF;

@@ -236,3 +236,48 @@ test("internal actions: rendered notification text is bounded to 500 characters"
   assert.equal(Array.from(body).length, 500);
   assert.ok(body.startsWith("x".repeat(490) + "علي"));
 });
+
+// ---- Text + image message nodes in a chain (message_image effects).
+const IMG = "https://abcd1234.supabase.co/storage/v1/object/public/flow-media/u1/0f8c2b1e-1111-4222-8333-444455556666.webp";
+const pic = (blocks: unknown[], t = "Our product {{name}}") =>
+  makeNode("message", { x: 0, y: 0 }, { text: t, options: [], contentBlocks: blocks as never });
+test("image message in a chain: block order kept, seq 0..n, each block counts toward the 5-effect limit", () => {
+  const t = trigger(), hi = text("Welcome");
+  const p = pic([{ id: "b1", type: "image", url: IMG }, { id: "b2", type: "text", text: "Price {{name}}" }]);
+  const end = makeNode("end", { x: 0, y: 0 });
+  const flow = doc([t, hi, p, end], [[t, "next", hi], [hi, "next", p], [p, "next", end]]);
+  const plan = planUntilWait(flow, createRuntimeState(flow, "f", 1), input);
+  assert.equal(plan.error, undefined);
+  assert.equal(plan.state.status, "completed");
+  assert.deepEqual(plan.effects.map(e => [e.kind, e.seq]),
+    [["message", 0], ["message", 1], ["message_image", 2], ["message", 3]]);
+  assert.deepEqual(plan.effects[2], { kind: "message_image", idempotencyKey: plan.effects[2].idempotencyKey,
+    nodeId: p.id, url: IMG, seq: 2 }, "payload {url}, never rendered");
+  assert.equal(new Set(plan.effects.map(e => e.idempotencyKey)).size, 4);
+  // Over the limit: one more text before the image node -> 6 effects -> fail closed, no effects.
+  const hi2 = text("Second"), hi3 = text("Third");
+  const over = doc([t, hi, hi2, hi3, p, end],
+    [[t, "next", hi], [hi, "next", hi2], [hi2, "next", hi3], [hi3, "next", p], [p, "next", end]]);
+  const blocked = planUntilWait(over, createRuntimeState(over, "f", 1), input);
+  assert.deepEqual(blocked.effects, []);
+  assert.equal(blocked.error, "flow chain exceeds " + MAX_CHAIN_EFFECTS + " effects");
+});
+test("image message: collected fields render only in texts; a rich shape still fails the whole chain", () => {
+  const t = trigger();
+  const ask = makeNode("question", { x: 0, y: 0 }, { text: "Name?", inputMode: "text", inputField: "name", options: [] });
+  const p = pic([{ id: "b1", type: "image", url: IMG }, { id: "b2", type: "text", text: "Hi {{name}}" }]);
+  const flow = doc([t, ask, p], [[t, "next", ask], [ask, "valid", p]]);
+  const first = planUntilWait(flow, createRuntimeState(flow, "f", 1), input);
+  assert.equal(first.state.status, "awaiting_input");
+  const reply = planUntilWait(flow, first.state, { ...input, eventKey: "mid.answer", answer: "Sara" });
+  assert.equal(reply.error, undefined);
+  assert.deepEqual(reply.effects.map(e => [e.kind, "text" in e ? e.text : (e as { url: string }).url, e.seq]),
+    [["message", "Our product Sara", 0], ["message_image", IMG, 1], ["message", "Hi Sara", 2]]);
+  // pdf in the same node: the chain fails with no effects (as before).
+  const bad = pic([{ id: "b1", type: "pdf", url: IMG }, { id: "b2", type: "image", url: IMG }]);
+  const hi = text("Welcome");
+  const f2 = doc([t, hi, bad], [[t, "next", hi], [hi, "next", bad]]);
+  const r = planUntilWait(f2, createRuntimeState(f2, "f", 1), input);
+  assert.deepEqual(r.effects, []);
+  assert.equal(r.error, "rich message requires a verified sender");
+});

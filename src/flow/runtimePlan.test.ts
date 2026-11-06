@@ -158,3 +158,56 @@ test("set_field rejects unsafe names and storage overflows",()=>{
   assert.equal(result.effects.length,0);
   assert.equal(result.state.variables.fresh,undefined);
 });
+
+// ---- Text + image message nodes (message_image effects; sending gated server-side).
+const IMG="https://abcd1234.supabase.co/storage/v1/object/public/flow-media/u1/0f8c2b1e-1111-4222-8333-444455556666.webp";
+function imageNode(blocks:unknown[],over:Record<string,unknown>={}){
+  return makeNode("message",{x:0,y:0},{text:"Our product",options:[],contentBlocks:blocks as never,...over});
+}
+test("text+image message plans node text, then blocks in order as message / message_image, then proceeds",()=>{
+  const t=trigger(),pic=imageNode([{id:"b1",type:"image",url:IMG},{id:"b2",type:"text",text:" Only today "},
+    {id:"b3",type:"image",url:IMG}]),after=makeNode("message",{x:0,y:0},{text:"Thanks",options:[]});
+  const flow=doc([t,pic,after],[[t,"next",pic],[pic,"next",after]]);
+  const before=JSON.stringify(flow);
+  const plan=planRuntimeTransition(flow,createRuntimeState(flow,"f",1),input);
+  assert.equal(plan.error,undefined);
+  assert.equal(plan.state.status,"ready");assert.equal(plan.state.nodeId,after.id);
+  assert.deepEqual(plan.effects.map(e=>[e.kind,"text" in e?e.text:"url" in e?e.url:""]),
+    [["message","Our product"],["message_image",IMG],["message","Only today"],["message_image",IMG]]);
+  assert.equal(new Set(plan.effects.map(e=>e.idempotencyKey)).size,4,"distinct idempotency keys");
+  assert.deepEqual(JSON.parse(plan.effects[0].idempotencyKey),["f",1,input.eventKey,2,pic.id],"node text keeps the plain-message key");
+  assert.deepEqual(JSON.parse(plan.effects[1].idempotencyKey),["f",1,input.eventKey,2,pic.id,0]);
+  for(const e of plan.effects)assert.equal(e.nodeId,pic.id);
+  assert.equal(JSON.stringify(flow),before,"document not mutated");
+});
+test("image message refuses every other rich shape exactly like before; question nodes unchanged",()=>{
+  const run=(n:FlowNode)=>{const t=trigger();const f=doc([t,n],[[t,"next",n]]);
+    return planRuntimeTransition(f,createRuntimeState(f,"f",1),input);};
+  const rich="rich message requires a verified sender";
+  for(const [label,n,err] of [
+    ["legacy d.image",imageNode([{id:"b",type:"image",url:IMG}],{image:IMG}),rich],
+    ["legacy d.image only",makeNode("message",{x:0,y:0},{text:"x",image:IMG,options:[]}),rich],
+    ["pdf block",imageNode([{id:"b",type:"pdf",url:IMG},{id:"c",type:"image",url:IMG}]),rich],
+    ["collection block",imageNode([{id:"b",type:"collection",field:"x"},{id:"c",type:"image",url:IMG}]),rich],
+    ["inline delay block",imageNode([{id:"b",type:"delay",seconds:3},{id:"c",type:"image",url:IMG}]),rich],
+    ["text blocks without an image",imageNode([{id:"b",type:"text",text:"hi"}]),rich],
+    ["buttons on an image message",imageNode([{id:"b",type:"image",url:IMG}],{options:[{id:"o",label:"Yes"}]}),rich],
+    ["blank node text",imageNode([{id:"b",type:"image",url:IMG}],{text:"  "}),"empty message"],
+    ["blank text block",imageNode([{id:"b",type:"text",text:" "},{id:"c",type:"image",url:IMG}]),"empty message block"],
+    ["http image",imageNode([{id:"b",type:"image",url:IMG.replace("https:","http:")}]),"image block URL is not an allowed https flow-media URL"],
+    ["data: image",imageNode([{id:"b",type:"image",url:"data:image/png;base64,AAAA"}]),"image block URL is not an allowed https flow-media URL"],
+    ["other bucket",imageNode([{id:"b",type:"image",url:"https://abcd1234.supabase.co/storage/v1/object/public/avatars/a.webp"}]),"image block URL is not an allowed https flow-media URL"],
+    ["traversal",imageNode([{id:"b",type:"image",url:"https://abcd1234.supabase.co/storage/v1/object/public/flow-media/u1/%2e%2e/x.webp"}]),"image block URL is not an allowed https flow-media URL"],
+    ["query string",imageNode([{id:"b",type:"image",url:IMG+"?x=1"}]),"image block URL is not an allowed https flow-media URL"],
+    ["missing url",imageNode([{id:"b",type:"image"}]),"image block URL is not an allowed https flow-media URL"],
+    ["six effects",imageNode(Array.from({length:5},(_,i)=>({id:"b"+i,type:"image",url:IMG}))),"rich message exceeds 5 effects"]
+  ] as Array<[string,FlowNode,string]>){
+    const p=run(n);
+    assert.equal(p.error,err,label);assert.deepEqual(p.effects,[],label);assert.equal(p.state.status,"blocked",label);
+  }
+  // Exactly five effects (node text + 4 blocks) are fine.
+  assert.equal(run(imageNode(Array.from({length:4},(_,i)=>({id:"b"+i,type:"image",url:IMG})))).effects.length,5);
+  // Question nodes keep refusing any content block.
+  const q=makeNode("question",{x:0,y:0},{text:"?",inputMode:"email",inputField:"email",contentBlocks:[{id:"b",type:"image",url:IMG}] as never});
+  assert.equal(run(q).error,"rich question is not supported");
+});

@@ -1,8 +1,8 @@
 -- REVIEW ONLY: READ-ONLY pre-deployment checks for Flow V3/V4
 -- (20261029125000_flow_durable_button_run, 20261029130000_flow_run_lifecycle,
 -- 20261029140000_flow_outbox_ai_retry, and the 20261029150000 /
--- 20261029160000 / 20261029170000 / 20261029180000 / 20261029190000
--- follow-ups; section (g):
+-- 20261029160000 / 20261029170000 / 20261029180000 / 20261029190000 /
+-- 20261029210000 follow-ups; section (g):
 -- 20261028227000_tenant_staff_memberships and
 -- 20261028228000_flow_internal_actions).
 -- NOT a migration.
@@ -56,7 +56,7 @@
 --   'ineligible' again; the takeover expiry column is ignored). Section (d)
 --   detects this by body hash (function_version:* = CONFLICT). Recovery:
 --   re-apply 20261029150000 (idempotent) and re-run these checks.
---   Lock/statement timeouts: 20261029125000 .. 20261029190000 (including
+--   Lock/statement timeouts: 20261029125000 .. 20261029210000 (including
 --   130000/140000, since audit B3) and their rollbacks set SET LOCAL
 --   lock_timeout='3s' and statement_timeout='60s' right after BEGIN, so no
 --   PGOPTIONS is needed for them. PGOPTIONS='-c lock_timeout=3s -c
@@ -83,12 +83,20 @@
 --   replaces both bodies: durable_button_run:* then shows
 --   body_version=20261029180000. preflight:20261029180000 must be OK before
 --   applying it, durable_button_run_guards must be OK after.
---   20261029190000_flow_begin_durable_run_superseding (newest; applied after
+--   20261029190000_flow_begin_durable_run_superseding (applied after
 --   180000, BEFORE deploying the milan-api build that calls it) adds the
 --   atomic supersede + start RPC (audit B4). preflight:20261029190000 must be
 --   OK before applying it; superseding_begin:* must be OK after (ABSENT = not
 --   applied). Rollback order (revert milan-api first): 190000, 180000,
 --   170000, 160000, 150000, 140000, 130000, 125000.
+--   20261029210000_flow_media_effects (newest flow migration; applied after
+--   190000; 20261029200000 flow-media storage is independent) lets the
+--   database store, reserve and finish 'message_image' effects (outcome
+--   rejected = dead_letter). preflight:20261029210000 must be OK before
+--   applying it; media_effects must be OK after (ABSENT = not applied).
+--   Keep FLOW_MEDIA_SEND_ENABLED off until the operator GO. Its rollback runs
+--   FIRST: 210000, then 190000 .. 125000 (each refuses while a 210000 body is
+--   installed).
 BEGIN READ ONLY;
 SET LOCAL statement_timeout = '15s';
 SET LOCAL lock_timeout = '2s';
@@ -921,6 +929,181 @@ SELECT section,item,status,tenant_id,n,ids,detail FROM (
   NULL,(SELECT count(*) FROM pf125),NULL,
   CASE WHEN (SELECT count(*) FROM pf125)=0 THEN 'all 20261029125000 hard prerequisites satisfied'
    ELSE 'unmet: '||(SELECT string_agg(label,'; ' ORDER BY label) FROM pf125) END
+) x ORDER BY ord,item;
+
+-- (d) 20261029210000_flow_media_effects ('message_image' Outbox effects;
+-- sending stays behind FLOW_MEDIA_SEND_ENABLED, default OFF). Catalog only.
+--  * media_effects:<fn> for flow_commit_run_step, flow_reserve_outbox_delivery
+--    and flow_finish_outbox_delivery: OK = the previous 20261028225000 /
+--    20261028226000 body or the 20261029210000 body (md5 of the
+--    whitespace-normalized prosrc; body_version shows which), the
+--    225000/226000 marker kept (210000 never changes it), not security
+--    definer, search_path='', no PUBLIC/anon/authenticated privilege, no other
+--    overload. MISSING = function absent. CONFLICT otherwise (210000 and its
+--    rollback refuse any other body).
+--  * media_check:<table>.<column>: the single-column CHECK on
+--    automation_flow_outbox(effect_kind) and automation_flow_delivery_attempts(status).
+--    OK = exactly the previous list, or the 210000 list (adds message_image /
+--    rejected) carrying the 210000 marker. INFO = unrecognized shape while no
+--    210000 body is installed (the 210000 preflight refuses it: review the live
+--    definition first). CONFLICT = 210000 list without its marker, or an
+--    unrecognized shape while a 210000 body is installed.
+--  * media_effects: OK = all three 210000 bodies and both marked CHECKs;
+--    ABSENT = not applied; INFO = rolled back with
+--    flow.rollback_210000=keep-media-checks (previous bodies, widened CHECKs
+--    kept because rows need them); CONFLICT = any other partial state.
+--  * preflight:20261029210000: its prerequisites (20261029130000 ..
+--    20261029190000 markers and the 180000 begin body, the three functions and
+--    the two CHECKs as above, outbox delivery_status allowing dead_letter);
+--    INFO while unmet.
+WITH
+mf(sig,marker,h_old,h_new,v_old) AS (VALUES
+ ('flow_commit_run_step(uuid,uuid,integer,text,text,integer,text,jsonb,timestamptz,jsonb,text,uuid)',
+  'CREATED_BY_20261028225000_FLOW_RUNTIME_ADVANCE','3d6031bb218b29cb0ffaed0286bd3b1b','94a87bc016ad93e609897025d259bf3e','20261028225000'),
+ ('flow_reserve_outbox_delivery(uuid,uuid)',
+  'CREATED_BY_20261028226000_FLOW_OUTBOX_DELIVERY','1b7108ae5c17bb190015aa64b4297f98','1b7a6fe3f6a9ee97203d50d5e0e0baa7','20261028226000'),
+ ('flow_finish_outbox_delivery(uuid,uuid,text,text)',
+  'CREATED_BY_20261028226000_FLOW_OUTBOX_DELIVERY','4cc4008c25291a1db951b595514efc56','1c6ec477519f8c91c24fc2ab82d4b9c4','20261028226000')
+),
+mfx AS (
+ SELECT mf.*,p.oid,obj_description(p.oid,'pg_proc') AS m,
+  md5(btrim(regexp_replace(p.prosrc,'[[:space:]]+',' ','g'))) AS ph,p.prosecdef,
+  coalesce(array_to_string(p.proconfig,','),'') AS cfg,
+  p.oid IS NOT NULL AND (p.proacl IS NULL OR EXISTS(SELECT 1 FROM unnest(p.proacl) e
+   WHERE e::text LIKE '=%' OR e::text LIKE 'anon=%' OR e::text LIKE 'authenticated=%')) AS exposed,
+  (SELECT count(*) FROM pg_catalog.pg_proc x
+   WHERE x.pronamespace='public'::regnamespace AND x.proname=split_part(mf.sig,'(',1)
+    AND x.oid IS DISTINCT FROM p.oid) AS overloads
+ FROM mf LEFT JOIN pg_catalog.pg_proc p ON p.oid=to_regprocedure('public.'||mf.sig)
+),
+mck(tbl,col,def_old,def_new) AS (VALUES
+ ('automation_flow_outbox','effect_kind',
+  'CHECK ((effect_kind = ANY (ARRAY[''message''::text, ''question''::text, ''delay''::text, ''handoff''::text, ''tag''::text, ''untag''::text, ''staff_notification''::text])))',
+  'CHECK ((effect_kind = ANY (ARRAY[''message''::text, ''question''::text, ''delay''::text, ''handoff''::text, ''tag''::text, ''untag''::text, ''staff_notification''::text, ''message_image''::text])))'),
+ ('automation_flow_delivery_attempts','status',
+  'CHECK ((status = ANY (ARRAY[''attempting''::text, ''confirmed''::text, ''uncertain''::text])))',
+  'CHECK ((status = ANY (ARRAY[''attempting''::text, ''confirmed''::text, ''uncertain''::text, ''rejected''::text])))')
+),
+mcc AS (
+ SELECT mck.tbl,mck.col,c.oid,pg_catalog.pg_get_constraintdef(c.oid) AS def,
+  split_part(coalesce(obj_description(c.oid,'pg_constraint'),''),' ',1) AS mk
+ FROM mck
+ JOIN pg_catalog.pg_attribute a ON a.attrelid=to_regclass('public.'||mck.tbl) AND a.attname=mck.col
+  AND a.attnum>0 AND NOT a.attisdropped
+ JOIN pg_catalog.pg_constraint c ON c.conrelid=a.attrelid AND c.contype='c' AND c.conkey=ARRAY[a.attnum]
+),
+mcx AS (
+ SELECT mck.*,to_regclass('public.'||mck.tbl) AS rel,
+  (SELECT count(*) FROM mcc WHERE mcc.tbl=mck.tbl) AS n,
+  (SELECT min(mcc.def) FROM mcc WHERE mcc.tbl=mck.tbl) AS def,
+  (SELECT min(mcc.mk) FROM mcc WHERE mcc.tbl=mck.tbl) AS mk,
+  (SELECT count(*) FROM pg_catalog.pg_constraint c
+   WHERE c.conrelid=to_regclass('public.'||mck.tbl) AND c.contype='c'
+    AND pg_catalog.pg_get_constraintdef(c.oid) LIKE '%effect_kind%') AS mentions
+ FROM mck
+),
+mcs AS (
+ SELECT mcx.*,
+  mcx.n=1 AND mcx.def=mcx.def_old AND (mcx.col<>'effect_kind' OR mcx.mentions=1) AS is_old,
+  mcx.n=1 AND mcx.def=mcx.def_new AND mcx.mk='CREATED_BY_20261029210000_FLOW_MEDIA_EFFECTS'
+   AND (mcx.col<>'effect_kind' OR mcx.mentions=1) AS is_new
+ FROM mcx
+),
+mfs AS (
+ SELECT mfx.*,
+  CASE WHEN mfx.oid IS NULL THEN 'MISSING: public.'||mfx.sig
+   WHEN mfx.m IS DISTINCT FROM mfx.marker THEN 'CONFLICT: public.'||mfx.sig
+   WHEN mfx.ph IS DISTINCT FROM mfx.h_old AND mfx.ph IS DISTINCT FROM mfx.h_new OR mfx.prosecdef OR mfx.cfg<>'search_path=""'
+    THEN 'CONFLICT: public.'||mfx.sig||' body'
+   WHEN mfx.overloads>0 THEN 'CONFLICT: public.'||split_part(mfx.sig,'(',1)||' overload'
+   WHEN mfx.exposed THEN 'CONFLICT: public.'||mfx.sig||' privileges'
+   ELSE 'OK' END AS st
+ FROM mfx
+),
+mtot AS (
+ SELECT (SELECT count(*) FROM mfs WHERE mfs.ph=mfs.h_new) AS fn_new,
+  (SELECT count(*) FROM mcs WHERE mcs.is_new) AS ck_new
+),
+pf210 AS (
+ SELECT r.label FROM (VALUES
+  ('20261029130000 .. 20261029170000 markers',
+   obj_description(to_regprocedure('public.flow_lease_due_runs(integer)'),'pg_proc') IS NOT DISTINCT FROM 'CREATED_BY_20261029130000_FLOW_RUN_LIFECYCLE'
+   AND obj_description(to_regprocedure('public.flow_cancel_run(uuid,uuid,text,text)'),'pg_proc') IS NOT DISTINCT FROM 'CREATED_BY_20261029130000_FLOW_RUN_LIFECYCLE'
+   AND obj_description(to_regprocedure('public.flow_claim_outbox_ai(uuid,uuid,integer,integer)'),'pg_proc') IS NOT DISTINCT FROM 'CREATED_BY_20261029140000_FLOW_OUTBOX_AI_RETRY'
+   AND obj_description(to_regprocedure('public.flow_end_stale_paused_runs(integer,integer)'),'pg_proc') IS NOT DISTINCT FROM 'CREATED_BY_20261029150000_FLOW_TAKEOVER_RESUME'
+   AND obj_description(to_regprocedure('public.flow_channel_temporarily_paused(uuid,uuid)'),'pg_proc') IS NOT DISTINCT FROM 'CREATED_BY_20261029160000_FLOW_CREDITS_PAUSE'
+   AND obj_description(to_regprocedure('public.flow_claim_inbound_durable(uuid,uuid,text,text,uuid,uuid)'),'pg_proc') IS NOT DISTINCT FROM 'CREATED_BY_20261029170000_FLOW_CANARY_CLAIM_DURABLE'),
+  ('20261029180000 marker on both durable functions and its flow_begin_durable_run body',
+   split_part(coalesce(obj_description(to_regprocedure('public.flow_begin_durable_run(uuid,uuid,uuid,uuid,text,text,bigint,text,text,integer,text,jsonb,timestamptz,jsonb)'),'pg_proc'),''),' ',1)
+    ='CREATED_BY_20261029180000_FLOW_DURABLE_BUTTON_RUN_GUARDS'
+   AND split_part(coalesce(obj_description(to_regprocedure('public.flow_resume_button_run(uuid,uuid,text,uuid,integer,text,text,integer,text,jsonb,timestamptz,jsonb)'),'pg_proc'),''),' ',1)
+    ='CREATED_BY_20261029180000_FLOW_DURABLE_BUTTON_RUN_GUARDS'
+   AND (SELECT md5(btrim(regexp_replace(p.prosrc,'[[:space:]]+',' ','g'))) FROM pg_catalog.pg_proc p
+    WHERE p.oid=to_regprocedure('public.flow_begin_durable_run(uuid,uuid,uuid,uuid,text,text,bigint,text,text,integer,text,jsonb,timestamptz,jsonb)'))
+    IS NOT DISTINCT FROM '80953ca6c0b52e627699748b59f383f9'),
+  ('20261029190000 marker on flow_begin_durable_run_superseding',
+   obj_description(to_regprocedure('public.flow_begin_durable_run_superseding(uuid,uuid,uuid,uuid,text,text,bigint,text,text,integer,text,jsonb,timestamptz,jsonb)'),'pg_proc')
+    IS NOT DISTINCT FROM 'CREATED_BY_20261029190000_FLOW_BEGIN_DURABLE_RUN_SUPERSEDING'),
+  ('20261028226000 marker on automation_flow_delivery_attempts',
+   obj_description(to_regclass('public.automation_flow_delivery_attempts'),'pg_class') IS NOT DISTINCT FROM 'CREATED_BY_20261028226000_FLOW_OUTBOX_DELIVERY'),
+  ('flow_commit_run_step, flow_reserve_outbox_delivery, flow_finish_outbox_delivery with their markers and the previous or 20261029210000 body',
+   (SELECT count(*) FROM mfs WHERE mfs.st='OK')=3),
+  ('single-column effect_kind and status CHECKs with the previous or 20261029210000 list',
+   (SELECT count(*) FROM mcs WHERE mcs.is_old OR mcs.is_new)=2),
+  ('outbox delivery_status CHECK allowing dead_letter',
+   EXISTS(SELECT 1 FROM pg_catalog.pg_constraint c
+    WHERE c.conrelid=to_regclass('public.automation_flow_outbox') AND c.contype='c'
+     AND pg_catalog.pg_get_constraintdef(c.oid) LIKE '%delivery_status%'
+     AND pg_catalog.pg_get_constraintdef(c.oid) LIKE '%''dead_letter''%'))
+ ) r(label,ok) WHERE NOT r.ok
+)
+SELECT section,item,status,tenant_id,n,ids,detail FROM (
+ SELECT 0 AS ord,'d_prerequisites'::text AS section,'media_effects:public.'||mfs.sig AS item,mfs.st AS status,
+  NULL::uuid AS tenant_id,mfs.overloads AS n,NULL::text AS ids,
+  CASE WHEN mfs.oid IS NULL THEN mfs.v_old||' not applied: 20261029210000 requires it'
+   ELSE format('marker=%s body_md5=%s body_version=%s security_definer=%s config=%s public_or_client_privilege=%s other_overloads=%s',
+    coalesce(mfs.m,'-'),mfs.ph,
+    CASE WHEN mfs.ph=mfs.h_new THEN '20261029210000' WHEN mfs.ph=mfs.h_old THEN mfs.v_old ELSE 'unrecognized' END,
+    mfs.prosecdef,mfs.cfg,mfs.exposed,mfs.overloads) END AS detail
+ FROM mfs
+ UNION ALL
+ SELECT 1,'d_prerequisites','media_check:public.'||mcs.tbl||'.'||mcs.col,
+  CASE WHEN mcs.rel IS NULL THEN 'MISSING: public.'||mcs.tbl
+   WHEN mcs.is_old OR mcs.is_new THEN 'OK'
+   WHEN mcs.n=1 AND mcs.def=mcs.def_new THEN 'CONFLICT: public.'||mcs.tbl||'.'||mcs.col||' check'
+   WHEN (SELECT fn_new FROM mtot)>0 THEN 'CONFLICT: public.'||mcs.tbl||'.'||mcs.col||' check'
+   ELSE 'INFO' END,
+  NULL,mcs.n,NULL,
+  CASE WHEN mcs.rel IS NULL THEN 'table absent'
+   WHEN mcs.is_old THEN format('previous list (20261029210000 not applied: %s not allowed); definition: %s',
+    CASE WHEN mcs.col='effect_kind' THEN 'message_image' ELSE 'rejected' END,mcs.def)
+   WHEN mcs.is_new THEN format('20261029210000 list with its marker (%s allowed); definition: %s',
+    CASE WHEN mcs.col='effect_kind' THEN 'message_image' ELSE 'rejected' END,mcs.def)
+   WHEN mcs.n=1 AND mcs.def=mcs.def_new THEN '20261029210000 list without its marker: 20261029210000 refuses to re-apply and its rollback refuses'
+   ELSE format('unrecognized: single-column checks=%s other effect_kind checks=%s definition=%s; the 20261029210000 preflight refuses to replace it (review the live definition first)',
+    mcs.n,CASE WHEN mcs.col='effect_kind' THEN mcs.mentions-mcs.n ELSE 0 END,coalesce(mcs.def,'-')) END
+ FROM mcs
+ UNION ALL
+ SELECT 2,'d_prerequisites','media_effects',
+  CASE WHEN t.fn_new=3 AND t.ck_new=2 THEN 'OK'
+   WHEN t.fn_new=0 AND t.ck_new=0 THEN 'ABSENT'
+   WHEN t.fn_new=0 AND t.ck_new=2 THEN 'INFO'
+   ELSE 'CONFLICT: 20261029210000 objects' END,
+  NULL,t.fn_new,NULL,
+  CASE WHEN t.fn_new=3 AND t.ck_new=2
+    THEN 'installed by 20261029210000 (message_image effects can be stored, reserved and finished; rejected = dead_letter); sending still needs FLOW_MEDIA_SEND_ENABLED; rollback: supabase/rollbacks/20261029210000_flow_media_effects.rollback.sql FIRST, before 20261029190000'
+   WHEN t.fn_new=0 AND t.ck_new=0
+    THEN '20261029210000 not applied: message_image effects are refused by the database (planner/worker builds that emit them fail closed)'
+   WHEN t.fn_new=0 AND t.ck_new=2
+    THEN 'rolled back with flow.rollback_210000=keep-media-checks: previous function bodies, widened CHECKs kept for existing rows; a re-apply of 20261029210000 is accepted'
+   ELSE format('partial or inconsistent 20261029210000 state: %s of 3 functions have its body, %s of 2 CHECKs carry its list and marker',t.fn_new,t.ck_new) END
+ FROM mtot t
+ UNION ALL
+ SELECT 3,'d_prerequisites','preflight:20261029210000',
+  CASE WHEN (SELECT count(*) FROM pf210)=0 THEN 'OK' ELSE 'INFO' END,
+  NULL,(SELECT count(*) FROM pf210),NULL,
+  CASE WHEN (SELECT count(*) FROM pf210)=0 THEN 'all 20261029210000 preflight requirements satisfied'
+   ELSE 'unmet (normal until 20261029130000..190000 are applied): '||(SELECT string_agg(label,'; ' ORDER BY label) FROM pf210) END
 ) x ORDER BY ord,item;
 
 -- (d) Canary registration for the INTENDED tenant/account (read only).

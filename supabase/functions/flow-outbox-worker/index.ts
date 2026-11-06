@@ -11,8 +11,9 @@
  *
  * message_image effects (Instagram image attachment) additionally need
  * FLOW_MEDIA_SEND_ENABLED (default OFF; see mediaPolicy.ts). DO NOT ENABLE
- * until the planner and the publication gate emit/accept message_image and the
- * database accepts that effect kind (CHECK, run RPCs, flow_reserve_outbox_delivery).
+ * before the operator GO and before 20261029210000_flow_media_effects is
+ * applied (CHECK, flow_commit_run_step, flow_reserve_outbox_delivery and the
+ * 'rejected' -> dead_letter outcome of flow_finish_outbox_delivery).
  */
 import {createClient} from "npm:@supabase/supabase-js@2";
 import {acceptsFlowWorkerBearer} from "../flowWorkerAuth.ts";
@@ -29,7 +30,8 @@ import {permanentOutboxBlock,temporaryOutboxPause,humanTakeoverActive,OUTBOX_SCA
 import {compareOutbox,heldByEarlierEffect,statusAfterOutcome,ORDERED_KINDS,
  ORDER_SIBLING_LIMIT,type OrderRow} from "./effectOrder.ts";
 import {plainInputQuestion} from "./questionMode.ts";
-import {mediaEffectGate,classifyMediaFailure,type MediaFailure} from "./mediaPolicy.ts";
+import {mediaEffectGate,classifyMediaFailure,finishOutcome,type MediaFailure,type FinishOutcome}
+ from "./mediaPolicy.ts";
 import {runInternalEffects,internalActionsReleased} from "../flow-internal-worker/internalEffects.ts";
 
 const env=(name:string)=>Deno.env.get(name)??"";
@@ -418,9 +420,10 @@ Deno.serve(async req=>{
     (env("WA_ACCESS_TOKEN")||env("WHATSAPP_ACCESS_TOKEN")):
     await decryptAccountToken(String(account.access_token_encrypted??""),fieldKey);
    if(!token){report("blocked");continue;}
-   // Images are not idempotent: a failure is classified for the report only;
-   // executeOnce still records it as uncertain and NEVER resends.
-   const media:{failure:MediaFailure|null}={failure:null};
+   // Images are not idempotent: NO failure is ever resent. A permanent Meta
+   // rejection of the image (4xx such as code 100) is finished as 'rejected'
+   // (dead_letter, 20261029210000); auth/5xx/429/network stay uncertain.
+   const media:{failure:MediaFailure|null;rejected:boolean}={failure:null,rejected:false};
    const res=await executeOnce({
     reserve:async()=>{
      const {data,error}=await sb.rpc("flow_reserve_outbox_delivery",{
@@ -437,17 +440,26 @@ Deno.serve(async req=>{
      token,recipient,text:"",imageUrl,imageHost:base
     }).catch(e=>{media.failure=classifyMediaFailure(e);throw e;}),
     confirm:async(status,providerId)=>{
-     const {data,error}=await sb.rpc("flow_finish_outbox_delivery",{
-      p_tenant:effect.tenant_id,p_outbox:effect.id,p_result:status,
-      p_provider_message_id:providerId
-     });
-     if(error){console.error("[outbox] finish error",{code:error.code});return false;}
-     return data===true;
+     const finish=async(result:FinishOutcome):Promise<boolean|null>=>{
+      const {data,error}=await sb.rpc("flow_finish_outbox_delivery",{
+       p_tenant:effect.tenant_id,p_outbox:effect.id,p_result:result,
+       p_provider_message_id:providerId
+      });
+      if(error){console.error("[outbox] finish error",{code:error.code});return null;}
+      return data===true;
+     };
+     if(finishOutcome(status,media.failure)==="rejected"){
+      const rejected=await finish("rejected");
+      if(rejected===true){media.rejected=true;return true;}
+      // Database without the 'rejected' outcome: record uncertain as before.
+      if(rejected===null)return false;
+     }
+     return await finish(status)===true;
     },
 
     persistAndBill
    });
-   report(res);
+   report(media.rejected?"dead_letter_media_rejected":res);
    if(media.failure){
     console.warn("[outbox] image send failed",{id:effect.id,code:media.failure});
     report(media.failure==="media_rejected"?"media_rejected":"media_"+media.failure);

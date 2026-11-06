@@ -64,5 +64,7 @@ export function statusAfterOutcome(outcome:string):string|undefined{
  if(outcome==="uncertain")return "uncertain";
  if(outcome.startsWith("skipped_"))return "cancelled";
  if(outcome.startsWith("billing_blocked_"))return "billing_blocked";
+ // Image refused by the provider (20261029210000 'rejected'): terminal, never resent.
+ if(outcome==="dead_letter_media_rejected")return "dead_letter";
  return undefined;
 }

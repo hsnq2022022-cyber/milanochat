@@ -24,6 +24,14 @@ DO $g$
 DECLARE v_name text; v_fn regprocedure; v_seen integer := 0;
 BEGIN
  -- Required rollback order: 20261029190000, 20261029180000, 20261029170000, 20261029160000, then this script.
+ -- 20261029210000 (media effects; requires the 130000..190000 chain) is newer: roll it back first.
+ IF EXISTS(SELECT 1 FROM pg_catalog.pg_proc p WHERE p.oid IN(
+   to_regprocedure('public.flow_commit_run_step(uuid,uuid,integer,text,text,integer,text,jsonb,timestamptz,jsonb,text,uuid)'),
+   to_regprocedure('public.flow_reserve_outbox_delivery(uuid,uuid)'),
+   to_regprocedure('public.flow_finish_outbox_delivery(uuid,uuid,text,text)'))
+  AND md5(btrim(regexp_replace(p.prosrc,'[[:space:]]+',' ','g'))) IN(
+   '94a87bc016ad93e609897025d259bf3e','1b7a6fe3f6a9ee97203d50d5e0e0baa7','1c6ec477519f8c91c24fc2ab82d4b9c4'))
+ THEN RAISE EXCEPTION 'Refusing takeover/resume rollback: 20261029210000 objects still exist; roll back 20261029210000_flow_media_effects first'; END IF;
  -- 20261029190000 (superseding begin; requires the 130000..180000 chain) is newer: roll it back first.
  IF to_regprocedure('public.flow_begin_durable_run_superseding(uuid,uuid,uuid,uuid,text,text,bigint,text,text,integer,text,jsonb,timestamptz,jsonb)') IS NOT NULL
  THEN RAISE EXCEPTION 'Refusing takeover/resume rollback: 20261029190000 objects still exist; roll back 20261029190000_flow_begin_durable_run_superseding first'; END IF;

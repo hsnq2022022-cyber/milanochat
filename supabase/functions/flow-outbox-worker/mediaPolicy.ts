@@ -2,12 +2,13 @@
  * SERVER ONLY. Image (media) send policy shared by milan-api/flowDurableIngress.ts
  * (whitelist) and the Outbox worker (message_image effects). Pure, no IO.
  *
- * FLOW_MEDIA_SEND_ENABLED (default OFF). DO NOT ENABLE until the planner
- * (src/flow/runtimePlan.ts / runtimeChain.ts) emits message_image effects, the
- * publication gate/readiness accepts message:image, and the database accepts
- * the 'message_image' effect kind (outbox CHECK, flow_*_run effect validation,
- * flow_reserve_outbox_delivery). Until then a whitelisted image flow fails at
- * plan time and no image effect can be reserved or sent.
+ * FLOW_MEDIA_SEND_ENABLED (default OFF). DO NOT ENABLE before the operator
+ * GO and before 20261029210000_flow_media_effects is applied (outbox CHECK,
+ * flow_commit_run_step, flow_reserve_outbox_delivery, and the 'rejected'
+ * outcome of flow_finish_outbox_delivery). The planner (src/flow/runtimePlan.ts
+ * / runtimeChain.ts) emits message_image for text+image message nodes and the
+ * publication gate requires message:image in FLOW_ACTIVATION_CAPABILITIES plus
+ * this flag; without the migration no image effect can be stored or reserved.
  */
 export const FLOW_MEDIA_SEND_FLAG="FLOW_MEDIA_SEND_ENABLED";
 export const FLOW_MEDIA_PATH="/storage/v1/object/public/flow-media/";
@@ -63,4 +64,15 @@ export function classifyMediaFailure(err:unknown):MediaFailure{
  if(status===401||status===403||code===190)return "auth";
  if(status>=400&&status<500&&status!==408&&status!==429)return "media_rejected";
  return "uncertain";
+}
+/**
+ * flow_finish_outbox_delivery outcome (20261029210000). Only a permanent
+ * provider rejection of an IMAGE ("media_rejected") becomes "rejected": the
+ * effect ends as dead_letter (never resent, never billed). Everything else
+ * keeps the executeOnce status: confirmed stays confirmed, auth / 5xx / 429 /
+ * network / unknown stay uncertain (human review, never a blind resend).
+ */
+export type FinishOutcome="confirmed"|"uncertain"|"rejected";
+export function finishOutcome(status:"confirmed"|"uncertain",failure:MediaFailure|null):FinishOutcome{
+ return status==="uncertain"&&failure==="media_rejected"?"rejected":status;
 }

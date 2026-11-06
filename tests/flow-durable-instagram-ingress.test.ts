@@ -540,7 +540,8 @@ test("ingress source: production canary uses only the separate claim function; V
 // ---- Multi-step durable chains (whitelisted node subset, planUntilWait).
 import {durableCandidateKind,durableRuntimeNeeds} from "../supabase/functions/milan-api/flowDurableIngress.ts";
 import {simpleMessageFromDocument} from "../supabase/functions/milan-api/flowPrepareMessage.ts";
-import {seedFromEventKey,randomizerField} from "../src/flow/runtimeChain.ts";
+import {seedFromEventKey,randomizerField,planUntilWait} from "../src/flow/runtimeChain.ts";
+import {createRuntimeState} from "../src/flow/runtimePlan.ts";
 const T={id:"start",data:{kind:"trigger",platform:"instagram",triggerMode:"message"}};
 const txt=(nid:string,text:string)=>({id:nid,data:{kind:"message",text,image:"",options:[],contentBlocks:[]}});
 const E=(source:string,target:string,sourceHandle="next")=>({source,target,sourceHandle});
@@ -1187,6 +1188,16 @@ test("image whitelist: V2 still rejects image documents, and the lone trigger->i
  const src=readFileSync("supabase/functions/milan-api/flowDurableIngress.ts","utf8");
  assert.match(src,/DO NOT ENABLE/);
  assert.match(src,/try\{return Deno\.env\.get\("FLOW_MEDIA_SEND_ENABLED"\)==="true";\}catch\{return false;\}/);
- // Live effect kinds unchanged: the planner does not emit message_image yet.
+ // Live effect kinds unchanged: the planner now emits message_image for
+ // text+image nodes, but this ingress (safePlan / LIVE_EFFECT_KINDS) does not
+ // accept it yet, so such a plan fails closed (nothing committed).
  assert.equal(src.includes('"message_image"'),false);
 });
+test("image whitelist: the planner emits message_image, the live ingress still refuses to commit it (fail closed)",()=>withMediaEnv(MEDIA_ON,()=>{
+ const d=imageDoc(TEXT_IMG);
+ assert.equal(supportedDurableDocument(d),true);
+ const plan=planUntilWait(d as any,createRuntimeState(d as any,"img",1),{eventKey:"mid.img",nowMs:1750000000000,seed:seedFromEventKey("mid.img")});
+ assert.equal(plan.error,undefined);
+ assert.deepEqual(plan.effects.map(e=>[e.kind,e.seq]),[["message",0],["message",1],["message_image",2],["message",3]]);
+ assert.equal(safePlan(plan),false,"message_image is not in LIVE_EFFECT_KINDS: no commit");
+}));

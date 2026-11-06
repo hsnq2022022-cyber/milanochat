@@ -49,7 +49,9 @@ test("180000 follows the whole 125000..170000 chain; only 190000 (requires 18000
  const stamps=readdirSync("supabase/migrations").filter(f=>f.endsWith(".sql")).map(f=>f.split("_")[0].padEnd(14,"0"));
  assert.equal(stamps.filter(s=>s==="20261029180000").length,1);
  // 20261029190000_flow_begin_durable_run_superseding (tests/flow-begin-durable-run-superseding.test.mjs).
- for(const s of stamps)if(s!=="20261029180000"&&s!=="20261029190000")assert.ok(s<"20261029180000",s);
+ // 20261029200000_flow_media_storage is an independent storage bucket (no flow object).
+ // 20261029210000_flow_media_effects requires 190000 (tests/flow-media-effects.test.mjs).
+ for(const s of stamps)if(!["20261029180000","20261029190000","20261029200000","20261029210000"].includes(s))assert.ok(s<"20261029180000",s);
  for(const f of [M125,...LATER])assert.ok(existsSync(f),f);
 });
 test("bodies: 125000 copies are byte-identical (migration, rollback, proposal); 180000 adds exactly the guards",()=>{

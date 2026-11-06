@@ -38,6 +38,13 @@ export type ReadinessInput={
  needsInternalActions?:boolean;
  /** FLOW_INTERNAL_ACTIONS_ENABLED==="true" (internal executor released). */
  internalActionsEnabled?:boolean;
+ /**
+  * The document has image content (publicationGate.ts flowNeedsMedia).
+  * Optional so older callers keep their exact results (absent = not needed).
+  */
+ needsMedia?:boolean;
+ /** message:image in FLOW_ACTIVATION_CAPABILITIES AND FLOW_MEDIA_SEND_ENABLED==="true". */
+ mediaEnabled?:boolean;
 };
 export function evaluateFlowReadiness(input:ReadinessInput){
  const checks={
@@ -59,6 +66,7 @@ export function evaluateFlowReadiness(input:ReadinessInput){
   scheduler:input.schedulerEnabled,
   buttons:input.richButtonsEnabled,
   internalActions:input.internalActionsEnabled===true,
+  media:input.mediaEnabled===true,
  };
  const base=["instagram","tenant","account","globalSwitch","tenantSwitch","credits",
   "activeRevision","supportedCandidate","ingress","activation","canary","operatorRelease","outbox",
@@ -68,17 +76,20 @@ export function evaluateFlowReadiness(input:ReadinessInput){
  const needsScheduler=input.candidateKind==="delay"||input.candidateKind==="mixed";
  const needsInternalActions=input.needsInternalActions===true;
  const internalOk=!needsInternalActions||checks.internalActions;
+ const needsMedia=input.needsMedia===true;
+ const extraOk=internalOk&&(!needsMedia||checks.media);
  return {
   checks,
   candidateKind:input.candidateKind,
   needsButtons,
   needsScheduler,
   needsInternalActions,
-  buttonsConfigured:baseReady&&checks.buttons&&input.candidateKind==="buttons"&&internalOk,
-  delayConfigured:baseReady&&checks.scheduler&&input.candidateKind==="delay"&&internalOk,
+  needsMedia,
+  buttonsConfigured:baseReady&&checks.buttons&&input.candidateKind==="buttons"&&extraOk,
+  delayConfigured:baseReady&&checks.scheduler&&input.candidateKind==="delay"&&extraOk,
   // Any supported kind: every base gate plus exactly the flags its nodes need.
   configured:baseReady&&input.candidateKind!=="unsupported"&&
-   (!needsButtons||checks.buttons)&&(!needsScheduler||checks.scheduler)&&internalOk,
+   (!needsButtons||checks.buttons)&&(!needsScheduler||checks.scheduler)&&extraOk,
   // These flags do not activate a revision, start Cron work, or send any message.
  };
 }

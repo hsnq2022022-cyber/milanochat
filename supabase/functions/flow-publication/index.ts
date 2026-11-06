@@ -8,7 +8,8 @@ import {
  preparePublishedDocument,publicationCanActivate,testCanaryArmed,productionActivationAuthorized,
  UUID_REGEX,VALID_FLOW_KEY,type ProviderPlatform
 } from "../../../src/flow/serverPublicationValidation.ts";
-import type {FlowCapability} from "../../../src/flow/publicationGate.ts";
+import {flowNeedsMedia,parseCapabilities,mediaActivationAllowed,withMediaGate,
+ type FlowCapability} from "../../../src/flow/publicationGate.ts";
 import {evaluateFlowReadiness} from "./readiness.ts";
 import {simpleMessageFromDocument} from "../milan-api/flowPrepareMessage.ts";
 import {supportedDurableDocument,durableCandidateKind,durableRuntimeNeeds,durableNeedsInternalActions,
@@ -202,7 +203,11 @@ export async function handleFlowPublication(req:Request,
     encryptionConfigured:env("FIELD_ENCRYPTION_KEY").length>0,
     // tag/untag/notify/handoff nodes need the internal executor flag.
     needsInternalActions:supported&&durableNeedsInternalActions(published),
-    internalActionsEnabled:env("FLOW_INTERNAL_ACTIONS_ENABLED")==="true"
+    internalActionsEnabled:env("FLOW_INTERNAL_ACTIONS_ENABLED")==="true",
+    // Image blocks: message:image in the server capability set AND the media flag.
+    needsMedia:supported&&flowNeedsMedia(published),
+    mediaEnabled:mediaActivationAllowed(parseCapabilities(env("FLOW_ACTIVATION_CAPABILITIES")),
+     env("FLOW_MEDIA_SEND_ENABLED")==="true")
    });
    return respond({ok:true,readiness,candidateRevision:revision??null});
   }
@@ -343,6 +348,11 @@ export async function handleFlowPublication(req:Request,
    const needs=durableGraph?durableRuntimeNeeds(rawDocument):{buttons:true,scheduler:true};
    // tag/untag/notify/handoff run only through the internal executor.
    const needsInternal=!durableGraph||durableNeedsInternalActions(rawDocument);
+   // Image blocks go live only with message:image in the server capability
+   // set (FLOW_ACTIVATION_CAPABILITIES) AND FLOW_MEDIA_SEND_ENABLED; PDF never.
+   const needsMedia=flowNeedsMedia(rawDocument);
+   const mediaAllowed=mediaActivationAllowed(parseCapabilities(env("FLOW_ACTIVATION_CAPABILITIES")),
+    env("FLOW_MEDIA_SEND_ENABLED")==="true");
    const durable=production&&scope.platform==="instagram"&&durableGraph&&
     env("FLOW_DURABLE_ACTIVATION_READY")==="true"&&
     env("FLOW_DURABLE_INGRESS_ENABLED")==="true"&&
@@ -353,13 +363,15 @@ export async function handleFlowPublication(req:Request,
     env("FIELD_ENCRYPTION_KEY").length>0&&
     (!needs.buttons||env("FLOW_RICH_BUTTONS_ENABLED")==="true")&&
     (!needsInternal||env("FLOW_INTERNAL_ACTIONS_ENABLED")==="true")&&
+    (!needsMedia||mediaAllowed)&&
     (!needs.scheduler||env("FLOW_DURABLE_SCHEDULER_ENABLED")==="true");
    if(!durable){
     if(simpleMessageFromDocument(publication.document,scope.platform)===null)
      return error("This flow uses unsupported runtime features",422);
-    const caps=new Set<FlowCapability>(canary?
-     (env("FLOW_ACTIVATION_CAPABILITIES").split(",").map(s=>s.trim()).filter(Boolean) as FlowCapability[]):
-     ["execution-engine","instagram","trigger:message","message:text","condition"]);
+    // message:image counts only while FLOW_MEDIA_SEND_ENABLED is on.
+    const caps=canary?
+     withMediaGate(parseCapabilities(env("FLOW_ACTIVATION_CAPABILITIES")),env("FLOW_MEDIA_SEND_ENABLED")==="true"):
+     new Set<FlowCapability>(["execution-engine","instagram","trigger:message","message:text","condition"]);
     if(!publicationCanActivate(publication.document,scope.platform,caps,true))
      return error("This flow uses unsupported runtime features",422);
    }

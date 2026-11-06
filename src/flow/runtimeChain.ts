@@ -16,7 +16,12 @@ import { chooseWeightedPort } from "./simulation.ts";
  *    twice in one chain) and bounded by MAX_CHAIN_CALLS planner calls;
  *  - any planner error is returned as-is with NO effects.
  * Each effect is tagged with `seq` 0..4 (its order inside this commit) so the
- * Outbox can dispatch effects of one run strictly in order.
+ * Outbox can dispatch effects of one run strictly in order. A text+image
+ * message node yields several effects (node text, then its blocks in order:
+ * "message" / "message_image"); each counts toward MAX_CHAIN_EFFECTS. Image
+ * URLs are never rendered. Sending images stays gated server-side
+ * (FLOW_MEDIA_SEND_ENABLED in milan-api and flow-outbox-worker); this planner
+ * reads no environment.
  *
  * State that must stay stable across resumes and retries is stored in the
  * run variables (never inbound customer text):

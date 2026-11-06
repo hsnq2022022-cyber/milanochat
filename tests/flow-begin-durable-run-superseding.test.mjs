@@ -47,10 +47,12 @@ const between=(s,open,close)=>{const a=s.indexOf(open);assert.ok(a>=0,open);cons
 const norm=x=>x.replace(/[ \t\n\r\f\v]+/g," ").replace(/^ +| +$/g,"");
 
 // ---------------------------------------------------------------- static
-test("190000 is the newest migration and follows the whole 125000..180000 chain",()=>{
+test("190000 follows the whole 125000..180000 chain; only 200000 (storage) and 210000 (requires 190000) are newer",()=>{
  const stamps=readdirSync("supabase/migrations").filter(f=>f.endsWith(".sql")).map(f=>f.split("_")[0].padEnd(14,"0"));
  assert.equal(stamps.filter(s=>s==="20261029190000").length,1);
- for(const s of stamps)if(s!=="20261029190000")assert.ok(s<"20261029190000",s);
+ // 20261029200000_flow_media_storage is an independent storage bucket (no flow object).
+ // 20261029210000_flow_media_effects requires 190000 (tests/flow-media-effects.test.mjs).
+ for(const s of stamps)if(!["20261029190000","20261029200000","20261029210000"].includes(s))assert.ok(s<"20261029190000",s);
  for(const f of [...CHAIN125_180,RB])assert.ok(existsSync(f),f);
 });
 test("migration and rollback: one bounded transaction, additive, service_role only, no data change",()=>{

@@ -173,3 +173,46 @@ test("activation guard requires the internal executor flag exactly when the grap
  assert.match(guard,/const needsInternal=!durableGraph\|\|durableNeedsInternalActions\(rawDocument\);/);
  assert.match(guard,/\(!needsInternal\|\|env\("FLOW_INTERNAL_ACTIONS_ENABLED"\)==="true"\)&&/);
 });
+import {flowNeedsMedia} from "../src/flow/publicationGate.ts";
+test("image graphs additionally require message:image + FLOW_MEDIA_SEND_ENABLED; old callers unchanged",()=>{
+ for(const kind of ["buttons","delay","mixed","text"] as const){
+  const before=evaluateFlowReadiness({...input,candidateKind:kind});
+  assert.equal(before.needsMedia,false,kind);assert.equal(before.checks.media,false,kind);
+  const needed=evaluateFlowReadiness({...input,candidateKind:kind,needsMedia:true});
+  assert.equal(needed.needsMedia,true);
+  assert.equal(needed.configured,false,kind+": media not enabled");
+  assert.equal(needed.buttonsConfigured,false);assert.equal(needed.delayConfigured,false);
+  const on=evaluateFlowReadiness({...input,candidateKind:kind,needsMedia:true,mediaEnabled:true});
+  assert.equal(on.configured,before.configured,kind);
+  assert.equal(on.buttonsConfigured,before.buttonsConfigured);assert.equal(on.delayConfigured,before.delayConfigured);
+  // Media never relaxes the internal-actions requirement (and vice versa).
+  assert.equal(evaluateFlowReadiness({...input,candidateKind:kind,needsMedia:true,mediaEnabled:true,needsInternalActions:true}).configured,false);
+ }
+ assert.equal(evaluateFlowReadiness({...input,candidateKind:"unsupported",needsMedia:true,mediaEnabled:true}).configured,false);
+ assert.equal(evaluateFlowReadiness({...input,candidateKind:"text",outboxEnabled:false,needsMedia:true,mediaEnabled:true}).configured,false);
+ const api=readFileSync("supabase/functions/flow-publication/index.ts","utf8");
+ const start=api.indexOf('if(action==="readiness")'),body=api.slice(start,api.indexOf('// Authenticated read-only catalog.',start));
+ assert.match(body,/needsMedia:supported&&flowNeedsMedia\(published\),/);
+ assert.match(body,/mediaEnabled:mediaActivationAllowed\(parseCapabilities\(env\("FLOW_ACTIVATION_CAPABILITIES"\)\),\n\s+env\("FLOW_MEDIA_SEND_ENABLED"\)==="true"\)/);
+ const T={id:"start",data:{kind:"trigger",platform:"instagram",triggerMode:"message"}};
+ const img={version:3,nodes:[T,{id:"m",data:{kind:"message",text:"x",image:"",options:[],
+  contentBlocks:[{id:"b",type:"image",url:"https://abcd1234.supabase.co/storage/v1/object/public/flow-media/u1/a.webp"}]}}],
+  edges:[{source:"start",target:"m",sourceHandle:"next"}]};
+ assert.equal(flowNeedsMedia(img),true);
+ const ui=readFileSync("src/flow/FlowPublicationPanel.tsx","utf8");
+ assert.match(ui,/\(key!=="media"\|\|readinessNeeds\(report\)\.media\)\);/);
+ assert.match(ui,/ media:r\.needsMedia===true\n\}\);/);
+});
+test("activation guard requires message:image and FLOW_MEDIA_SEND_ENABLED exactly when the graph has images",()=>{
+ const api=readFileSync("supabase/functions/flow-publication/index.ts","utf8");
+ const start=api.indexOf("const rawDocument:unknown=publication.document");
+ const guard=api.slice(start,api.indexOf("if(!durable){",start));
+ assert.match(guard,/const needsMedia=flowNeedsMedia\(rawDocument\);/);
+ assert.match(guard,/const mediaAllowed=mediaActivationAllowed\(parseCapabilities\(env\("FLOW_ACTIVATION_CAPABILITIES"\)\),\n\s+env\("FLOW_MEDIA_SEND_ENABLED"\)==="true"\);/);
+ assert.match(guard,/\(!needsMedia\|\|mediaAllowed\)&&\n\s+\(!needs\.scheduler\|\|env\("FLOW_DURABLE_SCHEDULER_ENABLED"\)==="true"\);/);
+ // Canary (non-durable) capability set: message:image only while the flag is on; default set unchanged.
+ const after=api.slice(api.indexOf("if(!durable){",start));
+ assert.match(after,/withMediaGate\(parseCapabilities\(env\("FLOW_ACTIVATION_CAPABILITIES"\)\),env\("FLOW_MEDIA_SEND_ENABLED"\)==="true"\)/);
+ assert.match(after,/new Set<FlowCapability>\(\["execution-engine","instagram","trigger:message","message:text","condition"\]\)/);
+ assert.match(after.slice(0,200),/simpleMessageFromDocument\(publication\.document,scope\.platform\)===null/,"V2 path still refuses image documents first");
+});

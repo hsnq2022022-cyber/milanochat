@@ -115,7 +115,7 @@ jobs:
           psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028225000_flow_runtime_advance.sql
           psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261029125000_flow_durable_button_run.sql
           psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-durable-button-ingress.test.sql
-      - name: Durable button run guards 20261029180000 over the full 125000..190000 chain
+      - name: Durable button run guards 20261029180000 over the full 125000..210000 chain
         shell: bash
         run: |
           set -euo pipefail
@@ -135,9 +135,11 @@ jobs:
             20261029150000_flow_takeover_resume 20261029160000_flow_credits_pause \
             20261029170000_flow_canary_claim_durable 20261029180000_flow_durable_button_run_guards \
             20261029180000_flow_durable_button_run_guards \
-            20261029190000_flow_begin_durable_run_superseding 20261029190000_flow_begin_durable_run_superseding; do
+            20261029190000_flow_begin_durable_run_superseding 20261029190000_flow_begin_durable_run_superseding \
+            20261029210000_flow_media_effects 20261029210000_flow_media_effects; do
             psql -X -v ON_ERROR_STOP=1 -f "supabase/migrations/$m.sql"
           done
+          test "$(psql -XAtq -c "SELECT count(*) FROM pg_constraint WHERE conrelid IN ('public.automation_flow_outbox'::regclass,'public.automation_flow_delivery_attempts'::regclass) AND obj_description(oid,'pg_constraint') LIKE 'CREATED_BY_20261029210000_FLOW_MEDIA_EFFECTS %'")" = 2
           test "$(psql -XAtq -c "SELECT count(*) FROM pg_proc WHERE pronamespace='public'::regnamespace AND proname IN ('flow_begin_durable_run','flow_resume_button_run') AND obj_description(oid,'pg_proc') LIKE 'CREATED_BY_20261029180000_FLOW_DURABLE_BUTTON_RUN_GUARDS %'")" = 2
           test "$(psql -XAtq -c "SELECT count(*) FROM pg_proc WHERE pronamespace='public'::regnamespace AND proname='flow_begin_durable_run_superseding' AND obj_description(oid,'pg_proc')='CREATED_BY_20261029190000_FLOW_BEGIN_DURABLE_RUN_SUPERSEDING'")" = 1
           # Behaviour of the 180000 bodies: throwaway unix-socket cluster from the runner's

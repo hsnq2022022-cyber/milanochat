@@ -12,17 +12,18 @@ type ReadinessChecks={
  instagram:boolean;tenant:boolean;account:boolean;globalSwitch:boolean;
  tenantSwitch:boolean;credits:boolean;activeRevision:boolean;supportedCandidate:boolean;ingress:boolean;activation:boolean;
  canary:boolean;operatorRelease:boolean;outbox:boolean;atomicDebit:boolean;
- encryption:boolean;scheduler:boolean;buttons:boolean;internalActions?:boolean;
+ encryption:boolean;scheduler:boolean;buttons:boolean;internalActions?:boolean;media?:boolean;
 };
 type Readiness={checks:ReadinessChecks;candidateKind:"buttons"|"delay"|"mixed"|"text"|"unsupported";
  buttonsConfigured:boolean;delayConfigured:boolean;
  // Absent on older servers; the per-kind fallbacks below preserve the old behaviour.
- configured?:boolean;needsButtons?:boolean;needsScheduler?:boolean;needsInternalActions?:boolean};
+ configured?:boolean;needsButtons?:boolean;needsScheduler?:boolean;needsInternalActions?:boolean;needsMedia?:boolean};
 const readinessNeeds=(r:Readiness)=>({
  buttons:typeof r.needsButtons==="boolean"?r.needsButtons:r.candidateKind==="buttons",
  scheduler:typeof r.needsScheduler==="boolean"?r.needsScheduler:r.candidateKind==="delay",
  // Absent on older servers = not needed (same default the server uses).
- internalActions:r.needsInternalActions===true
+ internalActions:r.needsInternalActions===true,
+ media:r.needsMedia===true
 });
 const readinessConfigured=(r:Readiness)=>typeof r.configured==="boolean"?r.configured:
  r.candidateKind==="buttons"?r.buttonsConfigured:r.candidateKind==="delay"?r.delayConfigured:false;
@@ -44,7 +45,8 @@ const readinessLabels:Record<keyof ReadinessChecks,{ar:string;en:string}>={
  encryption:{ar:"تشفير الرسائل",en:"Message encryption configured"},
  scheduler:{ar:"جدولة التأخير",en:"Delay scheduler enabled"},
  buttons:{ar:"إرسال الأزرار التفاعلية",en:"Rich buttons enabled"},
- internalActions:{ar:"تفعيل الإجراءات الداخلية (وسم/إزالة وسم/إشعار/تحويل لموظف)",en:"Internal actions enabled (tag/untag/notify/handoff)"}
+ internalActions:{ar:"تفعيل الإجراءات الداخلية (وسم/إزالة وسم/إشعار/تحويل لموظف)",en:"Internal actions enabled (tag/untag/notify/handoff)"},
+ media:{ar:"إرسال الصور (message:image وFLOW_MEDIA_SEND_ENABLED)",en:"Image sending enabled (message:image and FLOW_MEDIA_SEND_ENABLED)"}
 };
 type Reply={ok?:boolean;error?:string;accounts?:Account[];
  items?:Version[];activation?:Activation;revision?:number;
@@ -146,7 +148,8 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
   .filter(([key,ready])=>ready!==true&&
    (key!=="scheduler"||readinessNeeds(report).scheduler)&&
    (key!=="buttons"||readinessNeeds(report).buttons)&&
-   (key!=="internalActions"||readinessNeeds(report).internalActions));
+   (key!=="internalActions"||readinessNeeds(report).internalActions)&&
+   (key!=="media"||readinessNeeds(report).media));
  const copyReadiness=async()=>{
   if(!readiness)return;
   const missing=missingReadinessChecks(readiness).map(([key])=>key);
