@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
+import type { CSSProperties } from "react";
 import { Plus, Trash2, Check, Copy, AlertTriangle, ChevronDown, ChevronUp } from "lucide-react";
-import { ACCENT, LABELS, makeNode, outputs, canConnect, edgeFor, PLATFORM_LABELS, TRIGGER_OPTIONS } from "./model";
+import { LABELS, makeNode, outputs, canConnect, edgeFor, PLATFORM_LABELS, TRIGGER_OPTIONS } from "./model";
 import ButtonActionEditor from "./ButtonActionEditor";
 import MessageBlocksEditor from "./MessageBlocksEditor";
 import TriggerKeywordsEditor from "./TriggerKeywordsEditor";
@@ -9,6 +10,8 @@ import { useFlowStore } from "./store";
 import { cardSize, findOpenPosition } from "./layout";
 import { flowText, flowKindLabel } from "./uiLocale";
 import type { FlowLanguage } from "./uiLocale";
+import { SKIN_COLOR, SKIN_ICON } from "./skin";
+import { SHEET_FULL, SHEET_HALF, useBottomSheet, useCompactViewport } from "./useBottomSheet";
 
 const input="w-full rounded-xl border border-[#275443] bg-[#0F2E24] px-3 py-2.5 text-sm text-white outline-none focus:border-[#3DD189]";
 const btn="inline-flex min-h-10 items-center gap-1.5 rounded-xl border border-[#275443] px-3 py-2 text-xs hover:bg-[#173D30]";
@@ -23,7 +26,15 @@ export default function NodeEditor({node,onClose,language="ar"}:{node:FlowNode|n
   const [status,setStatus]=useState("");
   const [collapsed,setCollapsed]=useState(false);
   const t=(key:Parameters<typeof flowText>[0])=>flowText(key,language);
-  useEffect(()=>{if(!node)return;const dismiss=(e:KeyboardEvent)=>{if(e.key==="Escape"){e.stopPropagation();onClose();}};window.addEventListener("keydown",dismiss);return()=>window.removeEventListener("keydown",dismiss);},[node?.id,onClose]);
+  const compact=useCompactViewport();
+  // Return keyboard focus to the step's card when the panel closes from inside it.
+  const closePanel=()=>{
+    const id=node?.id,inside=!!document.activeElement?.closest("[data-testid='step-settings-panel']");
+    onClose();
+    if(id&&inside)window.requestAnimationFrame(()=>document.querySelector<HTMLElement>(`.react-flow__node[data-id="${CSS.escape(id)}"]`)?.focus({preventScroll:true}));
+  };
+  const sheet=useBottomSheet({enabled:compact&&!collapsed,onClose:closePanel});
+  useEffect(()=>{if(!node)return;const dismiss=(e:KeyboardEvent)=>{if(e.key==="Escape"){e.stopPropagation();closePanel();}};window.addEventListener("keydown",dismiss);return()=>window.removeEventListener("keydown",dismiss);},[node?.id,onClose]);
   if(!node)return <aside dir={language==="ar"?"rtl":"ltr"} className="flex w-[min(40vw,370px)] min-w-[210px] shrink-0 flex-col border-r border-[#173D30] bg-[#0B241C] p-5 text-[#8B9E96]"><h2 className="font-semibold text-white">{t("panel")}</h2><p className="mt-3 text-sm">{t("noNode")}</p></aside>;
   const d=node.data;
   const edit=(part:Partial<FlowData>)=>store.changeNode(node.id,part);
@@ -50,17 +61,29 @@ export default function NodeEditor({node,onClose,language="ar"}:{node:FlowNode|n
   const duplicate=()=>{if(store.doc.nodes.length>=100)return;const preferred={x:node.position.x+cardSize(node).width+80,y:node.position.y+80};const n=makeNode(d.kind,preferred,{...d,options:d.options.map(o=>({...o,id:crypto.randomUUID()})),title:d.title+" (نسخة)"});store.addNode({...n,position:findOpenPosition(store.doc.nodes,n,preferred)});};
   const remove=()=>{if(d.kind==="trigger"&&!window.confirm("حذف البداية سيجعل التدفق دون نقطة تشغيل. هل تريد المتابعة؟"))return;store.deleteNode(node.id);onClose();};
 
-  return <aside dir={language==="ar"?"rtl":"ltr"} data-testid="step-settings-panel" role="complementary" aria-label={t("stepProps")} className={"fixed inset-x-0 bottom-0 z-40 flex w-full shrink-0 flex-col overflow-hidden rounded-t-2xl border-t border-[#173D30] bg-[#0B241C] text-white shadow-2xl md:relative md:inset-auto md:z-20 md:max-h-none md:w-[min(40vw,385px)] md:rounded-none md:border-r md:border-t-0 md:shadow-none "+(collapsed?"max-h-20 md:w-[240px]":"max-h-[min(78dvh,730px)]")}>
-    <div className="sticky top-0 flex min-h-16 items-center justify-between gap-2 border-b border-[#173D30] bg-[#0B241C] px-3 py-3 md:px-4">
-      <div><p className="text-[11px] text-[#8B9E96]">{t("stepProps")}</p><h2 className="text-base font-bold" style={{color:ACCENT[d.kind]}}>{flowKindLabel(d.kind,language,LABELS[d.kind])}</h2></div>
-      <div className="flex items-center gap-2">
+  const KindIcon=SKIN_ICON[d.kind];
+  return <aside ref={sheet.sheetRef} dir={language==="ar"?"rtl":"ltr"} data-testid="step-settings-panel" role="complementary" aria-label={t("stepProps")}
+    data-kind={d.kind} data-snap={compact&&!collapsed?sheet.snap:undefined}
+    style={{"--c":SKIN_COLOR[d.kind],"--fs-sheet-h":(sheet.snap==="full"?SHEET_FULL:SHEET_HALF)*100+"dvh"} as CSSProperties}
+    className={"fs-inspector fixed inset-x-0 bottom-0 z-40 flex w-full shrink-0 flex-col overflow-hidden text-white md:relative md:inset-auto md:z-20 md:max-h-none md:w-[min(40vw,385px)] "+(collapsed?"is-collapsed max-h-20 md:w-[240px]":"max-h-[min(92dvh,100%)] md:max-h-none")}>
+    {compact&&!collapsed&&<div className="fs-sheet-grab" {...sheet.handlers}>
+      <button type="button" data-sheet-handle data-testid="step-sheet-handle" className="fs-sheet-handle"
+        aria-label={sheet.snap==="full"?t("sheetShrink"):t("sheetExpand")} aria-expanded={sheet.snap==="full"}
+        onClick={sheet.onHandleClick}><span aria-hidden="true"/></button>
+    </div>}
+    <div className="fs-insp-head sticky top-0 flex items-center justify-between gap-2" {...sheet.handlers}>
+      <div className="flex min-w-0 items-center gap-2.5">
+        <span className="fs-node-ico" aria-hidden="true"><KindIcon size={19}/></span>
+        <div className="min-w-0"><p className="fs-insp-cap">{t("stepProps")}</p><h2 className="fs-insp-title">{flowKindLabel(d.kind,language,LABELS[d.kind])}</h2></div>
+      </div>
+      <div className="flex items-center gap-1.5">
         <button type="button" aria-label={collapsed?t("expandStep"):t("collapseStep")} aria-expanded={!collapsed} className={btn} onClick={()=>setCollapsed(v=>!v)}>
-          {collapsed?<ChevronDown size={16}/>:<ChevronUp size={16}/>} {collapsed?(language==="ar"?"إظهار":"Show"):(language==="ar"?"طي":"Collapse")}
+          {collapsed?<ChevronDown size={16}/>:<ChevronUp size={16}/>} <span className="max-[380px]:sr-only">{collapsed?(language==="ar"?"إظهار":"Show"):(language==="ar"?"طي":"Collapse")}</span>
         </button>
-        <button type="button" aria-label={t("close")} className={btn} onClick={onClose}>{t("closeLabel")}</button>
+        <button type="button" aria-label={t("close")} className={btn} onClick={closePanel}>{t("closeLabel")}</button>
       </div>
     </div>
-    {!collapsed&&<div className="min-h-0 flex-1 overflow-y-auto px-4 pb-6">
+    {!collapsed&&<div className="fs-insp-body min-h-0 flex-1 overflow-y-auto px-4 pb-6">
       {d.kind!=="trigger"&&<><label className={section}>{t("title")}</label><input className={input} value={d.title} maxLength={90} onChange={e=>edit({title:e.target.value})}/></>}
       {d.kind==="trigger"&&<>
         <label className={section}>{t("channel")}</label>
@@ -153,6 +176,6 @@ export default function NodeEditor({node,onClose,language="ar"}:{node:FlowNode|n
       <div className="mt-5 flex flex-wrap gap-2"><button className={btn} onClick={duplicate}><Copy size={14}/> نسخ</button><button className={btn+" text-red-300"} onClick={remove}><Trash2 size={14}/> حذف الخطوة</button>
       <button className={btn} onClick={()=>{const ok=store.deleteNode(node.id,true);if(ok)onClose();}} disabled={store.doc.edges.filter(e=>e.source===node.id).length!==1||store.doc.edges.filter(e=>e.target===node.id).length!==1}>حذف مع إعادة التوصيل</button></div>
     </div>}
-    {!collapsed&&<div className="sticky bottom-0 border-t border-[#173D30] bg-[#0B241C] p-3"><button className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#3DD189] py-2.5 text-sm font-bold text-[#061A14]" onClick={onClose}><Check size={16}/> {t("done")}</button></div>}
+    {!collapsed&&<div className="fs-insp-foot sticky bottom-0 p-3"><button className="fs-btn fs-btn-primary w-full" onClick={closePanel}><Check size={16}/> {t("done")}</button></div>}
   </aside>;
 }

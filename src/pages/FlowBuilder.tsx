@@ -1,18 +1,25 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 import {
-  ReactFlow, ReactFlowProvider, Background, BackgroundVariant, Controls, MiniMap, MarkerType,
+  ReactFlow, ReactFlowProvider, Background, BackgroundVariant, MiniMap, MarkerType,
   useReactFlow,
 } from "@xyflow/react";
 import type { Connection, Edge, XYPosition } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { ArrowRight, Plus, Play, Save, Upload, Download, Undo2, Redo2, LayoutGrid, Trash2, AlertTriangle, CheckCircle2, X, Copy, ChevronUp, ChevronDown } from "lucide-react";
+import "../flow/flowSkin.css";
+import { ArrowRight, Plus, Play, Save, Upload, Download, Undo2, Redo2, LayoutGrid, Trash2, AlertTriangle, CheckCircle2, X, Copy, ChevronUp, ChevronDown, Send } from "lucide-react";
 import AutomationNode from "../flow/AutomationNode";
 import AutomationEdge from "../flow/AutomationEdge";
 import NodeEditor from "../flow/NodeEditor";
 import FlowSimulator from "../flow/FlowSimulator";
 import CloudDraftPanel from "../flow/CloudDraftPanel";
 import FlowPublicationPanel from "../flow/FlowPublicationPanel";
-import { ACCENT, KIND_LIST, LABELS, SAVE_KEY, canConnect, edgeFor, importFlow, makeNode, outputs, validateDocument } from "../flow/model";
+import FlowSwitcher from "../flow/FlowSwitcher";
+import WorkspaceTools from "../flow/WorkspaceTools";
+import { FlowIssuesContext, SKIN_COLOR, SKIN_ICON, skinHint } from "../flow/skin";
+import type { NodeIssueSummary } from "../flow/skin";
+import { SHEET_HALF } from "../flow/useBottomSheet";
+import { KIND_LIST, LABELS, SAVE_KEY, canConnect, edgeFor, importFlow, makeNode, outputs, validateDocument } from "../flow/model";
 import { arrangeFlow, cardSize, findOpenPosition } from "../flow/layout";
 import { useAddStepMenu } from "../flow/addMenu";
 import type { FlowNode, FlowEdge, Kind, FlowDocument } from "../flow/model";
@@ -28,7 +35,7 @@ const CLOUD_DRAFT_UI_ENABLED=(import.meta as ImportMeta & {env?:Record<string,st
 const PUBLICATION_UI_ENABLED=(import.meta as ImportMeta & {env?:Record<string,string|undefined>}).env?.VITE_ENABLE_FLOW_PUBLICATION_PREVIEW!=="false";
 const nodeTypes={flowNode:AutomationNode};
 const edgeTypes={flowEdge:AutomationEdge};
-const btn="inline-flex min-h-11 items-center justify-center gap-1.5 rounded-xl border border-[#275443] bg-[#0B241C] px-3 py-2.5 text-xs font-semibold hover:border-[#3DD189] hover:bg-[#173D30]";
+const btn="fs-btn fs-btn-ghost";
 type EdgeMenu={id:string;x:number;y:number}|null;
 
 function Editor(){
@@ -186,80 +193,134 @@ function Editor(){
   };
   const renderedNodes=useMemo(()=>doc.nodes.map(n=>({...n,className:trail.includes(n.id)?"flow-visited":""})),[doc.nodes,trail]);
   const renderedEdges=useMemo(()=>doc.edges.map(e=>({...e,animated:trail.includes(e.source)&&trail.includes(e.target)})),[doc.edges,trail]);
+  // Skin-only: per-node summary of the existing validation findings (badges on cards).
+  const nodeIssues=useMemo(()=>{
+    const map=new Map<string,NodeIssueSummary>();
+    for(const issue of issues){
+      if(!issue.nodeId)continue;
+      const current=map.get(issue.nodeId)||{errors:0,warnings:0,first:""};
+      if(issue.severity==="error"){if(!current.errors)current.first=issue.message;current.errors++;}
+      else{if(!current.first)current.first=issue.message;current.warnings++;}
+      map.set(issue.nodeId,current);
+    }
+    return map;
+  },[issues]);
+  // Skin-only save indicator: observes the existing 700ms browser autosave without changing it.
+  const [saveState,setSaveState]=useState<"saved"|"saving"|"paused"|"failed">("saving");
+  useEffect(()=>{
+    if(protectStoredLibrary){setSaveState("paused");return;}
+    setSaveState("saving");
+    const timer=window.setTimeout(()=>{
+      try{setSaveState(localStorage.getItem(SAVE_KEY)===JSON.stringify(doc)?"saved":"failed");}catch{setSaveState("failed");}
+    },820);
+    return()=>window.clearTimeout(timer);
+  },[doc,protectStoredLibrary]);
+  // Phones: keep the selected card visible above the half-height step sheet (viewport pan only).
+  useEffect(()=>{
+    if(!isCompact||!selectedId)return;
+    const timer=window.setTimeout(()=>{
+      const node=instance.getInternalNode(selectedId),pane=document.querySelector(".flow-skin .react-flow")?.getBoundingClientRect();
+      if(!node||!pane)return;
+      const {x:vx,y:vy,zoom}=instance.getViewport(),abs=node.internals.positionAbsolute;
+      const w=(node.measured.width??280)*zoom,h=(node.measured.height??160)*zoom;
+      const sx=abs.x*zoom+vx,sy=abs.y*zoom+vy;
+      const top=72,bottom=Math.min(pane.height,window.innerHeight*(1-SHEET_HALF)-pane.top)-16; // 72: below the workspace tools pill
+      if(bottom-top<60)return;
+      const fitsY=sy>=top&&sy+h<=bottom,fitsX=sx>=8&&sx+w<=pane.width-8;
+      if(fitsY&&fitsX)return;
+      const ty=fitsY?sy:(h>bottom-top?top:top+(bottom-top-h)/2),tx=fitsX?sx:(pane.width-w)/2;
+      const reduce=window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+      void instance.setViewport({x:vx+(tx-sx),y:vy+(ty-sy),zoom},{duration:reduce?0:320});
+    },60);
+    return()=>window.clearTimeout(timer);
+  },[isCompact,selectedId,instance]);
+  const switchTo=(id:string)=>{
+    store().switchFlow(id);closeAdd();setNotice("تم فتح التدفق المحدد.");
+    window.setTimeout(()=>instance.fitView({padding:.2,duration:200}),90);
+  };
+  const createNewFlow=()=>{
+    if(flows.length>=30){setNotice("الحد الأقصى 30 تدفقًا محليًا.");return;}
+    const created=store().createFlow();if(!created){setNotice("تعذّر إنشاء التدفق: وصلت إلى الحد الأقصى (30).");return;}
+    closeAdd();setNotice("أُنشئ تدفق جديد. اربط الأزرار من لوحة الخطوة.");
+    window.setTimeout(()=>instance.fitView({padding:.25}),120);
+  };
+  const createBlankFlow=()=>{
+    if(flows.length>=30){setNotice("الحد الأقصى 30 تدفقًا محليًا.");return;}
+    const created=store().createFlow("تدفق فارغ "+(flows.length+1),true);
+    if(!created){setNotice("تعذّر إنشاء التدفق: وصلت إلى الحد الأقصى (30).");return;}
+    closeAdd();setNotice("تم إنشاء تدفق فارغ يحتوي على نقطة البداية فقط. التدفق القديم محفوظ.");
+    window.setTimeout(()=>instance.fitView({padding:.25}),120);
+  };
+  const saveLabel=language==="ar"
+    ?{saved:"محفوظ في المتصفح",saving:"جارٍ الحفظ…",paused:"الحفظ التلقائي متوقف",failed:"تعذّر الحفظ — استخدم التصدير"}[saveState]
+    :{saved:"Saved in browser",saving:"Saving…",paused:"Autosave paused",failed:"Save failed — use Export"}[saveState];
+  const paletteAnchored=!!addRequest&&!addRequest.source;
 
-  return <div dir={language==="ar"?"rtl":"ltr"} className="flex h-[100dvh] flex-col bg-[#061A14] text-white" style={{fontFamily:"system-ui, sans-serif"}}>
-    <header className="z-30 flex shrink-0 flex-col gap-2 border-b border-[#173D30] bg-[#0B241C] px-2 py-2 md:flex-row md:flex-wrap md:items-center md:justify-between md:px-5">
-      <div className="flex w-full min-w-0 flex-wrap items-center gap-2 md:w-auto md:flex-nowrap"><a className={btn} href="#/dashboard" aria-label={t("back")}><ArrowRight size={17}/></a>
-        <div className="min-w-0"><p className="text-[11px] text-[#8B9E96]">{t("designer")}</p>
-          <input className="max-w-36 bg-transparent text-sm font-bold outline-none md:max-w-64" aria-label={t("name")} maxLength={100} value={doc.name} onChange={e=>store().rename(e.target.value)}/></div>
-        <span className="hidden rounded-lg border border-[#E5B54B]/40 px-2 py-1 text-[11px] text-[#E5B54B] sm:block">{t("draft")}</span>
-        {<span data-testid="flow-preview-version" className="rounded-lg border border-[#3DD189]/60 bg-[#173D30] px-2 py-1 text-[11px] text-[#3DD189]">معاينة 5.3 — سؤال بخانة واحدة</span>}
-        <div className="flex w-full min-w-0 shrink-0 items-center gap-1.5 overflow-x-auto pb-1 md:w-auto md:flex-none md:shrink md:overflow-visible" data-testid="flow-toolbar-actions">
-          <select className="max-w-36 rounded-lg border border-[#275443] bg-[#0F2E24] px-2 py-2 text-xs text-white md:max-w-52" aria-label={t("select")} value={activeFlowId} onChange={e=>{
-            store().switchFlow(e.target.value);closeAdd();setNotice("تم فتح التدفق المحدد.");
-            window.setTimeout(()=>instance.fitView({padding:.2,duration:200}),90);
-          }}>
+  return <div dir={language==="ar"?"rtl":"ltr"} className="flow-skin flex h-[100dvh] flex-col">
+    <header className={"fs-topbar"+(toolbarCollapsed?" is-collapsed":"")}>
+      <div className="fs-tb-main">
+        <a className="fs-ibtn" href="#/dashboard" aria-label={t("back")}><ArrowRight size={20}/></a>
+        <div className="fs-tb-name">
+          <p className="fs-tb-cap"><span className="truncate">{t("designer")}</span><span className="fs-draft">{t("draft")}</span></p>
+          <input className="fs-name-input" aria-label={t("name")} maxLength={100} value={doc.name} onChange={e=>store().rename(e.target.value)}/>
+        </div>
+        <FlowSwitcher flows={flows} activeFlowId={activeFlowId} activeName={doc.name} language={language} onSwitch={switchTo} onCreate={createNewFlow} onBlank={createBlankFlow}/>
+        {PUBLICATION_UI_ENABLED&&<button type="button" data-testid="flow-publications" className="fs-btn fs-btn-primary fs-publish" onClick={()=>setShowPublications(true)}>
+          <Send size={16}/><span className="sm:hidden">{t("publish")}</span><span className="hidden sm:inline">{language==="en"?"Published revisions":"الإصدارات المنشورة"}</span></button>}
+        <button type="button" className="fs-ibtn fs-tb-toggle" aria-label={toolbarCollapsed?t("expand"):t("collapse")} aria-expanded={!toolbarCollapsed} onClick={()=>setToolbarCollapsed(v=>!v)}>
+          {toolbarCollapsed?<ChevronDown size={18}/>:<ChevronUp size={18}/>} <span className="hidden lg:inline">{toolbarCollapsed?t("showTools"):t("hideTools")}</span>
+        </button>
+      </div>
+      <div className="fs-tb-sub" aria-hidden={toolbarCollapsed||undefined}><div className="fs-tb-sub-in">
+        <div className="fs-tb-row fs-scroll-row">
+          <span className={"fs-status is-"+saveState} role="status" aria-live="polite"><i className="fs-dot" aria-hidden="true"/>{saveLabel}</span>
+          {<span data-testid="flow-preview-version" className="fs-chip fs-chip-brand">معاينة 5.3 — سؤال بخانة واحدة</span>}
+          <label className="sr-only" htmlFor="flow-ui-language">{t("language")}</label>
+          <select id="flow-ui-language" data-testid="flow-ui-language" dir="ltr" aria-label={t("language")}
+            className="fs-select fs-lang"
+            value={language} onChange={e=>setLanguage(e.target.value as FlowLanguage)}>
+            <option value="ar">العربية</option><option value="en">English</option>
+          </select>
+        </div>
+        <div className="fs-tb-row fs-scroll-row" data-testid="flow-toolbar-actions">
+          <select className="fs-select fs-flow-select" aria-label={t("select")} value={activeFlowId} onChange={e=>switchTo(e.target.value)}>
             {flows.map(f=><option key={f.id} value={f.id}>{f.id===activeFlowId?doc.name:f.doc.name}</option>)}
           </select>
-          <button className={btn} title={t("create")} aria-label={t("create")} onClick={()=>{
-            if(flows.length>=30){setNotice("الحد الأقصى 30 تدفقًا محليًا.");return;}
-            const created=store().createFlow();if(!created){setNotice("تعذّر إنشاء التدفق: وصلت إلى الحد الأقصى (30).");return;}
-            closeAdd();setNotice("أُنشئ تدفق جديد. اربط الأزرار من لوحة الخطوة.");
-            window.setTimeout(()=>instance.fitView({padding:.25}),120);
-          }}><Plus size={16}/></button>
-          <button className={btn} title={t("blank")} aria-label={t("blank")} onClick={()=>{
-            if(flows.length>=30){setNotice("الحد الأقصى 30 تدفقًا محليًا.");return;}
-            const created=store().createFlow("تدفق فارغ "+(flows.length+1),true);
-            if(!created){setNotice("تعذّر إنشاء التدفق: وصلت إلى الحد الأقصى (30).");return;}
-            closeAdd();setNotice("تم إنشاء تدفق فارغ يحتوي على نقطة البداية فقط. التدفق القديم محفوظ.");
-            window.setTimeout(()=>instance.fitView({padding:.25}),120);
-          }}><LayoutGrid size={16}/> <span className="hidden sm:inline">{t("blank")}</span></button>
+          <button className={btn} title={t("create")} aria-label={t("create")} onClick={createNewFlow}><Plus size={16}/></button>
+          <button className={btn} title={t("blank")} aria-label={t("blank")} onClick={createBlankFlow}><LayoutGrid size={16}/> <span className="hidden sm:inline">{t("blank")}</span></button>
           <button className={btn} title={t("duplicate")} aria-label={t("duplicate")} onClick={()=>{store().duplicateFlow();setNotice("تم إنشاء نسخة مستقلة من التدفق.");}}><Copy size={15}/></button>
-          <button className={btn+" text-red-300"} disabled={flows.length<2} title={t("delete")} aria-label={t("delete")} onClick={()=>{
+          <button className={btn+" fs-btn-danger"} disabled={flows.length<2} title={t("delete")} aria-label={t("delete")} onClick={()=>{
             if(!window.confirm("سيُحذف هذا التدفق المحلي. قد تكون أزرار في تدفقات أخرى مرتبطة به. هل تريد المتابعة؟"))return;
             store().deleteFlow(activeFlowId);setNotice("حُذف التدفق المحلي.");
           }}><Trash2 size={15}/></button>
         </div>
-      </div>
-      <div className="flex items-center justify-end gap-2 md:justify-start">
-        <label className="sr-only" htmlFor="flow-ui-language">{t("language")}</label>
-        <select id="flow-ui-language" data-testid="flow-ui-language" dir="ltr" aria-label={t("language")}
-          className="min-h-11 rounded-xl border border-[#275443] bg-[#0F2E24] px-2 text-xs text-white"
-          value={language} onChange={e=>setLanguage(e.target.value as FlowLanguage)}>
-          <option value="ar">العربية</option><option value="en">English</option>
-        </select>
-      <button type="button" className={btn+" self-end md:self-auto"} aria-label={toolbarCollapsed?t("expand"):t("collapse")} aria-expanded={!toolbarCollapsed} onClick={()=>setToolbarCollapsed(v=>!v)}>
-        {toolbarCollapsed?<ChevronDown size={16}/>:<ChevronUp size={16}/>} <span className="hidden sm:inline">{toolbarCollapsed?t("showTools"):t("hideTools")}</span>
-      </button>
-      </div>
-      {!toolbarCollapsed&&<div className="flex w-full items-center gap-1.5 overflow-x-auto whitespace-nowrap pb-1 md:w-auto md:flex-wrap md:overflow-visible" data-testid="flow-toolbar-secondary">
+      {!toolbarCollapsed&&<div className="fs-tb-row fs-scroll-row" data-testid="flow-toolbar-secondary">
         <button data-testid="flow-enabled-toggle" type="button" aria-label={t("activate")} aria-pressed={activeEnabled}
-          className={"inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-xs font-bold "+(activeEnabled?"border-[#3DD189] bg-[#173D30] text-[#3DD189]":"border-[#275443] bg-[#0F2E24] text-[#C1D2CA]")}
+          className={"fs-toggle"+(activeEnabled?" is-on":"")}
           onClick={()=>{
             if(!activeEnabled&&errors.length>0){setShowIssues(true);setNotice("راجع الأخطاء قبل تفعيل المسودة.");return;}
             store().setFlowEnabled(activeFlowId,!activeEnabled);
             setNotice(!activeEnabled?"تم تفعيل المسودة محليًا فقط. لم تُفعّل الأتمتة على الحساب المرتبط.":"تم تعطيل المسودة محليًا.");
           }}>
-          <span className={"relative inline-flex h-4 w-8 shrink-0 rounded-full "+(activeEnabled?"bg-[#3DD189]":"bg-[#60766B]")}>
-            <span className={"absolute top-0.5 h-3 w-3 rounded-full bg-[#061A14] transition-transform "+(activeEnabled?"translate-x-0.5":"translate-x-[18px]")}/>
-          </span>
+          <span className="fs-toggle-track"><span className="fs-toggle-thumb"/></span>
           {activeEnabled?t("enabled"):t("disabled")}
         </button>
-        <button className={btn} onClick={()=>store().undo()} title={t("undo")}><Undo2 size={16}/></button>
-        <button className={btn} onClick={()=>store().redo()} title={t("redo")}><Redo2 size={16}/></button>
+        <div className="fs-grp">
+          <button className="fs-ibtn" onClick={()=>store().undo()} title={t("undo")}><Undo2 size={17}/></button>
+          <button className="fs-ibtn" onClick={()=>store().redo()} title={t("redo")}><Redo2 size={17}/></button>
+        </div>
         <button className={btn} onClick={e=>openAdd({x:e.clientX,y:e.clientY})} title={t("add")}><Plus size={16}/> <span className="hidden sm:inline">{t("addShort")}</span></button>
         <button className={btn} onClick={arrange} title={t("arrange")}><LayoutGrid size={16}/><span className="hidden md:inline">{t("arrangeShort")}</span></button>
-        <button className={btn} onClick={()=>setShowIssues(v=>!v)} title={t("check")}>
-          {errors.length?<AlertTriangle size={16} className="text-[#E5B54B]"/>:<CheckCircle2 size={16} className="text-[#3DD189]"/>}
-          <span className="hidden md:inline">{t("checkShort")}</span><span>{errors.length}</span><span className="text-[#E5B54B]">⚠ {warnings.length}</span>
+        <button className={"fs-chip-btn "+(errors.length?"is-error":warnings.length?"is-warning":"is-ok")} onClick={()=>setShowIssues(v=>!v)} title={t("check")} aria-expanded={showIssues}>
+          {errors.length?<AlertTriangle size={15}/>:<CheckCircle2 size={15}/>}
+          <span className="hidden md:inline">{t("checkShort")}</span><span>{errors.length}</span><span className="fs-chip-warn">⚠ {warnings.length}</span>
         </button>
         <button className={btn} onClick={()=>setShowSimulator(true)}><Play size={16}/> {t("preview")}</button>
         {CLOUD_DRAFT_UI_ENABLED&&<button data-testid="flow-cloud-drafts" className={btn} onClick={()=>setShowCloudDrafts(true)}>{language==="en"?"Cloud drafts":"مسودات سحابية"}</button>}
-        {PUBLICATION_UI_ENABLED&&<button type="button" data-testid="flow-publications" className={btn} onClick={()=>setShowPublications(true)}>{language==="en"?"Published revisions":"الإصدارات المنشورة"}</button>}
         <button className={btn} onClick={exportFile}><Download size={16}/> {t("export")}</button>
         <button className={btn} onClick={()=>input.current?.click()}><Upload size={16}/> {t("import")}</button>
         <input ref={input} className="hidden" type="file" accept=".json,application/json" onChange={e=>{void importFile(e.target.files?.[0]);e.target.value="";}}/>
-        <button className="flex items-center gap-1 rounded-xl bg-[#3DD189] px-3 py-2.5 text-xs font-bold text-[#061A14]" onClick={()=>{
+        <button className="fs-btn fs-btn-gold" onClick={()=>{
           if(protectStoredLibrary&&!window.confirm("المكتبة المحلية تحتوي بيانات تالفـة أو غير قابلة للاسترجاع. الحفظ الآن سيستبدل الأصل؛ يُنصح بأخذ نسخة احتياطية أولًا. هل تريد المتابعة؟"))return;
           try{
             localStorage.setItem(SAVE_KEY,JSON.stringify(doc));
@@ -268,15 +329,17 @@ function Editor(){
           }catch{setNotice("تعذر الحفظ؛ استخدم التصدير.");}
         }}><Save size={16}/> {t("save")}</button>
       </div>}
+      </div></div>
     </header>
     {CLOUD_DRAFT_UI_ENABLED&&showCloudDrafts&&<CloudDraftPanel language={language} onClose={()=>setShowCloudDrafts(false)}/>}
     {PUBLICATION_UI_ENABLED&&showPublications&&<FlowPublicationPanel key={activeFlowId} flowKey={activeFlowId} document={doc} language={language} onImportRevision={importPublishedRevision} onPreviewRevision={previewPublishedRevision} onClose={()=>setShowPublications(false)}/>}
-    {recovery.messages.length>0&&<div role="alert" className="border-b border-[#E5B54B] bg-[#2C2414] px-4 py-3 text-xs text-[#F9E3A2]">
+    {recovery.messages.length>0&&<div role="alert" className="fs-recovery">
       <strong>تقرير استعادة التدفقات: </strong>{recovery.messages.join(" ")} تم استرجاع {recovery.recovered} وتجاهل {recovery.skipped}.
       {protectStoredLibrary&&<span className="mr-2 font-bold">الحفظ التلقائي متوقف لحماية بيانات المكتبة الأصلية؛ استخدم «تصدير» قبل تأكيد الحفظ اليدوي.</span>}
     </div>}
     <div className="relative flex min-h-0 flex-1 overflow-hidden">
-      <section className="relative min-w-0 flex-1" aria-label="مساحة التدفقات" data-touch-pan={isCompact} onClick={()=>{if(edgeMenu)setEdgeMenu(null);}}>
+      <section className="fs-stage relative min-w-0 flex-1" aria-label="مساحة التدفقات" data-touch-pan={isCompact} onClick={()=>{if(edgeMenu)setEdgeMenu(null);}}>
+        <FlowIssuesContext.Provider value={nodeIssues}>
         <ReactFlow<FlowNode,FlowEdge>
           nodes={renderedNodes} edges={renderedEdges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
           onNodesChange={nodesChanged} onEdgesChange={edgesChanged}
@@ -319,18 +382,19 @@ function Editor(){
           onInit={api=>{window.setTimeout(()=>{void api.fitView({padding:.20,maxZoom:.85,duration:0});},470);}}
           snapToGrid snapGrid={[20,20]}
           selectionOnDrag={!isCompact} panOnDrag={isCompact?true:[1,2]} multiSelectionKeyCode={["Shift","Control","Meta"]}
-          colorMode="dark" connectionLineStyle={{stroke:"#3DD189",strokeWidth:2}}
+          colorMode="dark" connectionLineStyle={{stroke:"#3DD189",strokeWidth:2.4,strokeDasharray:"6 6"}}
           proOptions={{hideAttribution:true}}
         >
-          <Background variant={BackgroundVariant.Dots} gap={20} size={1.2} color="#365849"/>
-          <MiniMap nodeColor={n=>ACCENT[(n.data as FlowNode["data"]).kind]||"#3DD189"} className="!hidden md:!block !bg-[#0B241C] !border !border-[#275443]" maskColor="rgba(1,12,8,.65)" pannable zoomable />
-          <Controls showInteractive={false} className="!bg-[#0B241C] !border !border-[#275443] !bottom-10 md:!bottom-3"/>
+          <Background variant={BackgroundVariant.Dots} gap={22} size={1.6} color="#173D30"/>
+          <MiniMap nodeColor={n=>SKIN_COLOR[(n.data as FlowNode["data"]).kind]||"#3DD189"} nodeBorderRadius={8} className="fs-minimap !hidden md:!block" maskColor="rgba(2,12,8,.7)" pannable zoomable />
         </ReactFlow>
+        </FlowIssuesContext.Provider>
+        <WorkspaceTools language={language}/>
 
-        <button className="nodrag absolute right-4 top-4 z-20 flex h-12 w-12 items-center justify-center rounded-full border border-[#9BF0BD] bg-[#3DD189] text-[#061A14] shadow-[0_8px_25px_rgba(17,110,64,.4)] transition-transform hover:scale-105" title={t("add")} aria-label={t("openAdd")} onClick={e=>openAdd({x:e.clientX,y:e.clientY})}><Plus size={25}/></button>
-        {showIssues&&<div className="absolute left-3 top-3 z-20 w-[min(340px,90vw)] rounded-2xl border border-[#275443] bg-[#0B241C] p-4 shadow-xl">
-          <div className="flex items-center justify-between gap-2"><h3 className="font-bold">{t("flowIssues")}</h3><button onClick={()=>setShowIssues(false)} aria-label={language==="ar"?"إغلاق الفحص":"Close validation"}><X size={18}/></button></div>
-          {issues.length?<div className="mt-3 max-h-52 space-y-2 overflow-y-auto text-xs">{issues.slice(0,30).map((issue,i)=><button key={i} type="button" className={"block w-full rounded-md px-2 py-1 text-right hover:bg-[#173D30] "+(issue.severity==="warning"?"text-[#E5B54B]":"text-red-300")} onClick={()=>{
+        <button className="fs-fab nodrag" title={t("add")} aria-label={t("openAdd")} aria-expanded={paletteAnchored} onClick={e=>{if(paletteAnchored){closeAdd();return;}openAdd({x:e.clientX,y:e.clientY});}}><Plus size={28}/></button>
+        {showIssues&&<div className="fs-popover fs-issues">
+          <div className="flex items-center justify-between gap-2"><h3 className="fs-display text-lg">{t("flowIssues")}</h3><button className="fs-ibtn fs-ibtn-sm" onClick={()=>setShowIssues(false)} aria-label={language==="ar"?"إغلاق الفحص":"Close validation"}><X size={18}/></button></div>
+          {issues.length?<div className="mt-3 max-h-52 space-y-1.5 overflow-y-auto text-xs">{issues.slice(0,30).map((issue,i)=><button key={i} type="button" className={"fs-issue "+(issue.severity==="warning"?"is-warning":"is-error")} onClick={()=>{
               if(issue.nodeId){
                 const node=doc.nodes.find(n=>n.id===issue.nodeId);
                 if(node){store().setSelected(node.id);void instance.setCenter(node.position.x+140,node.position.y+90,{zoom:1,duration:350});}
@@ -338,35 +402,37 @@ function Editor(){
               setShowIssues(false);
             }}>{issue.severity==="warning"?"⚠ تحذير: ":"● خطأ: "}{issue.message}{issue.nodeId?" (انتقل إلى العقدة)":""}</button>)}</div>:<p className="mt-3 flex items-center gap-2 text-sm text-[#3DD189]"><CheckCircle2 size={18}/> لا توجد أخطاء بنيوية مكتشفة.</p>}
         </div>}
-        {edgeMenu&&<div className="fixed z-50 min-w-40 rounded-xl border border-[#275443] bg-[#0B241C] p-2 shadow-2xl" style={{left:Math.min(window.innerWidth-180,edgeMenu.x),top:Math.min(window.innerHeight-150,edgeMenu.y)}} onClick={e=>e.stopPropagation()}>
+        {edgeMenu&&<div className="fs-popover fixed z-50 min-w-40 p-2" style={{left:Math.min(window.innerWidth-180,edgeMenu.x),top:Math.min(window.innerHeight-150,edgeMenu.y)}} onClick={e=>e.stopPropagation()}>
           <button className={btn+" mb-2 w-full"} onClick={()=>insertOnEdge(edgeMenu.id)}><Plus size={15}/> إدراج خطوة</button>
-          <button className={btn+" w-full text-red-300"} onClick={()=>{store().deleteEdge(edgeMenu.id);setEdgeMenu(null);}}><Trash2 size={15}/> حذف الاتصال</button>
+          <button className={btn+" fs-btn-danger w-full"} onClick={()=>{store().deleteEdge(edgeMenu.id);setEdgeMenu(null);}}><Trash2 size={15}/> حذف الاتصال</button>
         </div>}
 
         {addRequest&&<div role="dialog" aria-label="إضافة خطوة" data-testid="add-step-menu"
-          className="fixed z-50 w-[min(285px,90vw)] max-h-[min(440px,75vh)] overflow-y-auto rounded-2xl border border-[#2C6448] bg-[#0B241C] p-3 text-white shadow-[0_15px_60px_rgba(0,0,0,.45)]"
-          style={{left:Math.max(8,Math.min(window.innerWidth-300,addRequest.x-24)),top:Math.max(55,Math.min(window.innerHeight-355,addRequest.y+8))}}
+          className={"fs-palette"+(paletteAnchored?" is-anchored":"")}
+          style={paletteAnchored?undefined:{left:Math.max(8,Math.min(window.innerWidth-300,addRequest.x-24)),top:Math.max(55,Math.min(window.innerHeight-355,addRequest.y+8))}}
           onClick={e=>e.stopPropagation()}>
-          <div className="mb-3 flex items-center justify-between gap-2"><h3 className="text-sm font-bold">{addRequest.source?t("addAfter"):t("addNew")}</h3>
-            <button className="rounded-lg p-1 hover:bg-[#173D30]" aria-label={t("menuClose")} onClick={closeAdd}><X size={17}/></button></div>
+          <div className="mb-3 flex items-center justify-between gap-2"><h3 className="fs-display text-lg">{addRequest.source?t("addAfter"):t("addNew")}</h3>
+            <button className="fs-ibtn fs-ibtn-sm" aria-label={t("menuClose")} onClick={closeAdd}><X size={17}/></button></div>
           {addRequest.source&&!addRequest.port?
-            <><p className="mb-2 text-xs text-[#8B9E96]">اختر أي فرع تريد توصيل الخطوة الجديدة به:</p>
+            <><p className="mb-2 text-xs text-[var(--fs-muted)]">اختر أي فرع تريد توصيل الخطوة الجديدة به:</p>
               <div className="space-y-1.5">{outputs(doc.nodes.find(n=>n.id===addRequest.source)!).map(port=>
                 <button key={port.id} className={btn+" w-full justify-between"} onClick={()=>openAdd({...addRequest,port:port.id})}>{port.label}<ArrowRight size={15}/></button>)}</div></>:
-            <div className="grid grid-cols-2 gap-2">
-              {KIND_LIST.filter(k=>k!=="trigger"||(!addRequest.source&&!doc.nodes.some(n=>n.data.kind==="trigger"))).map(kind=>
-                <button key={kind} className="flex min-h-12 items-center justify-between gap-1 rounded-xl border border-[#275443] bg-[#0F2E24] px-2.5 py-2 text-right text-xs hover:border-[#3DD189] hover:bg-[#173D30]"
+            <div className="fs-pal-grid">
+              {KIND_LIST.filter(k=>k!=="trigger"||(!addRequest.source&&!doc.nodes.some(n=>n.data.kind==="trigger"))).map(kind=>{
+                const KindIcon=SKIN_ICON[kind],name=flowKindLabel(kind,language,LABELS[kind]);
+                return <button key={kind} type="button" aria-label={name} className="fs-pal-item" style={{"--c":SKIN_COLOR[kind]} as CSSProperties}
                   onClick={()=>addNode(kind,addRequest.position,addRequest.source&&addRequest.port?{source:addRequest.source,port:addRequest.port}:undefined)}>
-                  <span>{flowKindLabel(kind,language,LABELS[kind])}</span><span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{backgroundColor:ACCENT[kind]}}/>
-                </button>)}
+                  <span className="fs-node-ico" aria-hidden="true"><KindIcon size={17}/></span>
+                  <span className="min-w-0"><b>{name}</b><small aria-hidden="true">{skinHint(kind,language)}</small></span>
+                </button>;})}
             </div>}
-          <p className="mt-3 text-[11px] leading-5 text-[#8B9E96]">بعد الإضافة يمكنك تحريك العقدة بحرية وإعادة ترتيب المخطط.</p>
+          <p className="mt-3 text-[11px] leading-5 text-[var(--fs-muted)]">بعد الإضافة يمكنك تحريك العقدة بحرية وإعادة ترتيب المخطط.</p>
         </div>}
       </section>
       {selected&&<NodeEditor node={selected} language={language} onClose={()=>store().setSelected(null)}/>}
     </div>
-    {notice&&<div role="status" className="fixed bottom-5 right-5 z-50 max-w-sm cursor-pointer rounded-xl border border-[#275443] bg-[#0B241C] px-4 py-3 text-xs text-[#3DD189] shadow-2xl" onClick={()=>setNotice("")}>{notice} ×</div>}
-    <div className="pointer-events-none absolute bottom-1 left-1/2 z-10 hidden -translate-x-1/2 rounded-lg bg-[#0B241C]/80 px-2 py-1 text-[10px] text-[#8B9E96] sm:block">{t("localOnly")}</div>
+    {notice&&<div role="status" className="fs-toast" onClick={()=>setNotice("")}>{notice} ×</div>}
+    <div className="fs-local-hint pointer-events-none hidden sm:block">{t("localOnly")}</div>
     {showSimulator&&<FlowSimulator language={language} doc={publishedPreview??doc} flowId={publishedPreview?"published-preview":activeFlowId} flows={publishedPreview?[{id:"published-preview",doc:publishedPreview,enabled:false}]:snapshotLibrary(activeFlowId,doc,flows).flows} onVisited={publishedPreview?undefined:setTrail} onClose={()=>{setShowSimulator(false);setPublishedPreview(null);}}/>}
   </div>;
 }

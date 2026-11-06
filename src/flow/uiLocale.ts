@@ -58,6 +58,21 @@ const messages={
   addNew:["إضافة خطوة جديدة","Add new step"],
   menuClose:["إغلاق قائمة الإضافة","Close step picker"],
   language:["لغة الواجهة","Interface language"],
+  // Flow Builder skin (presentation only)
+  switchFlow:["تبديل التدفق","Switch flow"],
+  myFlows:["تدفقاتي","My flows"],
+  flowCount:["تدفقات محفوظة محليًا","flows saved locally"],
+  currentFlow:["الحالي","Current"],
+  workspaceTools:["أدوات مساحة العمل","Workspace tools"],
+  zoomIn:["تكبير","Zoom in"],
+  zoomOut:["تصغير","Zoom out"],
+  fitView:["ملاءمة العرض","Fit view"],
+  savedLocal:["محفوظ في المتصفح","Saved in browser"],
+  savingLocal:["جارٍ الحفظ…","Saving…"],
+  savePaused:["الحفظ التلقائي متوقف","Autosave paused"],
+  publish:["نشر","Publish"],
+  sheetExpand:["توسيع لوحة الخطوة","Expand step panel"],
+  sheetShrink:["تصغير لوحة الخطوة إلى النصف","Shrink step panel to half"],
 } as const;
 const kindLabels={
  trigger:"Trigger",message:"Send message",question:"Question / collect data",
