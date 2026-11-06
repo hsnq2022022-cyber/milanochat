@@ -17,7 +17,7 @@
  */
 import {createClient} from "npm:@supabase/supabase-js@2";
 import {acceptsFlowWorkerBearer} from "../flowWorkerAuth.ts";
-import {sendProviderMessage,decryptAccountToken,encryptMessageBody} from "./deliveryCore.ts";
+import {sendProviderMessage,decryptAccountToken,encryptMessageBody,deliveredText} from "./deliveryCore.ts";
 import {answerWithVerifiedKnowledgeOutcome,knowledgeQuestionValid,openAIKnowledgeDependencies}
  from "./flowKnowledge.ts";
 import {resolveKnowledgeEffect,recoverKnowledgeCharge,AI_MAX_ATTEMPTS,AI_CLAIM_LEASE_SECONDS,
@@ -375,9 +375,15 @@ Deno.serve(async req=>{
       report(problem);await skip("ineligible","invalid");continue;
      }
    }
+   // Stored body = exactly what the customer received: the same single scrub
+   // pass sendProviderMessage applies to the raw messageText (pre-fix effects
+   // may hold {{...}}), computed BEFORE encryption. Images keep their URL.
+   // The send below still receives the raw messageText (scrubbed once there).
+   const storedBody=imageUrl!==undefined?messageText:
+    deliveredText({platform:account.platform,text:messageText,websiteButtons});
    const persistAndBill=async(providerId:string):Promise<boolean>=>{
      if(typeof providerId!=="string"||!providerId.trim())return false;
-     const encrypted=await encryptMessageBody(messageText,fieldKey);
+     const encrypted=await encryptMessageBody(storedBody,fieldKey);
      const {error:insertError}=await sb.from("messages").insert({
       id:effect.outgoing_message_id,tenant_id:tenant.id,
       conversation_id:conversation.id,direction:"out",body_encrypted:encrypted,

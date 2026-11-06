@@ -23,6 +23,20 @@ export class ProviderHttpError extends Error{
 export type Sender=(input:ProviderRequest,perform?:typeof fetch)=>Promise<string|null>;
 function valid(text:string,max:number){return typeof text==="string"&&text.length>0&&text.length<=max;}
 /**
+ * The text the customer actually receives for a text request: the single
+ * scrub pass used by scrubPlaceholders (sanitize + channel clip). Used both
+ * for the provider request and for the stored `messages` body, so the stored
+ * text equals the sent text. Without placeholders the input text is returned
+ * unchanged. Call it ONCE on the raw text (a second pass is not guaranteed to
+ * be a no-op for nested braces such as `{{{{x}}}}`).
+ */
+export function deliveredText(input:Pick<ProviderRequest,"platform"|"text"|"websiteButtons">):string{
+ if(typeof input.text!=="string"||!hasPlaceholder(input.text))return input.text;
+ const text=sanitizePlaceholders(input.text);
+ return input.websiteButtons?
+  clipChars(text,input.platform==="instagram"?640:80):clipUtf8Bytes(text,1000);
+}
+/**
  * Defense in depth (last step before the request body): effects stored
  * before the planner/V2 fixes may still hold {{...}} placeholders. They are
  * scrubbed with the shared rule (first_name -> FIRST_NAME_FALLBACK, other ->
@@ -35,11 +49,8 @@ function valid(text:string,max:number){return typeof text==="string"&&text.lengt
 export function scrubPlaceholders(input:ProviderRequest):ProviderRequest{
  if(!input||typeof input!=="object")return input;
  let out=input;
- if(typeof input.text==="string"&&hasPlaceholder(input.text)){
-  const text=sanitizePlaceholders(input.text);
-  out={...out,text:input.websiteButtons?
-   clipChars(text,input.platform==="instagram"?640:80):clipUtf8Bytes(text,1000)};
- }
+ if(typeof input.text==="string"&&hasPlaceholder(input.text))
+  out={...out,text:deliveredText(input)};
  if(Array.isArray(input.quickReplies)&&input.quickReplies.some(o=>hasPlaceholder(o?.label)))
   out={...out,quickReplies:input.quickReplies.map(o=>hasPlaceholder(o?.label)?{...o,label:sanitizeLabel(o.label)}:o)};
  if(Array.isArray(input.websiteButtons)&&input.websiteButtons.some(b=>hasPlaceholder(b?.label)))

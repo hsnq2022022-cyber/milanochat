@@ -1,8 +1,9 @@
 import {test} from "node:test";
 import assert from "node:assert/strict";
 import {simpleMessageFromDocument} from "../supabase/functions/milan-api/flowPrepareMessage.ts";
-import {sendProviderMessage,scrubPlaceholders,type ProviderRequest} from
- "../supabase/functions/flow-outbox-worker/deliveryCore.ts";
+import {readFileSync} from "node:fs";
+import {sendProviderMessage,scrubPlaceholders,deliveredText,encryptMessageBody,decryptAccountToken,
+ type ProviderRequest} from "../supabase/functions/flow-outbox-worker/deliveryCore.ts";
 
 const LEAK=/\{\{[^{}\r\n]*\}\}/;
 const msg=(id:string,text:string)=>({id,data:{kind:"message",text,options:[],contentBlocks:[],image:""}});
@@ -84,4 +85,63 @@ test("worker: payloads without placeholders are byte-identical and the same obje
   message:{text:"اختر",quick_replies:[{content_type:"text",title:"A",payload:"flow-choice:a"}]}}));
  await sendProviderMessage({...base,text:"plain"},b.fake);
  assert.equal(b.bodies[0],JSON.stringify({recipient:{id:"123456"},message:{text:"plain"}}));
+});
+
+// Stored body (messages.body_encrypted) must equal what the provider received.
+function sentText(platform:string,body:string):string{
+ const p=JSON.parse(body);
+ if(platform==="whatsapp")return p.text.body;
+ const m=p.message;
+ if(typeof m.text==="string")return m.text;
+ if(m.attachment?.payload?.text!==undefined)return m.attachment.payload.text;
+ return m.attachment.payload.elements[0].title;
+}
+const KEY="test-secret";
+test("worker store: placeholder effects are stored scrubbed and equal to the sent text",async()=>{
+ const raw="أهلاً {{first_name}} رقمك {{رقم الهاتف}} وعمرك {{age}}";
+ const cases:ProviderRequest[]=[
+  {...base,text:raw},
+  {platform:"facebook",token:"EAApage",externalId:"",recipient:"123456",text:raw},
+  {platform:"whatsapp",token:"wa",externalId:"100001",recipient:"9647712345678",text:raw},
+  {...base,text:raw,quickReplies:[{id:"a",label:"{{first_name}}"}]},
+  {...base,text:raw,websiteButtons:[{label:"متجر",url:"https://example.org/p"}]},
+  {platform:"facebook",token:"EAApage",externalId:"",recipient:"123456",text:raw,
+   websiteButtons:[{label:"متجر",url:"https://example.org/p"}]}
+ ];
+ for(const req of cases){
+  const r=recorder();
+  await sendProviderMessage(req,r.fake);
+  const stored=deliveredText({platform:req.platform,text:req.text,websiteButtons:req.websiteButtons});
+  assert.doesNotMatch(stored,LEAK);
+  assert.equal(stored,sentText(req.platform,r.bodies[0]),req.platform+" stored body == sent text");
+  // Scrubbed BEFORE encryption: the encrypted input decrypts to the scrubbed text.
+  assert.equal(await decryptAccountToken(await encryptMessageBody(stored,KEY),KEY),stored);
+ }
+ assert.equal(deliveredText({platform:"instagram",text:raw}),
+  "أهلاً عميلنا العزيز رقمك [غير متوفر] وعمرك [غير متوفر]");
+});
+test("worker store: text without placeholders is stored byte-identical",async()=>{
+ for(const text of ["مرحبا بك","اهلا { } }} {{","a{{b\nc}}"]){
+  assert.equal(deliveredText({platform:"instagram",text}),text);
+  const r=recorder();
+  await sendProviderMessage({...base,text},r.fake);
+  assert.equal(sentText("instagram",r.bodies[0]),text);
+ }
+});
+test("worker store: persistAndBill encrypts the delivered body; images keep their URL",()=>{
+ const code=readFileSync("supabase/functions/flow-outbox-worker/index.ts","utf8");
+ const stored=code.indexOf("const storedBody=imageUrl!==undefined?messageText:\n    deliveredText({platform:account.platform,text:messageText,websiteButtons});");
+ const persist=code.indexOf("const persistAndBill=async(providerId:string)");
+ const enc=code.indexOf("const encrypted=await encryptMessageBody(storedBody,fieldKey);");
+ const insert=code.indexOf('sb.from("messages").insert({');
+ assert(stored>0&&persist>stored&&enc>persist&&insert>enc);
+ // messageText is final here (knowledge/recovery assignments happen earlier).
+ assert.equal(code.slice(stored).search(/\bmessageText=/),-1);
+ // Exactly one messages insert, and it never encrypts the raw messageText.
+ assert.equal((code.match(/from\("messages"\)\.insert/g)??[]).length,1);
+ assert.doesNotMatch(code,/encryptMessageBody\(messageText/);
+ // The provider still receives the raw text (single scrub inside sendProviderMessage)
+ // with the same platform and websiteButtons used for the stored body.
+ assert.match(code,/token,recipient,text:messageText,quickReplies,websiteButtons/);
+ assert.match(code,/token,recipient,text:"",imageUrl,imageHost:base/);
 });
