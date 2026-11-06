@@ -10,7 +10,13 @@
   font-display: swap;
 }
 
+/* Force the custom font on every element, including ones with their own font-* class. */
+* {
+  font-family: "Handicrafts", "Tajawal", sans-serif !important;
+}
+
 @theme {
+  --font-sans: "Handicrafts", "Tajawal", sans-serif;
   --font-Handicrafts: "Handicrafts", "Lalezar", "Aref Ruqaa", sans-serif;
   --font-display: "Handicrafts", "Tajawal", "Changa", "IBM Plex Sans Arabic", sans-serif;
   --font-body: "Handicrafts", "Tajawal", "IBM Plex Sans Arabic", "Changa", sans-serif;
