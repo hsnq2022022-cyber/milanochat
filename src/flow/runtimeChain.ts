@@ -1,6 +1,8 @@
 import type { FlowDocument, FlowNode } from "./model.ts";
 import { planRuntimeTransition, type PlannedEffect, type RuntimeInput, type RuntimeState } from "./runtimePlan.ts";
 import { chooseWeightedPort } from "./simulation.ts";
+import { FIRST_NAME_FALLBACK, MISSING_VALUE_FALLBACK, clipChars, clipUtf8Bytes, hasPlaceholder,
+  replacePlaceholders, sanitizeLabel } from "./placeholders.ts";
 
 /**
  * Pure multi-step planner for the durable engine. Never performs IO.
@@ -140,56 +142,57 @@ export function collectedFields(doc: FlowDocument): Set<string> {
   }
   return out;
 }
-/** Cuts to at most `max` UTF-8 bytes on a code point boundary. */
-function clipBytes(text: string, max: number): string {
-  const enc = new TextEncoder();
-  if (enc.encode(text).byteLength <= max) return text;
-  let out = "", used = 0;
-  for (const ch of text) {
-    const n = enc.encode(ch).byteLength;
-    if (used + n > max) break;
-    out += ch; used += n;
-  }
-  return out;
+export { FIRST_NAME_FALLBACK, MISSING_VALUE_FALLBACK };
+/** Customer-facing resolver: collected value, else first_name / generic fallback. */
+function customerResolver(variables: Record<string, string>, fields: Set<string>) {
+  return (name: string): string => {
+    const own = Object.prototype.hasOwnProperty.call(variables, name);
+    if (name === "first_name") {
+      const v = fields.has(name) && own ? variables[name] : "";
+      return typeof v === "string" && v.trim() ? v : FIRST_NAME_FALLBACK;
+    }
+    if (!fields.has(name)) return MISSING_VALUE_FALLBACK;
+    // Collected field: its value (missing = empty, like the simulator).
+    const v = own ? variables[name] : "";
+    return typeof v === "string" ? v : "";
+  };
 }
-/** Customer-facing replacement for {{first_name}} when no name was collected. */
-export const FIRST_NAME_FALLBACK = "عميلنا العزيز";
 /**
  * Durable-only template rendering, same placeholder syntax as the simulator
- * ({{field}}). ONLY fields collected by this document's text/email/phone
- * questions are replaced (missing value = empty, like the simulator); any
- * other placeholder (e.g. {{age}}, {{رقم الهاتف}}) stays literal as before.
- * Exception (customer-facing texts, the default): {{first_name}} (also
- * written {{ first_name }}) is NEVER sent literally: it becomes the collected
- * first_name answer when this document collects one and it is non-empty,
- * otherwise FIRST_NAME_FALLBACK. Staff notifications pass
- * firstNameFallback:false and keep the previous behaviour.
+ * ({{field}}, see src/flow/placeholders.ts for the exact matcher).
+ * Customer-facing texts (the default) NEVER keep a placeholder:
+ *  - a field collected by this document's text/email/phone questions -> its
+ *    value (missing = empty), inner whitespace allowed ({{ email }});
+ *  - {{first_name}} -> the collected non-empty first_name answer, else
+ *    FIRST_NAME_FALLBACK;
+ *  - any other placeholder (e.g. {{age}}, {{رقم الهاتف}}) -> MISSING_VALUE_FALLBACK.
+ * Staff notifications pass firstNameFallback:false and keep the previous
+ * behaviour (only the exact {{field}} form of a collected field is replaced,
+ * everything else stays literal); they are not customer-facing.
  * Single pass (a value containing "{{x}}" is never expanded) and bounded to
  * MAX_RENDERED_BYTES (UTF-8, cut on a code point boundary).
  */
 export function renderCollectedTemplate(text: string, variables: Record<string, string>, fields: Set<string>,
   options: { firstNameFallback?: boolean } = {}): string {
   if (!text.includes("{{")) return text;
-  const fallback = options.firstNameFallback !== false;
-  let firstName = false;
-  const rendered = text.replace(/\{\{\s*(\w+)\s*\}\}/g, (whole, name: string) => {
-    const own = Object.prototype.hasOwnProperty.call(variables, name);
-    if (fallback && name === "first_name") {
-      firstName = true;
-      const v = fields.has(name) && own ? variables[name] : "";
-      return typeof v === "string" && v.trim() ? v : FIRST_NAME_FALLBACK;
-    }
-    // Other names: exact {{field}} form of a collected field only (unchanged).
-    if (whole !== "{{" + name + "}}" || !fields.has(name)) return whole;
-    const v = own ? variables[name] : "";
-    return typeof v === "string" ? v : "";
-  });
-  if (!fields.size && !firstName) return text;
-  return clipBytes(rendered, MAX_RENDERED_BYTES);
+  if (options.firstNameFallback === false) {
+    if (!fields.size) return text;
+    const staff = text.replace(/\{\{\s*(\w+)\s*\}\}/g, (whole, name: string) => {
+      if (whole !== "{{" + name + "}}" || !fields.has(name)) return whole;
+      const v = Object.prototype.hasOwnProperty.call(variables, name) ? variables[name] : "";
+      return typeof v === "string" ? v : "";
+    });
+    return clipUtf8Bytes(staff, MAX_RENDERED_BYTES);
+  }
+  if (!hasPlaceholder(text)) return text;
+  return clipUtf8Bytes(replacePlaceholders(text, customerResolver(variables, fields)), MAX_RENDERED_BYTES);
 }
+/** Instagram button template text limit (code points) / Messenger generic title (chars). */
+const IG_WEB_TEXT_MAX = 640, MESSENGER_WEB_TEXT_MAX = 80;
 /** Max characters of a staff notification body (flow_staff_notifications CHECK 1..500). */
 export const MAX_NOTIFICATION_CHARS = 500;
-function rendered(effect: PlannedEffect, variables: Record<string, string>, fields: Set<string>): PlannedEffect {
+function rendered(effect: PlannedEffect, variables: Record<string, string>, fields: Set<string>,
+  platform: unknown): PlannedEffect {
   if (effect.kind === "staff_notification") {
     // Same collected-field rule as messages; bounded to the stored body limit
     // (code points, like PostgreSQL length()).
@@ -198,8 +201,26 @@ function rendered(effect: PlannedEffect, variables: Record<string, string>, fiel
     return text === effect.text ? effect : { ...effect, text };
   }
   if ((effect.kind !== "message" && effect.kind !== "question") || "source" in effect) return effect;
-  const text = renderCollectedTemplate(effect.text, variables, fields);
-  return text === effect.text ? effect : { ...effect, text };
+  let text = renderCollectedTemplate(effect.text, variables, fields);
+  // Customer-facing labels: same resolver, blank -> fallback, <= 20 chars.
+  const resolve = customerResolver(variables, fields);
+  const label = (l: string) => sanitizeLabel(l, resolve);
+  if (effect.kind === "question") {
+    const choices = effect.choices.map(label);
+    const same = choices.every((c, i) => c === effect.choices[i]);
+    return text === effect.text && same ? effect : { ...effect, text, choices: same ? effect.choices : choices };
+  }
+  if (!effect.websiteButtons) return text === effect.text ? effect : { ...effect, text };
+  // Website card text: rendering must not exceed the publish-time limit
+  // (Instagram 640 code points, Messenger 80 chars); clipped like other texts.
+  if (text !== effect.text) text = clipChars(text, platform === "instagram" ? IG_WEB_TEXT_MAX : MESSENGER_WEB_TEXT_MAX);
+  const buttons = effect.websiteButtons.map(b => {
+    const l = label(b.label);
+    return l === b.label ? b : { ...b, label: l };
+  });
+  const same = buttons.every((b, i) => b === effect.websiteButtons![i]);
+  return text === effect.text && same ? effect :
+    { ...effect, text, websiteButtons: same ? effect.websiteButtons : buttons };
 }
 
 /** Plans until the run waits or ends. Pure: never mutates doc, state or input. */
@@ -224,7 +245,8 @@ export function planUntilWait(doc: FlowDocument, previous: RuntimeState, input: 
         return blocked(previous, "flow chain exceeds " + MAX_CHAIN_EFFECTS + " effects");
       // Variables at this effect = the state the call returned (message and
       // question nodes end the call right after emitting their effect).
-      effects.push({ ...rendered(effect, plan.state.variables, fields), seq: effects.length } as ChainEffect);
+      const owner = doc.nodes.find(n => n.id === effect.nodeId)?.data as { platform?: unknown } | undefined;
+      effects.push({ ...rendered(effect, plan.state.variables, fields, owner?.platform), seq: effects.length } as ChainEffect);
     }
     state = plan.state;
     if (state.status !== "ready") return { state, effects };

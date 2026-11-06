@@ -5,7 +5,7 @@ import type { FlowDocument, FlowNode } from "./model.ts";
 import { createRuntimeState } from "./runtimePlan.ts";
 import {
   planUntilWait, seedFromEventKey, randomizerField, MAX_CHAIN_EFFECTS,
-  collectedFields, renderCollectedTemplate, MAX_RENDERED_BYTES, FIRST_NAME_FALLBACK
+  collectedFields, renderCollectedTemplate, MAX_RENDERED_BYTES, FIRST_NAME_FALLBACK, MISSING_VALUE_FALLBACK
 } from "./runtimeChain.ts";
 
 const input = { eventKey: "mid.event.1", nowMs: 1750000000000, seed: seedFromEventKey("mid.event.1") };
@@ -177,16 +177,16 @@ test("template rendering is limited to collected fields, single pass and bounded
   ] });
   assert.deepEqual([...fields], ["name"], "number/buttons/'message' fields are never rendered");
   assert.equal(renderCollectedTemplate("Hi {{name}} {{age}} {{menu}}", { name: "Ali", age: "3", menu: "a" }, fields),
-    "Hi Ali {{age}} {{menu}}");
+    "Hi Ali [غير متوفر] [غير متوفر]", "uncollected placeholders never stay literal");
   assert.equal(renderCollectedTemplate("Hi {{name}}!", {}, fields), "Hi !", "missing value = empty, like the simulator");
   assert.equal(renderCollectedTemplate("{{name}}", { name: "{{name}}{{name}}" }, fields), "{{name}}{{name}}", "no recursion");
   const long = renderCollectedTemplate("س {{name}}", { name: "ع".repeat(600) }, fields);
   assert.ok(new TextEncoder().encode(long).byteLength <= MAX_RENDERED_BYTES);
   assert.ok(long.startsWith("س ع"));
-  // A document without typed questions keeps placeholders verbatim (old behaviour).
+  // A document without typed questions: no placeholder is sent literally.
   const t = trigger(), m = text("Hello {{name}}");
   const plain = doc([t, m], [[t, "next", m]]);
-  assert.equal((planUntilWait(plain, createRuntimeState(plain, "f", 1), input).effects[0] as { text: string }).text, "Hello {{name}}");
+  assert.equal((planUntilWait(plain, createRuntimeState(plain, "f", 1), input).effects[0] as { text: string }).text, "Hello [غير متوفر]");
 });
 
 test("internal actions: tag/untag/notify are chained in seq order, notify renders collected fields, handoff ends the run", () => {
@@ -287,7 +287,7 @@ const texts = (p: { effects: unknown[] }) =>
   p.effects.filter(e => typeof (e as { text?: unknown }).text === "string").map(e => (e as { text: string }).text);
 const noLiteralFirstName = (p: { effects: unknown[] }) =>
   texts(p).forEach(t => assert.doesNotMatch(t, /\{\{\s*first_name\s*\}\}/));
-test("first_name: uncollected -> fallback in message and question effects; other placeholders unchanged", () => {
+test("first_name: uncollected -> fallback in message and question effects; other placeholders -> generic fallback", () => {
   assert.equal(FIRST_NAME_FALLBACK, "عميلنا العزيز");
   const t = trigger(), hi = text("أهلاً {{first_name}}، {{ first_name }} {{name}} {{رقم الهاتف}}");
   const plainNode = text("بدون متغيرات");
@@ -296,7 +296,7 @@ test("first_name: uncollected -> fallback in message and question effects; other
   const p = planUntilWait(flow, createRuntimeState(flow, "f", 1), input);
   assert.equal(p.error, undefined);
   assert.deepEqual(texts(p), [
-    "أهلاً عميلنا العزيز، عميلنا العزيز {{name}} {{رقم الهاتف}}", "بدون متغيرات", "كيف نخدمك يا عميلنا العزيز؟"]);
+    "أهلاً عميلنا العزيز، عميلنا العزيز [غير متوفر] [غير متوفر]", "بدون متغيرات", "كيف نخدمك يا عميلنا العزيز؟"]);
   noLiteralFirstName(p);
   // Button message (question effect) and a doc with NO collected fields at all.
   const menu = makeNode("message", { x: 0, y: 0 }, { text: "اختر يا {{first_name}}", inputField: "menu",
@@ -327,8 +327,8 @@ test("first_name: collected answer is used; before the answer the fallback is us
   assert.equal(renderCollectedTemplate("Hi {{first_name}}", { first_name: "Ali" }, fields), "Hi Ali");
   const same = "نص عادي بلا متغيرات";
   assert.equal(renderCollectedTemplate(same, {}, fields), same);
-  // Other names keep the old exact-form rule: whitespace variants stay literal.
-  assert.equal(renderCollectedTemplate("{{ email }} {{email}}", { email: "a@b.co" }, fields), "{{ email }} a@b.co");
+  // Collected names also render with inner whitespace (never literal).
+  assert.equal(renderCollectedTemplate("{{ email }} {{email}}", { email: "a@b.co" }, fields), "a@b.co a@b.co");
   // Staff opt-out keeps the previous behaviour.
   assert.equal(renderCollectedTemplate("New {{first_name}}", {}, new Set(), { firstNameFallback: false }), "New {{first_name}}");
 });
@@ -361,4 +361,61 @@ test("first_name: fallback growth is clamped to MAX_RENDERED_BYTES like collecte
   assert.ok(enc.encode(out).byteLength <= MAX_RENDERED_BYTES);
   assert.equal(out, "ع".repeat(493) + "عميلنا ", "cut on a code point boundary, never a literal placeholder");
   assert.doesNotMatch(out, /\{\{/);
+});
+// ---- No placeholder of any kind ({{first_name}}, ASCII, Arabic) reaches a customer (V3).
+const LEAK = /\{\{[^{}\r\n]*\}\}/;
+test("placeholders: collected values win, every other placeholder gets a fallback (texts)", () => {
+  assert.equal(MISSING_VALUE_FALLBACK, "[غير متوفر]");
+  const t = trigger();
+  const ask = makeNode("question", { x: 0, y: 0 }, { text: "عمرك؟", inputMode: "text", inputField: "age", options: [] });
+  const after = text("أهلاً {{first_name}}، عمرك {{ age }}، {{رقم الهاتف}} {{اسم العميل}} {{name}}");
+  const flow = doc([t, ask, after], [[t, "next", ask], [ask, "valid", after]]);
+  const start = planUntilWait(flow, createRuntimeState(flow, "f", 1), input);
+  const done = planUntilWait(flow, start.state, { ...input, eventKey: "b", answer: "٣٠" });
+  assert.deepEqual(texts(done), ["أهلاً عميلنا العزيز، عمرك ٣٠، [غير متوفر] [غير متوفر] [غير متوفر]"]);
+  // Uncollected (no answer yet / not collected): never literal.
+  const fields = new Set(["age"]);
+  assert.equal(renderCollectedTemplate("{{age}} {{first_name}} {{رقم الهاتف}}", {}, fields),
+    " عميلنا العزيز [غير متوفر]");
+  for (const out of [...texts(start), ...texts(done)]) assert.doesNotMatch(out, LEAK);
+  // Arabic collected field names are impossible: model.ts liveFieldNameProblem allows [a-zA-Z_][a-zA-Z0-9_]*;
+  // an Arabic name in the fields set would still be resolved by its trimmed name.
+  assert.equal(renderCollectedTemplate("{{ الاسم }}", { "الاسم": "سارة" }, new Set(["الاسم"])), "سارة");
+});
+test("placeholders: quick-reply choices and website-button titles are rendered, clipped to 20, URLs untouched", () => {
+  const t = trigger();
+  const ask = makeNode("question", { x: 0, y: 0 }, { text: "اسمك؟", inputMode: "text", inputField: "first_name", options: [] });
+  const menu = makeNode("message", { x: 0, y: 0 }, { text: "اختر", inputField: "menu", options: [
+    { id: "a", label: "{{first_name}}" }, { id: "b", label: "{{رقم الهاتف}} {{a}}" }, { id: "c", label: "عادي" }] });
+  const flow = doc([t, ask, menu], [[t, "next", ask], [ask, "valid", menu]]);
+  const start = planUntilWait(flow, createRuntimeState(flow, "f", 1), input);
+  const q = planUntilWait(flow, start.state, { ...input, eventKey: "c", answer: "سارة" });
+  const choices = (q.effects[0] as { choices: string[]; choiceIds: string[] });
+  assert.deepEqual(choices.choices, ["سارة", "[غير متوفر] [غير متو", "عادي"]);
+  assert.deepEqual(choices.choiceIds, ["a", "b", "c"]);
+  for (const c of choices.choices) { assert.ok([...c].length <= 20 && c.length <= 20); assert.doesNotMatch(c, LEAK); }
+  // Without placeholders the effect object is the planner's (identity on labels).
+  const plainMenu = makeNode("message", { x: 0, y: 0 }, { text: "اختر", inputField: "menu", options: [{ id: "a", label: "A" }] });
+  const f0 = doc([t, plainMenu], [[t, "next", plainMenu]]);
+  assert.deepEqual((planUntilWait(f0, createRuntimeState(f0, "f", 1), input).effects[0] as { choices: string[] }).choices, ["A"]);
+  // Website buttons (Instagram): text <= 640 code points after rendering, label rendered, url unchanged.
+  const url = "https://example.org/p?x={{age}}";
+  const card = makeNode("message", { x: 0, y: 0 }, { text: "n".repeat(633) + "{{age}}", platform: "instagram",
+    options: [{ id: "w", label: "{{age}}", buttonType: "button", action: "website", url }] });
+  const f1 = doc([t, card], [[t, "next", card]]);
+  const w = planUntilWait(f1, createRuntimeState(f1, "f", 1), input);
+  assert.equal(w.error, undefined);
+  const e = w.effects[0] as { text: string; websiteButtons: { label: string; url: string }[] };
+  assert.equal([...e.text].length, 640);
+  assert.equal(e.text, "n".repeat(633) + "[غير مت", "1000-byte cut first, then the 640 card limit");
+  assert.deepEqual(e.websiteButtons, [{ label: "[غير متوفر]", url }]);
+  // Messenger generic card: title <= 80.
+  const fb = makeNode("message", { x: 0, y: 0 }, { text: "م".repeat(75) + "{{x}}", platform: "messenger",
+    options: [{ id: "w", label: "متجر", buttonType: "button", action: "website", url: "https://example.org" }] });
+  const f2 = doc([t, fb], [[t, "next", fb]]);
+  const m = planUntilWait(f2, createRuntimeState(f2, "f", 1), input);
+  assert.equal(m.error, undefined);
+  const me = m.effects[0] as { text: string; websiteButtons: { label: string }[] };
+  assert.equal(me.text, "م".repeat(75) + "[غير ");
+  assert.equal(me.websiteButtons[0].label, "متجر");
 });

@@ -1,5 +1,6 @@
 import type {SupabaseClient} from "npm:@supabase/supabase-js@2";
-type Platform = "instagram" | "facebook" | "whatsapp";
+import {hasPlaceholder,sanitizePlaceholders,clipUtf8Bytes} from "../../../src/flow/placeholders.ts";
+type Platform ="instagram" | "facebook" | "whatsapp";
 
 /**
  * Deliberately minimal supported engine: ONE trigger(message) -> ONE text
@@ -85,7 +86,7 @@ export function simpleMessageFromDocument(
  if(!conditional){
   const reply=messages[0];
   if(!edge(String(start.id),String(reply.id),"next"))return null;
-  return textOf(reply);
+  return customerText(textOf(reply));
  }
  const test=conditions[0],data=test.data as Record<string,unknown>;
  if(data.conditionField!=="message"||
@@ -108,5 +109,15 @@ export function simpleMessageFromDocument(
   data.operator==="equals"?incomingText===expected:
   data.operator==="not_equals"?incomingText!==expected:
   incomingText.includes(expected);
- return matched?yesText:noText;
+ return customerText(matched?yesText:noText);
+}
+/**
+ * V2 has no collected values: no placeholder is ever sent literally
+ * ({{first_name}} -> FIRST_NAME_FALLBACK, any other -> MISSING_VALUE_FALLBACK),
+ * kept within the same 1000 UTF-8 byte bound. Text without placeholders is
+ * returned unchanged; null stays null.
+ */
+function customerText(text:string|null):string|null{
+ if(text===null||!hasPlaceholder(text))return text;
+ return clipUtf8Bytes(sanitizePlaceholders(text),1000);
 }

@@ -1,5 +1,6 @@
 import {metaQuickReplies,messengerWebsiteButtons,instagramWebsiteButtons,type QuickOption,type WebOption} from "./flowRichActions.ts";
 import {isAllowedFlowImageUrl} from "./mediaPolicy.ts";
+import {hasPlaceholder,sanitizePlaceholders,sanitizeLabel,clipChars,clipUtf8Bytes} from "../../../src/flow/placeholders.ts";
 // Server-only Meta transport. No browser import and no implicit retry.
 export type Provider="facebook"|"instagram"|"whatsapp";
 export type ProviderRequest={
@@ -21,7 +22,32 @@ export class ProviderHttpError extends Error{
 }
 export type Sender=(input:ProviderRequest,perform?:typeof fetch)=>Promise<string|null>;
 function valid(text:string,max:number){return typeof text==="string"&&text.length>0&&text.length<=max;}
+/**
+ * Defense in depth (last step before the request body): effects stored
+ * before the planner/V2 fixes may still hold {{...}} placeholders. They are
+ * scrubbed with the shared rule (first_name -> FIRST_NAME_FALLBACK, other ->
+ * MISSING_VALUE_FALLBACK) in the text, quick-reply titles and website-button
+ * titles, then clipped to the channel limit (plain text 1000 UTF-8 bytes,
+ * Instagram button text 640, Messenger card title 80, titles 20). Button URLs,
+ * image URLs and ids are never touched. Without placeholders the SAME input
+ * object is returned (byte-identical request body).
+ */
+export function scrubPlaceholders(input:ProviderRequest):ProviderRequest{
+ if(!input||typeof input!=="object")return input;
+ let out=input;
+ if(typeof input.text==="string"&&hasPlaceholder(input.text)){
+  const text=sanitizePlaceholders(input.text);
+  out={...out,text:input.websiteButtons?
+   clipChars(text,input.platform==="instagram"?640:80):clipUtf8Bytes(text,1000)};
+ }
+ if(Array.isArray(input.quickReplies)&&input.quickReplies.some(o=>hasPlaceholder(o?.label)))
+  out={...out,quickReplies:input.quickReplies.map(o=>hasPlaceholder(o?.label)?{...o,label:sanitizeLabel(o.label)}:o)};
+ if(Array.isArray(input.websiteButtons)&&input.websiteButtons.some(b=>hasPlaceholder(b?.label)))
+  out={...out,websiteButtons:input.websiteButtons.map(b=>hasPlaceholder(b?.label)?{...b,label:sanitizeLabel(b.label)}:b)};
+ return out;
+}
 export async function sendProviderMessage(input:ProviderRequest,perform:typeof fetch=fetch):Promise<string|null>{
+ input=scrubPlaceholders(input);
  const image=!!input&&input.imageUrl!==undefined;
  if(!input||!["facebook","instagram","whatsapp"].includes(input.platform)||
   !valid(input.token,4096)||!valid(input.recipient,128)||
