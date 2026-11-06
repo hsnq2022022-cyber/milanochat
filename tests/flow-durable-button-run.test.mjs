@@ -52,9 +52,11 @@ test("version sorts after every dependency and before every migration that requi
  // 20261029190000_flow_begin_durable_run_superseding only calls begin (tests/flow-begin-durable-run-superseding.test.mjs).
  // 20261029200000_flow_media_storage is an independent storage bucket (no flow object).
  // 20261029210000_flow_media_effects requires the 130000..190000 chain (tests/flow-media-effects.test.mjs).
+ // 20261029220000_flow_media_stale_sweep requires 210000 (tests/flow-media-stale-sweep.test.mjs).
  for(const s of stamps)if(s>"20261029125000")assert.ok(["20261029130000","20261029140000","20261029150000",
-  "20261029160000","20261029170000","20261029180000","20261029190000","20261029200000","20261029210000"].includes(s),
-  `only the unapplied 130000..210000 follow: ${s}`);
+  "20261029160000","20261029170000","20261029180000","20261029190000","20261029200000","20261029210000",
+  "20261029220000"].includes(s),
+  `only the unapplied 130000..220000 follow: ${s}`);
  // 170000 still names the proposal in its message; the requirement itself is existence of both functions.
  const cc=src(CC);
  assert.ok(cc.includes(`to_regprocedure('${BEGIN_SIG}') IS NULL`)&&cc.includes(`to_regprocedure('${RESUME_SIG}') IS NULL`));

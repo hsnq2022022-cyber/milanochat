@@ -23,11 +23,13 @@ const textOk=(t:unknown)=>typeof t==="string"&&t.trim().length>0&&
 const plain=(d:RecordValue)=>(d.image===""||d.image===undefined)&&
  Array.isArray(d.contentBlocks)&&d.contentBlocks.length===0;
 /**
- * FLOW_MEDIA_SEND_ENABLED (default OFF). DO NOT ENABLE until the planner
- * (src/flow/runtimePlan.ts / runtimeChain.ts) emits message_image and the
- * publication gate (flow-publication, src/flow/publicationGate.ts) accepts
- * message:image; until then a whitelisted image flow still fails at plan time.
- * Read fail-closed: no Deno runtime (or any error) means OFF.
+ * FLOW_MEDIA_SEND_ENABLED (default OFF). DO NOT ENABLE before migrations
+ * 20261029210000 (message_image effects) and 20261029220000 (stale sweep of
+ * image effects) are applied, the operator GO, and a canary with a verified
+ * Meta image send. When ON, this ingress accepts image message nodes
+ * (imageMessage) and commits their message_image effects (safePlan), each URL
+ * re-validated server-side. Read fail-closed: no Deno runtime (or any error)
+ * means OFF.
  */
 const mediaSendEnabled=()=>{
  try{return Deno.env.get("FLOW_MEDIA_SEND_ENABLED")==="true";}catch{return false;}
@@ -277,18 +279,36 @@ const effectsPayload=(effects:ChainPlan["effects"])=>
  * earlier effect of the run; knowledge_ai ("source") stays excluded.
  */
 export const LIVE_EFFECT_KINDS=["message","question","delay","tag","untag","staff_notification","handoff"];
+/** Image attachment effect kind (planner: {kind,idempotencyKey,nodeId,url}). */
+export const IMAGE_EFFECT_KIND="message_image";
+/**
+ * Effect kinds committable right now: LIVE_EFFECT_KINDS, plus IMAGE_EFFECT_KIND
+ * ONLY while FLOW_MEDIA_SEND_ENABLED is on (read fail-closed, see
+ * mediaSendEnabled). Flag OFF: exactly LIVE_EFFECT_KINDS, as before.
+ */
+export const liveEffectKinds=():string[]=>
+ mediaSendEnabled()?[...LIVE_EFFECT_KINDS,IMAGE_EFFECT_KIND]:LIVE_EFFECT_KINDS;
+/**
+ * An image effect is committed only with a server-side re-validated URL (the
+ * project's public flow-media bucket, mediaPolicy.ts) and a safe node id; the
+ * worker validates the stored url again before sending.
+ */
+const imageEffectOk=(e:ChainPlan["effects"][number])=>e.kind!=="message_image"||
+ (safeId(e.nodeId)&&isAllowedFlowImageUrl(e.url,supabaseHost()));
 /**
  * A handoff ends the automated flow: it must be the LAST effect and the run
  * must end in status "handoff" (and "handoff" only with that effect).
  */
-export const safePlan=(plan:ChainPlan)=>
- !plan.error&&plan.state.status!=="blocked"&&
+export const safePlan=(plan:ChainPlan)=>{
+ const kinds=liveEffectKinds();
+ return !plan.error&&plan.state.status!=="blocked"&&
  ["completed","sleeping","awaiting_input","handoff"].includes(plan.state.status)&&
  plan.effects.length>=1&&plan.effects.length<=MAX_CHAIN_EFFECTS&&
  plan.effects.every((e,i)=>e.seq===i&&
-  LIVE_EFFECT_KINDS.includes(e.kind)&&!("source" in e)&&
+  kinds.includes(e.kind)&&!("source" in e)&&imageEffectOk(e)&&
   (e.kind!=="handoff"||i===plan.effects.length-1))&&
  (plan.state.status==="handoff")===(plan.effects[plan.effects.length-1].kind==="handoff");
+};
 /** After a typed answer a flow may also end silently (answer -> end). */
 const safeAnswerPlan=(plan:ChainPlan)=>safePlan(plan)||
  (!plan.error&&plan.state.status==="completed"&&plan.effects.length===0);

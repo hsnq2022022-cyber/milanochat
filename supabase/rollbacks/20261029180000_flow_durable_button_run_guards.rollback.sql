@@ -271,6 +271,10 @@ AS $head$;
 ) RETURNS boolean LANGUAGE plpgsql SECURITY INVOKER SET search_path=''
 AS $head$;
 BEGIN
+ -- 20261029220000 (media stale sweep; requires 210000) is newer: roll it back first.
+ IF EXISTS(SELECT 1 FROM pg_catalog.pg_proc p WHERE p.oid=to_regprocedure('public.flow_skip_blocked_outbox(integer,integer)')
+  AND md5(btrim(regexp_replace(p.prosrc,'[[:space:]]+',' ','g')))='dacdf7bb582a7d380651d478f47c6b97')
+ THEN RAISE EXCEPTION 'Refusing 20261029180000 rollback: 20261029220000 objects still exist; roll back 20261029220000_flow_media_stale_sweep first'; END IF;
  -- 20261029210000 (media effects; requires the 130000..190000 chain) is newer: roll it back first.
  IF EXISTS(SELECT 1 FROM pg_catalog.pg_proc p WHERE p.oid IN(
    to_regprocedure('public.flow_commit_run_step(uuid,uuid,integer,text,text,integer,text,jsonb,timestamptz,jsonb,text,uuid)'),

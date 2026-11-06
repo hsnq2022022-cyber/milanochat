@@ -27,6 +27,8 @@ const SUPERSEDING_RB="supabase/rollbacks/20261029190000_flow_begin_durable_run_s
 const SUPER_SIG="flow_begin_durable_run_superseding(uuid,uuid,uuid,uuid,text,text,bigint,text,text,integer,text,jsonb,timestamptz,jsonb)";
 const MEDIA="supabase/migrations/20261029210000_flow_media_effects.sql";
 const MEDIA_RB="supabase/rollbacks/20261029210000_flow_media_effects.rollback.sql";
+const SWEEP="supabase/migrations/20261029220000_flow_media_stale_sweep.sql";
+const SWEEP_RB="supabase/rollbacks/20261029220000_flow_media_stale_sweep.rollback.sql";
 const STAFF="supabase/migrations/20261028227000_tenant_staff_memberships.sql";
 const INTERNAL="supabase/migrations/20261028228000_flow_internal_actions.sql";
 const BEGIN_SIG="flow_begin_durable_run(uuid,uuid,uuid,uuid,text,text,bigint,text,text,integer,text,jsonb,timestamptz,jsonb)";
@@ -124,7 +126,7 @@ test("20261029190000: exact superseding body hash embedded; timeout rule matches
  const head=/^BEGIN;\nSET LOCAL lock_timeout='3s';\nSET LOCAL statement_timeout='60s';\n/m;
  for(const d of ["supabase/migrations","supabase/rollbacks"])for(const f of readdirSync(d)){
   const stamp=f.split("_")[0];
-  if(stamp>="20261029125000"&&stamp<="20261029210000")assert.match(readFileSync(`${d}/${f}`,"utf8"),head,`${d}/${f}`);
+  if(stamp>="20261029125000"&&stamp<="20261029220000")assert.match(readFileSync(`${d}/${f}`,"utf8"),head,`${d}/${f}`);
   if(stamp==="20261028227000"||stamp==="20261028228000")
    assert.doesNotMatch(readFileSync(`${d}/${f}`,"utf8"),/lock_timeout/,`${d}/${f} sets no timeout (PGOPTIONS still required)`);
  }
@@ -152,6 +154,30 @@ test("20261029210000: previous and media-effects body hashes and CHECK lists emb
  }
  assert.ok(script.includes("'preflight:20261029210000'"));
  assert.ok(script.includes("'CREATED_BY_20261029210000_FLOW_MEDIA_EFFECTS'"));
+});
+test("20261029220000: previous and stale-sweep body hashes embedded, equal to the migration's and the rollback's",()=>{
+ const md5=x=>createHash("md5").update(x).digest("hex");
+ const norm=x=>x.replace(/[ \t\n\r\f\v]+/g," ").replace(/^ +| +$/g,"");
+ const body=(f,tag)=>{const s=readFileSync(f,"utf8");const o=`AS $${tag}$`;const a=s.indexOf(o)+o.length;
+  return s.slice(a,s.indexOf(`$${tag}$`,a));};
+ const hOld=md5(norm(body(LIFECYCLE,"skip_many"))),hNew=md5(norm(body(SWEEP,"skip_many")));
+ assert.notEqual(hOld,hNew);
+ assert.ok(script.includes(`'${hOld}'::text AS h_old,'${hNew}'::text AS h_new`),"hashes embedded in checks");
+ for(const f of [SWEEP,SWEEP_RB]){
+  const m=readFileSync(f,"utf8");
+  assert.ok(m.includes(`v_h_old constant text := '${hOld}';`)&&m.includes(`v_h_new constant text := '${hNew}';`),f);
+ }
+ // The 210000 body hashes the 220000 preflight requires are the 210000 migration's.
+ for(const tag of ["advance","reserve","finish"]){
+  const h=md5(norm(body("supabase/migrations/20261029210000_flow_media_effects.sql",tag)));
+  assert.ok(script.includes(`'${h}')`),`${tag} 210000 hash in pf220`);
+  assert.ok(readFileSync(SWEEP,"utf8").includes(`'${h}')`),`${tag} 210000 hash in the 220000 preflight`);
+ }
+ assert.ok(script.includes("'preflight:20261029220000'")&&script.includes("'media_stale_sweep'"));
+ // Read-only section: no DDL/DML in the new block.
+ const blk=script.slice(script.indexOf("-- (d) 20261029220000_flow_media_stale_sweep"),script.indexOf("-- (d) Canary registration"));
+ assert.ok(blk.length>500);
+ assert.doesNotMatch(blk,/\b(INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|GRANT|REVOKE|COMMENT ON)\b/);
 });
 test("(g) embeds the exact 20261028227000 / 20261028228000 function body hashes, markers and object names",()=>{
  const md5=x=>createHash("md5").update(x).digest("hex");
@@ -663,8 +689,9 @@ test("live PG: 150000 coverage, canonical takeover columns, 130000-after-150000 
     "function:public.flow_claim_inbound_durable(uuid,uuid,text,text,uuid,uuid)",
     `durable_button_run:public.${BEGIN_SIG}`,`durable_button_run:public.${RESUME_SIG}`,
     "durable_ingress_for_20261029170000","durable_button_run_guards",`superseding_begin:public.${SUPER_SIG}`,
-    "media_effects"].includes(r.item)||
-   r.status==="INFO"&&["preflight:20261029180000","preflight:20261029190000","preflight:20261029210000"].includes(r.item),
+    "media_effects","media_stale_sweep"].includes(r.item)||
+   r.status==="INFO"&&["preflight:20261029180000","preflight:20261029190000","preflight:20261029210000",
+    "preflight:20261029220000"].includes(r.item),
    `${r.item}: ${r.status} ${r.detail}`);
  assert.equal(d(rows,"credits_pause").status,"ABSENT");
  assert.match(d(rows,"credits_pause").detail,/20261029160000 not applied/);
@@ -895,7 +922,9 @@ test("live PG: 20261029210000 media effects rows: preflight, previous -> 210000 
  for(const c of CK){assert.equal(d(rows,c).status,"OK");assert.match(d(rows,c).detail,/^20261029210000 list with its marker \((message_image|rejected) allowed\)/);}
  // Existing rows that pin the 225000 marker of flow_commit_run_step stay OK (210000 keeps it).
  assert.equal(d(rows,"preflight:20261029125000").status,"OK");
- assert.ok(!rows.some(r=>r.status.startsWith("CONFLICT")||r.item.startsWith("media_")&&r.status!=="OK"),"clean after 210000");
+ // media_stale_sweep is the separate 20261029220000 row (not applied here).
+ assert.equal(d(rows,"media_stale_sweep").status,"ABSENT");
+ assert.ok(!rows.some(r=>r.status.startsWith("CONFLICT")||r.item.startsWith("media_")&&r.item!=="media_stale_sweep"&&r.status!=="OK"),"clean after 210000");
  // Tampering / partial states (read only: the checks never fix anything).
  const RESERVE_HEAD="CREATE OR REPLACE FUNCTION public.flow_reserve_outbox_delivery(p_tenant uuid,p_outbox uuid)\nRETURNS boolean LANGUAGE plpgsql SECURITY INVOKER SET search_path=''\nAS ";
  const saved=ok("pdc_210",{sql:"SELECT pg_get_functiondef('public.flow_reserve_outbox_delivery(uuid,uuid)'::regprocedure);"},"save").stdout;
@@ -922,6 +951,62 @@ test("live PG: 20261029210000 media effects rows: preflight, previous -> 210000 
  assert.equal(d(rows,"media_effects").status,"ABSENT");
  for(const c of CK)assert.match(d(rows,c).detail,/^previous list/);
  assert.ok(!rows.some(r=>r.status.startsWith("CONFLICT")),"no conflicts after the 210000 rollback");
+});
+test("live PG: 20261029220000 media stale sweep rows: preflight, 130000 -> 220000 body, tampering, rollback",{skip},()=>{
+ const d=(rs,item)=>one(rs,"d_prerequisites",item);
+ const ITEM="media_sweep:public.flow_skip_blocked_outbox(integer,integer)";
+ prepare("pdc_220",{roles:false});
+ let {rows}=assertReadOnlyRun("pdc_220");
+ assert.equal(d(rows,ITEM).status,"MISSING: public.flow_skip_blocked_outbox(integer,integer)");
+ assert.equal(d(rows,"media_stale_sweep").status,"ABSENT");
+ assert.equal(d(rows,"preflight:20261029220000").status,"INFO");
+ assert.match(d(rows,"preflight:20261029220000").detail,/^unmet \(normal until 20261029130000\.\.210000 are applied\): /);
+ ok("pdc_220",{file:DURABLE},"125000");ok("pdc_220",{file:LIFECYCLE},"130000");ok("pdc_220",{file:AI_RETRY},"140000");
+ ok("pdc_220",{sql:`ALTER TABLE public.tenants ADD COLUMN is_active boolean NOT NULL DEFAULT true;
+  ALTER TABLE public.channel_accounts ADD COLUMN is_active boolean NOT NULL DEFAULT true,
+  ADD COLUMN agent_enabled boolean NOT NULL DEFAULT true,ADD COLUMN auto_reply boolean NOT NULL DEFAULT true;
+  ALTER TABLE public.conversations ADD COLUMN transferred boolean NOT NULL DEFAULT false,
+  ADD COLUMN auto_paused_reason text,ADD COLUMN human_agent_expires_at timestamptz;
+  ALTER TABLE public.automation_flow_tenant_switches ADD COLUMN IF NOT EXISTS production_approved boolean NOT NULL DEFAULT false;`},"production-shape columns");
+ for(const f of [TAKEOVER,CREDITS,"supabase/migrations/20261029170000_flow_canary_claim_durable.sql",GUARDS,SUPERSEDING])ok("pdc_220",{file:f},f);
+ ({rows}=assertReadOnlyRun("pdc_220"));
+ assert.equal(d(rows,ITEM).status,"OK",d(rows,ITEM).detail);
+ assert.match(d(rows,ITEM).detail,/^marker=CREATED_BY_20261029130000_FLOW_RUN_LIFECYCLE body_md5=dd51c2c354790475e1c840db4084caef body_version=20261029130000 security_definer=f config=search_path="" public_or_client_privilege=f other_overloads=0$/);
+ assert.equal(d(rows,"media_stale_sweep").status,"ABSENT");
+ assert.equal(d(rows,"preflight:20261029220000").status,"INFO","210000 still missing");
+ assert.match(d(rows,"preflight:20261029220000").detail,/20261029210000 bodies/);
+ ok("pdc_220",{file:MEDIA},"210000");
+ ({rows}=assertReadOnlyRun("pdc_220"));
+ assert.equal(d(rows,"preflight:20261029220000").status,"OK",d(rows,"preflight:20261029220000").detail);
+ ok("pdc_220",{file:SWEEP},"220000");
+ ({rows}=assertReadOnlyRun("pdc_220"));
+ assert.equal(d(rows,"media_stale_sweep").status,"OK",d(rows,"media_stale_sweep").detail);
+ assert.equal(d(rows,"preflight:20261029220000").status,"OK");
+ assert.match(d(rows,ITEM).detail,/ body_md5=dacdf7bb582a7d380651d478f47c6b97 body_version=20261029220000 /);
+ // The 130000 marker is kept: the 130000 marker checks stay OK.
+ assert.ok(!rows.some(r=>r.status.startsWith("CONFLICT")),"clean after 220000");
+ assert.equal(d(rows,"media_effects").status,"OK");
+ // Tampering (read only: the checks never fix anything).
+ const saved=ok("pdc_220",{sql:"SELECT pg_get_functiondef('public.flow_skip_blocked_outbox(integer,integer)'::regprocedure);"},"save").stdout;
+ for(const [label,sql,undo,status,sweepStatus] of [
+  ["client privilege","GRANT EXECUTE ON FUNCTION public.flow_skip_blocked_outbox(integer,integer) TO authenticated;",
+   "REVOKE EXECUTE ON FUNCTION public.flow_skip_blocked_outbox(integer,integer) FROM authenticated;",
+   "CONFLICT: public.flow_skip_blocked_outbox(integer,integer) privileges","OK"],
+  ["body tampered","CREATE OR REPLACE FUNCTION public.flow_skip_blocked_outbox(\n p_max_age_minutes integer DEFAULT 60,p_limit integer DEFAULT 200)\nRETURNS integer LANGUAGE plpgsql SECURITY INVOKER SET search_path=''\nAS $x$BEGIN RETURN 0; END$x$;",
+   saved+";","CONFLICT: public.flow_skip_blocked_outbox(integer,integer) body","CONFLICT: 20261029220000 objects"]]){
+  ok("pdc_220",{sql},label);
+  ({rows}=assertReadOnlyRun("pdc_220"));
+  assert.equal(d(rows,ITEM).status,status,`${label}: ${d(rows,ITEM).detail}`);
+  assert.equal(d(rows,"media_stale_sweep").status,sweepStatus,label);
+  ok("pdc_220",{sql:undo},`undo ${label}`);
+ }
+ ({rows}=assertReadOnlyRun("pdc_220"));
+ assert.equal(d(rows,"media_stale_sweep").status,"OK");
+ ok("pdc_220",{file:SWEEP_RB},"220000 rollback");
+ ({rows}=assertReadOnlyRun("pdc_220"));
+ assert.equal(d(rows,"media_stale_sweep").status,"ABSENT");
+ assert.match(d(rows,ITEM).detail,/body_version=20261029130000/);
+ assert.ok(!rows.some(r=>r.status.startsWith("CONFLICT")),"no conflicts after the 220000 rollback");
 });
 test("live PG: (f) inbound dedupe index: global/tenant scope, missing index with duplicate counts, failed concurrent build, counts only",{skip},()=>{
  const f=(rs,item)=>one(rs,"f_inbound_dedupe",item);

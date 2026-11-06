@@ -52,10 +52,11 @@ const body=(f,tag)=>{const s=src(f),o=`AS $${tag}$`,a=s.indexOf(o);assert.ok(a>=
 const TAGS=[["advance",M225],["reserve",M226],["finish",M226]];
 
 // ---------------------------------------------------------------- static
-test("210000 is the newest migration; 200000 (storage) is independent; the 125000..190000 chain precedes it",()=>{
+test("210000 follows the 125000..190000 chain; 200000 (storage) is independent; only 220000 (requires 210000) is newer",()=>{
  const stamps=readdirSync("supabase/migrations").filter(f=>f.endsWith(".sql")).map(f=>f.split("_")[0].padEnd(14,"0"));
  assert.equal(stamps.filter(s=>s==="20261029210000").length,1);
- for(const s of stamps)if(s!=="20261029210000")assert.ok(s<"20261029210000",s);
+ // 20261029220000_flow_media_stale_sweep requires 210000 (tests/flow-media-stale-sweep.test.mjs).
+ for(const s of stamps)if(!["20261029210000","20261029220000"].includes(s))assert.ok(s<"20261029210000",s);
  for(const f of [...CHAIN125_190,M225,M226,RB,...OLDER_RB])assert.ok(existsSync(f),f);
 });
 test("migration and rollback: one bounded transaction, marker, service_role only, no billing, no row writes",()=>{

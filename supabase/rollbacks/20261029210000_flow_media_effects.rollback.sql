@@ -25,10 +25,12 @@
 -- SELECT public.flow_skip_outbox_effect(tenant_id,id,'manual') per row.
 --
 -- Order: turn FLOW_MEDIA_SEND_ENABLED off and revert worker/ingress builds that
--- emit message_image FIRST. Then run this rollback FIRST (20261029210000 is the
--- newest flow migration); required rollback order: 210000, then 20261029190000,
--- 180000, 170000, 160000, 150000, 140000, 130000, 125000 (and the 20261028226000
--- / 20261028225000 rollbacks); each refuses while a 210000 body is installed.
+-- emit message_image FIRST. Then run this rollback right after the
+-- 20261029220000_flow_media_stale_sweep rollback (refused while the 220000
+-- sweep body is installed); required rollback order: 220000, 210000, then
+-- 20261029190000, 180000, 170000, 160000, 150000, 140000, 130000, 125000 (and
+-- the 20261028226000 / 20261028225000 rollbacks); each refuses while a 210000
+-- body is installed.
 BEGIN;
 SET LOCAL lock_timeout='3s';
 SET LOCAL statement_timeout='60s';
@@ -44,7 +46,10 @@ DECLARE
  v_rejected bigint := 0;
  r record;
 BEGIN
- -- 20261029210000 is the newest flow migration: no later rollback must run first.
+ -- 20261029220000 (media stale sweep; requires 210000) is newer: roll it back first.
+ IF EXISTS(SELECT 1 FROM pg_catalog.pg_proc p WHERE p.oid=to_regprocedure('public.flow_skip_blocked_outbox(integer,integer)')
+  AND md5(btrim(regexp_replace(p.prosrc,'[[:space:]]+',' ','g')))='dacdf7bb582a7d380651d478f47c6b97')
+ THEN RAISE EXCEPTION 'Refusing 20261029210000 rollback: 20261029220000 objects still exist; roll back 20261029220000_flow_media_stale_sweep first'; END IF;
  FOR r IN SELECT * FROM (VALUES
   ('public.flow_commit_run_step(uuid,uuid,integer,text,text,integer,text,jsonb,timestamptz,jsonb,text,uuid)',
    'CREATED_BY_20261028225000_FLOW_RUNTIME_ADVANCE','3d6031bb218b29cb0ffaed0286bd3b1b','94a87bc016ad93e609897025d259bf3e'),

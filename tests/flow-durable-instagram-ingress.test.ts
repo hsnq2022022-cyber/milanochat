@@ -1127,6 +1127,7 @@ test("pending handoff: older than 24h never silences; fresh blocks; cap counts o
 });
 
 // ---- Image messages (FLOW_MEDIA_SEND_ENABLED, default OFF).
+import {liveEffectKinds,LIVE_EFFECT_KINDS} from "../supabase/functions/milan-api/flowDurableIngress.ts";
 const MEDIA_PROJECT="https://abcd1234.supabase.co";
 const MEDIA_IMG=MEDIA_PROJECT+"/storage/v1/object/public/flow-media/u1/0f8c2b1e-1111-4222-8333-444455556666.webp";
 const withMediaEnv=<T,>(env:Record<string,string>,fn:()=>T):T=>{
@@ -1188,16 +1189,86 @@ test("image whitelist: V2 still rejects image documents, and the lone trigger->i
  const src=readFileSync("supabase/functions/milan-api/flowDurableIngress.ts","utf8");
  assert.match(src,/DO NOT ENABLE/);
  assert.match(src,/try\{return Deno\.env\.get\("FLOW_MEDIA_SEND_ENABLED"\)==="true";\}catch\{return false;\}/);
- // Live effect kinds unchanged: the planner now emits message_image for
- // text+image nodes, but this ingress (safePlan / LIVE_EFFECT_KINDS) does not
- // accept it yet, so such a plan fails closed (nothing committed).
- assert.equal(src.includes('"message_image"'),false);
+ // Live effect kinds: the static list is unchanged; message_image is added
+ // only by liveEffectKinds() while the flag is on (same fail-closed reader).
+ assert.match(src,/export const LIVE_EFFECT_KINDS=\["message","question","delay","tag","untag","staff_notification","handoff"\];/);
+ assert.match(src,/mediaSendEnabled\(\)\?\[\.\.\.LIVE_EFFECT_KINDS,IMAGE_EFFECT_KIND\]:LIVE_EFFECT_KINDS/);
 });
-test("image whitelist: the planner emits message_image, the live ingress still refuses to commit it (fail closed)",()=>withMediaEnv(MEDIA_ON,()=>{
+const imgPlan=(d:any,key="mid.img")=>planUntilWait(d,createRuntimeState(d,"img",1),{eventKey:key,nowMs:1750000000000,seed:seedFromEventKey(key)});
+test("image effects: flag OFF, safePlan rejects message_image exactly as before (no commit)",()=>{
  const d=imageDoc(TEXT_IMG);
- assert.equal(supportedDurableDocument(d),true);
- const plan=planUntilWait(d as any,createRuntimeState(d as any,"img",1),{eventKey:"mid.img",nowMs:1750000000000,seed:seedFromEventKey("mid.img")});
+ const plan=withMediaEnv(MEDIA_ON,()=>imgPlan(d));
  assert.equal(plan.error,undefined);
  assert.deepEqual(plan.effects.map(e=>[e.kind,e.seq]),[["message",0],["message",1],["message_image",2],["message",3]]);
- assert.equal(safePlan(plan),false,"message_image is not in LIVE_EFFECT_KINDS: no commit");
+ for(const env of [{},{FLOW_MEDIA_SEND_ENABLED:"false",SUPABASE_URL:MEDIA_PROJECT},{FLOW_MEDIA_SEND_ENABLED:"1",SUPABASE_URL:MEDIA_PROJECT},
+  {FLOW_MEDIA_SEND_ENABLED:"TRUE",SUPABASE_URL:MEDIA_PROJECT}])
+  withMediaEnv(env as Record<string,string>,()=>{
+   assert.deepEqual(liveEffectKinds(),LIVE_EFFECT_KINDS,"flag OFF: exactly the previous list");
+   assert.equal(liveEffectKinds().includes("message_image"),false);
+   assert.equal(safePlan(plan),false,"message_image is not committable with the flag OFF");
+   assert.equal(safePlan({...plan,effects:plan.effects.filter(e=>e.kind!=="message_image").map((e,i)=>({...e,seq:i}))}),true,
+    "text-only plans unchanged");
+  });
+ const old=(globalThis as any).Deno;delete (globalThis as any).Deno;
+ try{assert.equal(safePlan(plan),false,"no Deno runtime: fail closed");assert.deepEqual(liveEffectKinds(),LIVE_EFFECT_KINDS);}
+ finally{(globalThis as any).Deno=old;}
+ assert.deepEqual(LIVE_EFFECT_KINDS,["message","question","delay","tag","untag","staff_notification","handoff"],"static list unchanged");
+});
+test("image effects: flag ON accepts message_image only with a re-validated flow-media URL and a safe node id",()=>withMediaEnv(MEDIA_ON,()=>{
+ const plan=imgPlan(imageDoc(TEXT_IMG));
+ assert.deepEqual(liveEffectKinds(),[...LIVE_EFFECT_KINDS,"message_image"]);
+ assert.equal(safePlan(plan),true);
+ const withUrl=(url:unknown,over:Record<string,unknown>={})=>({...plan,effects:plan.effects.map(e=>
+  e.kind==="message_image"?{...e,url,...over} as any:e)});
+ for(const [url,why] of [
+  ["data:image/png;base64,AAAA","data: url"],[MEDIA_IMG.replace("https:","http:"),"http"],
+  [MEDIA_IMG.replace("abcd1234.supabase.co","evil.example.com"),"wrong host"],
+  [MEDIA_PROJECT+"/storage/v1/object/public/avatars/a.webp","other bucket"],
+  [MEDIA_PROJECT+"/storage/v1/object/public/flow-media/u1/%2e%2e/x.webp","traversal"],
+  ["","empty"],[undefined,"missing"],[42,"not a string"]] as Array<[unknown,string]>)
+  assert.equal(safePlan(withUrl(url)),false,why);
+ assert.equal(safePlan(withUrl(MEDIA_IMG,{nodeId:"<bad>"})),false,"unsafe node id");
+ // The URL is re-validated against SUPABASE_URL at commit time: another project's bucket is refused.
+ withMediaEnv({FLOW_MEDIA_SEND_ENABLED:"true",SUPABASE_URL:"https://other9999.supabase.co"},()=>
+  assert.equal(safePlan(plan),false,"image from another project"));
+ // Without SUPABASE_URL the rule is the whitelist's / worker's (mediaPolicy.ts): path rules only.
+ withMediaEnv({FLOW_MEDIA_SEND_ENABLED:"true"},()=>{
+  assert.equal(safePlan(plan),supportedDurableDocument(imageDoc(TEXT_IMG)),"same rule as the whitelist");
+  assert.equal(safePlan(withUrl("data:image/png;base64,AAAA")),false);
+ });
+ // Other rules still apply to image plans (seq order, knowledge_ai, bound).
+ assert.equal(safePlan({...plan,effects:plan.effects.map((e,i)=>({...e,seq:i===2?3:i}))}),false,"seq");
+ assert.equal(safePlan({...plan,effects:plan.effects.map(e=>e.kind==="message_image"?{...e,source:"knowledge_ai"} as any:e)}),false);
 }));
+test("image effects: flag ON, a text+image plan is committed in order with the {url} payload; flag OFF commits nothing",async()=>{
+ const d=imageDoc(TEXT_IMG);
+ const env={...MEDIA_ON,FLOW_DURABLE_INGRESS_ENABLED:"true",FLOW_DURABLE_CANARY_ACCOUNT_ID:id.account};
+ const run=async(e:Record<string,string>,doc:unknown=d)=>{
+  const old=(globalThis as any).Deno;(globalThis as any).Deno={env:{get:(k:string)=>e[k]}};
+  try{const h=lifecycleDb({document:doc});return {...h,result:await attemptDurableInstagram(h.db,baseEvent)};}
+  finally{(globalThis as any).Deno=old;}
+ };
+ const on=await run(env);
+ assert.equal(on.result,"handled");
+ assert.deepEqual(names(on.calls),["flow_claim_inbound","flow_begin_durable_run_superseding"]);
+ const effects=on.calls[1].args.p_effects;
+ assert.deepEqual(effects.map((e:any)=>[e.kind,e.payload.kind,e.payload.seq]),
+  [["message","message",0],["message","message",1],["message_image","message_image",2],["message","message",3]]);
+ const img=effects[2];
+ assert.equal(img.payload.url,MEDIA_IMG);assert.equal(img.payload.nodeId,"pic");
+ assert.equal(img.idempotencyKey,img.payload.idempotencyKey);
+ assert.ok(img.idempotencyKey.length>=1&&img.idempotencyKey.length<=1024);
+ assert.ok(new Set(effects.map((e:any)=>e.idempotencyKey)).size===4,"distinct keys");
+ assert.ok(effects.length<=5,"flow_commit_run_step bound");
+ assert.ok(JSON.stringify(img.payload).length<65536);
+ assert.deepEqual(on.writes,[]);
+ // Same event with the flag OFF: the image document is not even a durable candidate (V2 path, no begin).
+ const offEnv={...env,FLOW_MEDIA_SEND_ENABLED:"false"};
+ const off=await run(offEnv);
+ assert.equal(names(off.calls).includes("flow_begin_durable_run_superseding"),false,"flag OFF: nothing committed");
+ assert.equal(names(off.calls).includes("flow_resume_button_run"),false);
+ // Flag ON but the image URL is outside this project's bucket: refused before any commit
+ // (whitelist and safePlan both re-validate it server-side).
+ const bad=await run({...env,SUPABASE_URL:"https://other9999.supabase.co"});
+ assert.equal(names(bad.calls).includes("flow_begin_durable_run_superseding"),false,"invalid url: nothing committed");
+});

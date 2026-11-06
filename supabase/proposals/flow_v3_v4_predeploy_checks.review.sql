@@ -2,7 +2,7 @@
 -- (20261029125000_flow_durable_button_run, 20261029130000_flow_run_lifecycle,
 -- 20261029140000_flow_outbox_ai_retry, and the 20261029150000 /
 -- 20261029160000 / 20261029170000 / 20261029180000 / 20261029190000 /
--- 20261029210000 follow-ups; section (g):
+-- 20261029210000 / 20261029220000 follow-ups; section (g):
 -- 20261028227000_tenant_staff_memberships and
 -- 20261028228000_flow_internal_actions).
 -- NOT a migration.
@@ -89,7 +89,7 @@
 --   OK before applying it; superseding_begin:* must be OK after (ABSENT = not
 --   applied). Rollback order (revert milan-api first): 190000, 180000,
 --   170000, 160000, 150000, 140000, 130000, 125000.
---   20261029210000_flow_media_effects (newest flow migration; applied after
+--   20261029210000_flow_media_effects (applied after
 --   190000; 20261029200000 flow-media storage is independent) lets the
 --   database store, reserve and finish 'message_image' effects (outcome
 --   rejected = dead_letter). preflight:20261029210000 must be OK before
@@ -97,6 +97,14 @@
 --   Keep FLOW_MEDIA_SEND_ENABLED off until the operator GO. Its rollback runs
 --   FIRST: 210000, then 190000 .. 125000 (each refuses while a 210000 body is
 --   installed).
+--   20261029220000_flow_media_stale_sweep (newest flow migration; applied
+--   after 210000) makes flow_skip_blocked_outbox sweep 'message_image'
+--   effects like text (stale / human_takeover / ended run / inactive
+--   revision). preflight:20261029220000 must be OK before applying it;
+--   media_stale_sweep must be OK after (ABSENT = not applied). Its rollback
+--   runs FIRST: 220000, then 210000, 190000 .. 125000 (each refuses while the
+--   220000 body is installed); it refuses while message_image effects are
+--   still pending / retry_wait / leased.
 BEGIN READ ONLY;
 SET LOCAL statement_timeout = '15s';
 SET LOCAL lock_timeout = '2s';
@@ -1104,6 +1112,100 @@ SELECT section,item,status,tenant_id,n,ids,detail FROM (
   NULL,(SELECT count(*) FROM pf210),NULL,
   CASE WHEN (SELECT count(*) FROM pf210)=0 THEN 'all 20261029210000 preflight requirements satisfied'
    ELSE 'unmet (normal until 20261029130000..190000 are applied): '||(SELECT string_agg(label,'; ' ORDER BY label) FROM pf210) END
+) x ORDER BY ord,item;
+
+-- (d) 20261029220000_flow_media_stale_sweep (flow_skip_blocked_outbox also
+-- sweeps 'message_image' effects). Catalog only.
+--  * media_sweep:public.flow_skip_blocked_outbox(integer,integer): OK = the
+--    20261029130000 body or the 20261029220000 body (md5 of the
+--    whitespace-normalized prosrc; body_version shows which), the 130000
+--    marker kept (220000 never changes it), not security definer,
+--    search_path='', no PUBLIC/anon/authenticated privilege, no other
+--    overload. MISSING = function absent (20261029130000 not applied).
+--    CONFLICT otherwise (220000 and its rollback refuse any other body).
+--  * media_stale_sweep: OK = the 220000 body is installed; ABSENT = not applied
+--    (130000 body or function absent); CONFLICT = unrecognized body.
+--  * preflight:20261029220000: its prerequisites (130000 markers on
+--    flow_skip_blocked_outbox, flow_skip_outbox_effect and
+--    flow_conversation_human_takeover; the sweep with its attributes and the
+--    previous or 220000 body; the three 20261029210000 bodies and its marked
+--    effect_kind CHECK allowing message_image); INFO while unmet.
+WITH
+sw AS (
+ SELECT 'flow_skip_blocked_outbox(integer,integer)'::text AS sig,
+  'dd51c2c354790475e1c840db4084caef'::text AS h_old,'dacdf7bb582a7d380651d478f47c6b97'::text AS h_new,
+  p.oid,obj_description(p.oid,'pg_proc') AS m,
+  md5(btrim(regexp_replace(p.prosrc,'[[:space:]]+',' ','g'))) AS ph,p.prosecdef,p.proisstrict,p.pronargdefaults,
+  p.prorettype,p.proargnames,
+  coalesce(array_to_string(p.proconfig,','),'') AS cfg,
+  p.oid IS NOT NULL AND (p.proacl IS NULL OR EXISTS(SELECT 1 FROM unnest(p.proacl) e
+   WHERE e::text LIKE '=%' OR e::text LIKE 'anon=%' OR e::text LIKE 'authenticated=%')) AS exposed,
+  (SELECT count(*) FROM pg_catalog.pg_proc x
+   WHERE x.pronamespace='public'::regnamespace AND x.proname='flow_skip_blocked_outbox'
+    AND x.oid IS DISTINCT FROM p.oid) AS overloads
+ FROM (SELECT 1) one
+ LEFT JOIN pg_catalog.pg_proc p ON p.oid=to_regprocedure('public.flow_skip_blocked_outbox(integer,integer)')
+),
+sws AS (
+ SELECT sw.*,
+  CASE WHEN sw.oid IS NULL THEN 'MISSING: public.'||sw.sig
+   WHEN sw.m IS DISTINCT FROM 'CREATED_BY_20261029130000_FLOW_RUN_LIFECYCLE' THEN 'CONFLICT: public.'||sw.sig
+   WHEN sw.ph IS DISTINCT FROM sw.h_old AND sw.ph IS DISTINCT FROM sw.h_new OR sw.prosecdef OR sw.proisstrict
+    OR sw.cfg<>'search_path=""' OR sw.pronargdefaults<>2 OR sw.prorettype IS DISTINCT FROM 'integer'::regtype
+    OR sw.proargnames IS DISTINCT FROM ARRAY['p_max_age_minutes','p_limit']
+    THEN 'CONFLICT: public.'||sw.sig||' body'
+   WHEN sw.overloads>0 THEN 'CONFLICT: public.flow_skip_blocked_outbox overload'
+   WHEN sw.exposed THEN 'CONFLICT: public.'||sw.sig||' privileges'
+   ELSE 'OK' END AS st
+ FROM sw
+),
+pf220 AS (
+ SELECT r.label FROM (VALUES
+  ('20261029130000 marker on flow_skip_outbox_effect, flow_conversation_human_takeover and flow_skip_blocked_outbox',
+   obj_description(to_regprocedure('public.flow_skip_outbox_effect(uuid,uuid,text)'),'pg_proc') IS NOT DISTINCT FROM 'CREATED_BY_20261029130000_FLOW_RUN_LIFECYCLE'
+   AND obj_description(to_regprocedure('public.flow_conversation_human_takeover(uuid,uuid)'),'pg_proc') IS NOT DISTINCT FROM 'CREATED_BY_20261029130000_FLOW_RUN_LIFECYCLE'
+   AND obj_description(to_regprocedure('public.flow_skip_blocked_outbox(integer,integer)'),'pg_proc') IS NOT DISTINCT FROM 'CREATED_BY_20261029130000_FLOW_RUN_LIFECYCLE'),
+  ('flow_skip_blocked_outbox with its attributes and the 20261029130000 or 20261029220000 body',
+   (SELECT st FROM sws)='OK'),
+  ('20261029210000 bodies of flow_commit_run_step, flow_reserve_outbox_delivery and flow_finish_outbox_delivery',
+   (SELECT count(*) FROM pg_catalog.pg_proc p WHERE (p.oid,md5(btrim(regexp_replace(p.prosrc,'[[:space:]]+',' ','g')))) IN(
+    (to_regprocedure('public.flow_commit_run_step(uuid,uuid,integer,text,text,integer,text,jsonb,timestamptz,jsonb,text,uuid)'),'94a87bc016ad93e609897025d259bf3e'),
+    (to_regprocedure('public.flow_reserve_outbox_delivery(uuid,uuid)'),'1b7a6fe3f6a9ee97203d50d5e0e0baa7'),
+    (to_regprocedure('public.flow_finish_outbox_delivery(uuid,uuid,text,text)'),'1c6ec477519f8c91c24fc2ab82d4b9c4')))=3),
+  ('20261029210000 marked effect_kind CHECK allowing message_image',
+   EXISTS(SELECT 1 FROM pg_catalog.pg_constraint c
+    WHERE c.conrelid=to_regclass('public.automation_flow_outbox') AND c.contype='c'
+     AND split_part(coalesce(obj_description(c.oid,'pg_constraint'),''),' ',1)='CREATED_BY_20261029210000_FLOW_MEDIA_EFFECTS'
+     AND pg_catalog.pg_get_constraintdef(c.oid) LIKE '%''message_image''%'))
+ ) r(label,ok) WHERE NOT r.ok
+)
+SELECT section,item,status,tenant_id,n,ids,detail FROM (
+ SELECT 0 AS ord,'d_prerequisites'::text AS section,'media_sweep:public.'||sws.sig AS item,sws.st AS status,
+  NULL::uuid AS tenant_id,sws.overloads AS n,NULL::text AS ids,
+  CASE WHEN sws.oid IS NULL THEN '20261029130000 not applied: 20261029220000 requires it'
+   ELSE format('marker=%s body_md5=%s body_version=%s security_definer=%s config=%s public_or_client_privilege=%s other_overloads=%s',
+    coalesce(sws.m,'-'),sws.ph,
+    CASE WHEN sws.ph=sws.h_new THEN '20261029220000' WHEN sws.ph=sws.h_old THEN '20261029130000' ELSE 'unrecognized' END,
+    sws.prosecdef,sws.cfg,sws.exposed,sws.overloads) END AS detail
+ FROM sws
+ UNION ALL
+ SELECT 1,'d_prerequisites','media_stale_sweep',
+  CASE WHEN sws.oid IS NULL OR sws.ph=sws.h_old THEN 'ABSENT'
+   WHEN sws.ph=sws.h_new THEN 'OK'
+   ELSE 'CONFLICT: 20261029220000 objects' END,
+  NULL,NULL,NULL,
+  CASE WHEN sws.oid IS NOT NULL AND sws.ph=sws.h_new
+    THEN 'installed by 20261029220000 (flow_skip_blocked_outbox sweeps message_image effects like text); rollback: supabase/rollbacks/20261029220000_flow_media_stale_sweep.rollback.sql FIRST, before 20261029210000'
+   WHEN sws.oid IS NULL OR sws.ph=sws.h_old
+    THEN '20261029220000 not applied: unsent message_image effects are not swept (stale / takeover / ended run / inactive revision)'
+   ELSE 'unrecognized flow_skip_blocked_outbox body: 20261029220000 and its rollback refuse it (review the live definition first)' END
+ FROM sws
+ UNION ALL
+ SELECT 2,'d_prerequisites','preflight:20261029220000',
+  CASE WHEN (SELECT count(*) FROM pf220)=0 THEN 'OK' ELSE 'INFO' END,
+  NULL,(SELECT count(*) FROM pf220),NULL,
+  CASE WHEN (SELECT count(*) FROM pf220)=0 THEN 'all 20261029220000 preflight requirements satisfied'
+   ELSE 'unmet (normal until 20261029130000..210000 are applied): '||(SELECT string_agg(label,'; ' ORDER BY label) FROM pf220) END
 ) x ORDER BY ord,item;
 
 -- (d) Canary registration for the INTENDED tenant/account (read only).

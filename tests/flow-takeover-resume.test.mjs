@@ -28,7 +28,8 @@ test("150000 follows 130000/140000; only 160000 (credits pause) and 170000 (cana
  // 20261029190000_flow_begin_durable_run_superseding requires 180000 (and this migration).
  // 20261029200000_flow_media_storage is an independent storage bucket (no flow object).
  // 20261029210000_flow_media_effects requires 190000 (and this migration) (tests/flow-media-effects.test.mjs).
- const successors=["20261029160000","20261029170000","20261029180000","20261029190000","20261029200000","20261029210000"];
+ // 20261029220000_flow_media_stale_sweep requires 210000 (tests/flow-media-stale-sweep.test.mjs).
+ const successors=["20261029160000","20261029170000","20261029180000","20261029190000","20261029200000","20261029210000","20261029220000"];
  for(const s of stamps)if(s!=="20261029150000"&&!successors.includes(s))assert.ok(s<"20261029150000",s);
  assert.ok(existsSync(LC)&&existsSync(AI));
 });

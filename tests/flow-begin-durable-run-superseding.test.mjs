@@ -52,7 +52,8 @@ test("190000 follows the whole 125000..180000 chain; only 200000 (storage) and 2
  assert.equal(stamps.filter(s=>s==="20261029190000").length,1);
  // 20261029200000_flow_media_storage is an independent storage bucket (no flow object).
  // 20261029210000_flow_media_effects requires 190000 (tests/flow-media-effects.test.mjs).
- for(const s of stamps)if(!["20261029190000","20261029200000","20261029210000"].includes(s))assert.ok(s<"20261029190000",s);
+ // 20261029220000_flow_media_stale_sweep requires 210000 (tests/flow-media-stale-sweep.test.mjs).
+ for(const s of stamps)if(!["20261029190000","20261029200000","20261029210000","20261029220000"].includes(s))assert.ok(s<"20261029190000",s);
  for(const f of [...CHAIN125_180,RB])assert.ok(existsSync(f),f);
 });
 test("migration and rollback: one bounded transaction, additive, service_role only, no data change",()=>{
