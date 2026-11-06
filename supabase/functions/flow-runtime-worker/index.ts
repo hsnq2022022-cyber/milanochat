@@ -11,6 +11,8 @@ import type {FlowDocument} from "../../../src/flow/model.ts";
 // end are planned together (max 5 effects, seq-tagged) and committed at once.
 import {planUntilWait,seedFromEventKey} from "../../../src/flow/runtimeChain.ts";
 import {canWakeDurableRun,wakeEndReason,type WakeEligibility} from "./eligibility.ts";
+import {wakeMediaSendEnabled,wakeEffectsMediaAllowed,endWakeForDisallowedMedia,
+ WAKE_MEDIA_END_REASON} from "./mediaGuard.ts";
 
 const base=Deno.env.get("SUPABASE_URL")??"";
 const service=Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")??"";
@@ -153,6 +155,18 @@ Deno.serve(async(req)=>{
    // any send. This worker does not emit unsupported AI effects.
    if(plan.effects.some(e=>e.kind==="message"&&"source" in e&&e.source==="knowledge_ai"))
     throw Error("knowledge AI requires trusted handler, no emission");
+   // Same image rule as the ingress (liveEffectKinds/safePlan): message_image
+   // only with FLOW_MEDIA_SEND_ENABLED on and a re-validated URL. Otherwise
+   // commit NOTHING and end the run (blocked runs are never leased again).
+   if(!wakeEffectsMediaAllowed(plan.effects,
+     wakeMediaSendEnabled(()=>Deno.env.get("FLOW_MEDIA_SEND_ENABLED")),base)){
+    if(await endWakeForDisallowedMedia((fn,args)=>sb.rpc(fn,args),tenantId,runId)){
+     cancelled++;
+     console.warn("[flow-worker] image wake ended",{tenantId,runId,reason:WAKE_MEDIA_END_REASON});
+     continue;
+    }
+    throw Error("image effect not allowed, run not ended");
+   }
    const effects=plan.effects.map(e=>({
     kind:e.kind,idempotencyKey:e.idempotencyKey,
     payload:e
