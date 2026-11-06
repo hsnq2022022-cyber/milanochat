@@ -12,7 +12,7 @@
    it is only APPLIED through --fs-display below, i.e. inside .flow-skin. */
 @font-face{
   font-family:"Handicrafts";
-  src:url("/milanochat/fonts/alfont_com_TheYearofHandicrafts-SemiBold.otf") format("opentype");   /* app is served under the /milanochat/ Vite base */
+  src:url("/milanochat/fonts/alfont_com_TheYearofHandicrafts-SemiBold.woff2") format("woff2");   /* app is served under the /milanochat/ Vite base */
   font-weight:100 900;   /* single weight file: avoid faux-bold on headings */
   font-style:normal;
   font-display:swap;
