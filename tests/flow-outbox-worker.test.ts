@@ -347,7 +347,7 @@ test("text/email/phone questions are plain Instagram messages; buttons and unkno
  const code=readFileSync("supabase/functions/flow-outbox-worker/index.ts","utf8");
  // Only the plain question skips the buttons gate; any other question is blocked as before.
  assert.match(code,/const plainQuestion=effect\.effect_kind==="question"&&\n\s+plainInputQuestion\(payload,account\.platform\);/);
- assert.match(code,/if\(effect\.effect_kind==="question" && !plainQuestion &&\n\s+\(env\("FLOW_RICH_BUTTONS_ENABLED"\)!=="true" \|\|\n\s+!\["instagram","facebook"\]\.includes\(account\.platform\) \|\|\n\s+payload\.inputMode!=="buttons"\)\)\{\n\s+report\("blocked"\);continue;\n\s+\}/);
+ assert.match(code,/if\(effect\.effect_kind==="question" && !plainQuestion &&\n\s+\(env\("FLOW_RICH_BUTTONS_ENABLED"\)!=="true" \|\|\n\s+\(!\["instagram","facebook"\]\.includes\(account\.platform\) && !multichannelWhatsApp\) \|\|\n\s+payload\.inputMode!=="buttons"\)\)\{\n\s+report\("blocked"\);continue;\n\s+\}/);
  assert.match(code,/const quickReplies=effect\.effect_kind==="question" && !plainQuestion &&/);
  assert.match(code,/if\(effect\.effect_kind==="question" && !plainQuestion && !quickReplies\)\{await skip\("ineligible","invalid"\);continue;\}/);
  // Decided after the production gate and payload checks, before any send.
@@ -636,7 +636,9 @@ test("Meta errors on a button template follow the text path: uncertain, never re
 });
 test("worker gates Instagram website buttons on FLOW_RICH_BUTTONS_ENABLED and pre-validates before reserving",()=>{
  const code=readFileSync("supabase/functions/flow-outbox-worker/index.ts","utf8");
- assert.match(code,/if\(websiteButtons && \(env\("FLOW_RICH_BUTTONS_ENABLED"\)!=="true" \|\|\n\s+!\["facebook","instagram"\]\.includes\(account\.platform\)\)\)\{\n\s+report\("blocked"\);continue;/);
+ assert.match(code,/if\(websiteButtons && \(env\("FLOW_RICH_BUTTONS_ENABLED"\)!=="true" \|\|\n\s+\(!\["facebook","instagram"\]\.includes\(account\.platform\) && !multichannelWhatsApp\)\)\)\{\n\s+report\("blocked"\);continue;/);
+ // multichannelWhatsApp is false unless FLOW_MULTICHANNEL_ENABLED==="true" AND the account is WhatsApp.
+ assert.match(code,/const multichannel=env\("FLOW_MULTICHANNEL_ENABLED"\)==="true"&&\n\s+\(account\.platform==="whatsapp"\|\|account\.platform==="facebook"\);\n\s+const multichannelWhatsApp=multichannel&&account\.platform==="whatsapp";/);
  const gate=code.indexOf("instagramButtonTemplateProblem(messageText,websiteButtons)");
  assert.ok(gate>0&&gate<code.indexOf("const res=await executeOnce({"),"validated before reservation");
  assert.match(code,/report\(problem\);await skip\("ineligible","invalid"\);continue;/);

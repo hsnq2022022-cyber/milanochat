@@ -31,6 +31,8 @@ import {compareOutbox,heldByEarlierEffect,statusAfterOutcome,ORDERED_KINDS,
  ORDER_SIBLING_LIMIT,type OrderRow} from "./effectOrder.ts";
 import {plainInputQuestion} from "./questionMode.ts";
 import {instagramButtonTemplateProblem} from "./flowRichActions.ts";
+import {sendMultichannelMessage,multichannelPayloadProblem,classifyMultichannelFailure,
+ type MultichannelFailure} from "./multichannelSend.ts";
 import {mediaEffectGate,classifyMediaFailure,finishOutcome,type MediaFailure,type FinishOutcome}
  from "./mediaPolicy.ts";
 import {runInternalEffects,internalActionsReleased} from "../flow-internal-worker/internalEffects.ts";
@@ -219,6 +221,12 @@ Deno.serve(async req=>{
    const expectedPrefix=account.platform==="facebook"?"facebook":account.platform;
    if(!recipientRaw.startsWith(expectedPrefix+":")){await skip("ineligible");continue;}
    const recipient=recipientRaw.slice(expectedPrefix.length+1);
+   // FLOW_MULTICHANNEL_ENABLED (default OFF): WhatsApp/Facebook effects use the
+   // separate multichannelSend.ts senders. OFF: false, every gate and request
+   // below is exactly as before. Instagram is never affected.
+   const multichannel=env("FLOW_MULTICHANNEL_ENABLED")==="true"&&
+    (account.platform==="whatsapp"||account.platform==="facebook");
+   const multichannelWhatsApp=multichannel&&account.platform==="whatsapp";
    // Do not allow the AI prompt to dictate recipient, account, URL or tenant.
    const payload=effect.payload;
    if(!payload||typeof payload!=="object"||payload.kind!==effect.effect_kind){
@@ -234,7 +242,7 @@ Deno.serve(async req=>{
     plainInputQuestion(payload,account.platform);
    if(effect.effect_kind==="question" && !plainQuestion &&
       (env("FLOW_RICH_BUTTONS_ENABLED")!=="true" ||
-       !["instagram","facebook"].includes(account.platform) ||
+       (!["instagram","facebook"].includes(account.platform) && !multichannelWhatsApp) ||
        payload.inputMode!=="buttons")){
     report("blocked");continue;
    }
@@ -360,8 +368,22 @@ Deno.serve(async req=>{
    const websiteButtons=effect.effect_kind==="message" &&
      Array.isArray(payload.websiteButtons)?payload.websiteButtons:undefined;
    if(websiteButtons && (env("FLOW_RICH_BUTTONS_ENABLED")!=="true" ||
-      !["facebook","instagram"].includes(account.platform))){
+      (!["facebook","instagram"].includes(account.platform) && !multichannelWhatsApp))){
      report("blocked");continue;
+   }
+   // WhatsApp/Facebook (flag ON only, multichannelSend.ts): not representable
+   // (more than 3 WhatsApp reply buttons, cta_url mixed or with several URLs,
+   // text/title over the platform limit, ...) is cancelled for good BEFORE any
+   // reservation and without a request. Already sent: left for review.
+   if(multichannel && imageUrl===undefined){
+     const problem=multichannelPayloadProblem({platform:account.platform,
+      externalId:String(account.external_id??""),token:"validation-only",recipient,
+      text:messageText,quickReplies,websiteButtons});
+     if(problem){
+      if(effect.delivery_status==="charge_pending"){report("blocked");continue;}
+      console.warn("[outbox] multichannel payload not sendable",{id:effect.id,code:problem});
+      report(problem);await skip("ineligible","invalid");continue;
+     }
    }
    // Instagram button template (flowRichActions.ts): decided BEFORE any
    // reservation. Not representable (more than 3 buttons, text over 640,
@@ -444,6 +466,41 @@ Deno.serve(async req=>{
    // rejection of the image (4xx such as code 100) is finished as 'rejected'
    // (dead_letter, 20261029210000); auth/5xx/429/network stay uncertain.
    const media:{failure:MediaFailure|null;rejected:boolean}={failure:null,rejected:false};
+   // WhatsApp/Facebook (FLOW_MULTICHANNEL_ENABLED only): same reserve ->
+   // send once -> finish -> persist/bill sequence. Failures are classified for
+   // the report only: the delivery finishes 'uncertain' (never resent;
+   // 'rejected' is image-only in SQL).
+   if(multichannel && imageUrl===undefined){
+    let multichannelFailure:MultichannelFailure|null=null;
+    const sent=await executeOnce({
+     reserve:async()=>{
+      const {data,error}=await sb.rpc("flow_reserve_outbox_delivery",{
+       p_tenant:effect.tenant_id,p_outbox:effect.id
+      });
+      if(error){console.error("[outbox] reserve error",{code:error.code});return false;}
+      return data===true;
+     },
+     send:()=>sendMultichannelMessage({
+      platform:account.platform,externalId:String(account.external_id??""),
+      token,recipient,text:messageText,quickReplies,websiteButtons
+     }).catch(e=>{multichannelFailure=classifyMultichannelFailure(e);throw e;}),
+     confirm:async(status,providerId)=>{
+      const {data,error}=await sb.rpc("flow_finish_outbox_delivery",{
+       p_tenant:effect.tenant_id,p_outbox:effect.id,p_result:status,
+       p_provider_message_id:providerId
+      });
+      if(error){console.error("[outbox] finish error",{code:error.code});return false;}
+      return data===true;
+     },
+     persistAndBill
+    });
+    report(sent);
+    if(multichannelFailure){
+     console.warn("[outbox] multichannel send failed",{id:effect.id,code:multichannelFailure});
+     report("multichannel_"+multichannelFailure);
+    }
+    continue;
+   }
    const res=await executeOnce({
     reserve:async()=>{
      const {data,error}=await sb.rpc("flow_reserve_outbox_delivery",{

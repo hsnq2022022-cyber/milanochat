@@ -38,6 +38,7 @@ const messages={
   title:["عنوان الخطوة","Step title"],
   channel:["القناة التي يبدأ منها التدفق","Starting channel"],
   event:["نوع الحدث","Event type"],
+  multichannelNote:["Messenger وWhatsApp لا يعملان فعليًا إلا بعد تفعيل ميزة القنوات المتعددة على الخادم وتسجيل الحساب.","Messenger and WhatsApp go live only after the multichannel feature is enabled on the server and the account is registered."],
   answer:["نوع الإجابة","Response type"],
   next:["الخطوة التالية بعد الإجابة","Next step after answer"],
   localOnly:["التفعيل والتعطيل محليان فقط — لا توجد أتمتة حقيقية للحسابات المرتبطة","Activation here is local only — connected accounts do not run automations yet"],

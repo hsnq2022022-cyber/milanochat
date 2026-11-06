@@ -100,6 +100,7 @@ export default function NodeEditor({node,onClose,language="ar"}:{node:FlowNode|n
         </select>
         <TriggerKeywordsEditor key={node.id+":"+d.triggerMode} mode={d.triggerMode} value={d.keywords} onChange={keywords=>edit({keywords})}/>
         <p className="mt-2 text-[11px] leading-5 text-[#E5B54B]">هذه إعدادات التدفق فقط. اختيار WhatsApp أو Instagram أو Messenger لا يُنشئ ربط حساب جديدًا، ولا يمنح صلاحيات Meta تلقائيًا. الأحداث المسموح بها فعليًا تعتمد على القناة وحالة ربطها.</p>
+        {d.platform!=="instagram"&&<p className="mt-2 text-[11px] leading-5 text-[#E5B54B]">{t("multichannelNote")}</p>}
       </>}
       {["message","question"].includes(d.kind)&&<>
         {d.kind==="question"&&<>
