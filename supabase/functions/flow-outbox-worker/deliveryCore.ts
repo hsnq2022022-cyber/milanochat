@@ -1,4 +1,4 @@
-import {metaQuickReplies,messengerWebsiteButtons,type QuickOption,type WebOption} from "./flowRichActions.ts";
+import {metaQuickReplies,messengerWebsiteButtons,instagramWebsiteButtons,type QuickOption,type WebOption} from "./flowRichActions.ts";
 import {isAllowedFlowImageUrl} from "./mediaPolicy.ts";
 // Server-only Meta transport. No browser import and no implicit retry.
 export type Provider="facebook"|"instagram"|"whatsapp";
@@ -45,8 +45,10 @@ export async function sendProviderMessage(input:ProviderRequest,perform:typeof f
    {attachment:{type:"image",payload:{url:input.imageUrl}}}:{text:input.text};
   if(input.quickReplies) message={...message,quick_replies:metaQuickReplies(input.quickReplies,input.platform)};
   if(input.websiteButtons){
-   if(input.platform!=="facebook")throw Error("Website buttons require Facebook Messenger");
-   message=messengerWebsiteButtons(input.text,input.websiteButtons);
+   // Instagram: button template (text <= 640, 1..3 web_url buttons).
+   if(input.platform==="instagram")message=instagramWebsiteButtons(input.text,input.websiteButtons);
+   else if(input.platform!=="facebook")throw Error("Website buttons require Facebook Messenger");
+   else message=messengerWebsiteButtons(input.text,input.websiteButtons);
   }
   const envelope={recipient:{id:input.recipient},message};
   if(input.platform==="instagram"&&input.token.startsWith("IG")){

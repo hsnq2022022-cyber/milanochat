@@ -30,6 +30,7 @@ import {permanentOutboxBlock,temporaryOutboxPause,humanTakeoverActive,OUTBOX_SCA
 import {compareOutbox,heldByEarlierEffect,statusAfterOutcome,ORDERED_KINDS,
  ORDER_SIBLING_LIMIT,type OrderRow} from "./effectOrder.ts";
 import {plainInputQuestion} from "./questionMode.ts";
+import {instagramButtonTemplateProblem} from "./flowRichActions.ts";
 import {mediaEffectGate,classifyMediaFailure,finishOutcome,type MediaFailure,type FinishOutcome}
  from "./mediaPolicy.ts";
 import {runInternalEffects,internalActionsReleased} from "../flow-internal-worker/internalEffects.ts";
@@ -358,8 +359,21 @@ Deno.serve(async req=>{
    if(effect.effect_kind==="question" && !plainQuestion && !quickReplies){await skip("ineligible","invalid");continue;}
    const websiteButtons=effect.effect_kind==="message" &&
      Array.isArray(payload.websiteButtons)?payload.websiteButtons:undefined;
-   if(websiteButtons && (env("FLOW_RICH_BUTTONS_ENABLED")!=="true" || account.platform!=="facebook")){
+   if(websiteButtons && (env("FLOW_RICH_BUTTONS_ENABLED")!=="true" ||
+      !["facebook","instagram"].includes(account.platform))){
      report("blocked");continue;
+   }
+   // Instagram button template (flowRichActions.ts): decided BEFORE any
+   // reservation. Not representable (more than 3 buttons, text over 640,
+   // title over 20, non-https/credential URL): cancelled for good, no request,
+   // never silently trimmed. Already sent (charge_pending): left for review.
+   if(websiteButtons && account.platform==="instagram"){
+     const problem=instagramButtonTemplateProblem(messageText,websiteButtons);
+     if(problem){
+      if(effect.delivery_status==="charge_pending"){report("blocked");continue;}
+      console.warn("[outbox] instagram button template not sendable",{id:effect.id,code:problem});
+      report(problem);await skip("ineligible","invalid");continue;
+     }
    }
    const persistAndBill=async(providerId:string):Promise<boolean>=>{
      if(typeof providerId!=="string"||!providerId.trim())return false;

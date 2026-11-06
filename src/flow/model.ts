@@ -11,6 +11,26 @@ export type Choice = {
   targetFlowId?: string;
   url?: string;
 };
+export const URL_BUTTON_LABEL_MAX = 20;
+export const URL_BUTTON_URL_MAX = 2000;
+/** Meta button template limits: at most 3 website buttons, message text <= 640 code points. */
+export const WEBSITE_BUTTONS_MAX = 3;
+export const WEBSITE_BUTTON_TEXT_MAX = 640;
+/** Publish-time problems (Arabic) for a website/URL button; empty array means valid. */
+export function websiteButtonProblems(label:string|undefined,url:string|undefined):string[]{
+  const out:string[]=[], l=(label||"").trim(), u=url||"", name=" «"+l+"»";
+  if(!l)out.push("نص زر الرابط مطلوب");
+  else{
+    if([...l].length>URL_BUTTON_LABEL_MAX)out.push("نص زر الرابط"+name+" يجب ألا يتجاوز "+URL_BUTTON_LABEL_MAX+" حرفًا");
+    if(/[\u0000-\u001F\u007F-\u009F]/.test(l))out.push("نص زر الرابط"+name+" يحتوي على رموز تحكم غير مسموحة");
+  }
+  let ok=!!u&&u.length<=URL_BUTTON_URL_MAX&&!/\s/.test(u)&&/^https:\/\//i.test(u);
+  if(ok){
+    try{const p=new URL(u);ok=p.protocol==="https:"&&!p.username&&!p.password&&!!p.hostname;}catch{ok=false;}
+  }
+  if(!ok)out.push("رابط الزر"+name+" يجب أن يكون HTTPS صالحًا بدون مسافات أو بيانات دخول وبحد أقصى "+URL_BUTTON_URL_MAX+" حرف");
+  return out;
+}
 export type ContentBlock = {
   id: string;
   type: "text" | "image" | "pdf" | "delay" | "collection";
@@ -193,7 +213,9 @@ export function validateDocument(doc: FlowDocument, library?: readonly Validatio
     }
     for(const option of d.options){
       if(option.action==="website"){
-        if(!option.url||!/^https:\/\/\S+$/i.test(option.url))error("رابط الموقع للزر "+option.label+" يجب أن يبدأ بـ HTTPS");
+        const problems=websiteButtonProblems(option.label,option.url);
+        if(d.kind==="message"&&!d.text.trim())problems.push("الزر «"+option.label+"» يحتاج نص رسالة أساسيًا ليُرسل تحته");
+        if(problems.length)problems.forEach(error);
         else externalExit.add(n.id);
       }
       if(option.action==="flow"){
@@ -207,11 +229,17 @@ export function validateDocument(doc: FlowDocument, library?: readonly Validatio
          !doc.edges.some(e=>e.source===n.id&&e.sourceHandle===option.id))
         error("الخيار «"+option.label+"» بلا وجهة");
     }
+    if(d.kind==="message"){
+      const web=d.options.filter(o=>o.action==="website").length;
+      if(web>WEBSITE_BUTTONS_MAX)error("الحد الأقصى لأزرار الروابط في رسالة واحدة هو "+WEBSITE_BUTTONS_MAX);
+      if(web>0&&[...d.text.trim()].length>WEBSITE_BUTTON_TEXT_MAX)
+        error("نص الرسالة التي تحتوي على أزرار روابط يجب ألا يتجاوز "+WEBSITE_BUTTON_TEXT_MAX+" حرفًا");
+    }
     for(const block of d.contentBlocks||[]){
-      if(["image","pdf"].includes(block.type)&&!(/^https:\/\/\S+$/i.test(block.url||"")||
-         block.type==="image"&&/^data:image\/(?:webp|jpeg|png);base64,/i.test(block.url||"")||
-         block.type==="pdf"&&/^data:application\/pdf;base64,/i.test(block.url||"")))
-        error("رابط "+(block.type==="pdf"?"PDF":"الصورة")+" غير صالح");
+      if(block.type==="pdf"){error("مكوّن PDF لم يعد مدعومًا؛ احذفه قبل النشر");continue;}
+      if(block.type==="image"&&!(/^https:\/\/\S+$/i.test(block.url||"")||
+         /^data:image\/(?:webp|jpeg|png);base64,/i.test(block.url||"")))
+        error("رابط الصورة غير صالح");
       else if(block.type==="image"&&!isAllowedImageUrl(block.url))error(IMAGE_PUBLISH_MSG);
     }
     if(d.image&&!/^https:\/\//i.test(d.image)&&!/^data:image\/(?:png|jpeg|webp);base64,/i.test(d.image))
@@ -321,9 +349,10 @@ function cleanImported(raw:unknown): FlowDocument | null {
     const kind=kindOf(d.kind);
     const options:Array<Choice>=Array.isArray(d.options)?d.options.slice(0,12).filter((x:unknown)=>!!x&&typeof x==="object").map((x:unknown)=>{const c=x as Record<string,unknown>;
       const action:ButtonAction=["step","flow","website","ai","actions","condition","randomizer"].includes(String(c.action))?c.action as ButtonAction:"step";
-      return {id:safeString(c.id,id()),label:safeString(c.label).slice(0,100),weight:typeof c.weight==="number"?c.weight:undefined,
+      const web=action==="website";
+      return {id:safeString(c.id,id()),label:web?safeString(c.label).trim().slice(0,100):safeString(c.label).slice(0,100),weight:typeof c.weight==="number"?c.weight:undefined,
         buttonType:c.buttonType==="quick_reply"?"quick_reply":"button",action,
-        targetFlowId:safeString(c.targetFlowId).slice(0,150),url:safeString(c.url).slice(0,2000)};
+        targetFlowId:safeString(c.targetFlowId).slice(0,150),url:web?safeString(c.url).trim().slice(0,2000):safeString(c.url).slice(0,2000)};
     }):[];
     const contentBlocks:ContentBlock[]=Array.isArray(d.contentBlocks)?d.contentBlocks.slice(0,24).filter((x:unknown)=>!!x&&typeof x==="object").map((x:unknown)=>{
       const b=x as Record<string,unknown>;

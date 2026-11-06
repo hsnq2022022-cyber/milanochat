@@ -246,3 +246,66 @@ test("draft sanitising of image blocks unchanged",()=>{
  assert.ok(back);
  assert.equal(back!.nodes.find(n=>n.data.kind==="message")!.data.contentBlocks?.[0]?.url,"data:image/png;base64,AAAA");
 });
+
+/* ---- URL (website) button + legacy pdf ---- */
+function urlDoc(label:string,url:string,text="مرحبا"){
+ const doc=exampleFlow(),m=doc.nodes.find(n=>n.data.kind==="message")!;
+ m.data={...m.data,text,options:[{id:"u1",label,buttonType:"button",action:"website",url}]};
+ return doc;
+}
+const urlErrors=(label:string,url:string,text?:string)=>validateDocument(urlDoc(label,url,text)).filter(i=>i.severity==="error"&&(i.message.includes("الزر")||i.message.includes("زر")));
+test("url button label: 20 code points ok, 21 rejected, Arabic counted by code points",()=>{
+ assert.equal(urlErrors("a".repeat(20),"https://example.com").length,0);
+ assert.ok(urlErrors("a".repeat(21),"https://example.com").some(i=>i.message.includes("20")));
+ assert.equal(urlErrors("ا".repeat(20),"https://example.com").length,0);
+ assert.ok(urlErrors("ا".repeat(21),"https://example.com").length>0);
+ assert.equal(urlErrors("😀".repeat(20),"https://example.com").length,0);
+ assert.ok(urlErrors("😀".repeat(21),"https://example.com").length>0);
+ assert.ok(urlErrors("   ","https://example.com").length>0);
+ assert.ok(urlErrors("زر\u0007","https://example.com").length>0);
+});
+test("url button url rules",()=>{
+ for(const ok of ["https://example.com","https://example.com/a?b=1#c"])assert.equal(urlErrors("زيارة الموقع",ok).length,0,ok);
+ for(const bad of ["","http://example.com","javascript:alert(1)","data:text/html,hi","https://user:pass@example.com","https://u@example.com","https://exa mple.com","https://example.com/a b","https://","not a url","https://"+"a".repeat(2000)+".com"])
+  assert.ok(urlErrors("زيارة الموقع",bad).length>0,JSON.stringify(bad));
+});
+test("url button requires non-empty message text",()=>{
+ assert.ok(urlErrors("زيارة الموقع","https://example.com","   ").some(i=>i.message.includes("نص رسالة")));
+ assert.equal(urlErrors("زيارة الموقع","https://example.com","نص").length,0);
+});
+test("url buttons: max 3 per message and message text <= 640 code points",()=>{
+ const many=(n:number,text="مرحبا")=>{
+  const doc=urlDoc("زيارة","https://example.com",text),m=doc.nodes.find(n=>n.data.kind==="message")!;
+  m.data={...m.data,options:Array.from({length:n},(_,i)=>({id:"u"+i,label:"زر "+i,buttonType:"button" as const,action:"website" as const,url:"https://example.com/"+i}))};
+  return validateDocument(doc).filter(i=>i.severity==="error");
+ };
+ assert.equal(many(3).length,0);
+ assert.ok(many(4).some(i=>i.message.includes("الحد الأقصى لأزرار الروابط")));
+ assert.equal(many(1,"ن".repeat(640)).length,0);
+ assert.ok(many(1,"ن".repeat(641)).some(i=>i.message.includes("640")));
+ assert.equal(many(1,"😀".repeat(640)).length,0);
+ // Text-only messages keep the previous limits (no 640 rule without website buttons).
+ const plain=exampleFlow(),m=plain.nodes.find(n=>n.data.kind==="message")!;
+ m.data={...m.data,text:"ن".repeat(641)};
+ assert.ok(!validateDocument(plain).some(i=>i.message.includes("640")));
+});
+test("url button sanitiser trims, never truncates label or invents values",()=>{
+ const doc=urlDoc("  "+"a".repeat(21)+"  ","  https://example.com  ");
+ const back=importFlow(JSON.parse(JSON.stringify(doc)))!;
+ const o=back.nodes.find(n=>n.data.kind==="message")!.data.options[0];
+ assert.equal(o.label,"a".repeat(21));
+ assert.equal(o.url,"https://example.com");
+ assert.equal(o.action,"website");
+ const empty=importFlow(JSON.parse(JSON.stringify(urlDoc("",""))))!.nodes.find(n=>n.data.kind==="message")!.data.options[0];
+ assert.equal(empty.label,"");assert.equal(empty.url,"");
+ const again=importFlow(JSON.parse(JSON.stringify(back)))!;
+ assert.deepEqual(again.nodes.find(n=>n.data.kind==="message")!.data.options,back.nodes.find(n=>n.data.kind==="message")!.data.options);
+});
+test("legacy pdf block loads unchanged and still blocks publish validation",()=>{
+ const doc=exampleFlow(),m=doc.nodes.find(n=>n.data.kind==="message")!;
+ m.data={...m.data,contentBlocks:[{id:"p1",type:"pdf",url:"https://example.com/a.pdf"}]};
+ const back=importFlow(JSON.parse(JSON.stringify(doc)))!;
+ const b=back.nodes.find(n=>n.data.kind==="message")!.data.contentBlocks[0];
+ assert.equal(b.type,"pdf");assert.equal(b.url,"https://example.com/a.pdf");
+ assert.ok(validateDocument(back).some(i=>i.severity==="error"&&i.message.includes("PDF")));
+});

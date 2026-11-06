@@ -7,7 +7,6 @@ import { getSupabase } from "../lib/supabase";
 const types: Array<{id:ContentBlock["type"];label:string;note:string;icon:typeof Type}>=[
   {id:"text",label:"نص",note:"رسالة نصية إضافية",icon:Type},
   {id:"image",label:"صورة",note:"صورة داخل التسلسل",icon:ImageIcon},
-  {id:"pdf",label:"PDF",note:"ملف PDF أو رابط مباشر",icon:FileText},
   {id:"delay",label:"انتظار",note:"فاصل زمني بين المحتويات",icon:Clock3},
   {id:"collection",label:"جمع بيانات",note:"اسم العميل، البريد أو الهاتف",icon:ClipboardList}
 ];
@@ -31,14 +30,6 @@ export default function MessageBlocksEditor({node}:{node:FlowNode}){
   };
   const upload=async(block:ContentBlock,file?:File)=>{
     if(!file)return;
-    if(block.type==="pdf"){
-      if(file.type!=="application/pdf"||file.size>350000){setStatus("ملف PDF المحلي يجب ألا يتجاوز 350KB. للملفات الأكبر استخدم رابط HTTPS.");return;}
-      const reader=new FileReader();
-      reader.onload=()=>{const url=String(reader.result||"");if(url.startsWith("data:application/pdf;base64,")){patch(block.id,{url});setStatus("حُفظ PDF داخل المسودة المحلية.");}};
-      reader.onerror=()=>setStatus("تعذر قراءة ملف PDF.");
-      reader.readAsDataURL(file);
-      return;
-    }
     if(!["image/jpeg","image/png","image/webp"].includes(file.type)){setStatus("صيغة غير مدعومة. اختر JPG أو PNG أو WebP فقط.");return;}
     if(file.size>5*1024*1024){setStatus("حجم الصورة أكبر من 5MB، اختر صورة أصغر.");return;}
     const url=URL.createObjectURL(file);
@@ -87,7 +78,7 @@ export default function MessageBlocksEditor({node}:{node:FlowNode}){
     </div>}
     <div className="space-y-3">
       {blocks.map((block,i)=>{
-        const def=types.find(t=>t.id===block.type)!;const Icon=def.icon;
+        const def=block.type==="pdf"?{id:"pdf" as const,label:"PDF (غير مدعوم)",note:"",icon:FileText}:types.find(t=>t.id===block.type)!;const Icon=def.icon;
         return <div key={block.id} className="rounded-xl border border-[#275443] bg-[#0F2E24] p-3" data-testid={"content-block-"+block.type}>
           <header className="mb-2 flex items-center gap-2"><Icon size={16} className="text-[#3DD189]"/><span className="flex-1 text-xs font-bold">{def.label}</span>
             <button aria-label="نقل للأعلى" title="نقل للأعلى" disabled={i===0} onClick={()=>reorder(i,-1)}><ArrowUp size={15}/></button>
@@ -100,11 +91,7 @@ export default function MessageBlocksEditor({node}:{node:FlowNode}){
             <label className={btn+" mt-2 "+(uploading?"cursor-not-allowed opacity-60":"cursor-pointer")}><ImageIcon size={15}/> {uploading===block.id?"جارٍ رفع الصورة...":"اختر صورة من الجهاز"}<input type="file" accept="image/jpeg,image/png,image/webp" className="hidden" disabled={!!uploading} onChange={e=>{void upload(block,e.target.files?.[0]);e.target.value="";}}/></label>
             {!!block.url&&<img alt="معاينة المكوّن" src={block.url} className="mt-2 max-h-40 w-full rounded-lg object-contain"/>}
           </>}
-          {block.type==="pdf"&&<>
-            <input className={input} dir="ltr" aria-label="رابط PDF" placeholder="https://example.com/document.pdf" value={block.url?.startsWith("data:")?"":block.url||""} onChange={e=>patch(block.id,{url:e.target.value})}/>
-            <label className={btn+" mt-2 cursor-pointer"}><FileText size={15}/> رفع PDF صغير<input type="file" accept="application/pdf,.pdf" className="hidden" onChange={e=>{void upload(block,e.target.files?.[0]);e.target.value="";}}/></label>
-            {!!block.url&&<p className="mt-2 text-xs text-[#3DD189]">ملف PDF مُضاف إلى المسودة</p>}
-          </>}
+          {block.type==="pdf"&&<p role="note" className="text-xs text-[#E5B54B]">لم يعد PDF مدعومًا. هذا المكوّن محفوظ للقراءة فقط ويمنع النشر؛ احذفه للمتابعة.</p>}
           {block.type==="delay"&&<div className="flex items-center gap-2"><input type="number" min={1} max={3600} className={input} aria-label="فاصل الانتظار بالثواني" value={block.seconds||3} onChange={e=>patch(block.id,{seconds:Math.max(1,Math.min(3600,Number(e.target.value)||1))})}/><span className="shrink-0 text-xs text-[#8B9E96]">ثانية</span></div>}
           {block.type==="collection"&&<>
             <input className={input} aria-label="سؤال جمع البيانات" placeholder="اكتب رقم هاتفك" value={block.text||""} onChange={e=>patch(block.id,{text:e.target.value})}/>
@@ -122,6 +109,6 @@ export default function MessageBlocksEditor({node}:{node:FlowNode}){
       <t.icon size={17} className="text-[#3DD189]"/><span><span className="block text-xs font-bold">{t.label}</span><span className="text-[11px] text-[#8B9E96]">{t.note}</span></span>
     </button>)}</div>
     {!!status&&<p role="status" className="mt-3 text-xs text-[#3DD189]">{status}</p>}
-    <p className="mt-3 text-[11px] text-[#8B9E96]">المرفقات والمعلومات موجودة في المسودة المحلية فقط؛ دعم إرسال الصور وPDF يعتمد على القناة وصلاحيات Meta بعد تفعيل الخادم.</p>
+    <p className="mt-3 text-[11px] text-[#8B9E96]">المرفقات والمعلومات موجودة في المسودة المحلية فقط؛ دعم إرسال الصور يعتمد على القناة وصلاحيات Meta بعد تفعيل الخادم.</p>
   </section>;
 }

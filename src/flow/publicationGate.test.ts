@@ -78,3 +78,19 @@ test("message:image counts only with FLOW_MEDIA_SEND_ENABLED; pdf stays refused;
  const api=readFileSync("supabase/functions/flow-publication/index.ts","utf8");
  assert.ok(api.includes(`new Set<FlowCapability>(["execution-engine","instagram","trigger:message","message:text","condition"])`));
 });
+test("website buttons: message:link capability required; 4 buttons or text over 640 never publishable",()=>{
+ const caps=new Set(["execution-engine","instagram","trigger:message","message:text","message:link"] as const);
+ const web=(n:number,text="تفضل")=>{
+  const doc=minimal();
+  doc.nodes[1].data.text=text;
+  doc.nodes[1].data.options=Array.from({length:n},(_,i)=>({id:"w"+i,label:"زر "+i,buttonType:"button" as const,action:"website" as const,url:"https://example.com/"+i}));
+  return doc;
+ };
+ assert.equal(auditFlowPublication(web(3),caps as any).canPublish,true);
+ const noLink=auditFlowPublication(web(1),new Set(["execution-engine","instagram","trigger:message","message:text"]));
+ assert.equal(noLink.canPublish,false);
+ assert.ok(noLink.issues.some(x=>x.capability==="message:link"));
+ assert.equal(auditFlowPublication(web(4),caps as any).canPublish,false);
+ assert.equal(auditFlowPublication(web(1,"ن".repeat(641)),caps as any).canPublish,false);
+ assert.equal(auditFlowPublication(web(1,"ن".repeat(640)),caps as any).canPublish,true);
+});

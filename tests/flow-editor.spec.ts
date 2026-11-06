@@ -107,19 +107,15 @@ test("a quick reply can jump to a second locally saved flow and run its preview"
   await expect(page.getByRole("combobox",{name:"اختيار التدفق"}).locator("option")).toHaveCount(2);
 });
 
-test("rich message content adds PDF and data collection blocks that survive preview",async({page})=>{
+test("rich message content adds data collection blocks that survive preview",async({page})=>{
   await page.goto("/milanochat/#/flows");
   await page.locator(".react-flow__node").nth(1).click();
   await expect(page.getByTestId("content-block-menu")).toBeVisible();
-  await page.getByTestId("content-block-menu").getByRole("button").filter({hasText:"PDF"}).click();
-  await expect(page.getByTestId("content-block-pdf")).toBeVisible();
-  await page.getByRole("textbox",{name:"رابط PDF"}).fill("https://example.com/sample.pdf");
-  await expect(page.getByTestId("content-block-menu")).toBeVisible();
+  await expect(page.getByTestId("content-block-menu").getByRole("button").filter({hasText:"PDF"})).toHaveCount(0);
   await page.getByTestId("content-block-menu").getByRole("button").filter({hasText:"جمع بيانات"}).click();
   await page.getByRole("textbox",{name:"سؤال جمع البيانات"}).fill("شنو بريدك الإلكتروني؟");
   await page.getByRole("combobox",{name:"نوع البيانات"}).selectOption("email");
   await page.getByRole("button",{name:"تجربة"}).click();
-  await expect(page.getByText("ملف PDF مرفق")).toBeVisible();
   await expect(page.getByText("شنو بريدك الإلكتروني؟")).toBeVisible();
   await page.getByRole("textbox",{name:"إجابة العميل"}).fill("customer@example.com");
   await page.getByRole("textbox",{name:"إجابة العميل"}).press("Enter");
@@ -609,23 +605,21 @@ test("collection controls genuinely update the canvas and do not ask twice for t
  await expect(answer).toHaveCount(0);
 });
 
-test("image, pdf and delay blocks can be added, edited, reordered and removed",async({page})=>{
+test("image and delay blocks can be added, edited, reordered and removed",async({page})=>{
  await page.goto("/milanochat/#/flows");
  await page.locator(".react-flow__node").nth(1).click();
  const editor=page.getByTestId("step-settings-panel");
  const menu=editor.getByTestId("content-block-menu");
  await menu.getByRole("button").filter({hasText:"صورة"}).click();
  await editor.getByTestId("content-block-image").getByRole("textbox",{name:"رابط صورة المكوّن"}).fill("https://example.com/photo.jpg");
- await menu.getByRole("button").filter({hasText:"PDF"}).click();
- await editor.getByTestId("content-block-pdf").getByRole("textbox",{name:"رابط PDF"}).fill("https://example.com/info.pdf");
  await menu.getByRole("button").filter({hasText:"انتظار"}).click();
  await editor.getByTestId("content-block-delay").getByRole("spinbutton",{name:"فاصل الانتظار بالثواني"}).fill("12");
- await expect(page.locator(".react-flow__node").nth(1)).toContainText("3 مكونات إضافية");
+ await expect(page.locator(".react-flow__node").nth(1)).toContainText("2 مكونات إضافية");
  await editor.getByTestId("content-block-delay").getByRole("button",{name:"نقل للأعلى"}).click();
- await expect(editor.locator('[data-testid^="content-block-"]').nth(1)).toHaveAttribute("data-testid","content-block-delay");
+ await expect(editor.locator('[data-testid^="content-block-"]').nth(0)).toHaveAttribute("data-testid","content-block-delay");
  await editor.getByTestId("content-block-delay").getByRole("button",{name:"حذف المكوّن"}).click();
  await expect(editor.getByTestId("content-block-delay")).toHaveCount(0);
- await expect(page.locator(".react-flow__node").nth(1)).toContainText("2 مكونات إضافية");
+ await expect(page.locator(".react-flow__node").nth(1)).toContainText("1 مكونات إضافية");
 });
 
 test("always-visible content choices have no dead Add Content button",async({page})=>{
@@ -633,7 +627,44 @@ test("always-visible content choices have no dead Add Content button",async({pag
  await page.locator(".react-flow__node").nth(1).click();
  const panel=page.getByTestId("step-settings-panel");
  await expect(panel.getByRole("button",{name:"إضافة محتوى"})).toHaveCount(0);
- await expect(panel.getByTestId("content-block-menu").getByRole("button")).toHaveCount(5);
+ await expect(panel.getByTestId("content-block-menu").getByRole("button")).toHaveCount(4);
+});
+
+test("url button can be added, edited with a 20 character limit, and removed",async({page})=>{
+ await page.goto("/milanochat/#/flows");
+ await page.locator(".react-flow__node").nth(1).click();
+ const panel=page.getByTestId("step-settings-panel");
+ await panel.getByRole("button",{name:"رابط موقع جديد"}).click();
+ const editor=panel.getByTestId("button-action-editor");
+ const label=editor.getByRole("textbox",{name:"عنوان الزر"});
+ await expect(label).toHaveAttribute("placeholder","زيارة الموقع");
+ await expect(label).toHaveAttribute("maxlength","20");
+ await label.fill("ا".repeat(25));
+ await expect(label).toHaveValue("ا".repeat(20));
+ await expect(editor.getByTestId("url-button-counter")).toHaveText("20/20");
+ await label.fill("زيارة الموقع");
+ await expect(editor.getByTestId("url-button-counter")).toHaveText("12/20");
+ await editor.getByRole("textbox",{name:"رابط الموقع"}).fill("https://example.com/shop");
+ await expect(editor.getByRole("textbox",{name:"رابط الموقع"})).toHaveValue("https://example.com/shop");
+ await editor.getByRole("button",{name:"حذف الزر"}).click();
+ await expect(panel.getByTestId("button-action-editor")).toHaveCount(0);
+});
+
+test("legacy pdf block is read-only with an unsupported note and can be deleted",async({page})=>{
+ await page.addInitScript(()=>{
+  const n=(id:string,kind:string,y:number,extra:Record<string,unknown>={})=>({id,type:"flowNode",position:{x:0,y},data:{kind,title:kind,text:"",...extra}});
+  localStorage.setItem("social_flow_reactflow_v3",JSON.stringify({version:3,name:"legacy",nodes:[
+   n("s","trigger",0,{keywords:"hi",triggerMode:"keyword",platform:"instagram"}),
+   n("m","message",200,{text:"مرحبا",contentBlocks:[{id:"p1",type:"pdf",url:"https://example.com/a.pdf"}]})],
+   edges:[{id:"e1",source:"s",target:"m",sourceHandle:"next",targetHandle:"in"}]}));
+ });
+ await page.goto("/milanochat/#/flows");
+ await page.locator(".react-flow__node").nth(1).click();
+ const block=page.getByTestId("step-settings-panel").getByTestId("content-block-pdf");
+ await expect(block).toContainText("لم يعد PDF مدعومًا");
+ await expect(block.getByRole("textbox")).toHaveCount(0);
+ await block.getByRole("button",{name:"حذف المكوّن"}).click();
+ await expect(page.getByTestId("content-block-pdf")).toHaveCount(0);
 });
 
 test("typed question with reserved live field name shows a live-engine warning in the findings panel",async({page})=>{

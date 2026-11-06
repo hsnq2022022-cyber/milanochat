@@ -4,6 +4,7 @@ import {makeNode,edgeFor} from "./model.ts";
 import type {FlowDocument,FlowNode} from "./model.ts";
 import {createRuntimeState,planRuntimeTransition} from "./runtimePlan.ts";
 import {authorizeFlowAI,planFlowMetric} from "./aiMetricsGate.ts";
+import {planUntilWait} from "./runtimeChain.ts";
 
 const context={eventKey:"signed-event",nowMs:1793200000000,seed:7};
 const connect=(source:FlowNode,target:FlowNode,port="next")=>
@@ -100,6 +101,34 @@ test("Messenger HTTPS website buttons are a declared outbound effect, not a fake
  const reject=planRuntimeTransition(d,createRuntimeState(d,"web",1),context);
  assert.equal(reject.state.status,"blocked");
  assert.deepEqual(reject.effects,[]);
+});
+test("Instagram website buttons: message effect carries label/url in order, then continues",()=>{
+ const web=(n:number,text="تفضل بزيارة متجرنا",label=(i:number)=>"زر "+i)=>{
+  const start=trigger(),card=makeNode("message",{x:0,y:40},{text,platform:"instagram",
+   options:Array.from({length:n},(_,i)=>({id:"w"+i,label:label(i),buttonType:"button" as const,
+    action:"website" as const,url:"https://example.org/p"+i}))});
+  const after=makeNode("message",{x:0,y:80},{text:"شكرًا",options:[]});
+  const d=graph([start,card,after],[connect(start,card),connect(card,after)]);
+  return planUntilWait(d,createRuntimeState(d,"ig-web",1),context);
+ };
+ const ok=web(3);
+ assert.equal(ok.error,undefined);
+ assert.deepEqual(ok.effects.map(e=>e.kind),["message","message"]);
+ assert.deepEqual((ok.effects[0] as {websiteButtons:unknown}).websiteButtons,
+  [0,1,2].map(i=>({label:"زر "+i,url:"https://example.org/p"+i})));
+ assert.equal((ok.effects[0] as {text:string}).text,"تفضل بزيارة متجرنا");
+ assert.ok(!("websiteButtons" in ok.effects[1]));
+ assert.equal(web(4).effects.length,0);
+ assert.equal(web(4).state.status,"blocked");
+ assert.equal(web(1,"ن".repeat(640)).effects.length,2);
+ assert.equal(web(1,"ن".repeat(641)).effects.length,0);
+ assert.equal(web(1,"x",()=>"😀".repeat(20)).effects.length,2);
+ assert.equal(web(1,"x",()=>"a".repeat(21)).effects.length,0);
+ // Website + step buttons together are not representable: refused, never dropped.
+ const start=trigger(),mixed=makeNode("message",{x:0,y:40},{text:"x",platform:"instagram",
+  options:[{id:"w",label:"site",buttonType:"button",action:"website",url:"https://example.org"},{id:"s",label:"step"}]});
+ const md=graph([start,mixed],[connect(start,mixed)]);
+ assert.equal(planRuntimeTransition(md,createRuntimeState(md,"mix",1),context).state.status,"blocked");
 });
 test("too many rich choices fail closed before producing Outbox effects",()=>{
  const start=trigger(),q=makeNode("question",{x:0,y:40},{

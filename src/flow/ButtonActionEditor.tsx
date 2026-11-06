@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { ArrowRight, Plus, Trash2, Link2, Globe2, Bot, Zap, GitBranch, Shuffle, Copy } from "lucide-react";
-import { canConnect, edgeFor, makeNode } from "./model";
+import { canConnect, edgeFor, makeNode, URL_BUTTON_LABEL_MAX, URL_BUTTON_URL_MAX } from "./model";
 import type { Choice, ButtonAction, FlowNode, FlowData, Kind } from "./model";
 import { useFlowStore } from "./store";
 import { cardSize, findOpenPosition } from "./layout";
@@ -34,6 +34,12 @@ export default function ButtonActionEditor({node}:{node:FlowNode}){
     if(d.options.length>=10)return;
     const id=crypto.randomUUID();
     persist([...d.options,{id,label:type==="quick_reply"?"رد سريع جديد":"زر جديد",buttonType:type,action:"step"}]);
+    setActive(id);
+  };
+  const addUrl=()=>{
+    if(d.options.length>=10)return;
+    const id=crypto.randomUUID();
+    persist([...d.options,{id,label:"",buttonType:"button",action:"website",url:""}]);
     setActive(id);
   };
   const setAction=(choice:Choice,action:ButtonAction)=>{
@@ -97,6 +103,7 @@ export default function ButtonActionEditor({node}:{node:FlowNode}){
     </div>
     <div className="mt-3 flex flex-wrap gap-2">
       <button className={btn} disabled={d.options.length>=10} onClick={()=>add("button")}><Plus size={14}/> إضافة زر</button>
+      <button className={btn} disabled={d.options.length>=10} onClick={()=>addUrl()}><Link2 size={14}/> رابط موقع جديد</button>
       <button className={btn} disabled={d.options.length>=10} onClick={()=>add("quick_reply")}><Plus size={14}/> إضافة رد سريع</button>
     </div>
     {option&&<div className="mt-4 rounded-xl border border-[#3DD189]/50 bg-[#0F2E24] p-3" data-testid="button-action-editor">
@@ -105,8 +112,9 @@ export default function ButtonActionEditor({node}:{node:FlowNode}){
         <button className={btn} onClick={()=>setActive(null)}>تم</button>
       </div>
       <label className="mb-1 block text-xs">عنوان الزر</label>
-      <input className={input} aria-label="عنوان الزر" maxLength={60} value={option.label}
+      <input className={input} aria-label="عنوان الزر" maxLength={option.action==="website"?URL_BUTTON_LABEL_MAX:60} placeholder={option.action==="website"?"زيارة الموقع":undefined} value={option.label}
         onChange={e=>patch(option.id,{label:e.target.value})}/>
+      {option.action==="website"&&<p data-testid="url-button-counter" dir="ltr" className="mt-1 text-[11px] text-[#8B9E96]">{[...option.label].length}/{URL_BUTTON_LABEL_MAX}</p>}
       <label className="mb-1 mt-3 block text-xs">نوع الزر</label>
       <select className={input} value={option.buttonType||"button"}
         onChange={e=>patch(option.id,{buttonType:e.target.value as Choice["buttonType"]})}>
@@ -136,9 +144,10 @@ export default function ButtonActionEditor({node}:{node:FlowNode}){
         <p className="mt-2 text-[11px] text-[#E5B54B]">يمكنك إنشاء تدفقات إضافية من قائمة التدفقات أعلى المحرر. الربط يعمل في المعاينة المحلية فقط.</p>
       </>}
       {option.action==="website"&&<>
-        <label className="mb-1 mt-3 block text-xs">الرابط الذي سيفتحه الزر</label>
-        <input dir="ltr" className={input} placeholder="https://example.com" aria-label="رابط الموقع" value={option.url||""}
+        <label className="mb-1 mt-3 block text-xs">رابط الزر (HTTPS فقط)</label>
+        <input dir="ltr" className={input} placeholder="https://example.com" aria-label="رابط الموقع" maxLength={URL_BUTTON_URL_MAX} value={option.url||""}
           onChange={e=>patch(option.id,{url:e.target.value})}/>
+        <p className="mt-1 text-[11px] text-[#8B9E96]">يُرسل كزر رابط حقيقي تحت نص الرسالة، ويشترط وجود نص أساسي للرسالة.</p>
       </>}
       <button className="mt-4 flex items-center gap-2 text-xs text-red-300" onClick={()=>{
         persist(d.options.filter(o=>o.id!==option.id),[option.id]);setActive(null);

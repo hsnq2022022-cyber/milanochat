@@ -1272,3 +1272,59 @@ test("image effects: flag ON, a text+image plan is committed in order with the {
  const bad=await run({...env,SUPABASE_URL:"https://other9999.supabase.co"});
  assert.equal(names(bad.calls).includes("flow_begin_durable_run_superseding"),false,"invalid url: nothing committed");
 });
+
+// ---- Website buttons (Instagram button template, FLOW_RICH_BUTTONS_ENABLED, default OFF).
+const webOpt=(i:number,over:Record<string,unknown>={})=>({id:"w"+i,label:"زر "+i,buttonType:"button",
+ action:"website",url:"https://example.com/p"+i,targetFlowId:"",...over});
+const webDoc=(opts:unknown[],text="تفضل بزيارة متجرنا",over:Record<string,unknown>={})=>({version:3,name:"web",
+ nodes:[T,{id:"card",data:{kind:"message",platform:"instagram",text,image:"",contentBlocks:[],options:opts,...over}},
+  txt("after","شكراً")],edges:[E("start","card"),E("card","after")]});
+const RICH_ON={FLOW_RICH_BUTTONS_ENABLED:"true"};
+test("website-button whitelist: flag OFF (or no Deno) refuses exactly as before",()=>{
+ for(const env of [{},{FLOW_RICH_BUTTONS_ENABLED:"false"},{FLOW_RICH_BUTTONS_ENABLED:"1"}])
+  withMediaEnv(env as Record<string,string>,()=>{
+   assert.equal(supportedDurableDocument(webDoc([webOpt(0)])),false);
+   assert.equal(durableCandidateKind(webDoc([webOpt(0)])),"unsupported");
+   assert.equal(supportedDurableDocument(chainDoc),true,"other graphs unchanged");
+  });
+ const old=(globalThis as any).Deno;delete (globalThis as any).Deno;
+ try{assert.equal(supportedDurableDocument(webDoc([webOpt(0)])),false);}finally{(globalThis as any).Deno=old;}
+});
+test("website-button whitelist: flag ON accepts 1..3 valid Instagram website buttons only",()=>withMediaEnv(RICH_ON,()=>{
+ assert.equal(supportedDurableDocument(webDoc([webOpt(0)])),true);
+ assert.equal(supportedDurableDocument(webDoc([webOpt(0),webOpt(1),webOpt(2)])),true);
+ assert.equal(supportedDurableDocument(webDoc([webOpt(0)],"a".repeat(640))),true);
+ // Existing durable text rule (<= 1000 UTF-8 bytes) still applies on top of 640.
+ assert.equal(supportedDurableDocument(webDoc([webOpt(0)],"ن".repeat(501))),false);
+ assert.equal(supportedDurableDocument(webDoc([webOpt(0,{label:"a".repeat(20)})])),true);
+ // Needs the buttons sender: readiness/activation require FLOW_RICH_BUTTONS_ENABLED.
+ assert.equal(durableCandidateKind(webDoc([webOpt(0)])),"buttons");
+ assert.deepEqual(durableRuntimeNeeds(webDoc([webOpt(0)]) as any),{buttons:true,scheduler:false});
+ const bad:Array<[string,unknown]>=[
+  ["4 buttons",webDoc([0,1,2,3].map(i=>webOpt(i)))],
+  ["title 21",webDoc([webOpt(0,{label:"a".repeat(21)})])],
+  ["text 641",webDoc([webOpt(0)],"a".repeat(641))],
+  ["http",webDoc([webOpt(0,{url:"http://example.com"})])],
+  ["credentials",webDoc([webOpt(0,{url:"https://user:pass@example.com"})])],
+  ["quick_reply type",webDoc([webOpt(0,{buttonType:"quick_reply"})])],
+  ["website + step mixed",webDoc([webOpt(0),{id:"s",label:"step"}])],
+  ["messenger node",webDoc([webOpt(0)],undefined,{platform:"messenger"})],
+  ["duplicate ids",webDoc([webOpt(0),webOpt(0)])],
+ ];
+ for(const [why,d] of bad)assert.equal(supportedDurableDocument(d),false,why);
+ // The website message leaves through "next" only (no button ports).
+ const withPort={...webDoc([webOpt(0)]),edges:[E("start","card"),E("card","after","w0")]};
+ assert.equal(supportedDurableDocument(withPort),false);
+}));
+test("website buttons: planner emits label/url, safePlan commits only while the flag is on",()=>{
+ const d=webDoc([webOpt(0),webOpt(1)]);
+ const plan=planUntilWait(d as any,createRuntimeState(d as any,"web",1),{eventKey:"evt",nowMs:1,seed:seedFromEventKey("evt")});
+ assert.equal(plan.error,undefined);
+ assert.deepEqual(plan.effects.map(e=>e.kind),["message","message"]);
+ assert.deepEqual((plan.effects[0] as any).websiteButtons,[
+  {label:"زر 0",url:"https://example.com/p0"},{label:"زر 1",url:"https://example.com/p1"}]);
+ withMediaEnv(RICH_ON,()=>assert.equal(safePlan(plan),true));
+ withMediaEnv({},()=>assert.equal(safePlan(plan),false));
+ const tooMany={...plan,effects:[{...plan.effects[0],websiteButtons:[0,1,2,3].map(i=>({label:"x",url:"https://e.example/"+i}))},plan.effects[1]]};
+ withMediaEnv(RICH_ON,()=>assert.equal(safePlan(tooMany as any),false));
+});

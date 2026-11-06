@@ -205,7 +205,16 @@ export function planRuntimeTransition(
           return { state: proceed(state, nextNode(doc, node, "next")), effects: media.effects };
         }
         const webButtons=data.options.length>0 && data.options.every(o=>o.action==="website" && o.buttonType==="button");
-        if(webButtons){
+        // Instagram: button template (labels <= 20 code points, text <= 640);
+        // Messenger: generic template (unchanged rules below).
+        const igWeb=webButtons && data.platform==="instagram";
+        if(igWeb){
+          if(data.options.length>3 ||
+             data.options.some(o=>!o.label.trim() || [...o.label].length>20 ||
+               typeof o.url!=="string" || o.url.length>2000 ||
+               !/^https:\/\/[^/@?#]+/.test(o.url)))
+            return fail(state,"invalid Instagram website buttons");
+        }else if(webButtons){
           if(data.platform!=="messenger" || data.options.length>3 ||
              data.options.some(o=>!o.label.trim() || o.label.length>20 ||
                typeof o.url!=="string" || o.url.length>2048 ||
@@ -217,7 +226,7 @@ export function planRuntimeTransition(
         const text = safeValue(data.text).trim();
         if (!text) return fail(state, "empty message");
         if(webButtons){
-          if(text.length>80)return fail(state,"website card title too long");
+          if(igWeb ? [...text].length>640 : text.length>80)return fail(state,"website card title too long");
           const effect:PlannedEffect={kind:"message",idempotencyKey:key(state,input,node.id),
             nodeId:node.id,text,websiteButtons:data.options.map(o=>({label:o.label,url:o.url!}))};
           return {state:proceed(state,nextNode(doc,node,"next")),effects:[effect]};

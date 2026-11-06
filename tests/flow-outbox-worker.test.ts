@@ -544,3 +544,100 @@ test("worker wiring: finish maps media_rejected to 'rejected' (fallback uncertai
  const eo=readFileSync("supabase/functions/flow-outbox-worker/executeOnce.ts","utf8");
  assert.match(eo,/confirm\(status:"confirmed"\|"uncertain",providerId:string\|null\):Promise<boolean>;/,"executeOnce unchanged");
 });
+
+/* ---- Instagram website buttons: button template (flowRichActions.ts) ---- */
+import {instagramButtonTemplateProblem,instagramWebsiteButtons,messengerWebsiteButtons}
+ from "../supabase/functions/flow-outbox-worker/flowRichActions.ts";
+function igRecorder(status=200,body:unknown={message_id:"mid-ig-btn"}){
+ const calls:Array<{url:string;body:Record<string,unknown>}>=[];
+ const fake=(async(url:string,init:RequestInit)=>{
+  calls.push({url,body:JSON.parse(String(init.body))});
+  return new Response(JSON.stringify(body),{status});
+ }) as typeof fetch;
+ return {calls,fake};
+}
+const igBtn=(i:number)=>({label:"زر "+i,url:"https://example.com/p"+i});
+const igReq={platform:"instagram" as const,token:"IG-token",externalId:"",recipient:"123456",
+ text:"تفضل بزيارة متجرنا",websiteButtons:[igBtn(0),igBtn(1)]};
+test("Instagram website buttons are sent as the exact Meta button template",async()=>{
+ const r=igRecorder();
+ assert.equal(await sendProviderMessage(igReq,r.fake),"mid-ig-btn");
+ assert.equal(r.calls.length,1);
+ assert.equal(r.calls[0].url,"https://graph.instagram.com/v21.0/me/messages");
+ assert.deepEqual(r.calls[0].body,{recipient:{id:"123456"},message:{attachment:{type:"template",
+  payload:{template_type:"button",text:"تفضل بزيارة متجرنا",buttons:[
+   {type:"web_url",url:"https://example.com/p0",title:"زر 0"},
+   {type:"web_url",url:"https://example.com/p1",title:"زر 1"}]}}}});
+ assert.equal(JSON.stringify(r.calls[0].body),
+  '{"recipient":{"id":"123456"},"message":{"attachment":{"type":"template","payload":{"template_type":"button","text":"تفضل بزيارة متجرنا","buttons":[{"type":"web_url","url":"https://example.com/p0","title":"زر 0"},{"type":"web_url","url":"https://example.com/p1","title":"زر 1"}]}}}}');
+ // Graph API (page token) route: same message, plus access_token as before.
+ const g=igRecorder();
+ await sendProviderMessage({...igReq,token:"EAAtoken",externalId:"1784000001"},g.fake);
+ assert.equal(g.calls[0].url,"https://graph.facebook.com/v21.0/1784000001/messages");
+ assert.deepEqual(g.calls[0].body.message,r.calls[0].body.message);
+ assert.equal(g.calls[0].body.access_token,"EAAtoken");
+});
+test("Instagram button template limits: 3/4 buttons, title 20/21, text 640/641, url rules (no request)",async()=>{
+ const P=instagramButtonTemplateProblem;
+ assert.equal(P("t",[igBtn(0),igBtn(1),igBtn(2)]),null);
+ assert.equal(P("t",[igBtn(0),igBtn(1),igBtn(2),igBtn(3)]),"ig_buttons_count_invalid");
+ assert.equal(P("t",[]),"ig_buttons_count_invalid");
+ assert.equal(P("t",[{label:"a".repeat(20),url:"https://x.example"}]),null);
+ assert.equal(P("t",[{label:"😀".repeat(20),url:"https://x.example"}]),null);
+ assert.equal(P("t",[{label:"a".repeat(21),url:"https://x.example"}]),"ig_button_title_invalid");
+ assert.equal(P("t",[{label:"  ",url:"https://x.example"}]),"ig_button_title_invalid");
+ assert.equal(P("ن".repeat(640),[igBtn(0)]),null);
+ assert.equal(P("ن".repeat(641),[igBtn(0)]),"ig_buttons_text_too_long");
+ assert.equal(P(" ",[igBtn(0)]),"ig_buttons_text_invalid");
+ for(const url of ["http://example.com","https://user:pass@example.com","https://u@example.com",
+   "javascript:alert(1)","https://localhost/a","https://exa mple.com","not a url",""])
+  assert.equal(P("t",[{label:"site",url}]),"ig_button_url_invalid",url);
+ const r=igRecorder();
+ for(const bad of [
+  {...igReq,websiteButtons:[igBtn(0),igBtn(1),igBtn(2),igBtn(3)]},
+  {...igReq,websiteButtons:[{label:"a".repeat(21),url:"https://x.example"}]},
+  {...igReq,text:"ن".repeat(641)},
+  {...igReq,websiteButtons:[{label:"site",url:"http://example.com"}]},
+  {...igReq,websiteButtons:[{label:"site",url:"https://user:pass@example.com"}]}])
+  await assert.rejects(()=>sendProviderMessage(bad,r.fake),/Invalid Instagram button template/);
+ assert.equal(r.calls.length,0,"no request for an unrepresentable template");
+ const ok=igRecorder();
+ await sendProviderMessage({...igReq,text:"ن".repeat(640),websiteButtons:[igBtn(0),igBtn(1),igBtn(2)]},ok.fake);
+ assert.equal((ok.calls[0].body as any).message.attachment.payload.buttons.length,3);
+ assert.throws(()=>instagramWebsiteButtons("t",[igBtn(0),igBtn(1),igBtn(2),igBtn(3)]),/ig_buttons_count_invalid/);
+});
+test("website buttons with quick replies stay refused; WhatsApp never gets template buttons",async()=>{
+ const r=igRecorder();
+ await assert.rejects(()=>sendProviderMessage({...igReq,quickReplies:[{id:"a",label:"A"}]},r.fake),/Mixed rich button formats/);
+ await assert.rejects(()=>sendProviderMessage({...igReq,platform:"whatsapp",token:"wa",externalId:"100001",
+  recipient:"9647712345678"},r.fake),/WhatsApp rich buttons/);
+ assert.equal(r.calls.length,0);
+});
+test("Messenger website payload unchanged (generic template, page endpoint)",async()=>{
+ const r=igRecorder();
+ await sendProviderMessage({platform:"facebook",token:"EAApage",externalId:"",recipient:"123456",
+  text:"Choose",websiteButtons:[{label:"موقعنا",url:"https://example.com/p"}]},r.fake);
+ assert.equal(r.calls[0].url,"https://graph.facebook.com/v21.0/me/messages");
+ assert.equal(JSON.stringify(r.calls[0].body),
+  '{"recipient":{"id":"123456"},"message":{"attachment":{"type":"template","payload":{"template_type":"generic","elements":[{"title":"Choose","buttons":[{"type":"web_url","title":"موقعنا","url":"https://example.com/p"}]}]}}},"access_token":"EAApage"}');
+ assert.deepEqual(messengerWebsiteButtons("Choose",[{label:"موقعنا",url:"https://example.com/p"}]),
+  (r.calls[0].body as any).message);
+});
+test("Meta errors on a button template follow the text path: uncertain, never resent",async()=>{
+ for(const status of [400,500,429]){
+  const r=igRecorder(status,{error:{code:100}});
+  let sends=0;
+  const res=await executeOnce({reserve:async()=>true,
+   send:()=>{sends++;return sendProviderMessage(igReq,r.fake);},
+   confirm:async()=>true,persistAndBill:async()=>true});
+  assert.equal(res,"uncertain",String(status));
+  assert.equal(sends,1);assert.equal(r.calls.length,1);
+ }
+});
+test("worker gates Instagram website buttons on FLOW_RICH_BUTTONS_ENABLED and pre-validates before reserving",()=>{
+ const code=readFileSync("supabase/functions/flow-outbox-worker/index.ts","utf8");
+ assert.match(code,/if\(websiteButtons && \(env\("FLOW_RICH_BUTTONS_ENABLED"\)!=="true" \|\|\n\s+!\["facebook","instagram"\]\.includes\(account\.platform\)\)\)\{\n\s+report\("blocked"\);continue;/);
+ const gate=code.indexOf("instagramButtonTemplateProblem(messageText,websiteButtons)");
+ assert.ok(gate>0&&gate<code.indexOf("const res=await executeOnce({"),"validated before reservation");
+ assert.match(code,/report\(problem\);await skip\("ineligible","invalid"\);continue;/);
+});

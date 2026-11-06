@@ -216,3 +216,21 @@ test("activation guard requires message:image and FLOW_MEDIA_SEND_ENABLED exactl
  assert.match(after,/new Set<FlowCapability>\(\["execution-engine","instagram","trigger:message","message:text","condition"\]\)/);
  assert.match(after.slice(0,200),/simpleMessageFromDocument\(publication\.document,scope\.platform\)===null/,"V2 path still refuses image documents first");
 });
+test("Instagram website-button graphs are a buttons candidate: ready only with FLOW_RICH_BUTTONS_ENABLED",async()=>{
+ const {durableCandidateKind}=await import("../supabase/functions/milan-api/flowDurableIngress.ts");
+ const doc={version:3,nodes:[{id:"start",data:{kind:"trigger",platform:"instagram",triggerMode:"message"}},
+  {id:"card",data:{kind:"message",platform:"instagram",text:"تفضل",image:"",contentBlocks:[],
+   options:[{id:"w",label:"موقعنا",buttonType:"button",action:"website",url:"https://example.com"}]}},
+  {id:"after",data:{kind:"message",text:"شكراً",image:"",contentBlocks:[],options:[]}}],
+  edges:[{source:"start",target:"card",sourceHandle:"next"},{source:"card",target:"after",sourceHandle:"next"}]};
+ const old=(globalThis as any).Deno;
+ try{
+  (globalThis as any).Deno={env:{get:(k:string)=>k==="FLOW_RICH_BUTTONS_ENABLED"?"true":undefined}};
+  const kind=durableCandidateKind(doc);
+  assert.equal(kind,"buttons");
+  assert.equal(evaluateFlowReadiness({...input,candidateKind:kind}).configured,true);
+  assert.equal(evaluateFlowReadiness({...input,candidateKind:kind,richButtonsEnabled:false}).configured,false);
+  (globalThis as any).Deno={env:{get:()=>undefined}};
+  assert.equal(durableCandidateKind(doc),"unsupported","flag OFF: existing refusal");
+ }finally{(globalThis as any).Deno=old;}
+});

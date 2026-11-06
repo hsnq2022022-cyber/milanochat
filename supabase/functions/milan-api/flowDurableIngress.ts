@@ -12,6 +12,7 @@ import {simpleMessageFromDocument} from "./flowPrepareMessage.ts";
 import {durableAnswerMode,normalizeDurableAnswer,reaskText,type DurableAnswerMode}
  from "./flowDurableAnswer.ts";
 import {isAllowedFlowImageUrl} from "../flow-outbox-worker/mediaPolicy.ts";
+import {instagramButtonTemplateProblem} from "../flow-outbox-worker/flowRichActions.ts";
 
 type RecordValue=Record<string,unknown>;
 const record=(v:unknown):v is RecordValue=>!!v&&typeof v==="object"&&!Array.isArray(v);
@@ -57,6 +58,26 @@ const imageMessage=(d:RecordValue)=>{
  }
  return images>=1;
 };
+/**
+ * FLOW_RICH_BUTTONS_ENABLED (default OFF), read fail-closed like the media
+ * flag. When ON, an Instagram message whose options are ONLY website buttons
+ * (1..3, label <= 20, https without credentials, text <= 640) is whitelisted;
+ * the planner emits a "message" effect with websiteButtons and the Outbox
+ * worker sends it as an Instagram button template. OFF: refused as before.
+ */
+const richButtonsEnabled=()=>{
+ try{return Deno.env.get("FLOW_RICH_BUTTONS_ENABLED")==="true";}catch{return false;}
+};
+const websiteMessage=(d:RecordValue)=>{
+ const opts=d.options;
+ if(!richButtonsEnabled()||d.platform!=="instagram"||typeof d.text!=="string"||
+    !Array.isArray(opts)||opts.length<1)return false;
+ if(!opts.every(o=>record(o)&&safeId(o.id)&&o.action==="website"&&o.buttonType==="button"&&
+    (o.targetFlowId===undefined||o.targetFlowId==="")))return false;
+ if(new Set(opts.map(o=>(o as RecordValue).id)).size!==opts.length)return false;
+ return instagramButtonTemplateProblem(d.text.trim(),
+  (opts as RecordValue[]).map(o=>({label:o.label,url:o.url})))===null;
+};
 /** Run variable names usable by set_field/condition. "message" (the inbound text) is never allowed. */
 const fieldOk=(f:unknown):f is string=>typeof f==="string"&&
  /^[a-zA-Z_][a-zA-Z0-9_]{0,63}$/.test(f)&&!f.startsWith("__")&&
@@ -98,6 +119,8 @@ function durablePorts(d:RecordValue):{ports:string[];required:string[]}|null{
    // Image message (flag ON): no buttons, a single "next" port.
    if(!plain(d))return imageMessage(d)&&d.options.length===0?{ports:["next"],required:[]}:null;
    if(d.options.length===0)return {ports:["next"],required:[]};
+   // Website buttons leave the flow: the run continues through "next".
+   if(websiteMessage(d))return {ports:["next"],required:[]};
    if(!stepButtons(d.options,1))return null;
    const ids=(d.options as RecordValue[]).map(o=>o.id as string);
    return {ports:ids,required:ids};
@@ -295,6 +318,10 @@ export const liveEffectKinds=():string[]=>
  */
 const imageEffectOk=(e:ChainPlan["effects"][number])=>e.kind!=="message_image"||
  (safeId(e.nodeId)&&isAllowedFlowImageUrl(e.url,supabaseHost()));
+/** Website buttons are committed only while FLOW_RICH_BUTTONS_ENABLED is on and representable on Instagram. */
+const websiteEffectOk=(e:ChainPlan["effects"][number])=>!("websiteButtons" in e)||
+ (e.kind==="message"&&richButtonsEnabled()&&
+  instagramButtonTemplateProblem(e.text,e.websiteButtons)===null);
 /**
  * A handoff ends the automated flow: it must be the LAST effect and the run
  * must end in status "handoff" (and "handoff" only with that effect).
@@ -305,7 +332,7 @@ export const safePlan=(plan:ChainPlan)=>{
  ["completed","sleeping","awaiting_input","handoff"].includes(plan.state.status)&&
  plan.effects.length>=1&&plan.effects.length<=MAX_CHAIN_EFFECTS&&
  plan.effects.every((e,i)=>e.seq===i&&
-  kinds.includes(e.kind)&&!("source" in e)&&imageEffectOk(e)&&
+  kinds.includes(e.kind)&&!("source" in e)&&imageEffectOk(e)&&websiteEffectOk(e)&&
   (e.kind!=="handoff"||i===plan.effects.length-1))&&
  (plan.state.status==="handoff")===(plan.effects[plan.effects.length-1].kind==="handoff");
 };
