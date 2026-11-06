@@ -8,11 +8,21 @@
  */
 @layer theme, base, components, utilities;
 
+/* Custom vintage Arabic display face ("عام الحرف اليدوية"). Defining the family is global but harmless;
+   it is only APPLIED through --fs-display below, i.e. inside .flow-skin. Vite prepends the app base to /fonts/. */
+@font-face{
+  font-family:"Handicrafts";
+  src:url("/fonts/alfont_com_TheYearofHandicrafts-SemiBold.otf.ttf") format("truetype");
+  font-weight:100 900;   /* single weight file: avoid faux-bold on headings */
+  font-style:normal;
+  font-display:swap;
+}
+
 .flow-skin{
   --fs-bg:#061A14; --fs-card:#0B241C; --fs-field:#0F2E24; --fs-line:#173D30;
   --fs-brand:#3DD189; --fs-text:#FFFFFF; --fs-muted:#8B9E96; --fs-gold:#E5B54B; --fs-danger:#F45B69;
   --fs-ease:cubic-bezier(.2,.8,.2,1);
-  --fs-display:"Lalezar","Aref Ruqaa",serif;
+  --fs-display:"Handicrafts","Lalezar","Aref Ruqaa",serif;
   --fs-ui:"Tajawal",system-ui,sans-serif;
   background:var(--fs-bg);color:var(--fs-text);font-family:var(--fs-ui);
   -webkit-tap-highlight-color:transparent;
