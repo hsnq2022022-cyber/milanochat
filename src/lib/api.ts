@@ -175,7 +175,7 @@ async function dashSupabase<T>(token: string, path: string, init?: RequestInit):
   }
 
   // Owner-only delivery review: separate service-authenticated Edge endpoint.
-  // Feature flag is OFF until the endpoint and RLS have an independent GO.
+  // Enabled by default; set VITE_ENABLE_DELIVERY_REVIEW=false to switch it off.
   if (path === "/api/dashboard/delivery-review" || path === "/api/dashboard/flow-metrics") {
     if (import.meta.env.VITE_ENABLE_DELIVERY_REVIEW === "false")
       throw new Error("مراجعة التسليم غير مفعّلة");

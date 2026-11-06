@@ -32,8 +32,10 @@ import { chooseWeightedPort } from "./simulation.ts";
  *  - text/email/phone question: variables[node.inputField] = the answer the
  *    caller already validated and normalized (planRuntimeTransition stores it).
  * Message/question texts and staff notification texts get {{field}}
- * rendering for those collected fields only (renderCollectedTemplate); the
- * simulator is not affected. Tag names are never rendered.
+ * rendering for those collected fields only (renderCollectedTemplate); in
+ * customer-facing texts {{first_name}} is never sent literally (collected
+ * value, else FIRST_NAME_FALLBACK). The simulator is not affected (it has its
+ * own interpolation). Tag names are never rendered.
  * A handoff ends the chain (status "handoff"); it is always the last effect.
  */
 export const MAX_CHAIN_EFFECTS = 5;
@@ -150,20 +152,39 @@ function clipBytes(text: string, max: number): string {
   }
   return out;
 }
+/** Customer-facing replacement for {{first_name}} when no name was collected. */
+export const FIRST_NAME_FALLBACK = "عميلنا العزيز";
 /**
  * Durable-only template rendering, same placeholder syntax as the simulator
  * ({{field}}). ONLY fields collected by this document's text/email/phone
  * questions are replaced (missing value = empty, like the simulator); any
- * other placeholder (e.g. {{first_name}}) stays literal exactly as before.
- * Single pass (a value containing "{{x}}" is never expanded) and bounded.
+ * other placeholder (e.g. {{age}}, {{رقم الهاتف}}) stays literal as before.
+ * Exception (customer-facing texts, the default): {{first_name}} (also
+ * written {{ first_name }}) is NEVER sent literally: it becomes the collected
+ * first_name answer when this document collects one and it is non-empty,
+ * otherwise FIRST_NAME_FALLBACK. Staff notifications pass
+ * firstNameFallback:false and keep the previous behaviour.
+ * Single pass (a value containing "{{x}}" is never expanded) and bounded to
+ * MAX_RENDERED_BYTES (UTF-8, cut on a code point boundary).
  */
-export function renderCollectedTemplate(text: string, variables: Record<string, string>, fields: Set<string>): string {
-  if (!fields.size || !text.includes("{{")) return text;
-  const rendered = text.replace(/\{\{(\w+)\}\}/g, (whole, name: string) => {
-    if (!fields.has(name)) return whole;
-    const v = Object.prototype.hasOwnProperty.call(variables, name) ? variables[name] : "";
+export function renderCollectedTemplate(text: string, variables: Record<string, string>, fields: Set<string>,
+  options: { firstNameFallback?: boolean } = {}): string {
+  if (!text.includes("{{")) return text;
+  const fallback = options.firstNameFallback !== false;
+  let firstName = false;
+  const rendered = text.replace(/\{\{\s*(\w+)\s*\}\}/g, (whole, name: string) => {
+    const own = Object.prototype.hasOwnProperty.call(variables, name);
+    if (fallback && name === "first_name") {
+      firstName = true;
+      const v = fields.has(name) && own ? variables[name] : "";
+      return typeof v === "string" && v.trim() ? v : FIRST_NAME_FALLBACK;
+    }
+    // Other names: exact {{field}} form of a collected field only (unchanged).
+    if (whole !== "{{" + name + "}}" || !fields.has(name)) return whole;
+    const v = own ? variables[name] : "";
     return typeof v === "string" ? v : "";
   });
+  if (!fields.size && !firstName) return text;
   return clipBytes(rendered, MAX_RENDERED_BYTES);
 }
 /** Max characters of a staff notification body (flow_staff_notifications CHECK 1..500). */
@@ -172,7 +193,7 @@ function rendered(effect: PlannedEffect, variables: Record<string, string>, fiel
   if (effect.kind === "staff_notification") {
     // Same collected-field rule as messages; bounded to the stored body limit
     // (code points, like PostgreSQL length()).
-    const r = renderCollectedTemplate(effect.text, variables, fields);
+    const r = renderCollectedTemplate(effect.text, variables, fields, { firstNameFallback: false });
     const text = Array.from(r).slice(0, MAX_NOTIFICATION_CHARS).join("");
     return text === effect.text ? effect : { ...effect, text };
   }

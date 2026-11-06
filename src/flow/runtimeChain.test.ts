@@ -5,7 +5,7 @@ import type { FlowDocument, FlowNode } from "./model.ts";
 import { createRuntimeState } from "./runtimePlan.ts";
 import {
   planUntilWait, seedFromEventKey, randomizerField, MAX_CHAIN_EFFECTS,
-  collectedFields, renderCollectedTemplate, MAX_RENDERED_BYTES
+  collectedFields, renderCollectedTemplate, MAX_RENDERED_BYTES, FIRST_NAME_FALLBACK
 } from "./runtimeChain.ts";
 
 const input = { eventKey: "mid.event.1", nowMs: 1750000000000, seed: seedFromEventKey("mid.event.1") };
@@ -143,7 +143,7 @@ test("set_field drives a condition; inbound text never enters variables", () => 
 test("typed answer is stored under inputField, renders {{field}} in later texts and drives a condition", () => {
   const t = trigger();
   const ask = makeNode("question", { x: 0, y: 0 }, { text: "Your email?", inputMode: "email", inputField: "email", options: [] });
-  const thanks = text("Thanks {{email}}, {{first_name}} stays literal");
+  const thanks = text("Thanks {{email}}, {{first_name}} gets the fallback");
   const cond = makeNode("condition", { x: 0, y: 0 }, { conditionField: "email", operator: "contains", conditionValue: "@vip." });
   const vip = text("VIP for {{email}}"), std = text("Standard");
   const flow = doc([t, ask, thanks, cond, vip, std],
@@ -156,10 +156,10 @@ test("typed answer is stored under inputField, renders {{field}} in later texts 
   assert.equal(answered.state.status, "completed");
   assert.deepEqual(answered.state.variables, { email: "sara@vip.example" });
   assert.deepEqual(answered.effects.map(e => [(e as { text: string }).text, e.seq]),
-    [["Thanks sara@vip.example, {{first_name}} stays literal", 0], ["VIP for sara@vip.example", 1]]);
+    [["Thanks sara@vip.example, عميلنا العزيز gets the fallback", 0], ["VIP for sara@vip.example", 1]]);
   const other = planUntilWait(flow, start.state, { ...input, eventKey: "answer2", answer: "ali@shop.example" });
   assert.deepEqual(other.effects.map(e => (e as { text: string }).text),
-    ["Thanks ali@shop.example, {{first_name}} stays literal", "Standard"]);
+    ["Thanks ali@shop.example, عميلنا العزيز gets the fallback", "Standard"]);
   assert.equal(JSON.stringify(flow), original, "document not mutated");
   // Planner refusal of an empty answer keeps the run waiting (no effects).
   const empty = planUntilWait(flow, start.state, { ...input, eventKey: "e", answer: "   " });
@@ -280,4 +280,85 @@ test("image message: collected fields render only in texts; a rich shape still f
   const r = planUntilWait(f2, createRuntimeState(f2, "f", 1), input);
   assert.deepEqual(r.effects, []);
   assert.equal(r.error, "rich message requires a verified sender");
+});
+
+// ---- {{first_name}} (editor button "+ اسم العميل") is never sent literally.
+const texts = (p: { effects: unknown[] }) =>
+  p.effects.filter(e => typeof (e as { text?: unknown }).text === "string").map(e => (e as { text: string }).text);
+const noLiteralFirstName = (p: { effects: unknown[] }) =>
+  texts(p).forEach(t => assert.doesNotMatch(t, /\{\{\s*first_name\s*\}\}/));
+test("first_name: uncollected -> fallback in message and question effects; other placeholders unchanged", () => {
+  assert.equal(FIRST_NAME_FALLBACK, "عميلنا العزيز");
+  const t = trigger(), hi = text("أهلاً {{first_name}}، {{ first_name }} {{name}} {{رقم الهاتف}}");
+  const plainNode = text("بدون متغيرات");
+  const ask = makeNode("question", { x: 0, y: 0 }, { text: "كيف نخدمك يا {{first_name}}؟", inputMode: "text", inputField: "need", options: [] });
+  const flow = doc([t, hi, plainNode, ask], [[t, "next", hi], [hi, "next", plainNode], [plainNode, "next", ask]]);
+  const p = planUntilWait(flow, createRuntimeState(flow, "f", 1), input);
+  assert.equal(p.error, undefined);
+  assert.deepEqual(texts(p), [
+    "أهلاً عميلنا العزيز، عميلنا العزيز {{name}} {{رقم الهاتف}}", "بدون متغيرات", "كيف نخدمك يا عميلنا العزيز؟"]);
+  noLiteralFirstName(p);
+  // Button message (question effect) and a doc with NO collected fields at all.
+  const menu = makeNode("message", { x: 0, y: 0 }, { text: "اختر يا {{first_name}}", inputField: "menu",
+    options: [{ id: "a", label: "A" }] });
+  const f2 = doc([t, menu], [[t, "next", menu]]);
+  const q = planUntilWait(f2, createRuntimeState(f2, "f", 1), input);
+  assert.deepEqual(q.effects.map(e => [e.kind, (e as { text: string }).text]), [["question", "اختر يا عميلنا العزيز"]]);
+  // set_field first_name is not a collected answer: fallback (never the raw set value).
+  const set = makeNode("action", { x: 0, y: 0 }, { actionType: "set_field", actionValue: "first_name=Ali" });
+  const m = text("Hi {{first_name}}");
+  const f3 = doc([t, set, m], [[t, "next", set], [set, "next", m]]);
+  assert.deepEqual(texts(planUntilWait(f3, createRuntimeState(f3, "f", 1), input)), ["Hi عميلنا العزيز"]);
+});
+test("first_name: collected answer is used; before the answer the fallback is used", () => {
+  const t = trigger(), before = text("مرحباً {{first_name}}");
+  const ask = makeNode("question", { x: 0, y: 0 }, { text: "ما اسمك؟", inputMode: "text", inputField: "first_name", options: [] });
+  const after = text("شكراً {{first_name}} و {{ first_name }}");
+  const flow = doc([t, before, ask, after], [[t, "next", before], [before, "next", ask], [ask, "valid", after]]);
+  const start = planUntilWait(flow, createRuntimeState(flow, "f", 1), input);
+  assert.deepEqual(texts(start), ["مرحباً عميلنا العزيز", "ما اسمك؟"]);
+  const answered = planUntilWait(flow, start.state, { ...input, eventKey: "a", answer: "  سارة " });
+  assert.deepEqual(answered.state.variables, { first_name: "سارة" });
+  assert.deepEqual(texts(answered), ["شكراً سارة و سارة"]);
+  noLiteralFirstName(start); noLiteralFirstName(answered);
+  // Direct: collected but empty value -> fallback; text without "{{" is returned as-is.
+  const fields = new Set(["first_name", "email"]);
+  assert.equal(renderCollectedTemplate("Hi {{first_name}} {{email}}", { first_name: "" }, fields), "Hi عميلنا العزيز ");
+  assert.equal(renderCollectedTemplate("Hi {{first_name}}", { first_name: "Ali" }, fields), "Hi Ali");
+  const same = "نص عادي بلا متغيرات";
+  assert.equal(renderCollectedTemplate(same, {}, fields), same);
+  // Other names keep the old exact-form rule: whitespace variants stay literal.
+  assert.equal(renderCollectedTemplate("{{ email }} {{email}}", { email: "a@b.co" }, fields), "{{ email }} a@b.co");
+  // Staff opt-out keeps the previous behaviour.
+  assert.equal(renderCollectedTemplate("New {{first_name}}", {}, new Set(), { firstNameFallback: false }), "New {{first_name}}");
+});
+test("first_name: website-button text and image-message texts get the fallback; notify stays as before", () => {
+  const t = trigger();
+  const card = makeNode("message", { x: 0, y: 0 }, { text: "تفضل يا {{first_name}}", platform: "instagram",
+    options: [{ id: "w", label: "متجرنا", buttonType: "button", action: "website", url: "https://example.org/p" }] });
+  const f1 = doc([t, card], [[t, "next", card]]);
+  const w = planUntilWait(f1, createRuntimeState(f1, "f", 1), input);
+  assert.equal(w.error, undefined);
+  assert.deepEqual(texts(w), ["تفضل يا عميلنا العزيز"]);
+  assert.ok((w.effects[0] as { websiteButtons?: unknown }).websiteButtons);
+  const p = pic([{ id: "b1", type: "image", url: IMG }, { id: "b2", type: "text", text: "سعر خاص لـ {{first_name}}" }],
+    "منتجنا يا {{first_name}}");
+  const notify = makeNode("action", { x: 0, y: 0 }, { actionType: "notify", actionValue: "عميل {{first_name}}" });
+  const f2 = doc([t, p, notify], [[t, "next", p], [p, "next", notify]]);
+  const r = planUntilWait(f2, createRuntimeState(f2, "f", 1), input);
+  assert.equal(r.error, undefined);
+  assert.deepEqual(r.effects.map(e => [e.kind, "text" in e ? e.text : (e as { url: string }).url]),
+    [["message", "منتجنا يا عميلنا العزيز"], ["message_image", IMG], ["message", "سعر خاص لـ عميلنا العزيز"],
+     ["staff_notification", "عميل {{first_name}}"]]);
+});
+test("first_name: fallback growth is clamped to MAX_RENDERED_BYTES like collected values", () => {
+  const enc = new TextEncoder();
+  const raw = "ع".repeat(493) + "{{first_name}}";
+  assert.equal(enc.encode(raw).byteLength, 1000, "raw text is exactly at the stored limit");
+  const t = trigger(), m = text(raw);
+  const flow = doc([t, m], [[t, "next", m]]);
+  const out = texts(planUntilWait(flow, createRuntimeState(flow, "f", 1), input))[0];
+  assert.ok(enc.encode(out).byteLength <= MAX_RENDERED_BYTES);
+  assert.equal(out, "ع".repeat(493) + "عميلنا ", "cut on a code point boundary, never a literal placeholder");
+  assert.doesNotMatch(out, /\{\{/);
 });

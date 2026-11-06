@@ -55,9 +55,10 @@ export default function DeliveryReviewPanel({token,tenantId}:{token:string|null;
  const [flow,setFlow]=useState<Inbox|null>(null);
  const [loading,setLoading]=useState(false);
  const [error,setError]=useState("");
+ const [unreachable,setUnreachable]=useState(false);
  const refresh=useCallback(async()=>{
   if(!token){setError("سجّل الدخول للوصول إلى قائمة المراجعة");return;}
-  setLoading(true);setError("");
+  setLoading(true);setError("");setUnreachable(false);
   try{
    const [inbox,metrics]=await Promise.all([
     apiAuthFetch<Inbox>(token,"/api/dashboard/delivery-review",{method:"POST",body:JSON.stringify({tenantId})}),
@@ -66,7 +67,11 @@ export default function DeliveryReviewPanel({token,tenantId}:{token:string|null;
    if(!Array.isArray(inbox.items))throw new Error("صيغة قائمة المراجعة غير صالحة");
    setItems(inbox.items);setTotals(metrics);setFlow(inbox);
   }catch(e){
-   setError(e instanceof Error?e.message:"تعذر تحميل البيانات");
+   const msg=e instanceof Error?e.message:"";
+   const name=e instanceof Error?e.name:"";
+   if(e instanceof TypeError||/failed to fetch|networkerror|network request failed|load failed|fetch|relay/i.test(msg+" "+name)||/^HTTP (404|5\d\d)$/.test(msg)){
+    setUnreachable(true);
+   }else setError(msg||"تعذر تحميل البيانات");
   }finally{setLoading(false);}
  },[token,tenantId]);
  useEffect(()=>{void refresh();},[refresh]);
@@ -82,6 +87,7 @@ export default function DeliveryReviewPanel({token,tenantId}:{token:string|null;
     {loading?"جارٍ التحديث…":"تحديث القائمة"}
    </button>
   </header>
+  {unreachable&&<p role="status" data-testid="delivery-review-unreachable" className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-100">تعذر الاتصال بالخادم. يرجى المحاولة لاحقاً</p>}
   {error&&<p role="alert" className="rounded-lg border border-red-500/50 p-3 text-sm text-red-200">{error}</p>}
   {totals&&<section aria-label="إحصائيات التدفقات خلال 30 يومًا" className="grid grid-cols-2 gap-2 sm:grid-cols-4">
    {Object.entries(metricNames).map(([key,label])=><div className={container} key={key}>
@@ -138,7 +144,7 @@ export default function DeliveryReviewPanel({token,tenantId}:{token:string|null;
     {r.ended_reason&&<p data-testid="flow-run-ended-reason" data-reason-code={r.ended_reason} className="mt-1 text-xs text-white/65">سبب التوقف: {cancelReasonLabel(r.ended_reason)}</p>}
    </li>)}</ul>
   </section>}
-  {items.length===0&&!(flow?.flowItems?.length)&&!(flow?.flowFailures?.length)&&!loading&&!error&&<p className={container}>لا توجد رسائل تحتاج مراجعة الآن.</p>}
+  {items.length===0&&!(flow?.flowItems?.length)&&!(flow?.flowFailures?.length)&&!loading&&!error&&!unreachable&&<p className={container}>لا توجد رسائل تحتاج مراجعة الآن.</p>}
   <ul className="space-y-3">
    {items.map(item=><li key={item.claim_id} className={container}>
     <div className="flex flex-wrap justify-between gap-2">

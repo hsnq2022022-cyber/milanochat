@@ -261,7 +261,7 @@ function Editor(){
       <div className="fs-tb-main">
         <a className="fs-ibtn" href="#/dashboard" aria-label={t("back")}><ArrowRight size={20}/></a>
         <div className="fs-tb-name">
-          <p className="fs-tb-cap"><span className="truncate">{t("designer")}</span><span className="fs-draft">{t("draft")}</span></p>
+          <p className="fs-tb-cap"><span className="truncate">{t("designer")}</span></p>
           <input className="fs-name-input" aria-label={t("name")} maxLength={100} value={doc.name} onChange={e=>store().rename(e.target.value)}/>
         </div>
         <FlowSwitcher flows={flows} activeFlowId={activeFlowId} activeName={doc.name} language={language} onSwitch={switchTo} onCreate={createNewFlow} onBlank={createBlankFlow}/>
@@ -274,7 +274,6 @@ function Editor(){
       <div className="fs-tb-sub" aria-hidden={toolbarCollapsed||undefined}><div className="fs-tb-sub-in">
         <div className="fs-tb-row fs-scroll-row">
           <span className={"fs-status is-"+saveState} role="status" aria-live="polite"><i className="fs-dot" aria-hidden="true"/>{saveLabel}</span>
-          {<span data-testid="flow-preview-version" className="fs-chip fs-chip-brand">معاينة 5.3 — سؤال بخانة واحدة</span>}
           <label className="sr-only" htmlFor="flow-ui-language">{t("language")}</label>
           <select id="flow-ui-language" data-testid="flow-ui-language" dir="ltr" aria-label={t("language")}
             className="fs-select fs-lang"

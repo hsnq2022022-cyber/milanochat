@@ -90,6 +90,10 @@ export default function MessageBlocksEditor({node}:{node:FlowNode}){
             <input className={input} dir="ltr" aria-label="رابط صورة المكوّن" placeholder="https://example.com/image.jpg" value={block.url?.startsWith("data:")?"":block.url||""} onChange={e=>patch(block.id,{url:e.target.value})}/>
             <label className={btn+" mt-2 "+(uploading?"cursor-not-allowed opacity-60":"cursor-pointer")}><ImageIcon size={15}/> {uploading===block.id?"جارٍ رفع الصورة...":"اختر صورة من الجهاز"}<input type="file" accept="image/jpeg,image/png,image/webp" className="hidden" disabled={!!uploading} onChange={e=>{void upload(block,e.target.files?.[0]);e.target.value="";}}/></label>
             {!!block.url&&<img alt="معاينة المكوّن" src={block.url} className="mt-2 max-h-40 w-full rounded-lg object-contain"/>}
+            <div data-testid="image-send-flag-note" className="mt-2 text-[11px] leading-5 text-[#8B9E96]">
+              <p>تُرسل الصورة إلى العملاء الحقيقيين فقط عندما يفعّل المسؤول ميزة إرسال الوسائط على الخادم؛ وإلا تظهر في المعاينة فقط ولا يُرسل أي شيء.</p>
+              <p dir="ltr" className="mt-1 text-[10px] opacity-70" title="FLOW_MEDIA_SEND_ENABLED + message:image">FLOW_MEDIA_SEND_ENABLED · message:image</p>
+            </div>
           </>}
           {block.type==="pdf"&&<p role="note" className="text-xs text-[#E5B54B]">لم يعد PDF مدعومًا. هذا المكوّن محفوظ للقراءة فقط ويمنع النشر؛ احذفه للمتابعة.</p>}
           {block.type==="delay"&&<div className="flex items-center gap-2"><input type="number" min={1} max={3600} className={input} aria-label="فاصل الانتظار بالثواني" value={block.seconds||3} onChange={e=>patch(block.id,{seconds:Math.max(1,Math.min(3600,Number(e.target.value)||1))})}/><span className="shrink-0 text-xs text-[#8B9E96]">ثانية</span></div>}

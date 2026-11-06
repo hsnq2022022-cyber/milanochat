@@ -147,7 +147,10 @@ export default function ButtonActionEditor({node}:{node:FlowNode}){
         <label className="mb-1 mt-3 block text-xs">رابط الزر (HTTPS فقط)</label>
         <input dir="ltr" className={input} placeholder="https://example.com" aria-label="رابط الموقع" maxLength={URL_BUTTON_URL_MAX} value={option.url||""}
           onChange={e=>patch(option.id,{url:e.target.value})}/>
-        <p className="mt-1 text-[11px] text-[#8B9E96]">يُرسل كزر رابط حقيقي تحت نص الرسالة، ويشترط وجود نص أساسي للرسالة.</p>
+        <div data-testid="url-button-flag-note" className="mt-1 text-[11px] leading-5 text-[#8B9E96]">
+          <p>يشترط وجود نص أساسي للرسالة. يظهر كزر رابط للعملاء الحقيقيين فقط عندما يفعّل المسؤول ميزة الأزرار الغنية على الخادم؛ وإلا يعمل في المعاينة فقط ولا يُرسل أي شيء.</p>
+          <p dir="ltr" className="mt-1 text-[10px] opacity-70" title="FLOW_RICH_BUTTONS_ENABLED + message:link">FLOW_RICH_BUTTONS_ENABLED · message:link</p>
+        </div>
       </>}
       <button className="mt-4 flex items-center gap-2 text-xs text-red-300" onClick={()=>{
         persist(d.options.filter(o=>o.id!==option.id),[option.id]);setActive(null);

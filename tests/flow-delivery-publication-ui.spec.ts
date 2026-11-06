@@ -13,7 +13,7 @@ const FAKE_JWT = `${b64({ alg: "none" })}.${b64({ sub: "u1", exp: 4102444800, ro
 
 test.skip(!URL_.startsWith("http://mock."), "needs VITE_SUPABASE_URL=http://mock.supabase.test (fake host)");
 
-async function setup(page: Page, handlers: { review?: unknown; publication?: (b: any) => unknown; inbox?: { status: number; body: unknown } }) {
+async function setup(page: Page, handlers: { review?: unknown; reviewNetworkError?: boolean; publication?: (b: any) => unknown; inbox?: { status: number; body: unknown } }) {
   const calls: any[] = [];
   const ref = new URL(URL_).hostname.split(".")[0];
   await page.addInitScript(([key, value]) => localStorage.setItem(key, value), [
@@ -33,6 +33,7 @@ async function setup(page: Page, handlers: { review?: unknown; publication?: (b:
     const body = req.postDataJSON?.() ?? {};
     calls.push({ path: u.pathname, body });
     if (u.pathname.endsWith("/flow-delivery-review")) {
+      if (handlers.reviewNetworkError) return route.abort("failed");
       return json(body.mode === "metrics" ? { events: { started: 3 }, periodDays: 30, truncated: false } : handlers.review);
     }
     if (u.pathname.endsWith("/flow-staff-inbox")) {
@@ -49,6 +50,17 @@ async function setup(page: Page, handlers: { review?: unknown; publication?: (b:
   });
   return calls;
 }
+
+test("delivery review shows a friendly Arabic message when the edge function is unreachable", async ({ page }) => {
+  await setup(page, { reviewNetworkError: true });
+  await page.goto("/milanochat/#/dashboard");
+  const panel = page.getByTestId("delivery-review-panel");
+  await expect(panel).toBeVisible();
+  await expect(panel.getByTestId("delivery-review-unreachable")).toHaveText("تعذر الاتصال بالخادم. يرجى المحاولة لاحقاً");
+  await expect(panel.getByText("Failed to fetch")).toHaveCount(0);
+  await expect(panel.getByRole("alert")).toHaveCount(0);
+  await expect(panel.getByRole("button", { name: "تحديث القائمة" })).toBeVisible();
+});
 
 test("delivery review shows cancel_reason labels for V3/V4 flow failures and tolerates unknown/null", async ({ page }) => {
   const calls = await setup(page, {

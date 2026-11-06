@@ -2,7 +2,6 @@
 export type FlowLanguage="ar"|"en";
 const messages={
   designer:["إدارة سوشيال / مصمم الأتمتة","Social Management / Flow Builder"],
-  draft:["مسودة","Draft"],
   back:["الرجوع إلى لوحة التحكم","Back to dashboard"],
   name:["اسم التدفق","Flow name"],
   select:["اختيار التدفق","Select flow"],

@@ -147,7 +147,12 @@ export default function NodeEditor({node,onClose,language="ar"}:{node:FlowNode|n
         {d.actionType==="handoff"
           ?<p data-testid="handoff-hint" className="mt-2 text-[11px] text-[#8B9E96]">يُفضّل إضافة رسالة قبل تحويل المحادثة إلى موظف</p>
           :<><label className={section}>القيمة / اسم الوسم</label><input className={input} value={d.actionValue} onChange={e=>edit({actionValue:e.target.value})}/></>}
-        <p className="mt-2 text-[11px] text-[#8B9E96]">هذه إعدادات تصميمية، وليست أوامر مفعّلة في النظام الحقيقي.</p>
+        {["tag","untag","notify","handoff"].includes(d.actionType)
+          ?<div data-testid="internal-actions-flag-note" className="mt-2 text-[11px] leading-5 text-[#8B9E96]">
+            <p>هذا الإجراء يعمل مع العملاء الحقيقيين فقط عندما يفعّل المسؤول ميزة الإجراءات الداخلية على الخادم؛ وإلا يعمل في المعاينة فقط ولا يُرسل أي شيء.</p>
+            <p dir="ltr" className="mt-1 text-[10px] opacity-70" title="FLOW_INTERNAL_ACTIONS_ENABLED">FLOW_INTERNAL_ACTIONS_ENABLED</p>
+          </div>
+          :<p data-testid="action-preview-only-note" className="mt-2 text-[11px] leading-5 text-[#8B9E96]">هذا الإجراء يعمل في المعاينة فقط ولا يُرسل أي شيء للعملاء.</p>}
       </>}
       {d.kind==="randomizer"&&<>
         <label className={section}>نسب التوزيع (المجموع 100%)</label>

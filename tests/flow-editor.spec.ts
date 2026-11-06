@@ -457,7 +457,44 @@ test("audit: AI Step and action buttons create editable nodes rather than inert 
  await panel.getByTestId("button-action-editor").getByRole("button",{name:"AI Step",exact:true}).click();
  await expect(page.locator(".react-flow__node")).toHaveCount(7);
  await expect(panel.getByText("نوع الإجراء")).toBeVisible();
- await expect(panel.getByText("هذه إعدادات تصميمية، وليست أوامر مفعّلة في النظام الحقيقي.")).toBeVisible();
+ await expect(panel.getByText("هذه إعدادات تصميمية، وليست أوامر مفعّلة في النظام الحقيقي.")).toHaveCount(0);
+ await expect(panel.getByTestId("action-preview-only-note")).toBeVisible();
+});
+
+test("feature-flag notes: image, URL button and internal actions explain server enablement",async({page})=>{
+ await page.goto("/milanochat/#/flows");
+ await page.locator(".react-flow__node").nth(1).click();
+ const panel=page.getByTestId("step-settings-panel");
+ await panel.getByTestId("content-block-menu").getByRole("button",{name:/صورة/}).click();
+ await expect(panel.getByTestId("image-send-flag-note")).toContainText("يفعّل المسؤول");
+ await expect(panel.getByTestId("image-send-flag-note")).toContainText("FLOW_MEDIA_SEND_ENABLED");
+ await panel.getByRole("button",{name:"رابط موقع جديد"}).click();
+ await expect(panel.getByTestId("url-button-flag-note")).toContainText("يفعّل المسؤول");
+ await expect(panel.getByTestId("url-button-flag-note")).toContainText("FLOW_RICH_BUTTONS_ENABLED");
+ await panel.getByRole("button",{name:"إضافة زر"}).click();
+ await panel.getByTestId("button-action-editor").getByRole("button",{name:"AI Step",exact:true}).click();
+ const select=panel.locator("select").filter({hasText:"إضافة وسم"});
+ for(const v of ["tag","untag","notify","handoff"]){
+  await select.selectOption(v);
+  await expect(panel.getByTestId("internal-actions-flag-note")).toContainText("FLOW_INTERNAL_ACTIONS_ENABLED");
+ }
+});
+
+test("goto card shows the target step name, not its raw id; removed draft badge and version chip are gone",async({page})=>{
+ await page.goto("/milanochat/#/flows");
+ await expect(page.getByTestId("flow-preview-version")).toHaveCount(0);
+ await expect(page.locator(".fs-draft")).toHaveCount(0);
+ await page.getByRole("button",{name:"فتح إضافة خطوة"}).click();
+ await page.getByTestId("add-step-menu").getByRole("button",{name:"الانتقال لخطوة",exact:true}).click();
+ const panel=page.getByTestId("step-settings-panel");
+ const target=panel.locator("select").filter({hasText:"اختر خطوة"});
+ const option=target.locator("option").nth(1);
+ const name=(await option.textContent())||"";
+ const id=await option.getAttribute("value");
+ await target.selectOption(id!);
+ const card=page.getByTestId("goto-target-name");
+ await expect(card).toContainText(name.trim());
+ await expect(card).not.toContainText(id!);
 });
 
 test("handoff action hides the value field and shows a hint; other actions keep the value field",async({page})=>{
@@ -550,7 +587,6 @@ test("batch 5 delete-and-reconnect bridges one input and output atomically",asyn
 
 test("root cause: correct branch marker and absolutely no old valid-invalid cards on typed questions",async({page})=>{
  await page.goto("/milanochat/#/flows");
- await expect(page.getByTestId("flow-preview-version")).toContainText("5.3");
  await page.locator(".react-flow__node").nth(2).click();
  const editor=page.getByTestId("step-settings-panel");
  for(const value of ["email","phone","number","text"]){

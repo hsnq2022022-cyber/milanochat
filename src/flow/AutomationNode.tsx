@@ -1,4 +1,4 @@
-import { Handle, Position, useUpdateNodeInternals } from "@xyflow/react";
+import { Handle, Position, useStore, useUpdateNodeInternals } from "@xyflow/react";
 import { useEffect } from "react";
 import type { CSSProperties } from "react";
 import type { NodeProps } from "@xyflow/react";
@@ -12,6 +12,13 @@ export default function AutomationNode({id,data,selected}:NodeProps<FlowNodeType
   const updateInternals=useUpdateNodeInternals();
   const openMenu=useAddStepMenu(s=>s.open);
   const issue=useNodeIssues(id);
+  const gotoTarget=data.kind==="goto"?data.gotoNode:"";
+  const gotoName=useStore(s=>{
+    if(!gotoTarget)return "";
+    const target=s.nodeLookup.get(gotoTarget)?.data as {kind?:keyof typeof LABELS;title?:string}|undefined;
+    if(!target)return "";
+    return target.title||(target.kind?LABELS[target.kind]:"")||"";
+  });
   const ports=outputs({id,position:{x:0,y:0},type:"flowNode",data});
   const allPorts=data.kind==="message"?[{id:"next",label:"التالي"},...data.options]:
     data.kind==="question"&&data.inputMode==="buttons"?data.options:ports;
@@ -71,7 +78,7 @@ export default function AutomationNode({id,data,selected}:NodeProps<FlowNodeType
       {data.kind==="delay"&&<p className="fs-node-desc">انتظار {data.delayValue} {({seconds:"ثانية",minutes:"دقيقة",hours:"ساعة",days:"يوم"} as const)[data.delayUnit]}</p>}
       {data.kind==="action"&&<p className="fs-node-desc">{data.actionType}: {data.actionValue||"—"}</p>}
       {data.kind==="randomizer"&&<p className="fs-node-desc">توزيع المسارات بالنسب المحددة</p>}
-      {data.kind==="goto"&&<p className="fs-node-desc">انتقال إلى {data.gotoNode||"خطوة غير محددة"}</p>}
+      {data.kind==="goto"&&<p data-testid="goto-target-name" className="fs-node-desc">انتقال إلى {gotoName||"خطوة غير محددة"}</p>}
       {data.kind==="request"&&<>
         <p className="fs-node-desc">طلب خارجي: {data.requestMethod}</p>
         <p dir="ltr" className="fs-node-desc truncate !text-[10px]">{data.requestUrl||"HTTPS URL"}</p>
