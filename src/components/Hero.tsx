@@ -10,7 +10,7 @@ import {
   type CountryCode,
 } from "libphonenumber-js";
 import { useCountUp, useInView, useReveal } from "../hooks/useReveal";
-import { api, apiEnabled, apiFetch, backendMode, type QAPair, type SemanticTestRes, type WaSnapshot } from "../lib/api";
+import { api, apiEnabled, backendMode, type QAPair, type SemanticTestRes, type WaSnapshot } from "../lib/api";
 import {
   IconArrowStart,
   IconBolt,
@@ -259,7 +259,6 @@ function Wizard() {
   const sseRef = useRef<EventSource | null>(null);
   const pollRef = useRef<number | null>(null);
   const waBusyRef = useRef(false);
-  const [payUrl, setPayUrl] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const reconnects = useRef(0);
 
@@ -428,7 +427,6 @@ function Wizard() {
     setWorkStep(0);
     setPhase("working");
     setApiResult(null);
-    setPayUrl(null);
     setQaPairs([]);
     setQaSourceUrl(null);
     setQaTitle("");
@@ -475,25 +473,6 @@ function Wizard() {
     setBusy(true);
     setPhase("link");
     await relink();
-    setBusy(false);
-  };
-
-  /* إنشاء فاتورة Moyasar وفتح صفحة الدفع — التفعيل يتم من الـ webhook */
-  const startPay = async () => {
-    if (!tenantId) return;
-    setBusy(true);
-    try {
-      const res = await apiFetch<{ paymentUrl: string | null }>("/api/payments/create", {
-        method: "POST",
-        body: JSON.stringify({ tenantId, packageId: "starter" }),
-      });
-      if (res.paymentUrl) {
-        window.open(res.paymentUrl, "_blank", "noopener");
-        setPayUrl(res.paymentUrl);
-      }
-    } catch (err: any) {
-      setErrors((prev) => ({ ...prev, pay: err?.message || "تعذر إنشاء الفاتورة" }));
-    }
     setBusy(false);
   };
 
@@ -553,7 +532,6 @@ function Wizard() {
     setErrors({});
     setWorkStep(0);
     setApiResult(null);
-    setPayUrl(null);
     reconnects.current = 0;
     setQaPairs([]);
     setQaSourceUrl(null);
@@ -988,22 +966,13 @@ function Wizard() {
                   <IconWhatsapp className="w-5 h-5" />
                   اربط واتساب الآن — الأجهزة المرتبطة
                 </button> */}
-                <button
-                  onClick={startPay}
-                  disabled={busy}
-                  className="w-full bg-oro text-ink font-display font-bold py-3 rounded-2xl hover:bg-verde transition-all duration-300 active:scale-[0.98] disabled:opacity-60"
+                <a
+                  href="#/dashboard?pay=1"
+                  data-testid="onboarding-open-topup"
+                  className="flex min-h-[44px] w-full items-center justify-center rounded-2xl bg-oro px-4 py-3 text-center font-display font-bold text-ink transition-colors duration-300 hover:bg-verde focus:outline-none focus-visible:ring-2 focus-visible:ring-verde focus-visible:ring-offset-2 focus-visible:ring-offset-night"
                 >
-                  {busy ? "جارٍ…" : "ادفع الآن — 40,000 دينار"}
-                </button>
-                {payUrl && (
-                  <p className="mt-2.5 text-[11px] text-verde leading-5">
-                    فُتحت صفحة الدفع — التفعيل يتم تلقائياً فور تأكيد البوابة.
-                    <a href={payUrl} target="_blank" rel="noreferrer" className="underline underline-offset-2 text-oro-soft">
-                      {" "}إعادة فتح الرابط
-                    </a>
-                  </p>
-                )}
-                {errors.pay && <p className="mt-2 text-[11px] text-oro-soft">{errors.pay}</p>}
+                  افتح لوحة التحكم لشحن الرصيد
+                </a>
               </>
             ) : (
               <button

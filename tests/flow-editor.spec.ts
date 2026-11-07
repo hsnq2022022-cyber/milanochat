@@ -774,7 +774,7 @@ const pngFile = { name: "x.png", mimeType: "image/png", buffer: PNG };
 test.describe("image block storage upload", () => {
   test.skip(!SB_URL.startsWith("http://mock."), "needs VITE_SUPABASE_URL=http://mock.supabase.test (fake host)");
 
-  test("uploads resized WebP to flow-media under the user folder and stores the public https URL", async ({ page }) => {
+  test("uploads resized JPEG to flow-media under the user folder and stores the public https URL", async ({ page }) => {
     const uploads: { path: string; ct: string }[] = [];
     await page.route("**/storage/v1/object/flow-media/**", async (route) => {
       const req = route.request();
@@ -786,9 +786,9 @@ test.describe("image block storage upload", () => {
     await aside.locator('[data-testid="content-block-image"] input[type=file]').setInputFiles(pngFile);
     await expect(aside.getByText("رُفعت الصورة بنجاح")).toBeVisible();
     expect(uploads.length).toBe(1);
-    expect(uploads[0].path).toMatch(new RegExp(`^/storage/v1/object/flow-media/${UP_UID}/[0-9a-f-]{36}\\.webp$`));
+    expect(uploads[0].path).toMatch(new RegExp(`^/storage/v1/object/flow-media/${UP_UID}/[0-9a-f-]{36}\\.jpg$`));
     const src = await aside.getByAltText("معاينة المكوّن").getAttribute("src");
-    expect(src).toMatch(new RegExp(`^${SB_URL.replace(/[.]/g, "\\.")}/storage/v1/object/public/flow-media/${UP_UID}/[0-9a-f-]{36}\\.webp$`));
+    expect(src).toMatch(new RegExp(`^${SB_URL.replace(/[.]/g, "\\.")}/storage/v1/object/public/flow-media/${UP_UID}/[0-9a-f-]{36}\\.jpg$`));
     expect(src!.startsWith("data:")).toBe(false);
   });
 
@@ -820,7 +820,7 @@ test.describe("image block storage upload", () => {
     const aside = await openImageBlock(page, false);
     await aside.locator('[data-testid="content-block-image"] input[type=file]').setInputFiles(pngFile);
     await expect(aside.getByText("مسودة محلية فقط")).toBeVisible();
-    expect(await aside.getByAltText("معاينة المكوّن").getAttribute("src")).toMatch(/^data:image\/webp/);
+    expect(await aside.getByAltText("معاينة المكوّن").getAttribute("src")).toMatch(/^data:image\/jpeg/);
     expect(hits).toBe(0);
   });
 });

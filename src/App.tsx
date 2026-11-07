@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 import Navbar from "./components/Navbar";
 import FlowErrorBoundary from "./components/FlowErrorBoundary";
+import RouteErrorBoundary from "./components/RouteErrorBoundary";
 import Hero from "./components/Hero";
 import { Marquee, Footer } from "./components/Extras";
 import Guarantees from "./components/Guarantees";
@@ -32,27 +33,33 @@ export default function App() {
   /* لوحة التحكم: #/dashboard */
   if (route.startsWith("#/dashboard")) {
     return (
-      <Suspense fallback={<div className="min-h-screen bg-night" />}>
-        <Dashboard />
-      </Suspense>
+      <RouteErrorBoundary key="dashboard">
+        <Suspense fallback={<div className="min-h-screen bg-night" />}>
+          <Dashboard />
+        </Suspense>
+      </RouteErrorBoundary>
     );
   }
 
   /* الإعدادات: #/settings (و#/profile كاسم بديل) */
   if (route.startsWith("#/settings") || route.startsWith("#/profile")) {
     return (
-      <Suspense fallback={<div className="min-h-screen bg-night" />}>
-        <Settings />
-      </Suspense>
+      <RouteErrorBoundary key="settings">
+        <Suspense fallback={<div className="min-h-screen bg-night" />}>
+          <Settings />
+        </Suspense>
+      </RouteErrorBoundary>
     );
   }
 
   /* صفحة Widgets: #/widgets */
   if (route.startsWith("#/widgets")) {
     return (
-      <Suspense fallback={<div className="min-h-screen bg-night" />}>
-        <Widgets />
-      </Suspense>
+      <RouteErrorBoundary key="widgets">
+        <Suspense fallback={<div className="min-h-screen bg-night" />}>
+          <Widgets />
+        </Suspense>
+      </RouteErrorBoundary>
     );
   }
 

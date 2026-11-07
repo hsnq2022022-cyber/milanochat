@@ -40,19 +40,20 @@ export default function MessageBlocksEditor({node}:{node:FlowNode}){
       const size=Math.min(1,1000/Math.max(image.naturalWidth,image.naturalHeight));
       const canvas=document.createElement("canvas");canvas.width=Math.max(1,Math.round(image.naturalWidth*size));canvas.height=Math.max(1,Math.round(image.naturalHeight*size));
       const ctx=canvas.getContext("2d");if(!ctx)throw new Error();
+      ctx.fillStyle="#FFFFFF";ctx.fillRect(0,0,canvas.width,canvas.height); // JPEG بلا شفافية: خلفية بيضاء بدل الأسود
       ctx.drawImage(image,0,0,canvas.width,canvas.height);
-      const blob=await new Promise<Blob|null>(resolve=>canvas.toBlob(resolve,"image/webp",.68));
+      const blob=await new Promise<Blob|null>(resolve=>canvas.toBlob(resolve,"image/jpeg",.82));
       if(!blob)throw new Error();
       if(blob.size>2*1024*1024){setStatus("الصورة كبيرة بعد الضغط (أكثر من 2MB)، اختر صورة أصغر.");return;}
       const client=getSupabase();
       const uid=client?(await client.auth.getSession()).data.session?.user?.id:undefined;
       if(!client||!uid){
-        const output=canvas.toDataURL("image/webp",.68);
+        const output=canvas.toDataURL("image/jpeg",.82);
         if(output.length>700000){setStatus("الصورة كبيرة بعد الضغط، اختر صورة أصغر.");return;}
         patch(block.id,{url:output});setStatus("الصورة مسودة محلية فقط ولا يمكن إرسالها فعليًا قبل تسجيل الدخول.");return;
       }
-      const path=`${uid}/${crypto.randomUUID()}.webp`;
-      const {error}=await client.storage.from("flow-media").upload(path,blob,{contentType:"image/webp",upsert:false});
+      const path=`${uid}/${crypto.randomUUID()}.jpg`;
+      const {error}=await client.storage.from("flow-media").upload(path,blob,{contentType:"image/jpeg",upsert:false});
       if(error){setStatus("فشل رفع الصورة: "+(error.message||"خطأ غير معروف"));return;}
       patch(block.id,{url:client.storage.from("flow-media").getPublicUrl(path).data.publicUrl});setStatus("رُفعت الصورة بنجاح وأُضيفت إلى الرسالة.");
     }catch{setStatus("لم نتمكن من معالجة هذه الصورة.");}finally{URL.revokeObjectURL(url);setUploading("");}

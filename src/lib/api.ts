@@ -31,7 +31,6 @@ export const backendMode: BackendMode = HAS_SUPABASE ? "supabase" : "demo";
 /** عنوان Edge Function الواحدة التي تحوي الباك-إند كله */
 const FN_URL = `${FUNCTIONS_BASE}/milan-api`;
 const CHANNELS_FN_URL = `${FUNCTIONS_BASE}/channels`;
-const WA_FN_URL = `${FUNCTIONS_BASE}/wa-webhook`;
 
 /* ─── نقل عام (عام فقط — لم يعد يوجد خادم خارجي) ─── */
 
@@ -73,7 +72,7 @@ async function topupSupabase(
 /** نداء Edge Function في نمط Supabase */
 async function fn<T>(
   action: string,
-  opts: { body?: unknown; token?: string | null; claim?: string | null; wa?: boolean } = {}
+  opts: { body?: unknown; token?: string | null; claim?: string | null } = {}
 ): Promise<T> {
   const headers: Record<string, string> = {
     "content-type": "application/json",
@@ -81,7 +80,7 @@ async function fn<T>(
     authorization: `Bearer ${opts.token && opts.token.split(".").length === 3 ? opts.token : SUPABASE_ANON}`,
   };
   if (opts.claim) headers["x-tenant-token"] = opts.claim;
-  const res = await fetch(`${opts.wa ? WA_FN_URL : FN_URL}?action=${action}`, {
+  const res = await fetch(`${FN_URL}?action=${action}`, {
     method: "POST",
     headers,
     body: JSON.stringify(opts.body ?? {}),
@@ -371,7 +370,7 @@ export const api = {
   wa: {
     createSession: (tenantId: string, token?: string | null) =>
       backendMode === "supabase"
-        ? fn<{ bound: boolean; phoneId: string | null }>("ping", { body: { tenantId }, wa: true }).then(
+        ? fn<{ bound: boolean; phoneId: string | null }>("wa_status", { body: { tenantId }, claim: token ?? storedClaim() ?? tenantId }).then(
             (r): WaSnapshot => ({
               sessionId: tenantId,
               state: r.bound ? "CONNECTED" : "UNBOUND",
@@ -387,7 +386,7 @@ export const api = {
 
     getSession: (sessionId: string, token?: string | null) =>
       backendMode === "supabase"
-        ? fn<{ bound: boolean; phoneId: string | null }>("ping", { body: { tenantId: sessionId }, wa: true }).then(
+        ? fn<{ bound: boolean; phoneId: string | null }>("wa_status", { body: { tenantId: sessionId }, claim: token ?? storedClaim() ?? sessionId }).then(
             (r): WaSnapshot => ({
               sessionId,
               state: r.bound ? "CONNECTED" : "UNBOUND",

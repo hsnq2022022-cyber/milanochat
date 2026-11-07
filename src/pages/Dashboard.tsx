@@ -747,22 +747,6 @@ export default function Dashboard() {
     }
   };
 
-  const disconnectSocialChannel = async (platform: "facebook" | "instagram") => {
-    if (!token || !st?.tenantId) return;
-    if (!window.confirm(`فصل ${platform === "facebook" ? "Facebook" : "Instagram"}؟`)) return;
-    try {
-      await apiAuthFetch(token, "/api/auth/disconnect", {
-        method: "POST",
-        body: JSON.stringify({ platform, tenantId: st.tenantId }),
-      });
-      showToast("تم فصل القناة");
-      loadSocialChannels();
-      loadChannels();
-    } catch (e: any) {
-      showToast(e?.message || "تعذر الفصل");
-    }
-  };
-
   const patchAccount = async (id: string, patch: Partial<ChannelAccount>) => {
     if (!token) return;
     setChBusyId(id);
@@ -1771,11 +1755,6 @@ export default function Dashboard() {
                   <button onClick={() => handleConnectChannel("instagram")} className={`${cls.btn} w-full py-2.5 text-xs`} disabled={chBusyPlatform === "instagram"}>
                     {chBusyPlatform === "instagram" ? "جارٍ التحويل…" : igAccounts.length > 0 ? "ربط حساب آخر" : "ربط Instagram"}
                   </button>
-                  {igAccounts.length > 0 && (
-                    <button onClick={() => disconnectSocialChannel("instagram")} className="w-full py-2 text-[11px] font-bold text-red-300/80 hover:text-red-300 border border-red-400/20 rounded-xl">
-                      فصل القناة
-                    </button>
-                  )}
                 </div>
               </div>
             </div>
