@@ -7,6 +7,7 @@ const review=readFileSync("src/pages/DeliveryReviewPanel.tsx","utf8");
 const inbox=readFileSync("src/pages/StaffInboxPanel.tsx","utf8");
 const api=readFileSync("src/lib/api.ts","utf8");
 const dash=readFileSync("src/pages/Dashboard.tsx","utf8");
+const settings=readFileSync("src/pages/Settings.tsx","utf8");
 
 test("publication panel surfaces needsInternalActions readiness without listing it when not needed",()=>{
  assert.match(pub,/needsInternalActions\?:boolean/);
@@ -31,7 +32,7 @@ test("staff inbox uses only the edge function and handles 423",()=>{
  assert.doesNotMatch(inbox,/getSupabase|\.from\(/);
  assert.match(inbox,/صندوق إشعارات الموظفين غير مفعّل حاليًا/);
  assert.match(inbox,/لا توجد إشعارات للموظفين الآن/);
- assert.match(dash,/<StaffInboxPanel token=\{token\} tenantId=\{st\.tenantId\} \/>/);
+ assert.match(settings,/<StaffInboxPanel token=\{token\} tenantId=\{summary\.tenantId\} \/>/);
 });
 test("delivery review renders flowInternal section separately with available/empty/unavailable states",()=>{
  assert.match(review,/flowInternal\?:FlowFailure\[\];flowInternalAvailable\?:boolean/);

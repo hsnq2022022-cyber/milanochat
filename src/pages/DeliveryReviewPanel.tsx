@@ -79,7 +79,7 @@ export default function DeliveryReviewPanel({token,tenantId}:{token:string|null;
  return <section dir="rtl" data-testid="delivery-review-panel" className="min-w-0 space-y-4 text-white">
   <header className="flex flex-wrap items-center justify-between gap-3">
    <div>
-    <h2 className="text-lg font-bold">مراجعة الرسائل غير المؤكدة</h2>
+    <h2 className="sr-only">مراجعة الرسائل غير المؤكدة</h2>
     <p className="mt-1 text-xs text-white/70">عرض فقط — لا إعادة إرسال ولا خصم تلقائي. يتطلب إذن مالك المتجر.</p>
    </div>
    <button type="button" onClick={()=>void refresh()} disabled={loading}

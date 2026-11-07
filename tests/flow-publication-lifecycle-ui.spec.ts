@@ -148,7 +148,7 @@ test("delivery review renders runCounts, flowFailures cancel_reason and the flow
       flowItems: [],
     },
   });
-  await page.goto("/milanochat/#/dashboard");
+  await page.goto("/milanochat/#/settings");
   const panel = page.getByTestId("delivery-review-panel");
   const counts = panel.getByRole("region", { name: "حالة تشغيلات التدفقات" });
   await expect(counts).toContainText("بيانات التدفقات المتقدمة غير متاحة كاملة حاليًا");

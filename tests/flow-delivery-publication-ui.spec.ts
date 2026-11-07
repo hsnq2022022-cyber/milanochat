@@ -53,7 +53,7 @@ async function setup(page: Page, handlers: { review?: unknown; reviewNetworkErro
 
 test("delivery review shows a friendly Arabic message when the edge function is unreachable", async ({ page }) => {
   await setup(page, { reviewNetworkError: true });
-  await page.goto("/milanochat/#/dashboard");
+  await page.goto("/milanochat/#/settings");
   const panel = page.getByTestId("delivery-review-panel");
   await expect(panel).toBeVisible();
   await expect(panel.getByTestId("delivery-review-unreachable")).toHaveText("تعذر الاتصال بالخادم. يرجى المحاولة لاحقاً");
@@ -81,7 +81,7 @@ test("delivery review shows cancel_reason labels for V3/V4 flow failures and tol
       flowItems: [{ outbox_id: "o-1", claim_id: null, status: "uncertain", provider_message_id: null, attempted_at: null, review_status: "pending" }],
     },
   });
-  await page.goto("/milanochat/#/dashboard");
+  await page.goto("/milanochat/#/settings");
   const panel = page.getByTestId("delivery-review-panel");
   await expect(panel).toBeVisible();
   const failures = panel.getByRole("region", { name: "رسائل التدفقات الفاشلة أو غير المؤكدة" });
@@ -147,7 +147,7 @@ test("delivery review labels internal effect kinds and statuses, unknown values 
       { id: "i-new", effect_kind: "brand_new_kind", delivery_status: "brand_new_status", attempts: 0, created_at: null, cancel_reason: null },
     ] },
   });
-  await page.goto("/milanochat/#/dashboard");
+  await page.goto("/milanochat/#/settings");
   const items = page.getByTestId("delivery-review-panel").getByRole("region", { name: "رسائل التدفقات الفاشلة أو غير المؤكدة" }).getByRole("listitem");
   await expect(items).toHaveCount(5);
   await expect(items.nth(0).getByTestId("flow-effect-kind")).toHaveText("إجراء داخلي: إضافة وسم");
@@ -175,7 +175,7 @@ test("delivery review lists flowInternal rows with Arabic labels and status badg
       { id: "n-cancel", effect_kind: "tag", delivery_status: "cancelled", attempts: 0, created_at: null, cancel_reason: "human_takeover", cancelled_at: null },
     ] },
   });
-  await page.goto("/milanochat/#/dashboard");
+  await page.goto("/milanochat/#/settings");
   const sec = page.getByRole("region", { name: "الإجراءات الداخلية" });
   const rows = sec.getByTestId("flow-internal-row");
   await expect(rows).toHaveCount(5);
@@ -190,7 +190,7 @@ test("delivery review lists flowInternal rows with Arabic labels and status badg
 
 test("delivery review internal section: empty when available, neutral note when unavailable or missing", async ({ page }) => {
   await setup(page, { review: { ...EMPTY_REVIEW, flowInternalAvailable: true, flowInternal: [] } });
-  await page.goto("/milanochat/#/dashboard");
+  await page.goto("/milanochat/#/settings");
   await expect(page.getByTestId("flow-internal-empty")).toHaveText("لا توجد إجراءات داخلية حديثة.");
   await expect(page.getByTestId("flow-internal-unavailable")).toHaveCount(0);
   await page.unroute(`${URL_}/**`);
@@ -211,7 +211,7 @@ test("staff inbox shows items from flow-staff-inbox and an empty state", async (
     review: EMPTY_REVIEW,
     inbox: { status: 200, body: { readOnly: true, items: [{ outbox_id: "n-1", conversation_id: "abcdef12-0000-4000-8000-000000000000", body: "عميل يطلب موظفًا", status: "settled", created_at: null }] } },
   });
-  await page.goto("/milanochat/#/dashboard");
+  await page.goto("/milanochat/#/settings");
   const inbox = page.getByTestId("staff-inbox-panel");
   await expect(inbox.getByTestId("staff-inbox-item")).toHaveCount(1);
   await expect(inbox).toContainText("عميل يطلب موظفًا");
@@ -231,7 +231,7 @@ test("staff inbox handles empty, disabled (423), forbidden and error states in A
   for (const [inbox, id, text] of cases) {
     await page.unrouteAll();
     await setup(page, { review: EMPTY_REVIEW, inbox });
-    await page.goto("/milanochat/#/dashboard");
+    await page.goto("/milanochat/#/settings");
     await page.reload();
     await expect(page.getByTestId("staff-inbox-panel").getByTestId(id)).toHaveText(text);
     await expect(page.getByTestId("staff-inbox-item")).toHaveCount(0);

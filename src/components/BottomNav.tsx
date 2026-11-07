@@ -1,11 +1,12 @@
-import { IconLog, IconSparkle, IconSettings } from "./Icons";
+import { Settings } from "lucide-react";
+import { IconLog, IconSparkle } from "./Icons";
 
-export type BottomNavId = "home" | "flows" | "profile";
+export type BottomNavId = "home" | "flows" | "settings";
 
 const ITEMS: { id: BottomNavId; href: string; label: string; testid: string; icon: JSX.Element }[] = [
   { id: "home", href: "#/dashboard", label: "الرئيسية", testid: "bottom-nav-home", icon: <IconLog className="w-5 h-5" /> },
   { id: "flows", href: "#/flows", label: "التدفقات", testid: "bottom-nav-flows", icon: <IconSparkle className="w-5 h-5" /> },
-  { id: "profile", href: "#/profile", label: "الملف الشخصي", testid: "bottom-nav-profile", icon: <IconSettings className="w-5 h-5" /> },
+  { id: "settings", href: "#/settings", label: "الإعدادات", testid: "bottom-nav-settings", icon: <Settings className="w-5 h-5" aria-hidden="true" /> },
 ];
 
 export default function BottomNav({ active }: { active: BottomNavId }) {
@@ -24,7 +25,7 @@ export default function BottomNav({ active }: { active: BottomNavId }) {
               href={i.href}
               data-testid={i.testid}
               aria-current={current ? "page" : undefined}
-              className={`flex flex-col items-center justify-center gap-1 text-xs font-bold transition-colors ${current ? "text-oro" : "text-sage hover:text-bone"}`}
+              className={`flex flex-col items-center min-h-[44px] focus-visible:outline focus-visible:outline-2 focus-visible:outline-oro justify-center gap-1 text-xs font-bold transition-colors ${current ? "text-oro" : "text-sage hover:text-bone"}`}
             >
               {i.icon}
               <span>{i.label}</span>

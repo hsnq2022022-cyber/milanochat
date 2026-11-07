@@ -4,15 +4,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import confetti from "canvas-confetti";
 import SafeAvatar from "../components/SafeAvatar";
-import DeliveryReviewPanel from "./DeliveryReviewPanel";
-import StaffInboxPanel from "./StaffInboxPanel";
 import BottomNav from "../components/BottomNav";
 import { api, apiAuthFetch, apiBase, apiEnabled, backendMode, paymentCheckoutEnabled, type WaSnapshot } from "../lib/api";
 import { getSupabase, getStoredClaim, clearStoredClaim } from "../lib/supabase";
 import { CHANNELS, ChannelBadge, detectChannel, type ChannelId } from "../lib/channels";
 import {
   IconWhatsapp, IconCheck, IconX, IconPlus, IconTrash, IconSend,
-  IconLogout, IconRefresh, IconDatabase, IconCard, IconGlobe, IconMapPin,
+  IconLogout, IconDatabase, IconCard, IconGlobe, IconMapPin,
   IconPen, IconSettings, IconQuestion, IconHandoff, IconLog, IconCoin, IconSparkle, IconChevronDown,
   IconFacebook, IconInstagram,
 } from "../components/Icons";
@@ -640,6 +638,10 @@ export default function Dashboard() {
   useEffect(() => {
     const q = new URLSearchParams(window.location.search);
     if (q.get("tab") === "channels") setTab("channels");
+    /* روابط من الإعدادات: #/dashboard?tab=unresolved أو ?pay=1 */
+    const hq = new URLSearchParams(window.location.hash.split("?")[1] ?? "");
+    if (hq.get("tab") === "unresolved") setTab("unresolved");
+    if (hq.get("pay") === "1") setPayOpen(true);
     const connected = q.get("channel_connected");
     if (connected) {
       const name = q.get("name");
@@ -1019,7 +1021,7 @@ export default function Dashboard() {
   }, [demo, token, loadWidgets]);
 
   const createWidget = async () => {
-    if (!widgetForm.name.trim()) { showToast("أدخل اسم الـ widget"); return; }
+    if (!widgetForm.name.trim()) { showToast("أدخل اسم الودجة"); return; }
     try {
       const newWidget = await apiAuthFetch(token!, "/api/widgets/dashboard", {
         method: "POST",
@@ -1034,21 +1036,21 @@ export default function Dashboard() {
         }),
       });
       setWidgets([newWidget, ...widgets]);
-      showToast("تم إنشاء الـ widget بنجاح");
+      showToast("تم إنشاء الودجة بنجاح");
       setWidgetForm({ name: "", welcomeMessage: "مرحباً! كيف يمكنني مساعدتك؟", primaryColor: "#2ec27e", position: "left", placeholder: "اكتب رسالتك..." });
     } catch (e: any) {
-      showToast(e?.message || "تعذر إنشاء الـ widget");
+      showToast(e?.message || "تعذر إنشاء الودجة");
     }
   };
 
   const deleteWidget = async (id: string) => {
-    if (!confirm("هل أنت متأكد من حذف هذا الـ widget؟")) return;
+    if (!confirm("هل أنت متأكد من حذف هذا الودجة؟")) return;
     try {
       await apiAuthFetch(token!, `/api/widgets/dashboard/${id}`, { method: "DELETE" });
       setWidgets(widgets.filter(w => w.id !== id));
-      showToast("تم حذف الـ widget");
+      showToast("تم حذف الودجة");
     } catch (e: any) {
-      showToast(e?.message || "تعذر حذف الـ widget");
+      showToast(e?.message || "تعذر حذف الودجة");
     }
   };
 
@@ -1201,13 +1203,10 @@ export default function Dashboard() {
 
   /* ═══════════ اللوحة ═══════════ */
 
-  const creditPct = Math.max(0, Math.min(100, (st.credits / 1000) * 100));
-  const active = st.convs.find((c) => c.id === activeConv) ?? null;
+    const active = st.convs.find((c) => c.id === activeConv) ?? null;
   const TABS = [
     { id: "convs" as const, label: "المحادثات", icon: <IconLog className="w-4 h-4" /> },
-    { id: "unresolved" as const, label: "العالقة", icon: <IconQuestion className="w-4 h-4" />, badge: st.openUnresolved },
     { id: "knowledge" as const, label: "المعرفة", icon: <IconDatabase className="w-4 h-4" /> },
-    { id: "widgets" as const, label: "Widgets", icon: <span className="text-sm">💬</span> },
     { id: "channels" as const, label: "القنوات", icon: <IconGlobe className="w-4 h-4" /> },
   ];
 
@@ -1245,16 +1244,6 @@ export default function Dashboard() {
       </header>
 
       <main className="max-w-6xl mx-auto px-4 pt-5 pb-[calc(6rem+env(safe-area-inset-bottom))]">
-        {import.meta.env.VITE_ENABLE_DELIVERY_REVIEW !== "false" && st?.tenantId && (
-          <>
-            <div className="mb-4">
-              <DeliveryReviewPanel token={token} tenantId={st.tenantId} />
-            </div>
-            <div className="mb-4">
-              <StaffInboxPanel token={token} tenantId={st.tenantId} />
-            </div>
-          </>
-        )}
         {st.credits <= 0 ? (
           <div className="mb-5 flex flex-wrap items-center gap-3 bg-oro/10 border border-oro/40 rounded-2xl px-5 py-3.5 msg-in">
             <span className="text-oro"><IconCoin className="w-5 h-5" /></span>
@@ -1269,61 +1258,7 @@ export default function Dashboard() {
           </div>
         ) : null}
 
-        <div className="grid md:grid-cols-12 gap-3 mb-5">
-          <section className={`${cls.card} md:col-span-5 p-4 relative overflow-hidden group hover:border-verde/35 transition-colors duration-300`}>
-            <div className="absolute -bottom-14 -start-14 w-44 h-44 rounded-full bg-verde/10 blur-2xl group-hover:bg-verde/15 transition-colors duration-500" aria-hidden="true" />
-            <div className="flex items-start justify-between gap-3 relative">
-              <div>
-                <p className="text-[11px] text-sage mb-1.5">حالة واتساب</p>
-                <p className="flex items-center gap-2 font-display font-bold text-lg text-bone">
-                  <span className={`w-2.5 h-2.5 rounded-full ${st.waStatus === "connected" ? "bg-verde live-dot" : "bg-oro"}`} />
-                  {st.waStatus === "connected" ? "متصل" : st.waStatus === "qr" ? "بانتظار المسح" : "غير متصل"}
-                </p>
-                <p className="text-[11.5px] text-sage mt-1" dir="ltr">
-                  {st.waStatus === "connected" ? "WhatsApp Cloud API" : "غير مُعدّ"}
-                </p>
-              </div>
-              {st.waStatus === "connected" ? (
-                <span className="text-xs text-verde font-semibold flex items-center gap-1">
-                  <IconWhatsapp className="w-4 h-4" /> متصل عبر Cloud API
-                </span>
-              ) : (
-                <span className="text-xs text-oro font-semibold flex items-center gap-1">
-                  <IconWhatsapp className="w-4 h-4" /> تحقق من إعدادات Cloud API
-                </span>
-              )}
-            </div>
-            <div className="mt-4 flex items-center gap-2 text-[11px] text-sage relative">
-              <IconRefresh className="w-3.5 h-3.5 text-verde" />
-              تتحدث الحالة تلقائيًا كل بضع ثوانٍ
-            </div>
-          </section>
-
-          <section className={`${cls.card} md:col-span-4 p-4 group hover:border-verde/35 transition-colors duration-300`}>
-            <div className="flex items-center justify-between mb-2">
-              <p className="text-[11px] text-sage">رصيد الردود</p>
-              <span className="text-verde"><IconCoin className="w-4.5 h-4.5" /></span>
-            </div>
-            <p className="font-display font-bold text-3xl text-bone tabular-nums leading-none">
-              {st.credits.toLocaleString("en")}
-              <span className="text-xs text-sage font-body font-normal ms-1.5">من 1,000</span>
-            </p>
-            <div className="mt-3.5 flex gap-[3px]" aria-hidden="true">
-              {Array.from({ length: 25 }).map((_, i) => (
-                <span
-                  key={i}
-                  className={`h-2 flex-1 rounded-full transition-all duration-500 ${
-                    i < (creditPct / 100) * 25
-                      ? creditPct > 40 ? "bg-verde" : creditPct > 15 ? "bg-oro" : "bg-oro-soft"
-                      : "bg-moss"
-                  }`}
-                  style={{ transitionDelay: `${i * 18}ms` }}
-                />
-              ))}
-            </div>
-          </section>
-
-          <section className="md:col-span-3 grid grid-rows-2 gap-3">
+        <div className="grid grid-cols-2 gap-3 mb-5" data-testid="dashboard-kpis">
             <button onClick={() => setTab("convs")} className={`${cls.card} p-4 text-start group hover:border-verde/40 hover:-translate-y-0.5 transition-all duration-300`}>
               <div className="flex items-center justify-between">
                 <span className="text-sage group-hover:text-verde transition-colors"><IconLog className="w-4.5 h-4.5" /></span>
@@ -1340,24 +1275,18 @@ export default function Dashboard() {
               </div>
               <p className="text-[11px] text-sage mt-1">سؤال ينتظر تدخلّك</p>
             </button>
-          </section>
         </div>
 
-        <div className="relative bg-pine/50 border border-verde/12 rounded-2xl p-1.5 grid grid-cols-5 mb-4 max-w-2xl">
+        <div className="relative bg-pine/50 border border-verde/12 rounded-2xl p-1.5 grid grid-cols-3 mb-4 max-w-2xl" data-testid="dashboard-tabs">
           {TABS.map((t) => (
             <button
               key={t.id}
               onClick={() => setTab(t.id)}
-              className={`flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-[13px] font-bold transition-colors duration-300 ${
+              className={`flex items-center justify-center gap-1.5 min-h-[44px] rounded-xl text-[13px] font-bold transition-colors duration-300 focus-visible:outline focus-visible:outline-2 focus-visible:outline-oro ${
                 tab === t.id ? "text-oro bg-moss" : "text-sage hover:text-bone"
               }`}
             >
               {t.icon}{t.label}
-              {t.badge ? (
-                <span className="min-w-5 h-5 px-1 rounded-full bg-oro text-ink text-[10.5px] font-bold flex items-center justify-center tabular-nums">
-                  {t.badge}
-                </span>
-              ) : null}
             </button>
           ))}
         </div>
@@ -1694,12 +1623,12 @@ export default function Dashboard() {
           <div className="grid lg:grid-cols-[1fr_400px] gap-4 items-start">
             <section className={`${cls.card} overflow-hidden`}>
               <div className="px-5 py-4 border-b border-verde/10 flex items-center justify-between">
-                <p className="text-sm font-bold text-bone">💬 Widgets الخاصة بك</p>
-                <span className="text-[11px] text-sage">{widgets.length} widget</span>
+                <p className="text-sm font-bold text-bone">💬 الودجات الخاصة بك</p>
+                <span className="text-[11px] text-sage">{widgets.length} ودجة</span>
               </div>
               <ul className="divide-y divide-verde/8">
                 {widgets.length === 0 && (
-                  <li className="px-5 py-12 text-center text-xs text-sage/70">لا widgets بعد.</li>
+                  <li className="px-5 py-12 text-center text-xs text-sage/70">لا ودجات بعد.</li>
                 )}
                 {widgets.map((w) => (
                   <li key={w.id} className="px-5 py-4">
@@ -1720,11 +1649,11 @@ export default function Dashboard() {
             </section>
 
             <aside className={`${cls.card} p-5`}>
-              <p className="text-sm font-bold text-bone mb-4">إنشاء Widget جديد</p>
+              <p className="text-sm font-bold text-bone mb-4">إنشاء ودجة جديدة</p>
               <div className="space-y-3">
-                <input value={widgetForm.name} onChange={(e) => setWidgetForm({ ...widgetForm, name: e.target.value })} className={cls.input} placeholder="اسم الـ widget" />
+                <input value={widgetForm.name} onChange={(e) => setWidgetForm({ ...widgetForm, name: e.target.value })} className={cls.input} placeholder="اسم الودجة" />
                 <textarea value={widgetForm.welcomeMessage} onChange={(e) => setWidgetForm({ ...widgetForm, welcomeMessage: e.target.value })} rows={2} className={`${cls.input} resize-none`} placeholder="رسالة الترحيب" />
-                <button onClick={createWidget} className={`${cls.btn} w-full py-3`}>إنشاء Widget</button>
+                <button onClick={createWidget} className={`${cls.btn} w-full py-3`}>إنشاء ودجة</button>
               </div>
             </aside>
           </div>
@@ -1952,7 +1881,7 @@ export default function Dashboard() {
             <button onClick={() => setWidgetPreview(null)} className="absolute top-4 left-4 text-sage hover:text-bone">
               <IconX className="w-5 h-5" />
             </button>
-            <h3 className="font-display font-bold text-xl text-bone mb-4 text-center">معاينة Widget</h3>
+            <h3 className="font-display font-bold text-xl text-bone mb-4 text-center">معاينة الودجة</h3>
             <p className="text-center text-sm text-sage">{widgetPreview.name}</p>
           </div>
         </div>

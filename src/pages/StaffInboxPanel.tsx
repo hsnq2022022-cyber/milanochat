@@ -32,7 +32,7 @@ export default function StaffInboxPanel({token,tenantId}:{token:string|null;tena
  return <section dir="rtl" data-testid="staff-inbox-panel" className="min-w-0 space-y-3 text-white">
   <header className="flex flex-wrap items-center justify-between gap-3">
    <div>
-    <h2 className="text-lg font-bold">إشعارات الموظفين</h2>
+    <h2 className="sr-only">إشعارات الموظفين</h2>
     <p className="mt-1 text-xs text-white/70">عرض فقط — إشعارات أنشأتها إجراءات التدفقات الداخلية لك.</p>
    </div>
    <button type="button" onClick={()=>void refresh()} disabled={state==="loading"}

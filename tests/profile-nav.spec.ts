@@ -30,20 +30,55 @@ async function setup(page: Page) {
   });
 }
 
-test("dashboard bottom nav has flows + profile and profile page shows email/plan/logout", async ({ page }) => {
+test("dashboard bottom nav has flows + settings and settings page shows email/plan/logout", async ({ page }) => {
   await setup(page);
   await page.goto("/milanochat/#/dashboard");
   const nav = page.getByTestId("bottom-nav");
   await expect(nav).toBeVisible();
   await expect(nav.getByTestId("bottom-nav-flows")).toHaveText("التدفقات");
   await expect(nav.getByTestId("bottom-nav-flows")).toHaveAttribute("href", "#/flows");
-  await nav.getByTestId("bottom-nav-profile").click();
+  await expect(nav.getByTestId("bottom-nav-settings")).toHaveText("الإعدادات");
+  await nav.getByTestId("bottom-nav-settings").click();
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("الإعدادات");
   await expect(page.getByTestId("profile-page")).toBeVisible();
   await expect(page.getByTestId("profile-email")).toHaveText("t@example.test");
+  await expect(page.getByTestId("settings-store-name")).toHaveText("متجر تجريبي");
   await expect(page.getByTestId("profile-plan")).toHaveText("—");
-  await expect(page.getByTestId("profile-logout")).toBeVisible();
+  await expect(page.getByTestId("profile-logout")).toHaveText("تسجيل خروج");
   await page.getByTestId("bottom-nav-home").click();
   await expect(page).toHaveURL(/#\/dashboard/);
+});
+
+test("#/profile still works as an alias of settings", async ({ page }) => {
+  await setup(page);
+  await page.goto("/milanochat/#/profile");
+  await expect(page.getByTestId("profile-page")).toBeVisible();
+  await expect(page.getByTestId("profile-email")).toHaveText("t@example.test");
+});
+
+test("settings has the five sections", async ({ page }) => {
+  await setup(page);
+  await page.goto("/milanochat/#/settings");
+  for (const [id, title] of [
+    ["balance", "رصيد الردود"], ["staff-inbox", "إشعارات الموظفين"], ["delivery-review", "مراجعة الرسائل غير المؤكدة"],
+    ["widgets", "الودجات"], ["unresolved", "المحادثات العالقة"],
+  ] as const) {
+    await expect(page.getByTestId(`settings-section-${id}`).getByRole("heading", { level: 2 }).first()).toContainText(title);
+  }
+  await expect(page.getByTestId("settings-credits")).toContainText("10");
+  await expect(page.getByTestId("settings-widgets-link")).toHaveCount(0);
+  await page.getByTestId("settings-section-widgets-toggle").click();
+  await expect(page.getByTestId("settings-widgets-link")).toHaveAttribute("href", "#/widgets");
+});
+
+test("dashboard has exactly 3 top tabs and no WhatsApp status card", async ({ page }) => {
+  await setup(page);
+  await page.goto("/milanochat/#/dashboard");
+  const tabs = page.getByTestId("dashboard-tabs").getByRole("button");
+  await expect(tabs).toHaveText(["المحادثات", "المعرفة", "القنوات"]);
+  await expect(page.getByTestId("dashboard-kpis")).toBeVisible();
+  await expect(page.getByText("حالة واتساب")).toHaveCount(0);
+  await expect(page.getByText("Widgets")).toHaveCount(0);
 });
 
 test("Handicrafts first with Tajawal fallback; bold renders differently from normal", async ({ page }) => {
