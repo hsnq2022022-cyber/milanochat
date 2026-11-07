@@ -2,6 +2,7 @@ import {useCallback,useEffect,useState} from "react";
 import {getSupabase} from "../lib/supabase";
 import type {FlowDocument} from "./model.ts";
 import type {FlowLanguage} from "./uiLocale.ts";
+import { copyText } from "../lib/clipboard.ts";
 
 type Account={id:string;platform:string;is_active:boolean|null;canActivate?:boolean};
 type Version={revision:number;created_at:string};
@@ -157,7 +158,7 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
   // No token, account ID, customer identity, message or tenant information.
   const report={revision:checkedRevision,kind:readiness.candidateKind,configured,missing};
   try{
-   await navigator.clipboard.writeText(JSON.stringify(report,null,2));
+   await copyText(JSON.stringify(report,null,2));
    setNotice(en?"Readiness report copied.":"تم نسخ تقرير الجاهزية.");
   }catch{
    setNotice(en?"Could not copy the readiness report.":"تعذر نسخ تقرير الجاهزية.");

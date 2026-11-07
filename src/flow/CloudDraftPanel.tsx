@@ -8,6 +8,7 @@ import {
 } from "./cloudDraft";
 import type { DecodeResult, SaveResult } from "./cloudDraft";
 import type { FlowLanguage } from "./uiLocale";
+import { uuid } from "../lib/uuid.ts";
 
 type Props = { onClose: () => void; language: FlowLanguage };
 const control = "min-h-11 rounded-xl border border-[#173D30] bg-[#0F2E24] px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40 hover:border-[#3DD189]";
@@ -97,7 +98,7 @@ export default function CloudDraftPanel({ onClose, language }: Props) {
       ? "Create a NEW INACTIVE local copy of " + remote.flow.doc.name + "? Existing drafts will remain untouched."
       : "استرجاع «" + remote.flow.doc.name + "» كنسخة محلية جديدة وغير مفعّلة؟ لن تُستبدل المسودات الحالية.")) return;
     // لا يستبدل التدفق المفتوح ولا يفعّل النسخة المسترجعة.
-    const restored = useFlowStore.getState().restoreCloudCopy(remote, crypto.randomUUID());
+    const restored = useFlowStore.getState().restoreCloudCopy(remote, uuid());
     setNotice(restored
       ? (english ? "Restored a separate inactive copy." : "استُرجعت نسخة مستقلة وغير مفعّلة.")
       : (english ? "Restore failed: invalid identifier or library capacity." : "تعذّر الاسترجاع؛ تحقق من سعة المكتبة المحلية."));

@@ -14,6 +14,7 @@ import {
   IconPen, IconSettings, IconQuestion, IconHandoff, IconLog, IconCoin, IconSparkle, IconChevronDown,
   IconFacebook, IconInstagram,
 } from "../components/Icons";
+import { copyText } from "../lib/clipboard.ts";
 
 /* ═══════════ الأنواع ═══════════ */
 
@@ -1053,7 +1054,7 @@ export default function Dashboard() {
   const copyEmbedCode = (token: string) => {
     const API = apiBase; // Keep prior legacy embed behavior; Widget out of launch scope.
     const code = `<script src="${apiEnabled ? API : "https://your-server.com"}/widget.js" data-token="${token}"></script>`;
-    navigator.clipboard.writeText(code);
+    copyText(code);
     setCopiedCode(token);
     setTimeout(() => setCopiedCode(null), 2000);
     showToast("تم نسخ كود التضمين");

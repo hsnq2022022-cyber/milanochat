@@ -6,6 +6,7 @@ import type { FlowEdge } from "./model";
 import { useFlowStore } from "./store";
 import { findOpenPosition } from "./layout";
 import { SKIN_COLOR } from "./skin";
+import { uuid } from "../lib/uuid.ts";
 
 export default function AutomationEdge(props:EdgeProps<FlowEdge>){
   const {id,sourceX,sourceY,targetX,targetY,sourcePosition,targetPosition,selected,markerEnd}=props;
@@ -25,8 +26,8 @@ export default function AutomationEdge(props:EdgeProps<FlowEdge>){
     const draft=makeNode("message",preferred,{title:"خطوة جديدة",text:"اكتب رسالتك هنا"});
     const fresh={...draft,position:findOpenPosition(doc.nodes,draft,preferred)};
     const edges=doc.edges.filter(e=>e.id!==id);
-    edges.push({...old,id:crypto.randomUUID(),target:fresh.id,targetHandle:"in"},
-      {id:crypto.randomUUID(),source:fresh.id,sourceHandle:"next",target:old.target,targetHandle:old.targetHandle,type:"flowEdge",data:{label:"التالي"}});
+    edges.push({...old,id:uuid(),target:fresh.id,targetHandle:"in"},
+      {id:uuid(),source:fresh.id,sourceHandle:"next",target:old.target,targetHandle:old.targetHandle,type:"flowEdge",data:{label:"التالي"}});
     store.replace({...doc,nodes:[...doc.nodes,fresh],edges});
   };
   return <>

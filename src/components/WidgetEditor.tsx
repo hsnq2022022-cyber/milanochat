@@ -16,6 +16,7 @@ import {
   IconCode,
   IconSparkle,
 } from "./Icons";
+import { copyText } from "../lib/clipboard.ts";
 
 type EditorTab =
   | "general"
@@ -336,7 +337,7 @@ export default function WidgetEditor({
     }
 
     try {
-      await navigator.clipboard.writeText(embedCode);
+      await copyText(embedCode);
       setCopiedCode(true);
       window.setTimeout(() => setCopiedCode(false), 2000);
     } catch {

@@ -3,6 +3,7 @@ import { Trash2, ArrowUp, ArrowDown, Type, Image as ImageIcon, FileText, Clock3,
 import type { ContentBlock, FlowNode } from "./model";
 import { useFlowStore } from "./store";
 import { getSupabase } from "../lib/supabase";
+import { uuid } from "../lib/uuid.ts";
 
 const types: Array<{id:ContentBlock["type"];label:string;note:string;icon:typeof Type}>=[
   {id:"text",label:"نص",note:"رسالة نصية إضافية",icon:Type},
@@ -22,7 +23,7 @@ export default function MessageBlocksEditor({node}:{node:FlowNode}){
   const patch=(id:string,part:Partial<ContentBlock>)=>edit(blocks.map(b=>b.id===id?{...b,...part}:b));
   const add=(type:ContentBlock["type"])=>{
     if(blocks.length>=24){setStatus("الحد الأقصى 24 مكوّنًا في الرسالة.");return;}
-    edit([...blocks,{id:crypto.randomUUID(),type,text:type==="text"?"اكتب نصًا إضافيًا":type==="collection"?"اكتب بياناتك هنا":"",url:"",seconds:3,field:"response",inputMode:"text"}]);
+    edit([...blocks,{id:uuid(),type,text:type==="text"?"اكتب نصًا إضافيًا":type==="collection"?"اكتب بياناتك هنا":"",url:"",seconds:3,field:"response",inputMode:"text"}]);
   };
   const reorder=(index:number,dir:-1|1)=>{
     const i=index+dir;if(i<0||i>=blocks.length)return;
@@ -52,7 +53,7 @@ export default function MessageBlocksEditor({node}:{node:FlowNode}){
         if(output.length>700000){setStatus("الصورة كبيرة بعد الضغط، اختر صورة أصغر.");return;}
         patch(block.id,{url:output});setStatus("الصورة مسودة محلية فقط ولا يمكن إرسالها فعليًا قبل تسجيل الدخول.");return;
       }
-      const path=`${uid}/${crypto.randomUUID()}.jpg`;
+      const path=`${uid}/${uuid()}.jpg`;
       const {error}=await client.storage.from("flow-media").upload(path,blob,{contentType:"image/jpeg",upsert:false});
       if(error){setStatus("فشل رفع الصورة: "+(error.message||"خطأ غير معروف"));return;}
       patch(block.id,{url:client.storage.from("flow-media").getPublicUrl(path).data.publicUrl});setStatus("رُفعت الصورة بنجاح وأُضيفت إلى الرسالة.");

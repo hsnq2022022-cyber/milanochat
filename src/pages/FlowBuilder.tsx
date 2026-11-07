@@ -36,6 +36,7 @@ import { useFlowStore } from "../flow/store";
 import { getLibraryRecoveryReport, saveLibrary, snapshotLibrary } from "../flow/library";
 import { flowText, flowKindLabel } from "../flow/uiLocale";
 import type { FlowLanguage } from "../flow/uiLocale";
+import { uuid } from "../lib/uuid.ts";
 
 // لا تعرض أدوات الحفظ السحابي في الإنتاج قبل تجهيز الجدول والموافقة على النشر.
 const CLOUD_DRAFT_UI_ENABLED=(import.meta as ImportMeta & {env?:Record<string,string|undefined>}).env?.VITE_ENABLE_CLOUD_FLOW_DRAFTS==="true";
@@ -174,9 +175,9 @@ function Editor(){
     if(key==="z"){e.preventDefault();if(e.shiftKey)s.redo();else s.undo();}
     if(key==="y"){e.preventDefault();s.redo();}
     if(key==="c"&&s.selectedId){const n=s.doc.nodes.find(n=>n.id===s.selectedId);if(n){e.preventDefault();clipboard.current=n;setNotice("تم نسخ العقدة.");}}
-    if(key==="v"&&clipboard.current){e.preventDefault();const n=clipboard.current;const draft=makeNode(n.data.kind,{x:n.position.x+cardSize(n).width+85,y:n.position.y+85},{...n.data,options:n.data.options.map(o=>({...o,id:crypto.randomUUID()}))});
+    if(key==="v"&&clipboard.current){e.preventDefault();const n=clipboard.current;const draft=makeNode(n.data.kind,{x:n.position.x+cardSize(n).width+85,y:n.position.y+85},{...n.data,options:n.data.options.map(o=>({...o,id:uuid()}))});
       s.addNode({...draft,position:findOpenPosition(s.doc.nodes,draft,draft.position)});setNotice("تم لصق العقدة.");}
-    if(key==="d"&&s.selectedId){e.preventDefault();const n=s.doc.nodes.find(n=>n.id===s.selectedId);if(n){const draft=makeNode(n.data.kind,{x:n.position.x+cardSize(n).width+85,y:n.position.y+85},{...n.data,options:n.data.options.map(o=>({...o,id:crypto.randomUUID()}))});
+    if(key==="d"&&s.selectedId){e.preventDefault();const n=s.doc.nodes.find(n=>n.id===s.selectedId);if(n){const draft=makeNode(n.data.kind,{x:n.position.x+cardSize(n).width+85,y:n.position.y+85},{...n.data,options:n.data.options.map(o=>({...o,id:uuid()}))});
       s.addNode({...draft,position:findOpenPosition(s.doc.nodes,draft,draft.position)});}}
   },[]);
   useEffect(()=>{window.addEventListener("keydown",onKeyboard);return()=>window.removeEventListener("keydown",onKeyboard);},[onKeyboard]);
@@ -195,8 +196,8 @@ function Editor(){
     const fresh={...draft,position:findOpenPosition(doc.nodes,draft,preferred)};
     store().replace({...doc,nodes:[...doc.nodes,fresh],edges:[
       ...doc.edges.filter(e=>e.id!==id),
-      {...old,id:crypto.randomUUID(),target:fresh.id,targetHandle:"in"},
-      {id:crypto.randomUUID(),type:"flowEdge",source:fresh.id,sourceHandle:"next",target:old.target,targetHandle:old.targetHandle||"in",data:{label:"التالي"}}
+      {...old,id:uuid(),target:fresh.id,targetHandle:"in"},
+      {id:uuid(),type:"flowEdge",source:fresh.id,sourceHandle:"next",target:old.target,targetHandle:old.targetHandle||"in",data:{label:"التالي"}}
     ]});
     setEdgeMenu(null);
   };

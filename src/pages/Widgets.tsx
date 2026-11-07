@@ -17,6 +17,7 @@ import {
   IconX,
   IconChat,
 } from "../components/Icons";
+import { copyText } from "../lib/clipboard.ts";
 
 export default function Widgets() {
   const sb = getSupabase();
@@ -134,7 +135,7 @@ return (
   // Copy
   const copyEmbedCode = (widget: Widget) => {
     const code = `<script src="https://nmhefwvhoholcjrbbila.supabase.co/functions/v1/milan-api?action=widget.js" data-token="${widget.public_token}"></script>`;
-    navigator.clipboard.writeText(code);
+    copyText(code);
     setCopiedToken(widget.public_token);
     setTimeout(() => setCopiedToken(null), 2000);
     showToast("تم نسخ كود التضمين");

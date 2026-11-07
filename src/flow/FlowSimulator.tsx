@@ -6,6 +6,7 @@ import { chooseWeightedPort, MAX_SIMULATOR_STEPS, normalizeArabicDigits, validCu
 import type { SavedFlow } from "./library";
 import { flowText } from "./uiLocale";
 import type { FlowLanguage } from "./uiLocale";
+import { uuid } from "../lib/uuid.ts";
 
 type Bubble = {id:string;side:"bot"|"user"|"system";text:string;image?:string;pdf?:string};
 type SimState = {
@@ -15,7 +16,7 @@ type SimState = {
   stepCount:number;
 };
 const btn="rounded-xl border border-[#275443] bg-[#0F2E24] px-3 py-2 text-xs hover:bg-[#173D30]";
-const bubble=(side:Bubble["side"],text:string,extra?:Partial<Bubble>):Bubble=>({id:crypto.randomUUID(),side,text,...extra});
+const bubble=(side:Bubble["side"],text:string,extra?:Partial<Bubble>):Bubble=>({id:uuid(),side,text,...extra});
 const interpolate=(s:string,vars:Record<string,string>)=>s.replace(/\{\{(\w+)\}\}/g,(_,key:string)=>vars[key]||"");
 function evaluate(n:FlowNode,vars:Record<string,string>){
   const value=vars[n.data.conditionField]||"",test=n.data.conditionValue;

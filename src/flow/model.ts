@@ -1,4 +1,5 @@
 import type { Node, Edge, XYPosition, Connection } from "@xyflow/react";
+import { uuid } from "../lib/uuid.ts";
 
 export type Kind = "trigger" | "message" | "question" | "condition" | "delay" | "action" | "randomizer" | "goto" | "request" | "end";
 export type Platform = "instagram" | "messenger" | "whatsapp";
@@ -96,7 +97,7 @@ export const ACCENT: Record<Kind,string> = {
   request:"#38BDF8", end:"#F87171",
 };
 export const KIND_LIST = Object.keys(LABELS) as Kind[];
-const id = () => crypto.randomUUID();
+const id = () => uuid();
 export function makeNode(kind: Kind, position: XYPosition, opts?: Partial<FlowData>): FlowNode {
   return {
     id: id(), position, type:"flowNode",

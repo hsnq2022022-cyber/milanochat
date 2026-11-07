@@ -4,6 +4,7 @@ import { canConnect, edgeFor, makeNode, URL_BUTTON_LABEL_MAX, URL_BUTTON_URL_MAX
 import type { Choice, ButtonAction, FlowNode, FlowData, Kind } from "./model";
 import { useFlowStore } from "./store";
 import { cardSize, findOpenPosition } from "./layout";
+import { uuid } from "../lib/uuid.ts";
 
 const input="w-full rounded-xl border border-[#275443] bg-[#0F2E24] px-3 py-2.5 text-sm text-white outline-none focus:border-[#3DD189]";
 const btn="inline-flex items-center gap-1.5 rounded-xl border border-[#275443] px-3 py-2 text-xs hover:bg-[#173D30]";
@@ -36,13 +37,13 @@ export default function ButtonActionEditor({node}:{node:FlowNode}){
   };
   const add=(type:Choice["buttonType"])=>{
     if(d.options.length>=10)return;
-    const id=crypto.randomUUID();
+    const id=uuid();
     persist([...d.options,{id,label:type==="quick_reply"?"رد سريع جديد":"زر جديد",buttonType:type,action:"step"}]);
     setActive(id);
   };
   const addUrl=()=>{
     if(d.options.length>=10)return;
-    const id=crypto.randomUUID();
+    const id=uuid();
     persist([...d.options,{id,label:"",buttonType:"button",action:"website",url:""}]);
     setActive(id);
   };

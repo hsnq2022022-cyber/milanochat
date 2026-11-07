@@ -72,3 +72,17 @@ test("add-step palette lists the logic nodes by name and the AI/tag/notify/hando
   await pal.getByTestId("pal-preset-handoff").click();
   await expect(page.locator(".react-flow__node")).toHaveCount(before+1);
 });
+
+test("builder works on an insecure origin where crypto.randomUUID is undefined (plain http LAN IP)",async({page})=>{
+  const errors:string[]=[];
+  page.on("pageerror",e=>errors.push(e.message));
+  await page.addInitScript(()=>{Object.defineProperty(crypto,"randomUUID",{value:undefined,configurable:true});});
+  await page.goto("/milanochat/#/flows");
+  await expect(page.locator(".react-flow__node").first()).toBeVisible();
+  expect(await page.evaluate(()=>typeof crypto.randomUUID)).toBe("undefined");
+  const before=await page.locator(".react-flow__node").count();
+  await page.locator(".fs-fab").click();
+  await page.locator(".fs-palette").getByRole("button",{name:"سؤال وجمع بيانات",exact:true}).click();
+  await expect(page.locator(".react-flow__node")).toHaveCount(before+1);
+  expect(errors.filter(m=>/randomUUID|is not a function/i.test(m))).toEqual([]);
+});

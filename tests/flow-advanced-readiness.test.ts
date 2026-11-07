@@ -56,7 +56,7 @@ test("server checks are owner-scoped, read-only, and do not expose secret values
  assert.match(ui,/readinessNeeds\(report\)\.buttons/);
  assert.match(ui,/r\.candidateKind==="delay"/);
  assert.match(ui,/data-testid="flow-copy-readiness"/);
- assert.match(ui,/navigator\.clipboard\.writeText\(JSON\.stringify\(report,null,2\)\)/);
+ assert.match(ui,/copyText\(JSON\.stringify\(report,null,2\)\)/);
  assert.match(ui,/const report=\{revision:checkedRevision,kind:readiness\.candidateKind,configured,missing\}/);
 
  assert.match(ui,/data-testid=\{"readiness-published-revision-"\+v\.revision\}/);
