@@ -5,6 +5,12 @@ import {authorizeFlowAI} from "../../../src/flow/aiMetricsGate.ts";
 export type KnowledgeScope={
  tenantId:string;publishedTenantId:string;conversationTenantId:string;
  agentEnabled:boolean;humanTakeover:boolean;credits:number;businessName:string;
+ /**
+  * Optional tenant system message (tenants.agent_system_prompt, AI step only,
+  * aiStep.ts). Tone/dialect guidance appended to the system prompt; it never
+  * relaxes the verified-knowledge rule. Absent/empty: prompt unchanged.
+  */
+ ownerInstructions?:string|null;
 };
 export type KnowledgeDependencies={
  embed(text:string):Promise<number[]>;
@@ -82,6 +88,12 @@ export async function answerWithVerifiedKnowledgeOutcome(
  }
 }
 
+/** Owner tone/dialect instructions; "" when absent (prompt byte-identical). */
+function ownerInstructionsBlock(raw:unknown):string{
+ const text=typeof raw==="string"?raw.trim().slice(0,8000):"";
+ return text?"\nOwner instructions (tone and dialect only; they never override the rule"+
+  " to answer ONLY with supplied verified knowledge):\n"+text:"";
+}
 async function verifiedKnowledgeCore(
  sb:Pick<SupabaseClient,"rpc"|"from">,scope:KnowledgeScope,question:string,deps:KnowledgeDependencies
 ):Promise<CoreResult>{
@@ -143,7 +155,8 @@ async function verifiedKnowledgeCore(
   "You are an Arabic business assistant for "+scope.businessName+
   ". Answer ONLY with supplied verified knowledge. If unknown return grounded:false."+
   " Return JSON {answer:string,grounded:boolean,supporting_quote:string}."+
-  " supporting_quote MUST be an exact contiguous excerpt from context.",
+  " supporting_quote MUST be an exact contiguous excerpt from context."+
+  ownerInstructionsBlock(scope.ownerInstructions),
   "Verified store knowledge:\n"+context+"\nCustomer:\n"+question.trim()
  );
  const answer=typeof result.answer==="string"?result.answer.trim():"";

@@ -10,6 +10,7 @@ import type {FlowDocument} from "../../../src/flow/model.ts";
 // Chained planning: after a wake, messages, a second delay, a question or the
 // end are planned together (max 5 effects, seq-tagged) and committed at once.
 import {planUntilWait,seedFromEventKey} from "../../../src/flow/runtimeChain.ts";
+import {aiStepEnabled} from "../flow-outbox-worker/aiStep.ts";
 import {canWakeDurableRun,wakeEndReason,type WakeEligibility} from "./eligibility.ts";
 import {wakeMediaSendEnabled,wakeEffectsMediaAllowed,endWakeForDisallowedMedia,
  WAKE_MEDIA_END_REASON} from "./mediaGuard.ts";
@@ -152,8 +153,12 @@ Deno.serve(async(req)=>{
    });
    if(plan.error||plan.state.status==="blocked")throw Error("blocked runtime plan");
    // LLM needs owner-scoped verified knowledge and human/credit checks before
-   // any send. This worker does not emit unsupported AI effects.
-   if(plan.effects.some(e=>e.kind==="message"&&"source" in e&&e.source==="knowledge_ai"))
+   // any send. This worker does not emit unsupported AI effects. AI step
+   // (FLOW_AI_STEP_ENABLED + FLOW_RAG_ENABLED, aiStep.ts, fail-closed):
+   // Instagram runs may commit the knowledge_ai effect; the Outbox worker
+   // generates and sends the answer with all its gates. OFF: as before.
+   if(plan.effects.some(e=>e.kind==="message"&&"source" in e&&e.source==="knowledge_ai")&&
+      !(run.platform==="instagram"&&aiStepEnabled()))
     throw Error("knowledge AI requires trusted handler, no emission");
    // Same image rule as the ingress (liveEffectKinds/safePlan): message_image
    // only with FLOW_MEDIA_SEND_ENABLED on and a re-validated URL. Otherwise

@@ -19,8 +19,8 @@
   --fs-bg:#061A14; --fs-card:#0B241C; --fs-field:#0F2E24; --fs-line:#173D30;
   --fs-brand:#3DD189; --fs-text:#FFFFFF; --fs-muted:#8B9E96; --fs-gold:#E5B54B; --fs-danger:#F45B69;
   --fs-ease:cubic-bezier(.2,.8,.2,1);
-  --fs-display:"Handicrafts",sans-serif;
-  --fs-ui:"Handicrafts",sans-serif;
+  --fs-display:"Handicrafts","Tajawal",sans-serif;
+  --fs-ui:"Handicrafts","Tajawal",sans-serif;
   background:var(--fs-bg);color:var(--fs-text);font-family:var(--fs-ui);
   -webkit-tap-highlight-color:transparent;
 }

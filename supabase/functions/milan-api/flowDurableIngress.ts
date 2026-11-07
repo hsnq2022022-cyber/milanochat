@@ -17,6 +17,7 @@ import {multichannelCapabilityProblem,DOCUMENT_PLATFORM,type MultichannelPlatfor
  from "./flowPlatformCapabilities.ts";
 import {whatsappCtaProblem,facebookButtonTemplateProblem}
  from "../flow-outbox-worker/multichannelSend.ts";
+import {aiStepEnabled} from "../flow-outbox-worker/aiStep.ts";
 
 type RecordValue=Record<string,unknown>;
 const record=(v:unknown):v is RecordValue=>!!v&&typeof v==="object"&&!Array.isArray(v);
@@ -211,9 +212,20 @@ function durablePorts(d:RecordValue,triggerPlatform="instagram"):{ports:string[]
      d.conditionValue.trim().length>0&&d.conditionValue.length<=250))?
     {ports:["yes","no"],required:["yes","no"]}:null;
   case "action":{
-   // set_field, tag/untag, notify and handoff; AI stays unsupported live.
-   // Internal actions run in flow-internal-worker/internalEffects.ts (never
-   // sent to Meta, never billed) behind FLOW_INTERNAL_ACTIONS_ENABLED.
+   // set_field, tag/untag, notify and handoff. Internal actions run in
+   // flow-internal-worker/internalEffects.ts (never sent to Meta, never
+   // billed) behind FLOW_INTERNAL_ACTIONS_ENABLED.
+   // AI step (actionType "ai"; the button action "ai" creates the same node):
+   // ONLY while FLOW_AI_STEP_ENABLED and FLOW_RAG_ENABLED are both on
+   // (aiStep.ts, fail-closed), Instagram only (MULTICHANNEL_NODE_KINDS keeps
+   // refusing it on WhatsApp/Facebook). The planner emits the existing
+   // knowledge_ai effect; text typed into the node would never be used, so
+   // it is refused. OFF: refused exactly as before.
+   if(d.actionType==="ai")
+    return triggerPlatform==="instagram"&&aiStepEnabled()&&
+     (d.actionValue===undefined||d.actionValue===null||
+      (typeof d.actionValue==="string"&&d.actionValue.trim()===""))?
+     {ports:["next"],required:[]}:null;
    if(d.actionType==="handoff")
     // Terminal: the planner never follows an edge out of a handoff, so none
     // may exist. The optional handoff message is a message node BEFORE it;
@@ -366,7 +378,8 @@ const effectsPayload=(effects:ChainPlan["effects"])=>
 /**
  * Effects the live engine may commit. Internal kinds (tag/untag/
  * staff_notification/handoff) are executed by internalEffects.ts after every
- * earlier effect of the run; knowledge_ai ("source") stays excluded.
+ * earlier effect of the run; knowledge_ai ("source") stays excluded unless
+ * FLOW_AI_STEP_ENABLED is on (aiEffectOk below).
  */
 export const LIVE_EFFECT_KINDS=["message","question","delay","tag","untag","staff_notification","handoff"];
 /** Image attachment effect kind (planner: {kind,idempotencyKey,nodeId,url}). */
@@ -398,6 +411,16 @@ const websiteEffectOk=(e:ChainPlan["effects"][number],platform:string)=>!("websi
    platform==="facebook"?multichannelEnabled()&&facebookButtonTemplateProblem(e.text,e.websiteButtons)===null:
    false));
 /**
+ * knowledge_ai effect of an AI step: committed only while FLOW_AI_STEP_ENABLED
+ * and FLOW_RAG_ENABLED are on, on Instagram, in the exact planner shape
+ * (message, empty text, no buttons). The Outbox worker generates the answer
+ * (aiStep.ts). OFF: any effect carrying "source" is refused, as before.
+ */
+const aiEffectOk=(e:ChainPlan["effects"][number],platform:string)=>!("source" in e)||
+ (platform==="instagram"&&aiStepEnabled()&&e.kind==="message"&&
+  (e as {source?:unknown}).source==="knowledge_ai"&&(e as {text?:unknown}).text===""&&
+  safeId(e.nodeId)&&!("websiteButtons" in e));
+/**
  * A handoff ends the automated flow: it must be the LAST effect and the run
  * must end in status "handoff" (and "handoff" only with that effect).
  * `platform` = the event's account platform (default Instagram, unchanged).
@@ -408,7 +431,7 @@ export const safePlan=(plan:ChainPlan,platform:string="instagram")=>{
  ["completed","sleeping","awaiting_input","handoff"].includes(plan.state.status)&&
  plan.effects.length>=1&&plan.effects.length<=MAX_CHAIN_EFFECTS&&
  plan.effects.every((e,i)=>e.seq===i&&
-  kinds.includes(e.kind)&&!("source" in e)&&imageEffectOk(e,platform)&&websiteEffectOk(e,platform)&&
+  kinds.includes(e.kind)&&aiEffectOk(e,platform)&&imageEffectOk(e,platform)&&websiteEffectOk(e,platform)&&
   (e.kind!=="handoff"||i===plan.effects.length-1))&&
  (plan.state.status==="handoff")===(plan.effects[plan.effects.length-1].kind==="handoff");
 };

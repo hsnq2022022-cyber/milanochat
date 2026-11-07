@@ -1360,3 +1360,99 @@ test("multichannel flag: Instagram start, tap, free text and test mode are ident
   assert.equal(supportedDurableDocument(doc,"whatsapp"),false,"Instagram trigger never runs on WhatsApp");
  }finally{(globalThis as any).Deno=old;}
 });
+
+// ---- AI step (FLOW_AI_STEP_ENABLED + FLOW_RAG_ENABLED, default OFF).
+import {aiStepEnabled} from "../supabase/functions/flow-outbox-worker/aiStep.ts";
+const aiNode=(nid:string,actionValue:unknown="")=>({id:nid,data:{kind:"action",actionType:"ai",actionValue}});
+const aiDoc={version:3,name:"ai",nodes:[T,aiNode("ai")],edges:[E("start","ai")]};
+const aiChainDoc={version:3,name:"ai chain",nodes:[T,txt("hi","أهلاً بك"),aiNode("ai"),txt("bye","شكراً لك")],
+ edges:[E("start","hi"),E("hi","ai"),E("ai","bye")]};
+// The button action "ai" (ButtonActionEditor) turns the button into a step
+// button wired to a new action node with actionType "ai": the same node.
+const aiButtonDoc={version:3,name:"ai button",nodes:[T,
+ {id:"menu",data:{kind:"message",text:"اختر",image:"",contentBlocks:[],
+  options:[{id:"ask",label:"اسأل",buttonType:"quick_reply",action:"step"}]}},aiNode("ai")],
+ edges:[E("start","menu"),E("menu","ai","ask")]};
+const AI_ON={FLOW_AI_STEP_ENABLED:"true",FLOW_RAG_ENABLED:"true"};
+const withAiEnv=<T,>(env:Record<string,string|undefined>,fn:()=>T):T=>{
+ const old=(globalThis as any).Deno;(globalThis as any).Deno={env:{get:(k:string)=>env[k]}};
+ try{return fn();}finally{(globalThis as any).Deno=old;}
+};
+const aiEffect=(over:Record<string,unknown>={})=>({kind:"message",source:"knowledge_ai",text:"",
+ idempotencyKey:"k0",nodeId:"ai",seq:0,...over}) as any;
+const aiState=(status="completed")=>({flowId:"f",revision:1,nodeId:"ai",status,stepCount:3,variables:{},wakeAt:null}) as any;
+test("AI step flag OFF: the AI action and its effect are refused exactly as before",()=>{
+ for(const env of [{},{FLOW_AI_STEP_ENABLED:"true"},{FLOW_RAG_ENABLED:"true"},
+  {FLOW_AI_STEP_ENABLED:"1",FLOW_RAG_ENABLED:"true"},{FLOW_AI_STEP_ENABLED:"true",FLOW_RAG_ENABLED:"TRUE"},
+  {FLOW_AI_STEP_ENABLED:"false",FLOW_RAG_ENABLED:"true"}])
+  withAiEnv(env,()=>{
+   assert.equal(aiStepEnabled(),false,JSON.stringify(env));
+   for(const d of [aiDoc,aiChainDoc,aiButtonDoc])assert.equal(supportedDurableDocument(d),false);
+   assert.equal(durableCandidateKind(aiChainDoc),"unsupported");
+   assert.equal(safePlan({state:aiState(),effects:[aiEffect()]}),false);
+   assert.equal(supportedDurableDocument(chainDoc),true,"other graphs unchanged");
+  });
+ // No Deno runtime at all: fail closed.
+ const old=(globalThis as any).Deno;delete (globalThis as any).Deno;
+ try{
+  assert.equal(aiStepEnabled(),false);
+  assert.equal(supportedDurableDocument(aiDoc),false);
+  assert.equal(safePlan({state:aiState(),effects:[aiEffect()]}),false);
+ }finally{(globalThis as any).Deno=old;}
+ // A throwing env reader is OFF too.
+ assert.equal(aiStepEnabled(()=>{throw Error("x");}),false);
+ const src=readFileSync("supabase/functions/flow-outbox-worker/aiStep.ts","utf8");
+ assert.match(src,/return read\("FLOW_AI_STEP_ENABLED"\)==="true"&&read\("FLOW_RAG_ENABLED"\)==="true";\s*\}catch\{return false;\}/);
+});
+test("AI step flag ON: Instagram graphs with the AI action are whitelisted and plan the knowledge_ai effect",()=>{
+ withAiEnv(AI_ON,()=>{
+  for(const d of [aiDoc,aiChainDoc,aiButtonDoc])assert.equal(supportedDurableDocument(d),true);
+  assert.equal(durableCandidateKind(aiChainDoc),"text");
+  assert.equal(durableCandidateKind(aiButtonDoc),"buttons");
+  assert.equal(durableNeedsInternalActions(aiChainDoc as any),false);
+  // Text typed into the AI node is never used: refused. Other platforms: refused.
+  assert.equal(supportedDurableDocument({...aiDoc,nodes:[T,aiNode("ai","prompt")]}),false);
+  assert.equal(supportedDurableDocument({...aiDoc,nodes:[T,aiNode("ai",5)]}),false);
+  assert.equal(supportedDurableDocument(aiDoc,"whatsapp"),false);
+  // The planner output is exactly the existing knowledge_ai effect.
+  const doc=aiChainDoc as any;
+  const plan=planUntilWait(doc,createRuntimeState(doc,"f",1),{eventKey:"e1",nowMs:1,seed:1});
+  assert.equal(plan.state.status,"completed");
+  assert.deepEqual(plan.effects.map(e=>[e.kind,(e as any).source??null,(e as any).text]),
+   [["message",null,"أهلاً بك"],["message","knowledge_ai",""],["message",null,"شكراً لك"]]);
+  assert.equal(safePlan(plan),true);
+  assert.equal(safePlan(plan,"whatsapp"),false);
+  assert.equal(safePlan(plan,"facebook"),false);
+  // Only the exact planner shape is committable.
+  assert.equal(safePlan({state:aiState(),effects:[aiEffect()]}),true);
+  for(const bad of [aiEffect({text:"x"}),aiEffect({source:"other"}),aiEffect({kind:"question"}),
+   aiEffect({nodeId:"bad id"}),aiEffect({websiteButtons:[]})])
+   assert.equal(safePlan({state:aiState(),effects:[bad]}),false,JSON.stringify(bad));
+ });
+ // Multichannel stays refused even with every flag on.
+ withAiEnv({...AI_ON,FLOW_MULTICHANNEL_ENABLED:"true"},()=>{
+  const wa={...aiDoc,nodes:[{id:"start",data:{kind:"trigger",platform:"whatsapp",triggerMode:"message"}},aiNode("ai")]};
+  assert.equal(supportedDurableDocument(wa,"whatsapp"),false);
+ });
+});
+test("AI step flag ON: a new run commits the knowledge_ai effect through the unchanged begin RPC",async()=>{
+ const run=async(env:Record<string,string|undefined>)=>{
+  const old=(globalThis as any).Deno;
+  (globalThis as any).Deno={env:{get:(k:string)=>k in env?env[k]:canaryEnv.env.get(k)}};
+  try{
+   const h=lifecycleDb({document:aiChainDoc});
+   return {r:await attemptDurableInstagram(h.db,baseEvent),calls:h.calls};
+  }finally{(globalThis as any).Deno=old;}
+ };
+ const on=await run(AI_ON);
+ assert.equal(on.r,"handled");
+ const begin=on.calls.find(c=>c.name==="flow_begin_durable_run_superseding")!.args;
+ assert.equal(begin.p_status,"completed");
+ assert.deepEqual(begin.p_effects.map((e:any)=>[e.kind,e.payload.source??null,e.payload.seq]),
+  [["message",null,0],["message","knowledge_ai",1],["message",null,2]]);
+ assert.equal(begin.p_effects[1].payload.text,"");
+ // Flag OFF: unsupported graph, V2 answers, nothing is claimed or committed.
+ const off=await run({});
+ assert.equal(off.r,"fallback");
+ assert.deepEqual(off.calls,[]);
+});

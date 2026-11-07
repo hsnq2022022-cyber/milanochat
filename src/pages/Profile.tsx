@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { getSupabase } from "../lib/supabase";
+import BottomNav from "../components/BottomNav";
 
 /* الملف الشخصي: البريد من جلسة Supabase، والخطة غير متوفرة في حالة التطبيق حاليًا فتظهر «—». */
 export default function Profile() {
@@ -59,17 +60,7 @@ export default function Profile() {
         </button>
       </main>
 
-      <nav
-        data-testid="bottom-nav"
-        aria-label="التنقل الرئيسي"
-        className="fixed bottom-0 inset-x-0 z-40 bg-night/95 backdrop-blur-md border-t border-verde/15 pb-[env(safe-area-inset-bottom)]"
-      >
-        <div className="max-w-6xl mx-auto grid grid-cols-3 h-16">
-          <a href="#/dashboard" data-testid="bottom-nav-home" className="flex flex-col items-center justify-center gap-1 text-xs font-bold text-sage hover:text-bone">الرئيسية</a>
-          <a href="#/flows" data-testid="bottom-nav-flows" className="flex flex-col items-center justify-center gap-1 text-xs font-bold text-sage hover:text-bone">التدفقات</a>
-          <a href="#/profile" data-testid="bottom-nav-profile" aria-current="page" className="flex flex-col items-center justify-center gap-1 text-xs font-bold text-oro">الملف الشخصي</a>
-        </div>
-      </nav>
+      <BottomNav active="profile" />
     </div>
   );
 }

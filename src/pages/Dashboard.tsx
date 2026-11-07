@@ -6,6 +6,7 @@ import confetti from "canvas-confetti";
 import SafeAvatar from "../components/SafeAvatar";
 import DeliveryReviewPanel from "./DeliveryReviewPanel";
 import StaffInboxPanel from "./StaffInboxPanel";
+import BottomNav from "../components/BottomNav";
 import { api, apiAuthFetch, apiBase, apiEnabled, backendMode, paymentCheckoutEnabled, type WaSnapshot } from "../lib/api";
 import { getSupabase, getStoredClaim, clearStoredClaim } from "../lib/supabase";
 import { CHANNELS, ChannelBadge, detectChannel, type ChannelId } from "../lib/channels";
@@ -2002,30 +2003,7 @@ export default function Dashboard() {
         </div>
       )}
 
-      <nav
-        data-testid="bottom-nav"
-        aria-label="التنقل الرئيسي"
-        className="fixed bottom-0 inset-x-0 z-40 bg-night/95 backdrop-blur-md border-t border-verde/15 pb-[env(safe-area-inset-bottom)]"
-      >
-        <div className="max-w-6xl mx-auto grid grid-cols-3 h-16">
-          {([
-            { href: "#/dashboard", label: "الرئيسية", testid: "bottom-nav-home", icon: <IconLog className="w-5 h-5" />, current: true },
-            { href: "#/flows", label: "التدفقات", testid: "bottom-nav-flows", icon: <IconSparkle className="w-5 h-5" />, current: false },
-            { href: "#/profile", label: "الملف الشخصي", testid: "bottom-nav-profile", icon: <IconSettings className="w-5 h-5" />, current: false },
-          ]).map((i) => (
-            <a
-              key={i.testid}
-              href={i.href}
-              data-testid={i.testid}
-              aria-current={i.current ? "page" : undefined}
-              className={`flex flex-col items-center justify-center gap-1 text-xs font-bold transition-colors ${i.current ? "text-oro" : "text-sage hover:text-bone"}`}
-            >
-              {i.icon}
-              <span>{i.label}</span>
-            </a>
-          ))}
-        </div>
-      </nav>
+      <BottomNav active="home" />
 
       {toast && (
         <div className="fixed bottom-24 inset-x-0 z-50 flex justify-center px-4 pointer-events-none">

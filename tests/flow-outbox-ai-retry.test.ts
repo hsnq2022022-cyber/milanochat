@@ -483,3 +483,278 @@ test("worker: charge_pending recovery terminalizes only legacy rows, tenant-scop
  assert.match(review,/FAILED_OUTBOX_STATUSES = \["uncertain", "dead_letter", "billing_blocked"\]/);
  assert.match(AI_ANSWER_MISSING_CODE,/^[a-z0-9_]{1,48}$/);
 });
+
+// ------------------------------------------------------------ AI step (FLOW_AI_STEP_ENABLED)
+import {aiStepEnabled,lastInboundQuestion,tenantSystemPrompt,generateAiStepAnswer,
+ liveBotKnowledgeDependencies,MAX_SYSTEM_PROMPT_CHARS} from "../supabase/functions/flow-outbox-worker/aiStep.ts";
+import {encryptMessageBody,decryptAccountToken,sendProviderMessage} from
+ "../supabase/functions/flow-outbox-worker/deliveryCore.ts";
+const FIELD_KEY="test-field-key";
+const QUESTION="How much is the item?";
+const OWNER_PROMPT="Speak in Iraqi dialect, be warm.";
+type Read={table:string;filters:Record<string,unknown>;order?:unknown;limit?:number};
+/** Tenant-scoped fake: knowledge for tenant A only, prompt per tenant, inbound messages. */
+function aiDb(o:{prompt?:string|null;promptError?:boolean;messages?:unknown[];messagesError?:boolean;
+ knowledgeTenant?:string}={}){
+ const reads:Read[]=[],rpcs:Array<{fn:string;args:any}>=[];
+ const kt=o.knowledgeTenant??"A";
+ const db={
+  rpc:async(fn:string,args:any)=>{rpcs.push({fn,args});
+   return {data:args.p_tenant_id===kt?[{id:rowId,content,similarity:0.9}]:[],error:null};},
+  from:(table:string)=>{
+   const r:Read={table,filters:{}};reads.push(r);
+   const q:any={select:()=>q,eq:(k:string,v:unknown)=>{r.filters[k]=v;return q;},
+    in:(k:string,v:unknown)=>{r.filters[k]=v;return q;},
+    lte:(k:string,v:unknown)=>{r.filters[k+"<="]=v;return q;},
+    order:(k:string,v:unknown)=>{r.order=[k,v];return q;},
+    maybeSingle:async()=>{
+     if(table!=="tenants")throw Error("unexpected maybeSingle "+table);
+     if(o.promptError)return {data:null,error:{code:"57014"}};
+     return {data:{id:r.filters.id,agent_system_prompt:o.prompt??null},error:null};
+    },
+    limit:async(n:number)=>{r.limit=n;
+     if(table==="messages")return o.messagesError?{data:null,error:{code:"57014"}}:
+      {data:o.messages??[],error:null};
+     if(table==="knowledge_chunks")return {data:r.filters.tenant_id===kt?
+      [{id:rowId,tenant_id:kt,content,source_id:"src"}]:[],error:null};
+     if(table==="knowledge_sources")return {data:r.filters.tenant_id===kt?
+      [{id:"src",tenant_id:kt,status:"indexed"}]:[],error:null};
+     throw Error("unexpected table "+table);
+    }};
+   return q;
+  }
+ };
+ return {db:db as never,reads,rpcs};
+}
+const aiScope={...scope,businessName:"Shop"};
+/** Mocked provider: records requests; `plan` decides each response. */
+function fakeFetch(plan:(url:string,n:number)=>Response|Error){
+ const calls:Array<{url:string;headers:Record<string,string>;body:any}>=[];
+ const f=(async(url:string,init:any)=>{
+  calls.push({url,headers:init.headers,body:JSON.parse(init.body)});
+  const r=plan(url,calls.length);if(r instanceof Error)throw r;return r;
+ }) as unknown as typeof fetch;
+ return {f,calls};
+}
+const ok=(body:unknown)=>new Response(JSON.stringify(body),{status:200});
+const providerOk=(answerText="Price is 1000 IQD")=>(url:string)=>url.includes("embed")?
+ (url.includes("googleapis")?ok({embeddings:[{values:[0.1,0.2]}]}):ok({data:[{embedding:[0.1,0.2]}]})):
+ ok({choices:[{message:{content:JSON.stringify({answer:answerText,grounded:true,supporting_quote:content})}}]});
+const OPENAI_ENV:Record<string,string>={LLM_API_KEY:"sk-test-llm"};
+
+test("AI step flag: both FLOW_AI_STEP_ENABLED and FLOW_RAG_ENABLED must be exactly true; errors are OFF",()=>{
+ const env=(e:Record<string,string>)=>(k:string)=>e[k];
+ assert.equal(aiStepEnabled(env({FLOW_AI_STEP_ENABLED:"true",FLOW_RAG_ENABLED:"true"})),true);
+ for(const e of [{},{FLOW_AI_STEP_ENABLED:"true"},{FLOW_RAG_ENABLED:"true"},
+  {FLOW_AI_STEP_ENABLED:"yes",FLOW_RAG_ENABLED:"true"},{FLOW_AI_STEP_ENABLED:"true",FLOW_RAG_ENABLED:"1"}])
+  assert.equal(aiStepEnabled(env(e)),false,JSON.stringify(e));
+ assert.equal(aiStepEnabled(()=>{throw Error("no runtime");}),false);
+ const old=(globalThis as any).Deno;delete (globalThis as any).Deno;
+ try{assert.equal(aiStepEnabled(),false);}finally{(globalThis as any).Deno=old;}
+});
+
+test("AI step question: the customer's last inbound message of THIS tenant conversation, decrypted in memory",async()=>{
+ const enc=await encryptMessageBody("  "+QUESTION+"  ",FIELD_KEY);
+ const row={tenant_id:"A",conversation_id:"c1",direction:"in",body_encrypted:enc,created_at:"t"};
+ const dec=(e:string)=>decryptAccountToken(e,FIELD_KEY);
+ const s={tenantId:"A",conversationId:"c1",before:"2026-11-07T10:00:00.000Z"};
+ const h=aiDb({messages:[row]});
+ assert.deepEqual(await lastInboundQuestion(h.db,s,dec),{kind:"ok",text:QUESTION});
+ assert.deepEqual(h.reads[0],{table:"messages",filters:{tenant_id:"A",conversation_id:"c1",direction:"in",
+  "created_at<=":s.before},order:["created_at",{ascending:false}],limit:1});
+ // A row of another tenant/conversation or an outbound row is never used.
+ for(const bad of [{...row,tenant_id:"B"},{...row,conversation_id:"c2"},{...row,direction:"out"},
+  {...row,body_encrypted:null},{...row,body_encrypted:"plain text"}])
+  assert.deepEqual(await lastInboundQuestion(aiDb({messages:[bad]}).db,s,dec),{kind:"none"});
+ assert.deepEqual(await lastInboundQuestion(aiDb({messages:[]}).db,s,dec),{kind:"none"});
+ assert.deepEqual(await lastInboundQuestion(aiDb({messages:[{...row,
+  body_encrypted:await encryptMessageBody("   ",FIELD_KEY)}]}).db,s,dec),{kind:"none"});
+ assert.deepEqual(await lastInboundQuestion(aiDb({messages:[{...row,
+  body_encrypted:await encryptMessageBody("x".repeat(4001),FIELD_KEY)}]}).db,s,dec),{kind:"none"});
+ // Read error: "error" (the worker holds the effect without any state change).
+ assert.deepEqual(await lastInboundQuestion(aiDb({messagesError:true}).db,s,dec),{kind:"error"});
+ // Missing scope: no query at all.
+ const none=aiDb({messages:[row]});
+ assert.deepEqual(await lastInboundQuestion(none.db,{...s,tenantId:""},dec),{kind:"none"});
+ assert.equal(none.reads.length,0);
+});
+
+test("AI step generation: last customer message + the tenant's own system message, tenant-scoped",async()=>{
+ const seen:Array<{system:string;user:string}>=[];
+ const deps={embed:async()=>[0.1,0.2],complete:async(system:string,user:string)=>{
+  seen.push({system,user});return {answer:"Price is 1000 IQD",grounded:true,supporting_quote:content};}};
+ const h=aiDb({prompt:"  "+OWNER_PROMPT+"  "});
+ assert.deepEqual(await generateAiStepAnswer(h.db,aiScope,QUESTION,deps),{kind:"answer",text:"Price is 1000 IQD"});
+ assert.ok(seen[0].system.includes(OWNER_PROMPT));
+ assert.ok(seen[0].system.includes("Answer ONLY with supplied verified knowledge"),"grounding rule kept");
+ assert.ok(seen[0].user.endsWith("Customer:\n"+QUESTION));
+ // Every read and the vector search are scoped to the effect's tenant.
+ assert.deepEqual(h.reads.find(r=>r.table==="tenants")!.filters,{id:"A"});
+ assert.equal(h.rpcs[0].args.p_tenant_id,"A");
+ for(const r of h.reads.filter(x=>x.table.startsWith("knowledge_")))assert.equal(r.filters.tenant_id,"A");
+ // Without a system message the prompt is byte-identical to the existing knowledge path.
+ const base:string[]=[];
+ const capture={...deps,complete:async(system:string,user:string)=>{base.push(system);return deps.complete(system,user);}};
+ await answerWithVerifiedKnowledgeOutcome(kb(),aiScope,QUESTION,capture);
+ await generateAiStepAnswer(aiDb({prompt:"   "}).db,aiScope,QUESTION,capture);
+ await generateAiStepAnswer(aiDb({prompt:null}).db,aiScope,QUESTION,capture);
+ assert.equal(base.length,3);assert.equal(base[1],base[0]);assert.equal(base[2],base[0]);
+ // Bounded system message.
+ const long=aiDb({prompt:"p".repeat(MAX_SYSTEM_PROMPT_CHARS+50)});
+ assert.equal((await tenantSystemPrompt(long.db,"A"))!.length,MAX_SYSTEM_PROMPT_CHARS);
+ // Another tenant's knowledge is never used: no evidence -> no_knowledge, no model call.
+ const n=seen.length;
+ assert.deepEqual(await generateAiStepAnswer(aiDb({knowledgeTenant:"B"}).db,aiScope,QUESTION,deps),{kind:"no_knowledge"});
+ assert.equal(seen.length,n);
+ // Prompt lookup error: transient (retry_wait), the model is not called.
+ assert.deepEqual(await generateAiStepAnswer(aiDb({promptError:true}).db,aiScope,QUESTION,deps),
+  {kind:"transient",code:"rag_lookup_failed"});
+ assert.equal(seen.length,n);
+ // Scope mismatch stays ineligible (no prompt can override it).
+ assert.deepEqual(await generateAiStepAnswer(aiDb({prompt:OWNER_PROMPT}).db,{...aiScope,conversationTenantId:"B"},
+  QUESTION,deps),{kind:"ineligible"});
+});
+
+test("AI step provider: the live bot's configuration (same secret names), typed failures, no leaks",async()=>{
+ // OpenAI-compatible default (LLM_API_KEY only).
+ const a=fakeFetch(providerOk());
+ assert.deepEqual(await generateAiStepAnswer(aiDb().db,aiScope,QUESTION,liveBotKnowledgeDependencies(a.f,k=>OPENAI_ENV[k])),
+  {kind:"answer",text:"Price is 1000 IQD"});
+ assert.equal(a.calls[0].url,"https://api.openai.com/v1/embeddings");
+ assert.equal(a.calls[0].headers.authorization,"Bearer sk-test-llm");
+ assert.deepEqual(a.calls[0].body,{model:"text-embedding-3-small",input:[QUESTION]});
+ assert.equal(a.calls[1].url,"https://api.openai.com/v1/chat/completions");
+ assert.equal(a.calls[1].body.model,"gpt-4o-mini");
+ assert.deepEqual(a.calls[1].body.response_format,{type:"json_object"});
+ // Google key: Gemini text-embedding-004 (key in a header, never in the URL);
+ // chat through LLM_BASE_URL / LLM_MODEL exactly like milan-api.
+ const g=fakeFetch(providerOk());
+ const genv:Record<string,string>={GEMINI_API_KEY:"AIzaTestKey",
+  LLM_BASE_URL:"https://generativelanguage.googleapis.com/v1beta/openai",LLM_MODEL:"gemini-2.0-flash"};
+ assert.equal((await generateAiStepAnswer(aiDb().db,aiScope,QUESTION,liveBotKnowledgeDependencies(g.f,k=>genv[k]))).kind,"answer");
+ assert.equal(g.calls[0].url,"https://generativelanguage.googleapis.com/v1/models/text-embedding-004:batchEmbedContents");
+ assert.equal(g.calls[0].headers["x-goog-api-key"],"AIzaTestKey");
+ assert.ok(!g.calls.some(c=>c.url.includes("AIza")));
+ assert.deepEqual(g.calls[0].body,{requests:[{model:"models/text-embedding-004",content:{parts:[{text:QUESTION}]}}]});
+ assert.equal(g.calls[1].url,"https://generativelanguage.googleapis.com/v1beta/openai/chat/completions");
+ assert.equal(g.calls[1].headers.authorization,"Bearer AIzaTestKey");
+ assert.equal(g.calls[1].body.model,"gemini-2.0-flash");
+ // Classification: 5xx/429/timeout/network transient; other 4xx and config permanent.
+ const outcome=async(plan:(url:string,n:number)=>Response|Error,env=OPENAI_ENV)=>{
+  const p=fakeFetch(plan);
+  return {o:await generateAiStepAnswer(aiDb().db,aiScope,QUESTION,liveBotKnowledgeDependencies(p.f,k=>env[k])),calls:p.calls.length};
+ };
+ assert.deepEqual((await outcome(()=>new Response("down",{status:503}))).o,{kind:"transient",code:"ai_http_5xx"});
+ assert.deepEqual((await outcome(()=>new Response("",{status:429}))).o,{kind:"transient",code:"ai_http_429"});
+ assert.deepEqual((await outcome((u)=>u.includes("chat")?new Response("",{status:500}):providerOk()(u))).o,
+  {kind:"transient",code:"ai_http_5xx"});
+ assert.deepEqual((await outcome(()=>new DOMException("timed out","TimeoutError"))).o,{kind:"transient",code:"ai_timeout"});
+ assert.deepEqual((await outcome(()=>new DOMException("aborted","AbortError"))).o,{kind:"transient",code:"ai_timeout"});
+ assert.deepEqual((await outcome(()=>new TypeError("fetch failed"))).o,{kind:"transient",code:"ai_network"});
+ assert.deepEqual((await outcome(()=>new Response("secret body",{status:401}))).o,{kind:"permanent",code:"ai_http_401"});
+ assert.deepEqual((await outcome(()=>new Response("",{status:400}))).o,{kind:"permanent",code:"ai_http_400"});
+ const missing=await outcome(providerOk(),{});
+ assert.deepEqual(missing,{o:{kind:"permanent",code:"ai_config_missing"},calls:0});
+ const insecure=await outcome(providerOk(),{...OPENAI_ENV,EMBED_BASE_URL:"http://evil.example"});
+ assert.deepEqual(insecure,{o:{kind:"permanent",code:"ai_config_invalid"},calls:0});
+ // Not grounded / quote not in the tenant's knowledge: no_knowledge (existing fallback, no send).
+ assert.deepEqual((await outcome(u=>u.includes("chat")?ok({choices:[{message:{content:JSON.stringify(
+  {answer:"x",grounded:false,supporting_quote:""})}}]}):providerOk()(u))).o,{kind:"no_knowledge"});
+ assert.deepEqual((await outcome(u=>u.includes("chat")?ok({choices:[{message:{content:JSON.stringify(
+  {answer:"Invented",grounded:true,supporting_quote:"not in the knowledge base at all"})}}]}):providerOk()(u))).o,
+  {kind:"no_knowledge"});
+});
+
+test("AI step end to end (in-memory SQL mirror): sends the scrubbed answer once, bills once, retry reuses the stored answer",async()=>{
+ const logs:string[]=[];
+ const orig={log:console.log,warn:console.warn,error:console.error,info:console.info};
+ for(const k of ["log","warn","error","info"] as const)(console as any)[k]=(...a:unknown[])=>logs.push(JSON.stringify(a));
+ try{
+  const db=new FakeDb();db.add("e1");
+  let n=0;
+  const provider=fakeFetch((url)=>{n++;return n===1?new Response("",{status:503}):
+   providerOk("Hello {{first_name}}, price is 1000 IQD {{order_id}}")(url);});
+  const enc=await encryptMessageBody(QUESTION,FIELD_KEY);
+  const h=aiDb({prompt:OWNER_PROMPT,messages:[{tenant_id:"A",conversation_id:"c1",direction:"in",body_encrypted:enc}]});
+  const metaBodies:any[]=[];
+  const aiTick=async()=>{
+   const q=await lastInboundQuestion(h.db,{tenantId:"A",conversationId:"c1",before:"z"},e=>decryptAccountToken(e,FIELD_KEY));
+   assert.equal(q.kind,"ok");
+   const res=await resolveKnowledgeEffect({
+    claim:async()=>db.claim("A","e1"),
+    decrypt:e=>decryptAccountToken(e,FIELD_KEY),
+    generate:async()=>{db.modelCalls++;return generateAiStepAnswer(h.db,aiScope,(q as {text:string}).text,
+     liveBotKnowledgeDependencies(provider.f,k=>OPENAI_ENV[k]));},
+    store:async(token,text)=>db.store("e1",token,await encryptMessageBody(text,FIELD_KEY)),
+    finish:async(token,d)=>db.finish("e1",token,d),random:()=>0
+   });
+   if(res.status!=="send")return res.key;
+   return executeOnce({reserve:async()=>db.reserve("e1"),
+    send:async()=>{db.sends++;return sendProviderMessage({platform:"instagram",token:"IGtoken",externalId:"12345",
+     recipient:"98765",text:res.text},(async(_u:string,init:any)=>{metaBodies.push(JSON.parse(init.body));
+      return ok({message_id:"mid-1"});}) as never);},
+    confirm:async()=>{db.rows.get("e1")!.status="charge_pending";return true;},
+    persistAndBill:async()=>{db.bills++;db.rows.get("e1")!.status="settled";return true;}});
+  };
+  // Attempt 1: provider 503 -> retry_wait (60s), nothing sent or billed.
+  assert.equal(await aiTick(),"ai_retry_scheduled");
+  assert.equal(db.rows.get("e1")!.status,"retry_wait");assert.equal(db.sends,0);
+  db.now+=60_000;
+  assert.equal(await aiTick(),"settled");
+  assert.equal(db.sends,1);assert.equal(db.bills,1);assert.equal(db.modelCalls,2);
+  const providerCalls=provider.calls.length;
+  // The stored answer is encrypted and is what any later attempt reuses.
+  assert.match(db.rows.get("e1")!.answer!,/^enc:v1:/);
+  // The customer never sees a placeholder.
+  assert.equal(metaBodies.length,1);
+  assert.doesNotMatch(metaBodies[0].message.text,/\{\{|\}\}/);
+  assert.match(metaBodies[0].message.text,/price is 1000 IQD/);
+  // Repeated ticks: no second model call, no second send, no second debit.
+  for(let i=0;i<3;i++){db.now+=600_000;await aiTick();}
+  assert.equal(provider.calls.length,providerCalls);assert.equal(db.modelCalls,2);
+  assert.equal(db.sends,1);assert.equal(db.bills,1);
+  // Crash after store: the restarted worker sends the stored answer without calling the model.
+  const db2=new FakeDb();db2.add("e2");
+  const tok=db2.claim("A","e2") as {token:string};
+  db2.store("e2",tok.token,await encryptMessageBody("Stored answer",FIELD_KEY));
+  const before=provider.calls.length;
+  const res=await resolveKnowledgeEffect({claim:async()=>db2.claim("A","e2"),
+   decrypt:e=>decryptAccountToken(e,FIELD_KEY),
+   generate:async()=>{throw Error("must not be called");},
+   store:async()=>false,finish:async()=>null});
+  assert.deepEqual(res,{status:"send",text:"Stored answer"});
+  assert.equal(provider.calls.length,before);
+ }finally{Object.assign(console,orig);}
+ // Nothing sensitive was logged: no question, system message, answer or key.
+ for(const secret of [QUESTION,OWNER_PROMPT,"Price is 1000","price is 1000","sk-test-llm","Stored answer"])
+  assert.ok(!logs.some(l=>l.includes(secret)),secret);
+});
+
+test("worker wiring: AI step only behind the flag, question before the claim, tenant-scoped, nothing logged",()=>{
+ const code=readFileSync("supabase/functions/flow-outbox-worker/index.ts","utf8");
+ const rag=code.indexOf('if(env("FLOW_RAG_ENABLED")!=="true"){report("blocked");continue;}');
+ const flag=code.indexOf("const aiStep=aiStepEnabled();");
+ const legacyQ=code.indexOf('let question=typeof run.variables?.message==="string"?run.variables.message:"";');
+ const last=code.indexOf("const last=await lastInboundQuestion(sb,{tenantId:String(tenant.id),");
+ const valid=code.indexOf('if(!knowledgeQuestionValid(question)){await skip("ineligible","invalid");continue;}');
+ const claim=code.indexOf('sb.rpc("flow_claim_outbox_ai"');
+ const gen=code.indexOf("generateAiStepAnswer(sb,knowledgeScope,question,liveBotKnowledgeDependencies())");
+ const reserve=code.indexOf('sb.rpc("flow_reserve_outbox_delivery"');
+ assert(rag>0&&flag>rag&&legacyQ>flag&&last>legacyQ&&valid>last&&claim>valid&&gen>claim&&reserve>gen,"order");
+ assert.match(code,/conversationId:String\(conversation\.id\),before:String\(effect\.created_at\)\},\s*enc=>decryptAccountToken\(enc,fieldKey\)\);/);
+ assert.match(code,/if\(last\.kind==="error"\)\{report\("blocked"\);continue;\}/);
+ // Flag OFF: exactly the previous source and dependencies.
+ assert.match(code,/return aiStep\?\s*generateAiStepAnswer\(sb,knowledgeScope,question,liveBotKnowledgeDependencies\(\)\):\s*answerWithVerifiedKnowledgeOutcome\(sb,knowledgeScope,question,openAIKnowledgeDependencies\(\)\);/);
+ // One billing path: persistAndBill -> consume_flow_reply (no AI-specific debit).
+ assert.equal((code.match(/sb\.rpc\("consume_flow_reply"/g)??[]).length,1);
+ // No log line carries customer text, the system message or an answer.
+ for(const line of code.split("\n").filter(l=>/console\.(log|info|warn|error)/.test(l)))
+  assert.doesNotMatch(line,/question|messageText|last\.text|ownerInstructions|agent_system_prompt|resolved\.text|recovered\.text/,line);
+ const ai=readFileSync("supabase/functions/flow-outbox-worker/aiStep.ts","utf8");
+ assert.doesNotMatch(ai,/console\./);
+ // Ingress and wake worker share the same fail-closed flag.
+ const ingress=readFileSync("supabase/functions/milan-api/flowDurableIngress.ts","utf8");
+ assert.match(ingress,/import \{aiStepEnabled\} from "\.\.\/flow-outbox-worker\/aiStep\.ts";/);
+ const wake=readFileSync("supabase/functions/flow-runtime-worker/index.ts","utf8");
+ assert.match(wake,/e\.source==="knowledge_ai"\)&&\s*!\(run\.platform==="instagram"&&aiStepEnabled\(\)\)\)\s*throw Error\("knowledge AI requires trusted handler, no emission"\);/);
+});

@@ -12,14 +12,14 @@
 
 /* Force the custom font on every element, including ones with their own font-* class. */
 * {
-  font-family: "Handicrafts", sans-serif !important;
+  font-family: "Handicrafts", "Tajawal", sans-serif !important;
 }
 
 @theme {
-  --font-sans: "Handicrafts", sans-serif;
-  --font-Handicrafts: "Handicrafts", sans-serif;
-  --font-display: "Handicrafts", sans-serif;
-  --font-body: "Handicrafts", sans-serif;
+  --font-sans: "Handicrafts", "Tajawal", sans-serif;
+  --font-Handicrafts: "Handicrafts", "Tajawal", sans-serif;
+  --font-display: "Handicrafts", "Tajawal", sans-serif;
+  --font-body: "Handicrafts", "Tajawal", sans-serif;
 
   --color-night: #06201a;
   --color-pine: #0a2c22;
@@ -48,7 +48,7 @@ html {
 body,
 html,
 #root {
-  font-family: "Handicrafts", sans-serif !important;
+  font-family: "Handicrafts", "Tajawal", sans-serif !important;
 }
 
 body {

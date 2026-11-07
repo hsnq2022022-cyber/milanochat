@@ -46,7 +46,7 @@ test("dashboard bottom nav has flows + profile and profile page shows email/plan
   await expect(page).toHaveURL(/#\/dashboard/);
 });
 
-test("Handicrafts only; bold renders differently from normal", async ({ page }) => {
+test("Handicrafts first with Tajawal fallback; bold renders differently from normal", async ({ page }) => {
   await page.goto("/milanochat/");
   const r = await page.evaluate(async () => {
     await document.fonts.load('400 40px Handicrafts');
@@ -55,7 +55,7 @@ test("Handicrafts only; bold renders differently from normal", async ({ page }) 
     const n = mk(400), b = mk(700);
     return { ff: getComputedStyle(n).fontFamily, wn: n.getBoundingClientRect().width, wb: b.getBoundingClientRect().width, loaded: document.fonts.check('40px Handicrafts') };
   });
-  expect(r.ff).toBe('Handicrafts, sans-serif');
+  expect(r.ff).toBe('Handicrafts, Tajawal, sans-serif');
   expect(r.loaded).toBe(true);
   expect(r.wb).toBeGreaterThan(r.wn);
 });

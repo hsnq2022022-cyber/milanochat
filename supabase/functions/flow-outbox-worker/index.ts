@@ -21,6 +21,8 @@ import {sendProviderMessage,decryptAccountToken,encryptMessageBody,deliveredText
  from "./deliveryCore.ts";
 import {answerWithVerifiedKnowledgeOutcome,knowledgeQuestionValid,openAIKnowledgeDependencies}
  from "./flowKnowledge.ts";
+import {aiStepEnabled,lastInboundQuestion,generateAiStepAnswer,liveBotKnowledgeDependencies}
+ from "./aiStep.ts";
 import {resolveKnowledgeEffect,recoverKnowledgeCharge,AI_MAX_ATTEMPTS,AI_CLAIM_LEASE_SECONDS,
  AI_ANSWER_MISSING_CODE,BILLING_BLOCKED_ANSWER_MISSING,type AiClaim} from "./knowledgeRetry.ts";
 import {executeOnce} from "./executeOnce.ts";
@@ -307,7 +309,21 @@ Deno.serve(async req=>{
      }
      messageText=recovered.text;
     }else{
-     const question=typeof run.variables?.message==="string"?run.variables.message:"";
+     // FLOW_AI_STEP_ENABLED (+ FLOW_RAG_ENABLED, aiStep.ts; default OFF): the
+     // question is the customer's last inbound message of THIS tenant
+     // conversation (decrypted in memory, never logged), the tenant system
+     // message and the live bot's provider configuration are used. OFF:
+     // exactly the previous source (run variable) and dependencies.
+     const aiStep=aiStepEnabled();
+     let question=typeof run.variables?.message==="string"?run.variables.message:"";
+     if(aiStep){
+      const last=await lastInboundQuestion(sb,{tenantId:String(tenant.id),
+       conversationId:String(conversation.id),before:String(effect.created_at)},
+       enc=>decryptAccountToken(enc,fieldKey));
+      // Read error: hold the effect (no state change), retried next tick.
+      if(last.kind==="error"){report("blocked");continue;}
+      question=last.kind==="ok"?last.text:"";
+     }
      // No customer question is not retryable (previous behaviour: skipped).
      if(!knowledgeQuestionValid(question)){await skip("ineligible","invalid");continue;}
      const resolved=await resolveKnowledgeEffect({
@@ -329,12 +345,17 @@ Deno.serve(async req=>{
         {outcome:row.outcome} as AiClaim:null;
       },
       decrypt:enc=>decryptAccountToken(enc,fieldKey),
-      generate:()=>answerWithVerifiedKnowledgeOutcome(sb,{
+      generate:()=>{
+       const knowledgeScope={
         tenantId:tenant.id,publishedTenantId:run.tenant_id,
         conversationTenantId:conversation.tenant_id,agentEnabled:account.agent_enabled,
         humanTakeover:takeover,credits:tenant.credits_remaining,
         businessName:tenant.business_name
-      },question,openAIKnowledgeDependencies()),
+       };
+       return aiStep?
+        generateAiStepAnswer(sb,knowledgeScope,question,liveBotKnowledgeDependencies()):
+        answerWithVerifiedKnowledgeOutcome(sb,knowledgeScope,question,openAIKnowledgeDependencies());
+      },
       store:async(token,text)=>{
        const {data,error}=await sb.rpc("flow_store_outbox_ai_answer",{
         p_tenant:effect.tenant_id,p_outbox:effect.id,p_token:token,
