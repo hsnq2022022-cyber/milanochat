@@ -22,7 +22,16 @@ import { SHEET_HALF } from "../flow/useBottomSheet";
 import { KIND_LIST, LABELS, SAVE_KEY, canConnect, edgeFor, importFlow, makeNode, outputs, validateDocument } from "../flow/model";
 import { arrangeFlow, cardSize, findOpenPosition } from "../flow/layout";
 import { useAddStepMenu } from "../flow/addMenu";
-import type { FlowNode, FlowEdge, Kind, FlowDocument } from "../flow/model";
+import type { FlowNode, FlowEdge, Kind, FlowDocument, FlowData } from "../flow/model";
+
+/* The Action node covers AI / tag / notify / handoff. These palette shortcuts create an Action node
+   already set to that type (no new node kind, no model change), so the logic steps are listed by name. */
+const ACTION_PRESETS:Array<{id:string;ar:string;en:string;hintAr:string;hintEn:string;preset:Partial<FlowData>}>=[
+  {id:"ai",ar:"خطوة ذكاء اصطناعي",en:"AI step",hintAr:"معاينة فقط حاليًا",hintEn:"Preview only for now",preset:{actionType:"ai"}},
+  {id:"tag",ar:"وسم العميل",en:"Tag customer",hintAr:"إجراء داخلي",hintEn:"Internal action",preset:{actionType:"tag"}},
+  {id:"notify",ar:"إشعار الفريق",en:"Notify team",hintAr:"إجراء داخلي",hintEn:"Internal action",preset:{actionType:"notify"}},
+  {id:"handoff",ar:"تحويل إلى موظف",en:"Hand off to agent",hintAr:"إجراء داخلي",hintEn:"Internal action",preset:{actionType:"handoff"}},
+];
 import { useFlowStore } from "../flow/store";
 import { getLibraryRecoveryReport, saveLibrary, snapshotLibrary } from "../flow/library";
 import { flowText, flowKindLabel } from "../flow/uiLocale";
@@ -68,7 +77,7 @@ function Editor(){
     const timer=window.setTimeout(()=>{if(protectStoredLibrary)return;try{localStorage.setItem(SAVE_KEY,JSON.stringify(doc));saveLibrary(snapshotLibrary(activeFlowId,doc,flows));}catch{setNotice("مساحة تخزين المتصفح غير كافية؛ استخدم تصدير لحفظ التدفق.");}},700);
     return()=>window.clearTimeout(timer);
   },[doc,activeFlowId,flows,protectStoredLibrary]);
-  const addNode=(kind:Kind,point?:XYPosition,connectFrom?:{source:string;port:string})=>{
+  const addNode=(kind:Kind,point?:XYPosition,connectFrom?:{source:string;port:string},preset?:Partial<FlowData>)=>{
     const current=useFlowStore.getState().doc;
     if(current.nodes.length>=100){setNotice("الحد الأقصى 100 خطوة.");return;}
     if(kind==="trigger"&&current.nodes.some(n=>n.data.kind==="trigger")){setNotice("توجد بداية واحدة بالفعل.");return;}
@@ -76,7 +85,7 @@ function Editor(){
     const pos=point||(source
       ? {x:source.position.x,y:source.position.y+cardSize(source).height+150}
       :instance.screenToFlowPosition({x:Math.round(window.innerWidth*.48),y:Math.round(window.innerHeight*.5)}));
-    const candidateNode=makeNode(kind,pos);
+    const candidateNode=makeNode(kind,pos,preset);
     const node={...candidateNode,position:findOpenPosition(current.nodes,candidateNode,pos)};
     if(source&&connectFrom){
       const c:Connection={source:source.id,sourceHandle:connectFrom.port,target:node.id,targetHandle:"in"};
@@ -423,6 +432,13 @@ function Editor(){
                   onClick={()=>addNode(kind,addRequest.position,addRequest.source&&addRequest.port?{source:addRequest.source,port:addRequest.port}:undefined)}>
                   <span className="fs-node-ico" aria-hidden="true"><KindIcon size={17}/></span>
                   <span className="min-w-0"><b>{name}</b><small aria-hidden="true">{skinHint(kind,language)}</small></span>
+                </button>;})}
+              {ACTION_PRESETS.map(p=>{
+                const ActIcon=SKIN_ICON.action,name=language==="ar"?p.ar:p.en;
+                return <button key={p.id} type="button" aria-label={name} data-testid={"pal-preset-"+p.id} className="fs-pal-item" style={{"--c":SKIN_COLOR.action} as CSSProperties}
+                  onClick={()=>addNode("action",addRequest.position,addRequest.source&&addRequest.port?{source:addRequest.source,port:addRequest.port}:undefined,p.preset)}>
+                  <span className="fs-node-ico" aria-hidden="true"><ActIcon size={17}/></span>
+                  <span className="min-w-0"><b>{name}</b><small aria-hidden="true">{language==="ar"?p.hintAr:p.hintEn}</small></span>
                 </button>;})}
             </div>}
           <p className="mt-3 text-[11px] leading-5 text-[var(--fs-muted)]">بعد الإضافة يمكنك تحريك العقدة بحرية وإعادة ترتيب المخطط.</p>

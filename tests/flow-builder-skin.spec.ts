@@ -61,3 +61,14 @@ test("flow switcher lists the real local flows and opens the chosen one",async({
   await page.keyboard.press("Escape");
   await expect(page.getByTestId("flow-switcher-list")).toHaveCount(0);
 });
+
+test("add-step palette lists the logic nodes by name and the AI/tag/notify/handoff action shortcuts",async({page})=>{
+  await page.goto("/milanochat/#/flows");
+  await page.locator(".fs-fab").click();
+  const pal=page.locator(".fs-palette");
+  for(const name of ["شرط","إجراء","توزيع عشوائي"])await expect(pal.getByRole("button",{name,exact:true})).toBeVisible();
+  for(const id of ["ai","tag","notify","handoff"])await expect(pal.getByTestId("pal-preset-"+id)).toHaveCount(1);
+  const before=await page.locator(".react-flow__node").count();
+  await pal.getByTestId("pal-preset-handoff").click();
+  await expect(page.locator(".react-flow__node")).toHaveCount(before+1);
+});
