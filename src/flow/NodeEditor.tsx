@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { CSSProperties } from "react";
-import { Plus, Trash2, Check, Copy, AlertTriangle, ChevronDown, ChevronUp } from "lucide-react";
+import { Plus, Trash2, Check, Copy, AlertTriangle, Sparkles, ChevronDown, ChevronUp } from "lucide-react";
 import { LABELS, makeNode, outputs, canConnect, edgeFor, PLATFORM_LABELS, TRIGGER_OPTIONS } from "./model";
 import ButtonActionEditor from "./ButtonActionEditor";
 import MessageBlocksEditor from "./MessageBlocksEditor";
@@ -145,7 +145,21 @@ export default function NodeEditor({node,onClose,language="ar"}:{node:FlowNode|n
       </>}
       {d.kind==="action"&&<>
         <label className={section}>نوع الإجراء</label><select className={input} value={d.actionType} onChange={e=>edit({actionType:e.target.value as FlowData["actionType"]})}>{Object.entries(actions).map(([v,t])=><option key={v} value={v}>{t}</option>)}</select>
-        {d.actionType==="handoff"
+        {d.actionType==="ai"&&<>
+          <div data-testid="ai-node-note" className="mt-3 flex gap-2 rounded-xl border border-[#173D30] bg-[#0F2E24] p-3 text-sm leading-6 text-[#8B9E96]">
+            <Sparkles size={18} className="mt-0.5 shrink-0 text-[#3DD189]" aria-hidden="true"/>
+            <div className="min-w-0">
+              <p>سيُنشئ الذكاء الاصطناعي الرد تلقائيًا من قاعدة المعرفة ورسالة النظام وآخر رسالة من العميل — لا حاجة لكتابة نص هنا.</p>
+              <p className="mt-1 text-xs opacity-80">يعمل مع العملاء الحقيقيين فقط عندما يفعّل المسؤول ميزة الذكاء الاصطناعي على الخادم (FLOW_AI_STEP_ENABLED و FLOW_RAG_ENABLED)؛ وإلا يعمل في المعاينة فقط.</p>
+            </div>
+          </div>
+          {!!d.actionValue.trim()&&<div data-testid="ai-node-legacy-text" role="alert" className="mt-3 rounded-xl border border-[#E5B54B]/40 bg-[#E5B54B]/10 p-3 text-sm leading-6 text-[#E5B54B]">
+            <p className="flex gap-2"><AlertTriangle size={18} className="mt-0.5 shrink-0" aria-hidden="true"/>هذه الخطوة تحتوي على نص ثابت قديم. يتم تجاهله ويمنع تشغيلها مع العملاء الحقيقيين.</p>
+            <button type="button" aria-label="مسح النص" className="mt-2 inline-flex min-h-11 items-center rounded-xl border border-[#E5B54B]/60 px-4 text-sm font-semibold hover:bg-[#E5B54B]/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#3DD189]" onClick={()=>edit({actionValue:""})}>مسح النص</button>
+          </div>}
+        </>}
+        {d.actionType==="ai"?null
+        :d.actionType==="handoff"
           ?<p data-testid="handoff-hint" className="mt-2 text-[11px] text-[#8B9E96]">يُفضّل إضافة رسالة قبل تحويل المحادثة إلى موظف</p>
           :<><label className={section}>القيمة / اسم الوسم</label><input className={input} value={d.actionValue} onChange={e=>edit({actionValue:e.target.value})}/></>}
         {["tag","untag","notify","handoff"].includes(d.actionType)
@@ -153,7 +167,7 @@ export default function NodeEditor({node,onClose,language="ar"}:{node:FlowNode|n
             <p>هذا الإجراء يعمل مع العملاء الحقيقيين فقط عندما يفعّل المسؤول ميزة الإجراءات الداخلية على الخادم؛ وإلا يعمل في المعاينة فقط ولا يُرسل أي شيء.</p>
             <p dir="ltr" className="mt-1 text-[10px] opacity-70" title="FLOW_INTERNAL_ACTIONS_ENABLED">FLOW_INTERNAL_ACTIONS_ENABLED</p>
           </div>
-          :<p data-testid="action-preview-only-note" className="mt-2 text-[11px] leading-5 text-[#8B9E96]">هذا الإجراء يعمل في المعاينة فقط ولا يُرسل أي شيء للعملاء.</p>}
+          :d.actionType==="ai"?null:<p data-testid="action-preview-only-note" className="mt-2 text-[11px] leading-5 text-[#8B9E96]">هذا الإجراء يعمل في المعاينة فقط ولا يُرسل أي شيء للعملاء.</p>}
       </>}
       {d.kind==="randomizer"&&<>
         <label className={section}>نسب التوزيع (المجموع 100%)</label>

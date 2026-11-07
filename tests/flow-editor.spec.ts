@@ -520,6 +520,33 @@ test("handoff action hides the value field and shows a hint; other actions keep 
  await expect(hint).toHaveCount(0);
 });
 
+test("AI action hides the static text field, shows the note, and offers to clear legacy text",async({page})=>{
+ await page.goto("/milanochat/#/flows");
+ await page.locator(".react-flow__node").nth(1).click();
+ const panel=page.getByTestId("step-settings-panel");
+ await addActionStep(page);
+ const select=panel.locator("select").filter({hasText:"إضافة وسم"});
+ const valueLabel=panel.getByText("القيمة / اسم الوسم");
+ for(const v of ["tag","untag","set_field","notify"]) {
+  await select.selectOption(v);
+  await expect(valueLabel).toBeVisible();
+  await expect(panel.getByTestId("ai-node-note")).toHaveCount(0);
+ }
+ await select.selectOption("tag");
+ await valueLabel.locator("xpath=following-sibling::input[1]").fill("legacy text");
+ await select.selectOption("ai");
+ await expect(panel.getByTestId("ai-node-note")).toContainText("قاعدة المعرفة");
+ await expect(panel.getByTestId("ai-node-note")).toContainText("FLOW_AI_STEP_ENABLED");
+ await expect(valueLabel).toHaveCount(0);
+ await expect(panel.getByTestId("action-preview-only-note")).toHaveCount(0);
+ await expect(panel.getByTestId("ai-node-legacy-text")).toBeVisible();
+ await panel.getByRole("button",{name:"مسح النص"}).click();
+ await expect(panel.getByTestId("ai-node-legacy-text")).toHaveCount(0);
+ await expect(panel.getByTestId("ai-node-note")).toBeVisible();
+ await select.selectOption("tag");
+ await expect(valueLabel).toBeVisible();
+});
+
 test("batch 5 typed email and phone use input previews, never quick-reply buttons",async({page})=>{
  await page.goto("/milanochat/#/flows");
  await page.locator(".react-flow__node").nth(2).click();
