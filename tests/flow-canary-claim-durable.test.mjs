@@ -48,7 +48,7 @@ test("170000 is the newest migration and follows 130000/140000/150000/160000",()
  // 20261029210000_flow_media_effects (requires 190000) and
  // 20261029220000_flow_media_stale_sweep (requires 210000) and
  // 20261029230000_flow_multichannel_support (requires 220000) are newer.
- for(const s of stamps)if(!["20261029170000","20261029180000","20261029190000","20261029200000","20261029210000","20261029220000","20261029230000","20261029240000","20261029250000"].includes(s))assert.ok(s<"20261029170000",s);
+ for(const s of stamps)if(!["20261029170000","20261029180000","20261029190000","20261029200000","20261029210000","20261029220000","20261029230000","20261029240000","20261029250000","20261029260000","20261029270000","20261029280000","20261029290000"].includes(s))assert.ok(s<"20261029170000",s);
  for(const f of [CLAIM,LC,AI,TK,CP])assert.ok(existsSync(f),f);
 });
 test("migration: bounded, additive, service_role only, never touches flow_claim_inbound or billing",()=>{
@@ -160,7 +160,35 @@ test("TypeScript: only the durable ingress calls the new function; V2 call site 
     "          const {\n            error,\n          } = await sb\n            .from(\n              \"wa_bindings\"\n            )\n            .upsert(\n              {\n                phone_id:\n                  phoneId,\n\n                tenant_id:\n                  tenant.id,\n              },\n              {\n                onConflict:\n                  \"phone_id\",\n              }\n            );\n\n          if (error) {\n            return err(\n              error.message,\n              500\n            );\n"],
    // S4: knowledge_add per-tenant limit
    ["        // S4 (abuseGuards.ts): per-tenant limit before URL fetch / embeddings.\n        const kbLimited = await rateGate({\n          rpc: sb, headers: req.headers, salt: env(\"RATE_LIMIT_IP_SALT\"), cors: CORS,\n          rules: () => knowledgeAddRules(tenant.id),\n        });\n        if (kbLimited) return kbLimited;\n\n",
-    ""]
+    ""],
+   // Security hardening S8 (Widget credit reserved before the LLM,
+   // widgetBilling.ts) and S9 (wa_bindings verification gate, waBinding.ts):
+   // exactly these hunks; covered by tests/security-widget-billing.test.ts,
+   // tests/security-wa-verification.test.ts, tests/security-tenant-isolation-sql.test.mjs.
+   ["// Security hardening (S8 Widget billing / S9 WhatsApp binding verification).\nimport { widgetBillingEnabled, reserveWidgetAnswer, commitWidgetAnswer, releaseWidgetAnswer, widgetBillingEarlyReply } from \"./widgetBilling.ts\";\nimport { bindingIsVerified, readBindingVerified } from \"./waBinding.ts\";\n",
+    ""],
+   // S9: whatsapp_webhook routes only VERIFIED wa_bindings rows
+   ["            // S9 (waBinding.ts): only operator-VERIFIED bindings route traffic\n            // (20261029290000). Unverified -> not answered; approve with the\n            // service role: UPDATE public.wa_bindings SET is_verified = true,\n            // verified_at = now(), verified_by = '<operator>:<ticket>'\n            // WHERE phone_id = '<id>' AND tenant_id = '<tenant>';\n            const { data: bindingRow } = await sb\n              .from(\"wa_bindings\")\n              .select(\"tenant_id, phone_id, is_verified\")\n              .eq(\"phone_id\", phoneId)\n              .maybeSingle();\n            const binding = bindingIsVerified(bindingRow) ? bindingRow : null;\n            if (bindingRow && !binding) {\n              console.warn(\"[whatsapp_webhook] binding ignored\", { code: \"wa_binding_unverified\" });\n            }\n",
+    "            const { data: binding } = await sb\n              .from(\"wa_bindings\")\n              .select(\"tenant_id, phone_id\")\n              .eq(\"phone_id\", phoneId)\n              .maybeSingle();\n"],
+   // S8: reserve one credit before any embedding / LLM call
+   ["      // S8 (widgetBilling.ts): reserve ONE credit atomically BEFORE any\n      // embedding / LLM call. Billing is ON unless WIDGET_BILLING_V2_ENABLED\n      // is exactly \"false\" (operator kill switch). Idempotent per session +\n      // client message id / message hash; released when no answer is delivered.\n      const widgetBill = await reserveWidgetAnswer(sb, {\n        enabled: widgetBillingEnabled(env(\"WIDGET_BILLING_V2_ENABLED\")),\n        tenantId: found.tenant.id, sessionId: session.id, message,\n        clientMessageId: body.clientMessageId,\n      });\n      const widgetEarly = await widgetBillingEarlyReply(sb, widgetBill, {\n        tenantId: found.tenant.id, widgetId: found.widget.id, sessionId: session.id,\n      });\n      if (widgetEarly) return json(widgetEarly);\n\n",
+    ""],
+   // S8: release the reserved credit on LLM error / refusal / save failure
+   ["      } catch (e) {\n        await releaseWidgetAnswer(sb, found.tenant.id, widgetBill);\n        console.error(\n          \"[widget_message] AI error\",",
+    "      } catch (e) {\n        console.error(\n          \"[widget_message] AI error\","],
+   ["        await releaseWidgetAnswer(sb, found.tenant.id, widgetBill);\n        const reply =\n          \"عذرًا، ما عندي معلومات كافية عن هذا السؤال حاليًا.\";",
+    "        const reply =\n          \"عذرًا، ما عندي معلومات كافية عن هذا السؤال حاليًا.\";"],
+   ["      if(widgetSaveError||!savedWidgetReply?.id){\n        await releaseWidgetAnswer(sb, found.tenant.id, widgetBill);\n",
+    "      if(widgetSaveError||!savedWidgetReply?.id){\n"],
+   // S8: commit replaces the post-answer, flag-gated consume_widget_reply debit
+   ["      // S8 (widgetBilling.ts): the credit was reserved before the LLM call;\n      // bind it to the saved answer (\"deferred\" only under the kill switch).\n      const billingStatus=await commitWidgetAnswer(\n        sb,found.tenant.id,widgetBill,savedWidgetReply.id);\n",
+    "      // Two-phase deployment: additive SQL first, then activate separately.\n      // Disabled by default, preserving old (currently uncharged) Widget path.\n      let billingStatus:\"deferred\"|\"charged\"|\"already_charged\"|\"pending\"=\"deferred\";\n      if(env(\"WIDGET_BILLING_V2_ENABLED\")===\"true\"){\n        const charge=await chargeWidgetReply(\n          sb,found.tenant.id,savedWidgetReply.id);\n        billingStatus=charge.status===\"charged\"||charge.status===\"already_charged\"\n          ? charge.status:\"pending\";\n        if(billingStatus===\"pending\"){\n          console.error(\"[widget_message] reply saved but credit pending\",{\n            tenantId:found.tenant.id,\n            messageId:savedWidgetReply.id,\n            reason:charge.status\n          });\n        }\n      }else{\n        console.info(\"[widget_message] Widget billing v2 disabled; no charge\",{\n          tenantId:found.tenant.id,messageId:savedWidgetReply.id\n        });\n      }\n"],
+   // S9: bind_number returns the additive verified flag + TODO(security)
+   ["          // S9 interim control (20261029290000): new bindings start\n          // UNVERIFIED and get no auto-replies until an operator approves them\n          // (SQL in the migration header). Same-tenant re-bind never touches\n          // the flag (INSERT .. ON CONFLICT DO NOTHING).\n          // TODO(security): permanent fix — require the tenant's WhatsApp\n          // Business access token, call GET https://graph.facebook.com/<ver>/{phone_number_id}\n          // with it (fail closed on any error / mismatch) and set\n          // is_verified = true automatically instead of manual approval.\n          return json({\n            ok: true,\n            verified: await readBindingVerified(sb, phoneId, tenant.id),\n",
+    "          return json({\n            ok: true,\n"],
+   // S9: wa_status additive verified flag
+   ["            phoneId,\n            // S9: additive; false until an operator verified the binding.\n            verified: phoneId ? await readBindingVerified(sb, phoneId, tenant.id) : false,\n",
+    "            phoneId,\n"]
   ];
   let cur=src(IDX);
   if(cur!==head.stdout)for(const [now,was] of allowed){

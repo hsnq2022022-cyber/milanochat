@@ -53,6 +53,9 @@ import { recordVerifiedMetaReceipts } from "./metaDeliveryReceipts.ts";
 import { safeFetchText, denoResolver } from "./safeFetch.ts";
 import { rateGate, widgetIpRules, widgetScopeRules, aiActionRules, knowledgeAddRules, CLAIM_AI_ACTIONS } from "./abuseGuards.ts";
 import { bindWhatsappNumber, supabaseBindStore, BIND_CONFLICT_BODY } from "./waBinding.ts";
+// Security hardening (S8 Widget billing / S9 WhatsApp binding verification).
+import { widgetBillingEnabled, reserveWidgetAnswer, commitWidgetAnswer, releaseWidgetAnswer, widgetBillingEarlyReply } from "./widgetBilling.ts";
+import { bindingIsVerified, readBindingVerified } from "./waBinding.ts";
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
@@ -2316,11 +2319,20 @@ Deno.serve(async (req) => {
              */
             let account: any = null;
 
-            const { data: binding } = await sb
+            // S9 (waBinding.ts): only operator-VERIFIED bindings route traffic
+            // (20261029290000). Unverified -> not answered; approve with the
+            // service role: UPDATE public.wa_bindings SET is_verified = true,
+            // verified_at = now(), verified_by = '<operator>:<ticket>'
+            // WHERE phone_id = '<id>' AND tenant_id = '<tenant>';
+            const { data: bindingRow } = await sb
               .from("wa_bindings")
-              .select("tenant_id, phone_id")
+              .select("tenant_id, phone_id, is_verified")
               .eq("phone_id", phoneId)
               .maybeSingle();
+            const binding = bindingIsVerified(bindingRow) ? bindingRow : null;
+            if (bindingRow && !binding) {
+              console.warn("[whatsapp_webhook] binding ignored", { code: "wa_binding_unverified" });
+            }
 
             if (binding) {
               account = {
@@ -3144,6 +3156,20 @@ Deno.serve(async (req) => {
         });
       }
 
+      // S8 (widgetBilling.ts): reserve ONE credit atomically BEFORE any
+      // embedding / LLM call. Billing is ON unless WIDGET_BILLING_V2_ENABLED
+      // is exactly "false" (operator kill switch). Idempotent per session +
+      // client message id / message hash; released when no answer is delivered.
+      const widgetBill = await reserveWidgetAnswer(sb, {
+        enabled: widgetBillingEnabled(env("WIDGET_BILLING_V2_ENABLED")),
+        tenantId: found.tenant.id, sessionId: session.id, message,
+        clientMessageId: body.clientMessageId,
+      });
+      const widgetEarly = await widgetBillingEarlyReply(sb, widgetBill, {
+        tenantId: found.tenant.id, widgetId: found.widget.id, sessionId: session.id,
+      });
+      if (widgetEarly) return json(widgetEarly);
+
       /*
        * البحث في قاعدة المعرفة + LLM
        */
@@ -3157,6 +3183,7 @@ Deno.serve(async (req) => {
             message
           );
       } catch (e) {
+        await releaseWidgetAnswer(sb, found.tenant.id, widgetBill);
         console.error(
           "[widget_message] AI error",
           e
@@ -3200,6 +3227,7 @@ Deno.serve(async (req) => {
         result.kind ===
           "refusal"
       ) {
+        await releaseWidgetAnswer(sb, found.tenant.id, widgetBill);
         const reply =
           "عذرًا، ما عندي معلومات كافية عن هذا السؤال حاليًا.";
 
@@ -3279,6 +3307,7 @@ Deno.serve(async (req) => {
         }).select("id").single();
 
       if(widgetSaveError||!savedWidgetReply?.id){
+        await releaseWidgetAnswer(sb, found.tenant.id, widgetBill);
         console.error("[widget_message] answer insert failed",{
           tenantId:found.tenant.id,code:widgetSaveError?.code??"unknown",
           message:widgetSaveError?.message??"missing id"
@@ -3286,26 +3315,10 @@ Deno.serve(async (req) => {
         return err("تعذر حفظ رد المساعد",500);
       }
 
-      // Two-phase deployment: additive SQL first, then activate separately.
-      // Disabled by default, preserving old (currently uncharged) Widget path.
-      let billingStatus:"deferred"|"charged"|"already_charged"|"pending"="deferred";
-      if(env("WIDGET_BILLING_V2_ENABLED")==="true"){
-        const charge=await chargeWidgetReply(
-          sb,found.tenant.id,savedWidgetReply.id);
-        billingStatus=charge.status==="charged"||charge.status==="already_charged"
-          ? charge.status:"pending";
-        if(billingStatus==="pending"){
-          console.error("[widget_message] reply saved but credit pending",{
-            tenantId:found.tenant.id,
-            messageId:savedWidgetReply.id,
-            reason:charge.status
-          });
-        }
-      }else{
-        console.info("[widget_message] Widget billing v2 disabled; no charge",{
-          tenantId:found.tenant.id,messageId:savedWidgetReply.id
-        });
-      }
+      // S8 (widgetBilling.ts): the credit was reserved before the LLM call;
+      // bind it to the saved answer ("deferred" only under the kill switch).
+      const billingStatus=await commitWidgetAnswer(
+        sb,found.tenant.id,widgetBill,savedWidgetReply.id);
 
       await sb
         .from(
@@ -3411,8 +3424,17 @@ Deno.serve(async (req) => {
             return err("تعذر ربط الرقم — حاول مرة أخرى", 500);
           }
 
+          // S9 interim control (20261029290000): new bindings start
+          // UNVERIFIED and get no auto-replies until an operator approves them
+          // (SQL in the migration header). Same-tenant re-bind never touches
+          // the flag (INSERT .. ON CONFLICT DO NOTHING).
+          // TODO(security): permanent fix — require the tenant's WhatsApp
+          // Business access token, call GET https://graph.facebook.com/<ver>/{phone_number_id}
+          // with it (fail closed on any error / mismatch) and set
+          // is_verified = true automatically instead of manual approval.
           return json({
             ok: true,
+            verified: await readBindingVerified(sb, phoneId, tenant.id),
           });
         }
 
@@ -3432,6 +3454,8 @@ Deno.serve(async (req) => {
               Boolean(phoneId),
 
             phoneId,
+            // S9: additive; false until an operator verified the binding.
+            verified: phoneId ? await readBindingVerified(sb, phoneId, tenant.id) : false,
           });
         }
 

@@ -141,17 +141,23 @@ test("widget_message: IP limit before any lookup; session/tenant caps before the
   const scope = w.indexOf("rules: () => widgetScopeRules(found.tenant.id, session.id)");
   assert.ok(ip > 0 && scope > 0);
   assert.ok(ip < w.indexOf("await publicWidget("), "IP gate before the widget lookup");
-  for (const heavy of ['.from(\n          "widget_messages"\n        )\n        .insert(', "await answerFromKnowledge(", "chargeWidgetReply("]) {
+  for (const heavy of ['.from(\n          "widget_messages"\n        )\n        .insert(', "await answerFromKnowledge(", "await reserveWidgetAnswer(", "await commitWidgetAnswer("]) {
     const at = w.indexOf(heavy);
     assert.ok(at > 0, heavy);
     assert.ok(scope < at, `caps before ${heavy.trim().slice(0, 30)}`);
   }
-  // billing refusal (inactive / no credits) runs before the LLM regardless of WIDGET_BILLING_V2_ENABLED
+  // billing refusal (inactive / no credits) and the S8 credit reservation
+  // (widgetBilling.ts; flag read there, ON unless "false") run before the LLM
   const inactive = w.indexOf("found.tenant.is_active ===\n        false");
   const credits = w.indexOf("if (credits <= 0) {");
   const llm = w.indexOf("await answerFromKnowledge(");
-  const flag = w.indexOf('env("WIDGET_BILLING_V2_ENABLED")');
-  assert.ok(inactive > 0 && credits > 0 && inactive < llm && credits < llm && llm < flag);
+  const flag = w.indexOf('widgetBillingEnabled(env("WIDGET_BILLING_V2_ENABLED"))');
+  const reserve = w.indexOf("await reserveWidgetAnswer(");
+  const early = w.indexOf("if (widgetEarly) return json(widgetEarly);");
+  assert.ok(inactive > 0 && credits > 0 && inactive < llm && credits < llm);
+  assert.ok(credits < reserve && reserve < flag && flag < early && early < llm, "credit reserved before the LLM");
+  assert.ok(llm < w.indexOf("await commitWidgetAnswer("), "commit only after the answer");
+  assert.doesNotMatch(w, /chargeWidgetReply\(/, "the post-answer debit is gone");
 });
 
 test("claim AI actions and knowledge_add are gated before fetch / LLM / embeddings", () => {

@@ -43,7 +43,36 @@ export async function bindWhatsappNumber(store: BindStore, tenantId: string, pho
   }
 }
 
+/**
+ * S9 interim anti-squatting control (20261029290000): a wa_bindings row
+ * routes webhook traffic ONLY when an operator verified it
+ * (is_verified === true). New bindings start unverified; anything else
+ * (false, null, missing column) is treated as unverified.
+ */
+export function bindingIsVerified(row: unknown): boolean {
+  return !!row && typeof row === "object" && (row as { is_verified?: unknown }).is_verified === true;
+}
+
 type Q = any; // supabase-js query builder (kept untyped: pure module, no npm import)
+
+/**
+ * Verification flag of the caller's own binding (bind_number / wa_status).
+ * Read-only; fails closed (false) on any error.
+ */
+export async function readBindingVerified(sb: { from(table: string): Q }, phoneId: string, tenantId: string): Promise<boolean> {
+  try {
+    const { data, error } = await sb
+      .from("wa_bindings")
+      .select("is_verified")
+      .eq("phone_id", phoneId)
+      .eq("tenant_id", tenantId)
+      .maybeSingle();
+    if (error) return false;
+    return bindingIsVerified(data);
+  } catch {
+    return false;
+  }
+}
 
 /** Adapter over the service-role supabase-js client. */
 export function supabaseBindStore(sb: { from(table: string): Q }): BindStore {

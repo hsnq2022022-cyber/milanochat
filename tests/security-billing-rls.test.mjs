@@ -28,7 +28,8 @@ const noComments=s=>s.split("\n").map(l=>l.replace(/--.*$/,"")).join("\n");
 test("240000/250000: newest migrations, one bounded transaction each, rollbacks exist",()=>{
  const stamps=readdirSync("supabase/migrations").filter(f=>f.endsWith(".sql")).map(f=>f.split("_")[0].padEnd(14,"0"));
  for(const s of ["20261029240000","20261029250000"])assert.equal(stamps.filter(x=>x===s).length,1,s);
- for(const s of stamps)if(s!=="20261029240000"&&s!=="20261029250000")assert.ok(s<"20261029240000",s);
+ // 20261029260000..290000 (tests/security-tenant-isolation-sql.test.mjs) are newer security migrations.
+ for(const s of stamps)if(!["20261029240000","20261029250000","20261029260000","20261029270000","20261029280000","20261029290000"].includes(s))assert.ok(s<"20261029240000",s);
  for(const f of [MIG,RB,RL,RL_RB]){
   const s=src(f),code=noComments(s);
   assert.match(s,/^BEGIN;\nSET LOCAL lock_timeout='3s';\nSET LOCAL statement_timeout='60s';\n/m,f);
