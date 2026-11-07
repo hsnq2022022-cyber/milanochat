@@ -5,21 +5,21 @@
 @font-face {
   font-family: "Handicrafts";
   src: url("./assets/fonts/alfont_com_TheYearofHandicrafts-SemiBold.woff2") format("woff2");
-  font-weight: 100 900; /* single-weight file: no faux bold on headings */
+  font-weight: 400; /* single declared weight: 700 is synthesized (faux bold) for a visible hierarchy */
   font-style: normal;
   font-display: swap;
 }
 
 /* Force the custom font on every element, including ones with their own font-* class. */
 * {
-  font-family: "Handicrafts", "Tajawal", sans-serif !important;
+  font-family: "Handicrafts", sans-serif !important;
 }
 
 @theme {
-  --font-sans: "Handicrafts", "Tajawal", sans-serif;
-  --font-Handicrafts: "Handicrafts", "Lalezar", "Aref Ruqaa", sans-serif;
-  --font-display: "Handicrafts", "Tajawal", "Changa", "IBM Plex Sans Arabic", sans-serif;
-  --font-body: "Handicrafts", "Tajawal", "IBM Plex Sans Arabic", "Changa", sans-serif;
+  --font-sans: "Handicrafts", sans-serif;
+  --font-Handicrafts: "Handicrafts", sans-serif;
+  --font-display: "Handicrafts", sans-serif;
+  --font-body: "Handicrafts", sans-serif;
 
   --color-night: #06201a;
   --color-pine: #0a2c22;
@@ -48,7 +48,7 @@ html {
 body,
 html,
 #root {
-  font-family: "Handicrafts", "Tajawal", sans-serif !important;
+  font-family: "Handicrafts", sans-serif !important;
 }
 
 body {

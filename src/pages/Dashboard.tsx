@@ -12,7 +12,7 @@ import { CHANNELS, ChannelBadge, detectChannel, type ChannelId } from "../lib/ch
 import {
   IconWhatsapp, IconCheck, IconX, IconPlus, IconTrash, IconSend,
   IconLogout, IconRefresh, IconDatabase, IconCard, IconGlobe, IconMapPin,
-  IconPen, IconQuestion, IconHandoff, IconLog, IconCoin, IconSparkle, IconChevronDown,
+  IconPen, IconSettings, IconQuestion, IconHandoff, IconLog, IconCoin, IconSparkle, IconChevronDown,
   IconFacebook, IconInstagram,
 } from "../components/Icons";
 
@@ -1157,7 +1157,7 @@ export default function Dashboard() {
         <div className="max-w-xl mx-auto px-5 pt-24 pb-20">
           <div className={`${cls.card} p-8`}>
             <h2 className="font-display font-bold text-2xl text-bone mb-2">اربط حسابك بمشروعك</h2>
-            <p className="text-sm text-sage leading-6 mb-6">الصق رمز الضم الذي ظهر لك.</p>
+            <p className="text-sm text-sage leading-6 mb-4 font-normal">الصق رمز الضم الذي ظهر لك.</p>
             <input dir="ltr" value={claimVal} onChange={(e) => setClaimVal(e.target.value)} className={`${cls.input} text-left mb-3`} placeholder="claim token" />
             {claimErr && <p className="text-[11.5px] text-oro-soft mb-3">{claimErr}</p>}
             <button
@@ -1243,13 +1243,13 @@ export default function Dashboard() {
         </div>
       </header>
 
-      <main className="max-w-6xl mx-auto px-5 pt-7 pb-24">
+      <main className="max-w-6xl mx-auto px-4 pt-5 pb-[calc(6rem+env(safe-area-inset-bottom))]">
         {import.meta.env.VITE_ENABLE_DELIVERY_REVIEW !== "false" && st?.tenantId && (
           <>
-            <div className="mb-6">
+            <div className="mb-4">
               <DeliveryReviewPanel token={token} tenantId={st.tenantId} />
             </div>
-            <div className="mb-6">
+            <div className="mb-4">
               <StaffInboxPanel token={token} tenantId={st.tenantId} />
             </div>
           </>
@@ -1268,8 +1268,8 @@ export default function Dashboard() {
           </div>
         ) : null}
 
-        <div className="grid md:grid-cols-12 gap-4 mb-7">
-          <section className={`${cls.card} md:col-span-5 p-5 relative overflow-hidden group hover:border-verde/35 transition-colors duration-300`}>
+        <div className="grid md:grid-cols-12 gap-3 mb-5">
+          <section className={`${cls.card} md:col-span-5 p-4 relative overflow-hidden group hover:border-verde/35 transition-colors duration-300`}>
             <div className="absolute -bottom-14 -start-14 w-44 h-44 rounded-full bg-verde/10 blur-2xl group-hover:bg-verde/15 transition-colors duration-500" aria-hidden="true" />
             <div className="flex items-start justify-between gap-3 relative">
               <div>
@@ -1298,7 +1298,7 @@ export default function Dashboard() {
             </div>
           </section>
 
-          <section className={`${cls.card} md:col-span-4 p-5 group hover:border-verde/35 transition-colors duration-300`}>
+          <section className={`${cls.card} md:col-span-4 p-4 group hover:border-verde/35 transition-colors duration-300`}>
             <div className="flex items-center justify-between mb-2">
               <p className="text-[11px] text-sage">رصيد الردود</p>
               <span className="text-verde"><IconCoin className="w-4.5 h-4.5" /></span>
@@ -1322,7 +1322,7 @@ export default function Dashboard() {
             </div>
           </section>
 
-          <section className="md:col-span-3 grid grid-rows-2 gap-4">
+          <section className="md:col-span-3 grid grid-rows-2 gap-3">
             <button onClick={() => setTab("convs")} className={`${cls.card} p-4 text-start group hover:border-verde/40 hover:-translate-y-0.5 transition-all duration-300`}>
               <div className="flex items-center justify-between">
                 <span className="text-sage group-hover:text-verde transition-colors"><IconLog className="w-4.5 h-4.5" /></span>
@@ -1342,7 +1342,7 @@ export default function Dashboard() {
           </section>
         </div>
 
-        <div className="relative bg-pine/50 border border-verde/12 rounded-2xl p-1.5 grid grid-cols-5 mb-6 max-w-2xl">
+        <div className="relative bg-pine/50 border border-verde/12 rounded-2xl p-1.5 grid grid-cols-5 mb-4 max-w-2xl">
           {TABS.map((t) => (
             <button
               key={t.id}
@@ -1730,7 +1730,7 @@ export default function Dashboard() {
         )}
 
         {tab === "channels" && (
-          <div className="space-y-6">
+          <div className="space-y-4">
             <div>
               <h2 className="font-display font-bold text-2xl text-bone">القنوات والحسابات</h2>
               <p className="text-sm text-sage mt-1">اربط قنوات التواصل الخاصة بنشاطك التجاري.</p>
@@ -2002,8 +2002,33 @@ export default function Dashboard() {
         </div>
       )}
 
+      <nav
+        data-testid="bottom-nav"
+        aria-label="التنقل الرئيسي"
+        className="fixed bottom-0 inset-x-0 z-40 bg-night/95 backdrop-blur-md border-t border-verde/15 pb-[env(safe-area-inset-bottom)]"
+      >
+        <div className="max-w-6xl mx-auto grid grid-cols-3 h-16">
+          {([
+            { href: "#/dashboard", label: "الرئيسية", testid: "bottom-nav-home", icon: <IconLog className="w-5 h-5" />, current: true },
+            { href: "#/flows", label: "التدفقات", testid: "bottom-nav-flows", icon: <IconSparkle className="w-5 h-5" />, current: false },
+            { href: "#/profile", label: "الملف الشخصي", testid: "bottom-nav-profile", icon: <IconSettings className="w-5 h-5" />, current: false },
+          ]).map((i) => (
+            <a
+              key={i.testid}
+              href={i.href}
+              data-testid={i.testid}
+              aria-current={i.current ? "page" : undefined}
+              className={`flex flex-col items-center justify-center gap-1 text-xs font-bold transition-colors ${i.current ? "text-oro" : "text-sage hover:text-bone"}`}
+            >
+              {i.icon}
+              <span>{i.label}</span>
+            </a>
+          ))}
+        </div>
+      </nav>
+
       {toast && (
-        <div className="fixed bottom-6 inset-x-0 z-50 flex justify-center px-4 pointer-events-none">
+        <div className="fixed bottom-24 inset-x-0 z-50 flex justify-center px-4 pointer-events-none">
           <p className="bg-pine border border-verde/35 text-bone text-[12.5px] font-semibold rounded-full px-5 py-2.5 shadow-[0_16px_50px_-12px_rgba(0,0,0,0.8)] msg-in">
             {toast}
           </p>

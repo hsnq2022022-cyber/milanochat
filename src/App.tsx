@@ -11,6 +11,7 @@ import FAQ from "./components/FAQ";
 
 /* لوحة التحكم وحدة منفصلة — لا يتحمل زائر الصفحة الرئيسية حجمها */
 const Dashboard = lazy(() => import("./pages/Dashboard"));
+const Profile = lazy(() => import("./pages/Profile"));
 const Widgets = lazy(() => import("./pages/Widgets"));
 const FlowBuilder = lazy(() => import("./pages/FlowBuilder"));
 
@@ -33,6 +34,15 @@ export default function App() {
     return (
       <Suspense fallback={<div className="min-h-screen bg-night" />}>
         <Dashboard />
+      </Suspense>
+    );
+  }
+
+  /* الملف الشخصي: #/profile */
+  if (route.startsWith("#/profile")) {
+    return (
+      <Suspense fallback={<div className="min-h-screen bg-night" />}>
+        <Profile />
       </Suspense>
     );
   }
