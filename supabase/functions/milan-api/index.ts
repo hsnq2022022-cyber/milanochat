@@ -49,6 +49,10 @@ import { normalizeMetaMessages } from "./normalizeMetaMessage.ts";
 import { chargeWidgetReply } from "./widgetCredit.ts";
 import { verifyMetaWebhookSignature } from "./metaSignature.ts";
 import { recordVerifiedMetaReceipts } from "./metaDeliveryReceipts.ts";
+// Security hardening (S1 / S3 / S4): pure, unit-tested modules.
+import { safeFetchText, denoResolver } from "./safeFetch.ts";
+import { rateGate, widgetIpRules, widgetScopeRules, aiActionRules, knowledgeAddRules, CLAIM_AI_ACTIONS } from "./abuseGuards.ts";
+import { bindWhatsappNumber, supabaseBindStore, BIND_CONFLICT_BODY } from "./waBinding.ts";
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
@@ -438,12 +442,12 @@ async function extractFromUrl(
   title: string;
   text: string;
 }> {
-  const res = await fetch(url, {
-    headers: {
-      "user-agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36",
-    },
-    redirect: "follow",
+  // S4 SSRF guard (safeFetch.ts): public http(s) hosts only, ports 80/443,
+  // manual re-validated redirects (max 3), 8s deadline, 1.5 MB cap,
+  // text/html | text/plain | application/xhtml+xml only.
+  const res = await safeFetchText(url, {
+    fetch: (u, init) => fetch(u, init),
+    resolve: denoResolver(),
   });
 
   if (!res.ok) {
@@ -452,7 +456,7 @@ async function extractFromUrl(
     );
   }
 
-  const raw = await res.text();
+  const raw = res.text;
 
   const $ = cheerio.load(raw);
 
@@ -2969,6 +2973,13 @@ Deno.serve(async (req) => {
         );
       }
 
+      // S3 (abuseGuards.ts): per-IP limit BEFORE any lookup, write or LLM call.
+      const widgetIpLimited = await rateGate({
+        rpc: sb, headers: req.headers, salt: env("RATE_LIMIT_IP_SALT"), cors: CORS,
+        rules: widgetIpRules,
+      });
+      if (widgetIpLimited) return widgetIpLimited;
+
       const found =
         await publicWidget(
           sb,
@@ -2996,6 +3007,14 @@ Deno.serve(async (req) => {
           404
         );
       }
+
+      // S3 (abuseGuards.ts): per-session and per-tenant caps BEFORE the
+      // customer message is stored and before any LLM / embedding call.
+      const widgetScopeLimited = await rateGate({
+        rpc: sb, headers: req.headers, salt: env("RATE_LIMIT_IP_SALT"), cors: CORS,
+        rules: () => widgetScopeRules(found.tenant.id, session.id),
+      });
+      if (widgetScopeLimited) return widgetScopeLimited;
 
       /*
        * حفظ رسالة العميل أولًا
@@ -3346,6 +3365,16 @@ Deno.serve(async (req) => {
         );
       }
 
+      // S3/S4 (abuseGuards.ts): URL fetch / LLM / embedding claim actions are
+      // rate limited per IP and per tenant before any of that work.
+      if (CLAIM_AI_ACTIONS.has(action)) {
+        const aiLimited = await rateGate({
+          rpc: sb, headers: req.headers, salt: env("RATE_LIMIT_IP_SALT"), cors: CORS,
+          rules: (ipHash) => aiActionRules(ipHash, tenant.id),
+        });
+        if (aiLimited) return aiLimited;
+      }
+
       switch (action) {
         /* ─────────────────────────────────────────────────────────────
            ربط الرقم
@@ -3368,31 +3397,18 @@ Deno.serve(async (req) => {
             );
           }
 
-          const {
-            error,
-          } = await sb
-            .from(
-              "wa_bindings"
-            )
-            .upsert(
-              {
-                phone_id:
-                  phoneId,
-
-                tenant_id:
-                  tenant.id,
-              },
-              {
-                onConflict:
-                  "phone_id",
-              }
-            );
-
-          if (error) {
-            return err(
-              error.message,
-              500
-            );
+          // S1 (waBinding.ts): never overwrite another tenant's number.
+          // INSERT .. ON CONFLICT (phone_id) DO NOTHING, then verify owner.
+          const bound = await bindWhatsappNumber(
+            supabaseBindStore(sb), tenant.id, phoneId
+          );
+          if (bound.status === "conflict") {
+            console.warn("[bind_number] refused", { code: "phone_id_owned_by_other_tenant" });
+            return json(BIND_CONFLICT_BODY, 409);
+          }
+          if (bound.status === "error") {
+            console.error("[bind_number] failed", { code: "bind_error" });
+            return err("تعذر ربط الرقم — حاول مرة أخرى", 500);
           }
 
           return json({
@@ -5360,6 +5376,13 @@ ${text}`
 
 
       case "knowledge_add": {
+        // S4 (abuseGuards.ts): per-tenant limit before URL fetch / embeddings.
+        const kbLimited = await rateGate({
+          rpc: sb, headers: req.headers, salt: env("RATE_LIMIT_IP_SALT"), cors: CORS,
+          rules: () => knowledgeAddRules(tenant.id),
+        });
+        if (kbLimited) return kbLimited;
+
         const {
           url,
           text,

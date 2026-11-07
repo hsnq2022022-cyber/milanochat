@@ -54,7 +54,7 @@ test("220000 follows 125000..210000; 200000 (storage) is independent; only 23000
  const stamps=readdirSync("supabase/migrations").filter(f=>f.endsWith(".sql")).map(f=>f.split("_")[0].padEnd(14,"0"));
  assert.equal(stamps.filter(s=>s==="20261029220000").length,1);
  // 20261029230000_flow_multichannel_support requires 220000 (tests/flow-multichannel-support.test.mjs).
- for(const s of stamps)if(s!=="20261029220000"&&s!=="20261029230000")assert.ok(s<"20261029220000",s);
+ for(const s of stamps)if(!["20261029220000","20261029230000","20261029240000","20261029250000"].includes(s))assert.ok(s<"20261029220000",s);
  for(const f of [...CHAIN125_190,M210,RB,...OLDER_RB])assert.ok(existsSync(f),f);
  // No later migration than 130000 (other than this one) redefines the sweep.
  for(const f of readdirSync("supabase/migrations")){

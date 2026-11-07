@@ -35,7 +35,7 @@ test("AI retry migration is the newest migration and later than the lifecycle mi
  // 20261029220000_flow_media_stale_sweep requires 210000 (tests/flow-media-stale-sweep.test.mjs).
  // 20261029230000_flow_multichannel_support requires 220000 (tests/flow-multichannel-support.test.mjs).
  const successors=["20261029150000","20261029160000","20261029170000","20261029180000","20261029190000",
-  "20261029200000","20261029210000","20261029220000","20261029230000"];
+  "20261029200000","20261029210000","20261029220000","20261029230000","20261029240000","20261029250000"];
  for(const s of stamps)if(s!==mine&&!successors.includes(s))
   assert.ok(s<mine,`older migration ${s} must precede ${mine}`);
  assert.ok(existsSync(LIFECYCLE));

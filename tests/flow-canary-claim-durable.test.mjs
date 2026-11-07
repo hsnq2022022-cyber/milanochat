@@ -48,7 +48,7 @@ test("170000 is the newest migration and follows 130000/140000/150000/160000",()
  // 20261029210000_flow_media_effects (requires 190000) and
  // 20261029220000_flow_media_stale_sweep (requires 210000) and
  // 20261029230000_flow_multichannel_support (requires 220000) are newer.
- for(const s of stamps)if(!["20261029170000","20261029180000","20261029190000","20261029200000","20261029210000","20261029220000","20261029230000"].includes(s))assert.ok(s<"20261029170000",s);
+ for(const s of stamps)if(!["20261029170000","20261029180000","20261029190000","20261029200000","20261029210000","20261029220000","20261029230000","20261029240000","20261029250000"].includes(s))assert.ok(s<"20261029170000",s);
  for(const f of [CLAIM,LC,AI,TK,CP])assert.ok(existsSync(f),f);
 });
 test("migration: bounded, additive, service_role only, never touches flow_claim_inbound or billing",()=>{
@@ -133,14 +133,44 @@ test("TypeScript: only the durable ingress calls the new function; V2 call site 
     "            if (!account) {\n"],
    // postbacks only for the durable canary account
    ["            // Postbacks (flag ON only) reach the durable canary account only.\n            if (\"postback\" in msg &&\n                String(account.id) !== env(\"FLOW_DURABLE_CANARY_ACCOUNT_ID\")) {\n              continue;\n            }\n\n",
+    ""],
+   // Security hardening S1/S3/S4 (not part of HEAD e9a53a3): exactly these
+   // hunks; the guard logic itself lives in safeFetch.ts / abuseGuards.ts /
+   // waBinding.ts and is covered by tests/security-*.test.ts.
+   // imports of the pure security modules
+   ["// Security hardening (S1 / S3 / S4): pure, unit-tested modules.\nimport { safeFetchText, denoResolver } from \"./safeFetch.ts\";\nimport { rateGate, widgetIpRules, widgetScopeRules, aiActionRules, knowledgeAddRules, CLAIM_AI_ACTIONS } from \"./abuseGuards.ts\";\nimport { bindWhatsappNumber, supabaseBindStore, BIND_CONFLICT_BODY } from \"./waBinding.ts\";\n",
+    ""],
+   // S4: extractFromUrl uses the SSRF guard (safeFetch.ts)
+   ["  // S4 SSRF guard (safeFetch.ts): public http(s) hosts only, ports 80/443,\n  // manual re-validated redirects (max 3), 8s deadline, 1.5 MB cap,\n  // text/html | text/plain | application/xhtml+xml only.\n  const res = await safeFetchText(url, {\n    fetch: (u, init) => fetch(u, init),\n    resolve: denoResolver(),\n",
+    "  const res = await fetch(url, {\n    headers: {\n      \"user-agent\":\n        \"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36\",\n    },\n    redirect: \"follow\",\n"],
+   // S4: body comes from the capped guard result
+   ["  const raw = res.text;\n",
+    "  const raw = await res.text();\n"],
+   // S3: widget_message per-IP limit before any lookup
+   ["      // S3 (abuseGuards.ts): per-IP limit BEFORE any lookup, write or LLM call.\n      const widgetIpLimited = await rateGate({\n        rpc: sb, headers: req.headers, salt: env(\"RATE_LIMIT_IP_SALT\"), cors: CORS,\n        rules: widgetIpRules,\n      });\n      if (widgetIpLimited) return widgetIpLimited;\n\n",
+    ""],
+   // S3: widget_message per-session / per-tenant caps before the first write
+   ["      // S3 (abuseGuards.ts): per-session and per-tenant caps BEFORE the\n      // customer message is stored and before any LLM / embedding call.\n      const widgetScopeLimited = await rateGate({\n        rpc: sb, headers: req.headers, salt: env(\"RATE_LIMIT_IP_SALT\"), cors: CORS,\n        rules: () => widgetScopeRules(found.tenant.id, session.id),\n      });\n      if (widgetScopeLimited) return widgetScopeLimited;\n\n",
+    ""],
+   // S3/S4: claim-token AI actions rate limited
+   ["      // S3/S4 (abuseGuards.ts): URL fetch / LLM / embedding claim actions are\n      // rate limited per IP and per tenant before any of that work.\n      if (CLAIM_AI_ACTIONS.has(action)) {\n        const aiLimited = await rateGate({\n          rpc: sb, headers: req.headers, salt: env(\"RATE_LIMIT_IP_SALT\"), cors: CORS,\n          rules: (ipHash) => aiActionRules(ipHash, tenant.id),\n        });\n        if (aiLimited) return aiLimited;\n      }\n\n",
+    ""],
+   // S1: bind_number never overwrites another tenant's phone_id
+   ["          // S1 (waBinding.ts): never overwrite another tenant's number.\n          // INSERT .. ON CONFLICT (phone_id) DO NOTHING, then verify owner.\n          const bound = await bindWhatsappNumber(\n            supabaseBindStore(sb), tenant.id, phoneId\n          );\n          if (bound.status === \"conflict\") {\n            console.warn(\"[bind_number] refused\", { code: \"phone_id_owned_by_other_tenant\" });\n            return json(BIND_CONFLICT_BODY, 409);\n          }\n          if (bound.status === \"error\") {\n            console.error(\"[bind_number] failed\", { code: \"bind_error\" });\n            return err(\"تعذر ربط الرقم — حاول مرة أخرى\", 500);\n",
+    "          const {\n            error,\n          } = await sb\n            .from(\n              \"wa_bindings\"\n            )\n            .upsert(\n              {\n                phone_id:\n                  phoneId,\n\n                tenant_id:\n                  tenant.id,\n              },\n              {\n                onConflict:\n                  \"phone_id\",\n              }\n            );\n\n          if (error) {\n            return err(\n              error.message,\n              500\n            );\n"],
+   // S4: knowledge_add per-tenant limit
+   ["        // S4 (abuseGuards.ts): per-tenant limit before URL fetch / embeddings.\n        const kbLimited = await rateGate({\n          rpc: sb, headers: req.headers, salt: env(\"RATE_LIMIT_IP_SALT\"), cors: CORS,\n          rules: () => knowledgeAddRules(tenant.id),\n        });\n        if (kbLimited) return kbLimited;\n\n",
     ""]
   ];
   let cur=src(IDX);
   if(cur!==head.stdout)for(const [now,was] of allowed){
    assert.equal(cur.split(now).length,2,"allowed hunk present exactly once: "+now.trim().slice(0,60));
+   // A hunk already committed in HEAD is baseline: it must stay byte-identical
+   // (checked above) and is not undone.
+   if(head.stdout.includes(now))continue;
    cur=cur.replace(now,()=>was);
   }
-  assert.equal(cur,head.stdout,"milan-api/index.ts differs from HEAD only by the authorized multichannel / page-hardening hunks");
+  assert.equal(cur,head.stdout,"milan-api/index.ts differs from HEAD only by the authorized multichannel / page-hardening / security hunks");
  }
  assert.match(src(CHECKS),new RegExp(`cf\\.h IS DISTINCT FROM '${md5(body(MIG,"claim"))}'`),"170000 body hash embedded in checks");
  assert.match(src(CHECKS),new RegExp(`v2\\.h='${md5(body(CLAIM,"claim"))}'`),"220000 body hash embedded in checks");

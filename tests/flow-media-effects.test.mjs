@@ -57,7 +57,7 @@ test("210000 follows the 125000..190000 chain; 200000 (storage) is independent; 
  assert.equal(stamps.filter(s=>s==="20261029210000").length,1);
  // 20261029220000_flow_media_stale_sweep requires 210000 (tests/flow-media-stale-sweep.test.mjs).
  // 20261029230000_flow_multichannel_support requires 220000 (tests/flow-multichannel-support.test.mjs).
- for(const s of stamps)if(!["20261029210000","20261029220000","20261029230000"].includes(s))assert.ok(s<"20261029210000",s);
+ for(const s of stamps)if(!["20261029210000","20261029220000","20261029230000","20261029240000","20261029250000"].includes(s))assert.ok(s<"20261029210000",s);
  for(const f of [...CHAIN125_190,M225,M226,RB,...OLDER_RB])assert.ok(existsSync(f),f);
 });
 test("migration and rollback: one bounded transaction, marker, service_role only, no billing, no row writes",()=>{

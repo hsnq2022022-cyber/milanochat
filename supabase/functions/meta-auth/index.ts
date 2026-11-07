@@ -7,11 +7,13 @@
 // ثم يعيد المستخدم إلى الواجهة.
 //
 // Secrets: INSTAGRAM_APP_ID, INSTAGRAM_APP_SECRET, FIELD_ENCRYPTION_KEY,
+//          OAUTH_STATE_SECRET (>= 32 حرفاً، نفس قيمة دالة channels؛ إلزامي)،
 //          INSTAGRAM_REDIRECT_URI (يجب أن يطابق المسجّل في Meta تماماً)،
 //          FRONTEND_ORIGIN (اختياري، الافتراضي https://hsnq2022022-cyber.github.io)
 // ═══════════════════════════════════════════════════════════════════
 
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { consumeOAuthState, oauthStateSecret } from "../_shared/oauthState.ts";
 
 const IG_TOKEN_URL = "https://api.instagram.com/oauth/access_token";
 const IG_GRAPH_HOST = "https://graph.instagram.com";
@@ -35,42 +37,8 @@ async function encryptField(plain: string): Promise<string> {
   return `enc:v1:${hex(iv)}:${hex(ct.slice(-16))}:${hex(ct.slice(0, -16))}`;
 }
 
-// ─── state: body.sig (HMAC-SHA256 base64url) كما في channels/buildOAuthState ───
-const b64url = (buf: ArrayBuffer | Uint8Array) =>
-  btoa(String.fromCharCode(...new Uint8Array(buf as ArrayBuffer)))
-    .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-
-function safeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let d = 0;
-  for (let i = 0; i < a.length; i++) d |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return d === 0;
-}
-
-async function verifyState(
-  state: string,
-  secret: string,
-): Promise<{ ok: true; nonce: string; platform: string } | { ok: false; reason: string }> {
-  const [body, sig] = state.split(".");
-  if (!body || !sig) return { ok: false, reason: "state_format" };
-
-  const key = await crypto.subtle.importKey(
-    "raw", enc.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"],
-  );
-  const expected = b64url(await crypto.subtle.sign("HMAC", key, enc.encode(body)));
-  if (!safeEqual(sig, expected)) return { ok: false, reason: "state_signature" };
-
-  try {
-    const padded = body.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - (body.length % 4)) % 4);
-    const p = JSON.parse(atob(padded));
-    if (!p?.i || !p?.exp || Date.now() / 1000 > Number(p.exp)) {
-      return { ok: false, reason: "state_expired" };
-    }
-    return { ok: true, nonce: String(p.i), platform: String(p.p ?? "") };
-  } catch {
-    return { ok: false, reason: "state_format" };
-  }
-}
+// ─── state (S5): verified by ../_shared/oauthState.ts with OAUTH_STATE_SECRET.
+// Only the user/tenant inside the verified state are used; never query params.
 
 function frontBase(): string {
   const origin = (Deno.env.get("FRONTEND_ORIGIN") || "https://hsnq2022022-cyber.github.io")
@@ -133,32 +101,39 @@ Deno.serve(async (req: Request) => {
     const state = url.searchParams.get("state") ?? "";
     if (!code || !state) return fail("missing_params");
 
-    const st = await verifyState(state, igSecret);
-    if (!st.ok) return fail(`oauth_state:${st.reason}`);
-    if (st.platform !== "instagram") return fail("oauth_state_platform_mismatch");
-
     const sb = createClient(supaUrl, srvKey, {
       auth: { autoRefreshToken: false, persistSession: false },
     });
 
-    // استهلاك الـ state مرة واحدة (claim ذري)
-    const { data: claimed, error: claimErr } = await sb
-      .from("meta_oauth_states")
-      .update({ consumed: true })
-      .eq("id", st.nonce)
-      .eq("consumed", false)
-      .gt("expires_at", new Date().toISOString())
-      .select("tenant_id, platform")
-      .maybeSingle();
-
-    if (claimErr) {
-      console.error("[meta-auth] state claim error", claimErr.message);
-      return fail("db_error");
+    // Signature, shape and expiry are verified BEFORE any DB access or
+    // token exchange; then the nonce is claimed exactly once (atomic) for
+    // the same user/tenant/platform. Missing OAUTH_STATE_SECRET fails closed.
+    const st = await consumeOAuthState({
+      secret: oauthStateSecret((k) => Deno.env.get(k)),
+      state,
+      expectedPlatform: "instagram",
+      nowSec: Math.floor(Date.now() / 1000),
+      claimNonce: async (c) => {
+        const { data: claimed, error: claimErr } = await sb
+          .from("meta_oauth_states")
+          .update({ consumed: true })
+          .eq("id", c.nonce)
+          .eq("consumed", false)
+          .eq("user_id", c.userId)
+          .eq("tenant_id", c.tenantId)
+          .eq("platform", c.platform)
+          .gt("expires_at", new Date().toISOString())
+          .select("id")
+          .maybeSingle();
+        if (claimErr) return "error";
+        return claimed ? "claimed" : "not_found";
+      },
+    });
+    if (!st.ok) {
+      return fail(st.reason === "config_missing" ? "config_missing" : `oauth_state:${st.reason}`);
     }
-    if (!claimed) return fail("oauth_state:state_reused");
-    if (claimed.platform !== "instagram") return fail("oauth_state_platform_mismatch");
 
-    const tenantId: string = claimed.tenant_id;
+    const tenantId: string = st.tenantId;
 
     // نفس redirect_uri الذي أُرسل في طلب التفويض
     const redirectUri = Deno.env.get("INSTAGRAM_REDIRECT_URI") ||
