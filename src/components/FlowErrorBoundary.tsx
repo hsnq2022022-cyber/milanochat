@@ -26,6 +26,15 @@ export default class FlowErrorBoundary extends Component<{ children: ReactNode }
 
 /* Errors outside React rendering (event handlers, async code, chunk loading) never reach an error boundary:
    show them in a red banner too, only on the flow builder route. */
+/* Dev-server / socket noise (Vite HMR, closed WebSockets, ResizeObserver loop) is not an app error: never show it. */
+export function isBenignRuntimeNoise(value: unknown): boolean {
+  if (value == null) return false;
+  if (typeof Event !== "undefined" && value instanceof Event) return true; // CloseEvent/Event carries no message
+  const text = String((value as { message?: unknown })?.message ?? value);
+  if (!text || text === "[object Object]") return typeof value === "object" && !(value instanceof Error) && !(value as { message?: unknown }).message;
+  return /websocket|web socket|\bhmr\b|\[vite\]|ResizeObserver loop/i.test(text);
+}
+
 export function installFlowErrorBanner() {
   const show = (msg: string) => {
     if (!location.hash.startsWith("#/flows")) return;
@@ -39,6 +48,6 @@ export function installFlowErrorBanner() {
     }
     el.textContent = msg.slice(0, 600);
   };
-  window.addEventListener("error", (e) => show("Error: " + (e.message || "unknown") + (e.filename ? "\n" + e.filename + ":" + e.lineno : "")));
-  window.addEventListener("unhandledrejection", (e) => show("Unhandled rejection: " + String((e.reason && (e.reason.message || e.reason)) || "unknown")));
+  window.addEventListener("error", (e) => { if (isBenignRuntimeNoise(e.error ?? e.message) || isBenignRuntimeNoise(e.message)) return; show("Error: " + (e.message || "unknown") + (e.filename ? "\n" + e.filename + ":" + e.lineno : "")); });
+  window.addEventListener("unhandledrejection", (e) => { if (isBenignRuntimeNoise(e.reason)) return; show("Unhandled rejection: " + String((e.reason && (e.reason.message || e.reason)) || "unknown")); });
 }

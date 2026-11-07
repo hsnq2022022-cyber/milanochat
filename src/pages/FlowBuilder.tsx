@@ -264,7 +264,7 @@ function Editor(){
           <p className="fs-tb-cap"><span className="truncate">{t("designer")}</span></p>
           <input className="fs-name-input" aria-label={t("name")} maxLength={100} value={doc.name} onChange={e=>store().rename(e.target.value)}/>
         </div>
-        <FlowSwitcher flows={flows} activeFlowId={activeFlowId} activeName={doc.name} language={language} onSwitch={switchTo} onCreate={createNewFlow} onBlank={createBlankFlow}/>
+        <FlowSwitcher flows={flows} activeFlowId={activeFlowId} activeName={doc.name} liveDoc={doc} language={language} onSwitch={switchTo} onCreate={createNewFlow} onBlank={createBlankFlow}/>
         {PUBLICATION_UI_ENABLED&&<button type="button" data-testid="flow-publications" className="fs-btn fs-btn-primary fs-publish" onClick={()=>setShowPublications(true)}>
           <Send size={16}/><span className="sm:hidden">{t("publish")}</span><span className="hidden sm:inline">{language==="en"?"Published revisions":"الإصدارات المنشورة"}</span></button>}
         <button type="button" className="fs-ibtn fs-tb-toggle" aria-label={toolbarCollapsed?t("expand"):t("collapse")} aria-expanded={!toolbarCollapsed} onClick={()=>setToolbarCollapsed(v=>!v)}>

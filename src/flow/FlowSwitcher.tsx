@@ -1,15 +1,27 @@
 import { useEffect, useRef, useState } from "react";
 import { ChevronsUpDown, Check, Plus, LayoutGrid } from "lucide-react";
 import type { SavedFlow } from "./library";
+import type { FlowDocument } from "./model";
 import { flowText } from "./uiLocale";
 import type { FlowLanguage } from "./uiLocale";
+
+const CHANNELS:Record<string,{label:string;color:string}>={
+  instagram:{label:"Instagram",color:"#F45B69"},
+  whatsapp:{label:"WhatsApp",color:"#3DD189"},
+  messenger:{label:"Messenger",color:"#4FC3F7"},
+};
+/** Trigger channel read from the document's trigger node (never a cached summary). */
+export function flowChannel(doc:FlowDocument):string{
+  const p=doc.nodes.find(n=>n.data.kind==="trigger")?.data.platform;
+  return p&&CHANNELS[p]?p:"other";
+}
 
 /**
  * Presentation wrapper over the builder's existing local flow library:
  * lists `flows` from the store and calls the same switch/create handlers as the toolbar.
  */
-export default function FlowSwitcher({flows,activeFlowId,activeName,language,onSwitch,onCreate,onBlank}:{
-  flows:SavedFlow[];activeFlowId:string;activeName:string;language:FlowLanguage;
+export default function FlowSwitcher({flows,activeFlowId,activeName,liveDoc,language,onSwitch,onCreate,onBlank}:{
+  flows:SavedFlow[];activeFlowId:string;activeName:string;liveDoc?:FlowDocument;language:FlowLanguage;
   onSwitch:(id:string)=>void;onCreate:()=>void;onBlank:()=>void;
 }){
   const [open,setOpen]=useState(false);
@@ -47,13 +59,19 @@ export default function FlowSwitcher({flows,activeFlowId,activeName,language,onS
       <ul ref={list} className="fs-switcher-list">
         {flows.map(flow=>{
           const current=flow.id===activeFlowId;
-          const name=current?activeName:flow.doc.name;
+          // The active flow is edited live in the store; flow.doc is only snapshotted on switch/save, so read the live doc.
+          const doc=current&&liveDoc?liveDoc:flow.doc;
+          const name=current?activeName:doc.name;
+          const channel=flowChannel(doc),ch=CHANNELS[channel];
           return <li key={flow.id}>
-            <button type="button" className={"fs-switcher-item"+(current?" is-current":"")} aria-current={current?"true":undefined}
+            <button type="button" data-testid="flow-card" data-channel={channel} data-flow-id={flow.id} data-nodes={doc.nodes.length}
+              style={ch?{["--fs-ch" as string]:ch.color}:undefined}
+              className={"fs-switcher-item"+(current?" is-current":"")} aria-current={current?"true":undefined}
               onClick={()=>{close(false);if(!current)onSwitch(flow.id);}}>
               <span className="fs-switcher-dot" data-on={flow.enabled===true} aria-hidden="true"/>
               <span className="fs-switcher-name">{name||"—"}</span>
-              <span className="fs-switcher-meta">{flow.doc.nodes.length} · {flow.enabled===true?t("enabled"):t("disabled")}</span>
+              <span className="fs-switcher-meta">{doc.nodes.length} · {flow.enabled===true?t("enabled"):t("disabled")}</span>
+              {ch&&<span className="fs-switcher-ch" data-testid="flow-card-channel">{ch.label}</span>}
               {current&&<Check size={16} className="fs-switcher-check" aria-label={t("currentFlow")}/>}
             </button>
           </li>;

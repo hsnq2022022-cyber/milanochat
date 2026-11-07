@@ -390,6 +390,11 @@ for(const sample of [
  });
 }
 
+async function addActionStep(page:import("@playwright/test").Page){
+ await page.getByRole("button",{name:"فتح إضافة خطوة"}).click();
+ await page.getByTestId("add-step-menu").getByRole("button",{name:"إجراء",exact:true}).click();
+}
+
 for(const kind of [
  {label:"شرط",heading:"الحقل"},
  {label:"انتظار ذكي",heading:"مدة الانتظار"},
@@ -449,16 +454,19 @@ test("audit: quick reply connects to a real step and preview follows the connect
  await expect(sim.getByText("تواصل ويانا لمعرفة الأسعار الحالية لخدمتك في الإمارات.")).toBeVisible();
 });
 
-test("audit: AI Step and action buttons create editable nodes rather than inert buttons",async({page})=>{
+test("audit: the standalone action step (+ menu) creates an editable node; button picker no longer offers logic actions",async({page})=>{
  await page.goto("/milanochat/#/flows");
  await page.locator(".react-flow__node").nth(1).click();
  const panel=page.getByTestId("step-settings-panel");
  await panel.getByRole("button",{name:"إضافة زر"}).click();
- await panel.getByTestId("button-action-editor").getByRole("button",{name:"AI Step",exact:true}).click();
+ const picker=panel.getByTestId("button-action-editor");
+ for(const name of ["AI Step","تنفيذ إجراء","شرط","توزيع عشوائي"])await expect(picker.getByRole("button",{name,exact:true})).toHaveCount(0);
+ for(const name of ["إرسال رسالة أو الانتقال لخطوة","الانتقال إلى تدفق آخر","فتح موقع"])await expect(picker.getByRole("button",{name,exact:true})).toHaveCount(1);
+ await expect(picker.getByTestId("button-action-legacy")).toHaveCount(0);
+ await addActionStep(page);
  await expect(page.locator(".react-flow__node")).toHaveCount(7);
  await expect(panel.getByText("نوع الإجراء")).toBeVisible();
  await expect(panel.getByText("هذه إعدادات تصميمية، وليست أوامر مفعّلة في النظام الحقيقي.")).toHaveCount(0);
- await expect(panel.getByTestId("action-preview-only-note")).toBeVisible();
 });
 
 test("feature-flag notes: image, URL button and internal actions explain server enablement",async({page})=>{
@@ -471,8 +479,7 @@ test("feature-flag notes: image, URL button and internal actions explain server 
  await panel.getByRole("button",{name:"رابط موقع جديد"}).click();
  await expect(panel.getByTestId("url-button-flag-note")).toContainText("يفعّل المسؤول");
  await expect(panel.getByTestId("url-button-flag-note")).toContainText("FLOW_RICH_BUTTONS_ENABLED");
- await panel.getByRole("button",{name:"إضافة زر"}).click();
- await panel.getByTestId("button-action-editor").getByRole("button",{name:"AI Step",exact:true}).click();
+ await addActionStep(page);
  const select=panel.locator("select").filter({hasText:"إضافة وسم"});
  for(const v of ["tag","untag","notify","handoff"]){
   await select.selectOption(v);
@@ -501,8 +508,7 @@ test("handoff action hides the value field and shows a hint; other actions keep 
  await page.goto("/milanochat/#/flows");
  await page.locator(".react-flow__node").nth(1).click();
  const panel=page.getByTestId("step-settings-panel");
- await panel.getByRole("button",{name:"إضافة زر"}).click();
- await panel.getByTestId("button-action-editor").getByRole("button",{name:"AI Step",exact:true}).click();
+ await addActionStep(page);
  const hint=panel.getByTestId("handoff-hint");
  const valueLabel=panel.getByText("القيمة / اسم الوسم");
  await panel.locator("select").filter({hasText:"إضافة وسم"}).selectOption("handoff");
@@ -790,4 +796,78 @@ test.describe("image block storage upload", () => {
     expect(await aside.getByAltText("معاينة المكوّن").getAttribute("src")).toMatch(/^data:image\/webp/);
     expect(hits).toBe(0);
   });
+});
+
+/* ---- flow cards (switcher), button legacy actions, benign-noise banner ---- */
+const seedNode=(id:string,kind:string,y:number,extra:Record<string,unknown>={})=>({id,type:"flowNode",position:{x:0,y},data:{kind,title:kind,text:"",...extra}});
+const seedDoc=(name:string,platform:string,extraNodes:unknown[]=[])=>({version:3,name,nodes:[
+ seedNode("s","trigger",0,{keywords:"hi",triggerMode:"keyword",platform}),seedNode("m","message",200,{text:"مرحبا"}),...extraNodes],
+ edges:[{id:"e1",source:"s",target:"m",sourceHandle:"next",targetHandle:"in"}]});
+
+test("flow cards: colour and data-channel follow the live trigger channel, with a text label",async({page})=>{
+ await page.addInitScript((lib)=>{localStorage.setItem("social_flow_library_v1",JSON.stringify(lib));},{activeFlowId:"a",flows:[
+  {id:"a",doc:seedDoc("إنستغرام","instagram")},{id:"b",doc:seedDoc("واتساب","whatsapp")},{id:"c",doc:seedDoc("ماسنجر","messenger")}]});
+ await page.goto("/milanochat/#/flows");
+ await page.getByTestId("flow-switcher").click();
+ const expected:Record<string,[string,string]>={a:["instagram","Instagram"],b:["whatsapp","WhatsApp"],c:["messenger","Messenger"]};
+ for(const id of Object.keys(expected)){
+  const card=page.locator(`[data-testid="flow-card"][data-flow-id="${id}"]`);
+  await expect(card).toHaveAttribute("data-channel",expected[id][0]);
+  await expect(card.getByTestId("flow-card-channel")).toHaveText(expected[id][1]);
+ }
+ const color=(id:string)=>page.locator(`[data-testid="flow-card"][data-flow-id="${id}"] [data-testid="flow-card-channel"]`).evaluate(el=>getComputedStyle(el).color);
+ const [ig,wa,ms]=[await color("a"),await color("b"),await color("c")];
+ expect(new Set([ig,wa,ms]).size).toBe(3);
+ expect(ig).toBe("rgb(244, 91, 105)");
+ expect(wa).toBe("rgb(61, 209, 137)");
+ expect(ms).toBe("rgb(79, 195, 247)");
+});
+
+test("flow cards: the active card reflects the live document after edits, not a stale snapshot",async({page})=>{
+ await page.goto("/milanochat/#/flows");
+ await page.getByTestId("flow-switcher").click();
+ const card=page.locator('[data-testid="flow-card"][aria-current="true"]');
+ await expect(card).toHaveAttribute("data-nodes","6");
+ await page.keyboard.press("Escape");
+ await page.getByRole("button",{name:"فتح إضافة خطوة"}).click();
+ await page.getByTestId("add-step-menu").getByRole("button",{name:"نهاية",exact:true}).click();
+ await page.getByTestId("flow-switcher").click();
+ await expect(card).toHaveAttribute("data-nodes","7");
+ await page.keyboard.press("Escape");
+ await page.getByTitle("تراجع Ctrl+Z").click();
+ await page.getByTestId("flow-switcher").click();
+ await expect(card).toHaveAttribute("data-nodes","6");
+});
+
+test("button settings: removed logic actions are hidden; an existing legacy action stays visible read-only and unchanged",async({page})=>{
+ await page.addInitScript(()=>{
+  const doc={version:3,name:"legacy",nodes:[
+   {id:"s",type:"flowNode",position:{x:0,y:0},data:{kind:"trigger",title:"t",text:"",keywords:"hi",triggerMode:"keyword",platform:"instagram"}},
+   {id:"m",type:"flowNode",position:{x:0,y:200},data:{kind:"message",title:"m",text:"مرحبا",options:[{id:"o1",label:"قديم",buttonType:"button",action:"condition"}]}}],
+   edges:[{id:"e1",source:"s",target:"m",sourceHandle:"next",targetHandle:"in"}]};
+  localStorage.setItem("social_flow_reactflow_v3",JSON.stringify(doc));
+ });
+ await page.goto("/milanochat/#/flows");
+ await page.locator(".react-flow__node").nth(1).click();
+ const panel=page.getByTestId("step-settings-panel");
+ await panel.getByTestId("flow-button-o1").click();
+ const editor=panel.getByTestId("button-action-editor");
+ const legacy=editor.getByTestId("button-action-legacy");
+ await expect(legacy).toHaveText("شرط");
+ await expect(legacy).toBeDisabled();
+ for(const name of ["AI Step","تنفيذ إجراء","توزيع عشوائي"])await expect(editor.getByRole("button",{name,exact:true})).toHaveCount(0);
+ await expect(page.locator(".react-flow__node")).toHaveCount(2);
+});
+
+test("error banner ignores WebSocket/HMR noise but still shows real errors",async({page})=>{
+ await page.goto("/milanochat/#/flows");
+ await page.evaluate(()=>{
+  Promise.reject(new Error("WebSocket closed"));
+  Promise.reject(new Event("close"));
+  Promise.reject(new Error("[vite] server connection lost"));
+ });
+ await page.waitForTimeout(300);
+ await expect(page.locator("#flow-error-banner")).toHaveCount(0);
+ await page.evaluate(()=>{Promise.reject(new Error("real failure xyz"));});
+ await expect(page.locator("#flow-error-banner")).toContainText("real failure xyz");
 });

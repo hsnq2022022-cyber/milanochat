@@ -11,6 +11,10 @@ const ACTIONS: Array<{id:ButtonAction;label:string;description:string}>=[
   {id:"step",label:"إرسال رسالة أو الانتقال لخطوة",description:"ربط الزر بأي خطوة في التدفق الحالي"},
   {id:"flow",label:"الانتقال إلى تدفق آخر",description:"فتح تدفق محفوظ آخر عند الضغط"},
   {id:"website",label:"فتح موقع",description:"رابط HTTPS خارجي"},
+];
+/* Removed from the picker (still standalone canvas nodes via the + menu). Kept only so an existing button that
+   already carries one of these actions stays visible as a read-only legacy value, never silently changed. */
+const LEGACY_ACTIONS: Array<{id:ButtonAction;label:string;description:string}>=[
   {id:"ai",label:"AI Step",description:"إنشاء خطوة للذكاء الاصطناعي (تجريبية)"},
   {id:"actions",label:"تنفيذ إجراء",description:"إنشاء خطوة تغيير وسم أو حالة"},
   {id:"condition",label:"شرط",description:"إنشاء خطوة بشرطي نعم/لا"},
@@ -122,7 +126,9 @@ export default function ButtonActionEditor({node}:{node:FlowNode}){
       </select>
       <p className="mb-2 mt-4 text-xs font-semibold">عند الضغط على هذا الزر</p>
       <div className="grid grid-cols-2 gap-2">
-        {ACTIONS.map(a=><button key={a.id} type="button" title={a.description}
+        {[...ACTIONS,...LEGACY_ACTIONS.filter(a=>a.id===option.action)].map(a=>a.id===option.action&&LEGACY_ACTIONS.some(l=>l.id===a.id)?
+          <button key={a.id} type="button" disabled aria-pressed="true" data-testid="button-action-legacy" title={a.description+" (إجراء قديم للقراءة فقط)"}
+            className="rounded-lg border border-[#3DD189] bg-[#173D30] p-2 text-right text-[11px] opacity-80">{a.label}</button>:<button key={a.id} type="button" title={a.description}
           className={"rounded-lg border p-2 text-right text-[11px] "+((option.action||"step")===a.id?"border-[#3DD189] bg-[#173D30]":"border-[#275443] bg-[#0B241C]")}
           onClick={()=>setAction(option,a.id)}>{a.label}</button>)}
       </div>

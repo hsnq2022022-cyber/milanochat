@@ -117,10 +117,14 @@
   .flow-skin .fs-switcher-item:hover{border-color:color-mix(in srgb,var(--fs-brand) 50%,var(--fs-line))}
   .flow-skin .fs-switcher-item:active{transform:scale(.985)}
   .flow-skin .fs-switcher-item.is-current{border-color:var(--fs-brand);background:color-mix(in srgb,var(--fs-brand) 10%,var(--fs-field))}
-  .flow-skin .fs-switcher-dot{grid-row:span 2;width:8px;height:8px;border-radius:50%;background:#4B6157}
+  .flow-skin .fs-switcher-dot{grid-row:span 3;width:8px;height:8px;border-radius:50%;background:#4B6157}
   .flow-skin .fs-switcher-dot[data-on="true"]{background:var(--fs-brand);box-shadow:0 0 0 3px rgba(61,209,137,.18)}
   .flow-skin .fs-switcher-name{font-weight:700;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .flow-skin .fs-switcher-meta{grid-column:2;font-size:11px;color:var(--fs-muted)}
+  .flow-skin .fs-switcher-item[data-channel]:not([data-channel="other"]){border-inline-start:4px solid var(--fs-ch)}
+  .flow-skin .fs-switcher-ch{grid-column:2;grid-row:3;justify-self:start;margin-top:3px;font-size:10.5px;font-weight:700;padding:1px 8px;border-radius:999px;color:var(--fs-ch);
+    background:color-mix(in srgb,var(--fs-ch) 16%,transparent);border:1px solid color-mix(in srgb,var(--fs-ch) 55%,transparent)}
+  .flow-skin .fs-switcher-item[data-channel]:not([data-channel="other"]) .fs-switcher-dot[data-on="true"]{background:var(--fs-ch)}
   .flow-skin .fs-switcher-check{grid-column:3;grid-row:1 / span 2;color:var(--fs-brand)}
   .flow-skin .fs-switcher-foot{display:flex;gap:8px}
   .flow-skin .fs-switcher-foot .fs-btn{flex:1}

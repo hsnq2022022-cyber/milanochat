@@ -64,19 +64,17 @@ test("functional: HTTP is explicitly NOT executed, and preview picks error path"
 });
 
 for(const choice of [
- {action:"AI Step",kind:"action",label:"نوع الإجراء"},
- {action:"تنفيذ إجراء",kind:"action",label:"نوع الإجراء"},
+ {action:"إجراء",kind:"action",label:"نوع الإجراء"},
  {action:"شرط",kind:"condition",label:"الحقل"},
  {action:"توزيع عشوائي",kind:"randomizer",label:"نسب التوزيع"}
 ]){
- test("functional: action button "+choice.action+" creates an actual editable connected step",async({page})=>{
+ test("functional: action button "+choice.action+" is added from the + menu as an actual editable step",async({page})=>{
   await page.goto("/milanochat/#/flows");
   await page.locator(".react-flow__node").nth(1).click();
   const panel=page.getByTestId("step-settings-panel");
-  await panel.getByRole("button",{name:"إضافة زر"}).click();
-  await panel.getByTestId("button-action-editor").getByRole("button",{name:choice.action,exact:true}).click();
+  await page.getByRole("button",{name:"فتح إضافة خطوة"}).click();
+  await page.getByTestId("add-step-menu").getByRole("button",{name:choice.action,exact:true}).click();
   await expect(page.locator(".react-flow__node")).toHaveCount(7);
-  await expect(page.locator(".react-flow__edge")).toHaveCount(6);
   await expect(panel.getByText(choice.label).first()).toBeVisible();
  });
 }
