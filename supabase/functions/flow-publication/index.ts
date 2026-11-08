@@ -10,7 +10,7 @@ import {
 } from "../../../src/flow/serverPublicationValidation.ts";
 import {flowNeedsMedia,parseCapabilities,mediaActivationAllowed,withMediaGate,
  type FlowCapability} from "../../../src/flow/publicationGate.ts";
-import {evaluateFlowReadiness} from "./readiness.ts";
+import {evaluateFlowReadiness,documentHasCommentTrigger} from "./readiness.ts";
 import {simpleMessageFromDocument} from "../milan-api/flowPrepareMessage.ts";
 import {supportedDurableDocument,durableCandidateKind,durableRuntimeNeeds,durableNeedsInternalActions,
  type DurableCandidateKind} from "../milan-api/flowDurableIngress.ts";
@@ -200,7 +200,12 @@ export async function handleFlowPublication(req:Request,
    // Same whitelist and flag needs as the live ingress and the activation guard.
    const supported=supportedDurableDocument(published);
    const candidateKind:DurableCandidateKind=supported?durableCandidateKind(published):"unsupported";
+   // Comment-trigger documents (never durable DM graphs): the same plan and
+   // server-env flags (fail-closed) the activate action's comment path uses.
+   const comment=!supported&&documentHasCommentTrigger(published)?{
+    planValid:commentFlowPlan(published,scope.platform)!==null,...commentSwitches()}:undefined;
    const readiness=evaluateFlowReadiness({
+    comment,
     platform:scope.platform,candidateKind,tenantActive:tenant.is_active===true,
     accountActive:account.is_active===true,
     agentEnabled:account.agent_enabled===true,autoReply:account.auto_reply===true,

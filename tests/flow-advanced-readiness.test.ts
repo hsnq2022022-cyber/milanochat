@@ -234,3 +234,111 @@ test("Instagram website-button graphs are a buttons candidate: ready only with F
   assert.equal(durableCandidateKind(doc),"unsupported","flag OFF: existing refusal");
  }finally{(globalThis as any).Deno=old;}
 });
+
+import {evaluateCommentReadiness,documentHasCommentTrigger}
+ from "../supabase/functions/flow-publication/readiness.ts";
+import {commentFlowPlan} from "../supabase/functions/milan-api/commentTrigger.ts";
+import {productionActivationAuthorized} from "../src/flow/serverPublicationValidation.ts";
+const commentDoc=(platform:string,over:Record<string,unknown>={})=>({version:3,nodes:[
+ {id:"start",data:{kind:"trigger",platform,triggerMode:"comment",commentScope:"all",
+  commentMatchType:"any",keywords:"",publicReplyText:"أرسلنا لك رسالة",...over}},
+ {id:"m",data:{kind:"message",text:"مرحباً",image:"",options:[],contentBlocks:[]}}],
+ edges:[{source:"start",target:"m",sourceHandle:"next"}]});
+const flagsOn={commentAutomationEnabled:true,multichannelEnabled:true};
+const plan=(platform:"instagram"|"facebook"|"whatsapp",doc:unknown)=>
+ commentFlowPlan(doc,platform)!==null;
+test("comment flows: supported («مدعوم») for instagram and facebook when the server flags are on",()=>{
+ for(const [platform,trigger] of [["instagram","instagram"],["facebook","messenger"]] as const){
+  const doc=commentDoc(trigger);
+  assert.equal(documentHasCommentTrigger(doc),true);
+  const r=evaluateFlowReadiness({...input,platform,candidateKind:"unsupported",
+   comment:{planValid:plan(platform,doc),...flagsOn}});
+  assert.equal(r.candidateKind,"comment",platform);
+  assert.equal(r.commentTrigger?.status,"supported",platform);
+  assert.equal(r.commentTrigger?.supported,true);
+  assert.deepEqual(r.commentTrigger?.statusLabel,{ar:"مدعوم",en:"Supported"});
+  assert.equal(r.commentTrigger?.reason,"ok");
+  assert.equal(r.checks.commentTrigger,true);
+  assert.equal(r.checks.supportedCandidate,true);
+  // No Instagram-only requirement on comment reports (Facebook included).
+  assert.equal("instagram" in r.checks,false,platform);
+  assert.equal(r.needsButtons,false);assert.equal(r.needsScheduler,false);
+  assert.equal(r.configured,true,platform);
+  assert.equal(r.buttonsConfigured,false);assert.equal(r.delayConfigured,false);
+ }
+ const fb=evaluateFlowReadiness({...input,platform:"facebook",candidateKind:"unsupported",
+  comment:{planValid:true,...flagsOn}});
+ assert.match(fb.commentTrigger!.label.en,/Facebook Page/);
+ assert.doesNotMatch(JSON.stringify(fb.commentTrigger)+JSON.stringify(fb.checkLabels),/Instagram/);
+ const ig=evaluateFlowReadiness({...input,candidateKind:"unsupported",comment:{planValid:true,...flagsOn}});
+ assert.match(ig.commentTrigger!.label.en,/Instagram/);
+ // Comment graphs never need the buttons sender or the scheduler.
+ assert.equal(evaluateFlowReadiness({...input,richButtonsEnabled:false,schedulerEnabled:false,
+  candidateKind:"unsupported",comment:{planValid:true,...flagsOn}}).configured,true);
+});
+test("comment flows: unsupported («غير مدعوم») when flags are off, on whatsapp, or with an invalid graph",()=>{
+ const unsupported=(platform:string,comment:{planValid:boolean;commentAutomationEnabled:boolean;multichannelEnabled:boolean},reason:string)=>{
+  const r=evaluateFlowReadiness({...input,platform,candidateKind:"unsupported",comment});
+  assert.equal(r.commentTrigger?.status,"unsupported",platform+":"+reason);
+  assert.deepEqual(r.commentTrigger?.statusLabel,{ar:"غير مدعوم",en:"Not supported"});
+  assert.equal(r.commentTrigger?.reason,reason);
+  assert.equal(r.checks.commentTrigger,false);
+  assert.equal(r.configured,false);
+  assert.equal("instagram" in r.checks,false);
+  return r;
+ };
+ unsupported("instagram",{planValid:true,commentAutomationEnabled:false,multichannelEnabled:true},"comment_automation_off");
+ unsupported("facebook",{planValid:true,commentAutomationEnabled:false,multichannelEnabled:true},"comment_automation_off");
+ unsupported("facebook",{planValid:true,commentAutomationEnabled:true,multichannelEnabled:false},"multichannel_off");
+ // Instagram does not need the multichannel flag (same as productionActivationAuthorized).
+ assert.equal(evaluateFlowReadiness({...input,candidateKind:"unsupported",
+  comment:{planValid:true,commentAutomationEnabled:true,multichannelEnabled:false}}).configured,true);
+ // WhatsApp has no comment surface: never supported, even with every flag on.
+ const wa=unsupported("whatsapp",{planValid:true,...flagsOn},"no_comment_surface");
+ assert.equal(wa.candidateKind,"unsupported");
+ assert.match(wa.commentTrigger!.label.en,/WhatsApp/);
+ assert.equal(plan("whatsapp",commentDoc("whatsapp")),false);
+ // Missing public reply text: the plan is refused, so the flow stays unsupported.
+ for(const [platform,trigger] of [["instagram","instagram"],["facebook","messenger"]] as const){
+  const noReply=commentDoc(trigger,{publicReplyText:"  "});
+  assert.equal(plan(platform,noReply),false);
+  const r=unsupported(platform,{planValid:plan(platform,noReply),...flagsOn},"invalid_comment_flow");
+  assert.equal(r.candidateKind,"unsupported");assert.equal(r.checks.supportedCandidate,false);
+ }
+ // Fail-closed: only boolean true enables (truthy strings do not).
+ assert.equal(evaluateCommentReadiness("instagram",{planValid:true,commentAutomationEnabled:"true" as any,multichannelEnabled:true}).supported,false);
+ // Every operator/base gate still blocks a supported comment flow.
+ for(const key of Object.keys(input) as Array<keyof ReadinessInput>){
+  if(["platform","candidateKind","schedulerEnabled","richButtonsEnabled"].includes(key))continue;
+  assert.equal(evaluateFlowReadiness({...input,[key]:false,candidateKind:"unsupported",
+   comment:{planValid:true,...flagsOn}}).configured,false,key);
+ }
+ // Non-comment documents: no comment report, Instagram check unchanged.
+ const dm=evaluateFlowReadiness({...input,platform:"facebook"});
+ assert.equal("commentTrigger" in dm,false);assert.equal(dm.checks.instagram,false);
+ assert.equal(documentHasCommentTrigger({version:3,nodes:[{id:"s",data:{kind:"trigger",triggerMode:"message"}}]}),false);
+ assert.equal(documentHasCommentTrigger(null),false);
+});
+test("comment readiness platform rule matches productionActivationAuthorized (with the comment flag)",()=>{
+ for(const platform of ["instagram","facebook","whatsapp"] as const)
+  for(const commentAutomationEnabled of [true,false])
+   for(const multichannelEnabled of [true,false]){
+    const expected=commentAutomationEnabled&&productionActivationAuthorized(platform,true,true,true,
+     {commentTrigger:true,commentAutomationEnabled,multichannelEnabled});
+    assert.equal(evaluateCommentReadiness(platform,{planValid:true,commentAutomationEnabled,multichannelEnabled}).supported,
+     expected,platform+commentAutomationEnabled+multichannelEnabled);
+   }
+});
+test("readiness endpoint derives comment readiness from the stored document and server env only",()=>{
+ const api=readFileSync("supabase/functions/flow-publication/index.ts","utf8");
+ const start=api.indexOf('if(action==="readiness")'),body=api.slice(start,api.indexOf('// Authenticated read-only catalog.',start));
+ assert.match(body,/const comment=!supported&&documentHasCommentTrigger\(published\)\?\{\n\s+planValid:commentFlowPlan\(published,scope\.platform\)!==null,\.\.\.commentSwitches\(\)\}:undefined;/);
+ assert.doesNotMatch(body,/request\.(comment|commentAutomation|multichannel)/);
+ assert.match(api,/commentAutomationEnabled:env\("FLOW_COMMENT_AUTOMATION_ENABLED"\)==="true"/);
+ assert.match(api,/multichannelEnabled:env\("FLOW_MULTICHANNEL_ENABLED"\)==="true"/);
+ const ui=readFileSync("src/flow/FlowPublicationPanel.tsx","utf8");
+ // The UI renders the server's status/label; it never hardcodes «مدعوم».
+ assert.doesNotMatch(ui,/"مدعوم"/);
+ assert.match(ui,/serverText\(readiness\.commentTrigger\.statusLabel,en\)/);
+ assert.match(ui,/serverText\(readiness\.checkLabels\?\.\[key\],en\)/);
+});

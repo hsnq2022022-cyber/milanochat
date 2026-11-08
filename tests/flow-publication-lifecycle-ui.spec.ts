@@ -195,3 +195,50 @@ for (const c of cases) {
     }
   });
 }
+
+/** Comment-trigger readiness: status and labels are rendered exactly as the server sends them. */
+const commentReport = (status: "supported" | "unsupported", platform: "instagram" | "facebook", over: Record<string, unknown> = {}) => {
+  const label = platform === "facebook"
+    ? { ar: "مشغّل التعليقات (صفحة Facebook)", en: "Comment trigger (Facebook Page)" }
+    : { ar: "مشغّل التعليقات (Instagram)", en: "Comment trigger (Instagram)" };
+  const ok = status === "supported";
+  return {
+    candidateKind: "comment", configured: ok, needsButtons: false, needsScheduler: false, buttonsConfigured: false, delayConfigured: false,
+    checks: { commentTrigger: ok, tenant: true, account: true, supportedCandidate: true, scheduler: false, buttons: false },
+    commentTrigger: { platform, supported: ok, status, label, reason: ok ? "ok" : "comment_automation_off",
+      statusLabel: ok ? { ar: "مدعوم", en: "Supported" } : { ar: "غير مدعوم", en: "Not supported" },
+      detail: ok ? { ar: "مفعّل على الخادم", en: "Enabled on the server" } : { ar: "أتمتة التعليقات غير مفعّلة على الخادم.", en: "off" } },
+    checkLabels: { commentTrigger: label },
+    ...over,
+  };
+};
+for (const platform of ["instagram", "facebook"] as const) {
+  test(`readiness comment flow (${platform}) supported shows «مدعوم» from the server`, async ({ page }) => {
+    const state = { active: null as number | null };
+    await setup(page, { publication: readinessServer(state, commentReport("supported", platform)) });
+    const dialog = await openPanel(page);
+    await dialog.getByRole("button", { name: "فحص جاهزية الإصدار" }).first().click();
+    const report = dialog.getByTestId("flow-readiness-report");
+    const check = report.getByTestId("flow-readiness-comment-trigger");
+    await expect(check).toHaveAttribute("data-status", "supported");
+    await expect(report.getByTestId("flow-readiness-comment-status")).toHaveText("مدعوم");
+    await expect(check).toContainText(platform === "facebook" ? "صفحة Facebook" : "(Instagram)");
+    await expect(report).toContainText("تدفق تعليقات: الإعدادات مكتملة");
+    await expect(report).not.toContainText("غير مدعوم");
+    await expect(report).not.toContainText("قناة Instagram");
+    await expect(report).not.toContainText("ليس تدفق أزرار أو تأخير");
+    await expect(report).not.toContainText("•");
+  });
+}
+test("readiness comment flow with server flags off shows «غير مدعوم» and the platform-specific missing check", async ({ page }) => {
+  const state = { active: null as number | null };
+  await setup(page, { publication: readinessServer(state, commentReport("unsupported", "facebook")) });
+  const dialog = await openPanel(page);
+  await dialog.getByRole("button", { name: "فحص جاهزية الإصدار" }).first().click();
+  const report = dialog.getByTestId("flow-readiness-report");
+  await expect(report.getByTestId("flow-readiness-comment-trigger")).toHaveAttribute("data-status", "unsupported");
+  await expect(report.getByTestId("flow-readiness-comment-status")).toHaveText("غير مدعوم");
+  await expect(report).toContainText("تدفق تعليقات: الإعدادات غير مكتملة");
+  await expect(report).toContainText("• مشغّل التعليقات (صفحة Facebook)");
+  await expect(report).not.toContainText("Instagram");
+});
