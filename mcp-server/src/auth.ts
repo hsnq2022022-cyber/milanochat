@@ -14,7 +14,7 @@ import { UUID_RE } from "./config.js";
  * Never logs tokens or verification details.
  */
 export type AuthOutcome =
-  | { ok: true; tenantId: string; via: "jwt" | "test-header" }
+  | { ok: true; tenantId: string; via: "jwt" | "test-header" | "oauth" }
   | { ok: false; status: 401 | 403 | 503; reason: "missing" | "invalid" | "no_tenant" | "unavailable" };
 
 export type TenantLookup = (userId: string) => Promise<{ tenantId: string | null } | { error: true }>;
@@ -22,6 +22,8 @@ export type TenantLookup = (userId: string) => Promise<{ tenantId: string | null
 export type AuthenticatorOptions = {
   jwtSecret: string;
   allowSecretHeader: boolean;
+  /** Accept Supabase-style static Bearer JWTs (default true). When false every such Bearer is "invalid". */
+  allowStaticBearer?: boolean;
   lookupTenant: TenantLookup;
   /** Defense in depth: when set, any other resolved tenant is refused (403). */
   allowedTenantId?: string | null;
@@ -72,13 +74,26 @@ export function createAuthenticator(opts: AuthenticatorOptions) {
     return r.tenantId; // negatives are not cached (a newly created workspace works immediately)
   }
 
-  const scope = (tenantId: string, via: "jwt" | "test-header"): AuthOutcome =>
+  const scope = (tenantId: string, via: "jwt" | "test-header" | "oauth"): AuthOutcome =>
     allowed && tenantId !== allowed ? { ok: false, status: 403, reason: "no_tenant" } : { ok: true, tenantId, via };
 
+  const allowStatic = opts.allowStaticBearer ?? true;
+
   return {
+    /**
+     * Tenant of an already verified user id (OAuth access token `sub`): tenants.user_id = sub only,
+     * never a client-supplied value. Same cache and MILANO_ALLOWED_TENANT_ID lock as the JWT path.
+     */
+    async resolveUserTenant(sub: string): Promise<AuthOutcome> {
+      if (!UUID_RE.test(sub)) return { ok: false, status: 403, reason: "no_tenant" };
+      const t = await tenantForUser(sub.toLowerCase());
+      if (t === "error") return { ok: false, status: 503, reason: "unavailable" };
+      return t ? scope(t, "oauth") : { ok: false, status: 403, reason: "no_tenant" };
+    },
     async authenticate(headers: { authorization?: string; xMilanoTenant?: string }): Promise<AuthOutcome> {
       const auth = headers.authorization?.trim();
       if (auth) {
+        if (!allowStatic) return { ok: false, status: 401, reason: "invalid" };
         const m = /^Bearer\s+([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)$/i.exec(auth);
         if (!m) return { ok: false, status: 401, reason: "invalid" };
         let payload: JWTPayload;

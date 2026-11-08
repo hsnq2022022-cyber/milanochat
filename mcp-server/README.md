@@ -156,7 +156,7 @@ clients can connect by URL. It is **stateless**: every `POST /mcp` gets a fresh 
 
 ```bash
 npm run build
-npm run dev:http      # tsx src/http-server.ts  (needs SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_JWT_SECRET)
+npm run dev:http      # tsx src/http-server.ts  (needs SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_JWT_SECRET; see OAuth below)
 npm run start:http    # node dist/http-server.js
 ngrok http 8080       # public https URL for testing; then set TRUST_PROXY=1
 ```
@@ -217,7 +217,7 @@ Drop the `tenant_id` claim to exercise the `tenants.user_id = sub` lookup (needs
 
 ### Hardening
 
-- CORS allowlist: `https://claude.ai`, `https://chat.openai.com`, `https://cursor.com`, `http://localhost:6274`
+- CORS allowlist: `https://claude.ai`, `https://chat.openai.com`, `https://chatgpt.com`, `https://cursor.com`, `http://localhost:6274`
   (MCP Inspector). Requests without `Origin` (server-to-server clients) are allowed; other browser origins get no
   CORS headers and `403` on `/mcp`.
 - Rate limit 20 requests/min per IP on `/mcp` (`429`, `RateLimit` headers). Behind ngrok/Railway set
@@ -238,20 +238,179 @@ Drop the `tenant_id` claim to exercise the `tenants.user_id = sub` lookup (needs
 ### Deployment notes
 
 Run `npm ci && npm run build`, start with `npm run start:http`, set `NODE_ENV=production`, `PORT` (Railway sets
-it), `TRUST_PROXY=1`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_JWT_SECRET`; leave
-`MCP_ALLOW_SECRET_HEADER` unset/false. Serve only over HTTPS (the platform's TLS terminator). Health check: `GET /health`.
+it), `TRUST_PROXY=1`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`; for OAuth `MCP_OAUTH_ENABLED=true`,
+`MCP_PUBLIC_URL`, `MCP_OAUTH_SIGNING_SECRET`, `SESSION_SECRET`, `SUPABASE_ANON_KEY`, `DATABASE_URL` (+ `DATABASE_SSL_CA_FILE`)
+after applying migration 20261029320000; `SUPABASE_JWT_SECRET` only with `MCP_ALLOW_STATIC_BEARER=true` (off by default in
+production; with neither OAuth nor static bearer the server refuses to start). Leave `MCP_ALLOW_SECRET_HEADER` unset/false. Serve only over HTTPS (the platform's TLS terminator). Health check: `GET /health`.
 No deployment configuration is included in this package.
 
-### Limitation: OAuth is not implemented
+## OAuth 2.1 (web connectors: Claude.ai, ChatGPT, Cursor)
 
-Many web connector UIs (for example Claude custom connectors, ChatGPT connectors) expect **OAuth 2.1** with
-discovery (`/.well-known/oauth-protected-resource`, authorization server metadata, dynamic client registration)
-rather than a static bearer token. This server only validates Supabase-style bearer JWTs. Clients that let you
-set an `Authorization` header (MCP Inspector, Cursor, custom/SDK clients, curl) work today; connectors that
-require OAuth discovery will not connect until an OAuth layer is added.
+With `MCP_OAUTH_ENABLED=true` the HTTP server is also an OAuth 2.1 authorization server and
+protected resource, as required by the MCP authorization spec: authorization code + **PKCE S256 only**,
+refresh tokens with rotation, Dynamic Client Registration (RFC 7591), RFC 8414 / RFC 9728 discovery.
+Stdio (`src/index.ts`) is unchanged; with the flag off the HTTP server behaves as before.
+
+### Library decision
+
+- `mcp-oauth-server` (npm) **exists** (v1.0.1, Oct 2026, PKCE + DCR + custom storage advertised), but it is a
+  young single-maintainer package (first release Nov 2025) that has not been vetted here. **Not used.**
+- Used instead: the **official `@modelcontextprotocol/sdk` (1.32.2) server auth module** already installed:
+  `mcpAuthRouter` (metadata, `/authorize`, `/token`, `/register`, `/revoke` handlers) with our own
+  `OAuthServerProvider` (`src/oauthProvider.ts`) and storage (`src/oauthStore.ts`). Added dependencies:
+  `express-session`, `pg` (+ `@types/*`). Where the SDK is weaker than this brief we add guards in front of it:
+  exact `redirect_uri` match (the SDK accepts any port on loopback), hashed client secrets (the SDK compares
+  plaintext secrets, so confidential clients are authenticated before its handlers), PKCE verified only
+  after the code is consumed (a wrong verifier burns the code), our own per-minute rate limits.
+
+### Endpoints (issuer = `MCP_PUBLIC_URL`)
+
+| endpoint | |
+|---|---|
+| `GET /.well-known/oauth-authorization-server` | RFC 8414 metadata (`code_challenge_methods_supported: ["S256"]`) |
+| `GET /.well-known/oauth-protected-resource` (and `/mcp` suffix) | `resource = <issuer>/mcp`, `authorization_servers`, `scopes_supported: ["mcp:tools"]` |
+| `POST /register` | DCR. redirect URIs: https, or http only for `localhost` / `127.0.0.1`; max 5; no fragment. `token_endpoint_auth_method` `none` or `client_secret_post` |
+| `GET /authorize` | `response_type=code`, `code_challenge_method=S256` required (missing/plain -> error redirect keeping `state`), exact `redirect_uri` match |
+| `GET/POST /consent`, `POST /consent/login` | Arabic (RTL) login + consent pages |
+| `POST /token` | `authorization_code` (+ `code_verifier`, `redirect_uri`), `refresh_token` |
+| `POST /revoke` | RFC 7009 (access token -> jti denylist; refresh token -> whole grant revoked) |
+
+Unauthenticated `POST /mcp` -> `401` with
+`WWW-Authenticate: Bearer resource_metadata="<issuer>/.well-known/oauth-protected-resource", scope="mcp:tools"`.
+
+### Tokens and grants
+
+- Access token: JWT HS256 (`MCP_OAUTH_SIGNING_SECRET`, >= 32 chars, must differ from `SUPABASE_JWT_SECRET`),
+  header `typ: at+jwt`, claims `iss`, `aud = <issuer>/mcp`, `sub` (Supabase user id), `client_id`, `scope`,
+  `exp` (1 h), `jti`, `fam` (grant family). `/mcp` checks signature, typ, exp, iss, **aud** (tokens for other
+  resources are refused: no token passthrough), scope `mcp:tools` (else 403 `insufficient_scope`), jti
+  denylist and family revocation.
+- Refresh token: opaque, 30 days, **rotated on every use**. Presenting an already-rotated refresh token
+  revokes the whole grant family (every refresh and access token of that consent).
+- Authorization code: opaque, single use, 5 min, bound to client_id + redirect_uri + code_challenge + user.
+  Replaying a used code revokes the grant issued from it.
+- Only SHA-256 hashes of client secrets, codes and refresh tokens are stored.
+
+### Login, consent, tenant
+
+- `/authorize` parks the request in a short session and redirects to `/consent`. If not signed in, an Arabic
+  login form posts to `/consent/login`, which calls Supabase Auth server-side
+  (`POST {SUPABASE_URL}/auth/v1/token?grant_type=password` with `SUPABASE_ANON_KEY`). The password is never stored
+  or logged; only the verified user id is kept in the session, and the session id is regenerated on login.
+- Consent page: client name (from DCR, attacker-controlled: control/bidi chars stripped, capped at 100 chars,
+  HTML-escaped), the **redirect host shown prominently** (anti-phishing), scope `mcp:tools` =
+  «إنشاء وتعديل تدفقات الأتمتة», buttons «سماح» / «رفض». «رفض» -> redirect with `error=access_denied`.
+- Hardening: CSRF token bound to the session on every POST, Origin check, `X-Frame-Options: DENY`,
+  CSP `default-src 'none'; style-src 'nonce-…'; form-action 'self' <redirect origin>; frame-ancestors 'none'`,
+  `Cache-Control: no-store`. Session cookie `milano_mcp_sid`: HttpOnly, SameSite=Lax, Secure (unless
+  `MCP_INSECURE_COOKIES=true`, local http dev only, refused in production), 15 min.
+- Tenant: from `tenants.user_id = sub` only (same resolver + cache as the static bearer path). No workspace ->
+  no code is issued (consent shows an error) and `/mcp` answers 403. Tools still have no `tenant_id` argument
+  and `X-Milano-Tenant` is ignored for OAuth tokens.
+- Rate limits per IP per minute: `/authorize` 10, `/token` + `/revoke` 10, `/register` 5, login POST 5,
+  `/consent` 30, `/mcp` 20. DCR is also capped globally (`MCP_OAUTH_MAX_CLIENTS_PER_HOUR`, default 100).
+
+### Storage
+
+`DATABASE_URL` (Supabase Postgres connection string, owner role; session pooler or direct) -> Postgres store.
+Apply `supabase/migrations/20261029320000_oauth_tables.sql` first (rollback:
+`supabase/rollbacks/20261029320000_oauth_tables.rollback.sql`, refuses while rows exist unless
+`milan.rollback_320000=discard-mcp-oauth-grants`). Tables have RLS enabled with no policies and no
+anon/authenticated privileges. Expired rows are removed by `public.mcp_oauth_cleanup()` at startup and every 15 min.
+TLS: `DATABASE_SSL=verify` (default; set `DATABASE_SSL_CA_FILE` to Supabase's CA certificate),
+`no-verify` (encrypted, certificate not checked), `disable` (local host only). `ssl*` parameters in the URL are ignored.
+
+> **Without `DATABASE_URL` the store is IN-MEMORY: local development only** (lost on restart, single process).
+> The server refuses to start with OAuth in `NODE_ENV=production` without `DATABASE_URL`.
+> Login/consent sessions are in-process (bounded, 15 min): run one instance, or use sticky sessions.
+
+### Environment
+
+| var | |
+|---|---|
+| `MCP_OAUTH_ENABLED` | `true` to enable OAuth |
+| `MCP_PUBLIC_URL` | issuer origin, https (http only for localhost outside production), no path |
+| `MCP_OAUTH_SIGNING_SECRET` | >= 32 random chars (`openssl rand -base64 48`) |
+| `SESSION_SECRET` | >= 32 random chars, different from the signing secret |
+| `SUPABASE_ANON_KEY` | for the server-side password login |
+| `DATABASE_URL` | required in production |
+| `MCP_ALLOW_STATIC_BEARER` | Supabase user JWT as Bearer. Default **false in production**, true elsewhere (then `SUPABASE_JWT_SECRET` is required) |
+| `MCP_ALLOW_SECRET_HEADER` | testing-only `X-Milano-Tenant`, refused in production (unchanged) |
+| `MCP_INSECURE_COOKIES` | local http dev only, refused in production |
+| `TRUST_PROXY` | `1` behind ngrok / Railway (needed for Secure cookies and per-IP limits) |
+
+Startup errors list missing variable names only, never values.
+
+### Run locally (http, memory store)
+
+```bash
+export SUPABASE_URL=https://YOUR-PROJECT.supabase.co SUPABASE_SERVICE_ROLE_KEY=... SUPABASE_ANON_KEY=...
+export MCP_OAUTH_ENABLED=true MCP_PUBLIC_URL=http://localhost:8080 MCP_INSECURE_COOKIES=true
+export MCP_OAUTH_SIGNING_SECRET="$(openssl rand -base64 48)" SESSION_SECRET="$(openssl rand -base64 48)"
+export MCP_ALLOW_STATIC_BEARER=false
+npm run build && npm run start:http
+curl -s http://localhost:8080/.well-known/oauth-authorization-server
+curl -s http://localhost:8080/.well-known/oauth-protected-resource
+```
+
+### Via ngrok (https)
+
+```bash
+ngrok http 8080                                   # copy the https forwarding URL
+export MCP_PUBLIC_URL=https://YOUR-ID.ngrok-free.app TRUST_PROXY=1
+unset MCP_INSECURE_COOKIES                         # Secure cookies over https
+npm run start:http
+```
+
+### Add as a connector
+
+- **Claude.ai**: Settings -> Connectors -> Add custom connector -> URL `<MCP_PUBLIC_URL>/mcp`. Claude discovers the
+  metadata, registers itself (DCR), opens the login/consent page, then lists the four tools.
+  Its callback (`https://claude.ai/api/mcp/auth_callback`) is accepted by the redirect URI rules.
+- **ChatGPT** (connectors / developer mode): same URL, OAuth authentication. Callback on `chatgpt.com` (https) is accepted.
+- **Cursor**: remote URL `<MCP_PUBLIC_URL>/mcp`. Cursor's desktop OAuth callback uses a custom `cursor://` scheme,
+  which this server **rejects** (https / localhost only, by design); use a static bearer
+  (`MCP_ALLOW_STATIC_BEARER=true`, header `Authorization`) for Cursor, or a client with an https/localhost callback.
+- **MCP Inspector**: `npx @modelcontextprotocol/inspector`, transport Streamable HTTP, URL `<issuer>/mcp`
+  (callback `http://localhost:6274/oauth/callback` is accepted).
+
+### PKCE walkthrough with curl
+
+```bash
+ISS=http://localhost:8080
+VERIFIER=$(openssl rand -base64 48 | tr -d '=+/\n' | cut -c1-64)
+CHALLENGE=$(printf '%s' "$VERIFIER" | openssl dgst -sha256 -binary | openssl base64 -A | tr '+/' '-_' | tr -d '=')
+CLIENT_ID=$(curl -s -X POST $ISS/register -H 'Content-Type: application/json' \
+  -d '{"client_name":"curl test","redirect_uris":["http://localhost:9999/callback"],"token_endpoint_auth_method":"none","grant_types":["authorization_code","refresh_token"],"response_types":["code"]}' \
+  | node -e 'process.stdin.on("data",d=>console.log(JSON.parse(d).client_id))')
+echo "$ISS/authorize?response_type=code&client_id=$CLIENT_ID&redirect_uri=http://localhost:9999/callback&code_challenge=$CHALLENGE&code_challenge_method=S256&scope=mcp:tools&state=xyz"
+# Open that URL in a browser, sign in, press «سماح». The browser lands on
+# http://localhost:9999/callback?code=...&state=xyz&iss=... (nothing listens there: copy the code from the address bar).
+CODE=PASTE_CODE_HERE
+curl -s -X POST $ISS/token -d grant_type=authorization_code -d client_id=$CLIENT_ID -d code=$CODE \
+  -d code_verifier=$VERIFIER --data-urlencode redirect_uri=http://localhost:9999/callback
+# -> {"access_token":"...","token_type":"Bearer","expires_in":3600,"refresh_token":"...","scope":"mcp:tools"}
+curl -s -X POST $ISS/mcp -H "Authorization: Bearer $ACCESS" -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+curl -s -X POST $ISS/token -d grant_type=refresh_token -d client_id=$CLIENT_ID -d refresh_token=$REFRESH
+# The old refresh token is now spent: presenting it again revokes the whole grant.
+curl -s -X POST $ISS/revoke -d client_id=$CLIENT_ID -d token=$REFRESH_NEW
+```
+
+> **OAuth SECURITY**
+> - HTTPS is required for any non-local issuer; set `TRUST_PROXY=1` behind ngrok/Railway.
+> - Postgres (`DATABASE_URL`) is required in production; the memory store is for development only.
+> - The server still uses `SUPABASE_SERVICE_ROLE_KEY` (bypasses RLS): isolation relies on the tenant resolved
+>   from the verified token on every request. Keep all secrets in the platform's secret store, never in git.
+> - Rotating `MCP_OAUTH_SIGNING_SECRET` invalidates all access tokens (clients refresh); rotating
+>   `SESSION_SECRET` only ends pending logins.
+> - Consent phishing: anyone can register a client with any name. Users must check the **redirect host** shown on
+>   the consent page and only approve connections they started themselves.
+> - Ngrok free URLs change on restart: the issuer changes, so connectors must be re-added.
 
 ## Not verified
 
-No live Supabase project, Claude Desktop, Cursor, claude.ai or ChatGPT session was used in testing (stdio or HTTP). The tests use the real MCP
+No live Supabase project, Claude Desktop, Cursor, claude.ai, ChatGPT or ngrok session was used in testing (stdio, HTTP or OAuth;
+the Supabase password grant is faked; the OAuth Postgres store is tested against a throwaway local PostgreSQL 16). The tests use the real MCP
 client over stdio, an in-memory fake of the supabase-js query builder, and the frontend's real `importFlow`,
 `validateDocument` and `decodeCloudDraftRows`, all imported read-only.

@@ -31,7 +31,8 @@ const noComments=s=>s.split("\n").map(l=>l.replace(/--.*$/,"")).join("\n");
 test("310000 is the newest migration; rollback exists",()=>{
  const stamps=readdirSync("supabase/migrations").filter(f=>f.endsWith(".sql")).map(f=>f.split("_")[0].padEnd(14,"0"));
  assert.equal(stamps.filter(s=>s==="20261029310000").length,1);
- for(const s of stamps)assert.ok(s<="20261029310000",s);
+ // 20261029320000_oauth_tables (MCP server OAuth storage) is independent of the AI builder.
+ for(const s of stamps)assert.ok(s<="20261029310000"||s==="20261029320000",s);
  assert.ok(existsSync(RB));
 });
 test("migration and rollback: one bounded transaction, service_role-only, SECURITY DEFINER with empty search_path",()=>{
