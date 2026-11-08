@@ -8,7 +8,8 @@ in natural language. It writes nodes and edges in the **exact JSON shape of the 
 > ## SECURITY WARNING
 > This server uses `SUPABASE_SERVICE_ROLE_KEY`, which **bypasses Row Level Security**. Anyone who can
 > talk to this process can edit flows of **any tenant** unless you set `MILANO_ALLOWED_TENANT_ID`.
-> - Run it only locally, for a trusted operator. Never expose it over a network.
+> - Run the stdio server only locally, for a trusted operator. Never expose it over a network
+>   (the separate HTTP server authenticates every request; see "Remote (HTTP) server").
 > - **Set `MILANO_ALLOWED_TENANT_ID`** to lock the server to one tenant. With it set, every tool refuses
 >   other tenant ids and refuses flows owned by other tenants.
 > - Without it, `add_node` / `connect_nodes` (which take only `flow_id`) can edit any tenant's flow
@@ -142,8 +143,115 @@ returns a clear `Conflict` error and writes nothing.
 - "أضف سؤالًا عند 100,400 بأزرار «الأسعار» و«موظف» واربط الرسالة به"
 - "اعرض قائمة التدفقات"
 
+## Remote (HTTP) server
+
+`src/http-server.ts` serves the same four tools over the MCP **Streamable HTTP** transport, so web
+clients can connect by URL. It is **stateless**: every `POST /mcp` gets a fresh `McpServer` + transport
+(no `Mcp-Session-Id`), closed when the response closes. `GET /mcp` and `DELETE /mcp` return 405.
+
+| endpoint | |
+|---|---|
+| `GET /health` | `200 {"status":"ok","transport":"http"}` |
+| `POST /mcp` | MCP endpoint (JSON responses) |
+
+```bash
+npm run build
+npm run dev:http      # tsx src/http-server.ts  (needs SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_JWT_SECRET)
+npm run start:http    # node dist/http-server.js
+ngrok http 8080       # public https URL for testing; then set TRUST_PROXY=1
+```
+
+### Auth and tenant scoping
+
+- `Authorization: Bearer <Supabase access token>`, verified locally with `SUPABASE_JWT_SECRET` (HS256 only):
+  `exp` checked (5 s clock tolerance), `sub` required, `aud` must be `authenticated` when present, `role` must be
+  `authenticated` when present (so the anon / service-role keys are not accepted as user tokens).
+- Tenant: a uuid `tenant_id` claim (top level or `app_metadata.tenant_id`; `user_metadata` is ignored because
+  users can edit it). Otherwise `tenants.id` where `tenants.user_id = sub` (same lookup as the Flow Builder's
+  `resolveCloudTenant`), via the service-role client, cached 60 s (max 1000 users, positive results only).
+  No tenant -> `403`. Lookup failure -> `503`. Missing/invalid/expired token -> `401` + `WWW-Authenticate: Bearer`.
+- In remote mode the tool schemas have **no `tenant_id` argument** and are strict: a client-supplied
+  `tenant_id` is rejected. The tenant from the request context is used for every store call; `add_node` /
+  `connect_nodes` refuse flows of other tenants with the same "not found" error as a missing id.
+- If `MILANO_ALLOWED_TENANT_ID` is set it is also enforced here (any other tenant -> 403).
+
+### Try it (test mode, no token)
+
+```bash
+MCP_ALLOW_SECRET_HEADER=true npm run start:http   # with the 3 required vars exported; NOT in production
+
+curl -s http://localhost:8080/health
+
+curl -s -X POST http://localhost:8080/mcp \
+  -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+  -H 'X-Milano-Tenant: 11111111-1111-4111-8111-111111111111' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+
+curl -s -X POST http://localhost:8080/mcp \
+  -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+  -H 'X-Milano-Tenant: 11111111-1111-4111-8111-111111111111' \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"create_flow","arguments":{"name":"Welcome"}}}'
+```
+
+Without a token (and with the flag off the header is simply ignored):
+
+```bash
+curl -s -i -X POST http://localhost:8080/mcp \
+  -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+# HTTP/1.1 401 Unauthorized
+# WWW-Authenticate: Bearer realm="milanochat-mcp"
+# {"jsonrpc":"2.0","error":{"code":-32001,"message":"Unauthorized: a valid Bearer token is required."},"id":null}
+```
+
+Bearer path with a locally minted test token (run inside `mcp-server/`; uses the same secret as the server):
+
+```bash
+TOKEN=$(node -e 'import("jose").then(async({SignJWT})=>console.log(await new SignJWT({role:"authenticated",tenant_id:process.argv[1]}).setProtectedHeader({alg:"HS256"}).setSubject("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa").setAudience("authenticated").setIssuedAt().setExpirationTime("15m").sign(new TextEncoder().encode(process.env.SUPABASE_JWT_SECRET))))' 11111111-1111-4111-8111-111111111111)
+curl -s -X POST http://localhost:8080/mcp -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_flows","arguments":{}}}'
+```
+
+Drop the `tenant_id` claim to exercise the `tenants.user_id = sub` lookup (needs a real user id).
+
+### Hardening
+
+- CORS allowlist: `https://claude.ai`, `https://chat.openai.com`, `https://cursor.com`, `http://localhost:6274`
+  (MCP Inspector). Requests without `Origin` (server-to-server clients) are allowed; other browser origins get no
+  CORS headers and `403` on `/mcp`.
+- Rate limit 20 requests/min per IP on `/mcp` (`429`, `RateLimit` headers). Behind ngrok/Railway set
+  `TRUST_PROXY=1`, otherwise all clients share the proxy's IP. Never set it higher than the real number of hops.
+- Body: `application/json` only (`415`), max 256 kb (`413`), invalid JSON `400` (-32700), non-object bodies `400`.
+  No stack traces to clients; `nosniff`, no `X-Powered-By`; request timeout 30 s.
+- Tokens, keys and tenant-supplied values are never logged.
+
+> **SECURITY**
+> - `X-Milano-Tenant` (`MCP_ALLOW_SECRET_HEADER=true`) is an **unauthenticated testing bypass**: anyone who can
+>   reach the port can edit any tenant's flows. It logs a warning at startup and on every request, and the server
+>   **refuses to start** with it when `NODE_ENV=production`. Keep it `false` anywhere reachable.
+> - The service-role key **bypasses RLS**. Isolation relies on per-request tenant scoping in this server
+>   (every query filtered by the tenant from the verified token, every loaded flow re-checked).
+> - Treat `SUPABASE_JWT_SECRET` like the service-role key. If the project uses asymmetric JWT signing keys
+>   (JWKS) instead of the legacy HS256 secret, this verifier does not support it yet.
+
+### Deployment notes
+
+Run `npm ci && npm run build`, start with `npm run start:http`, set `NODE_ENV=production`, `PORT` (Railway sets
+it), `TRUST_PROXY=1`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_JWT_SECRET`; leave
+`MCP_ALLOW_SECRET_HEADER` unset/false. Serve only over HTTPS (the platform's TLS terminator). Health check: `GET /health`.
+No deployment configuration is included in this package.
+
+### Limitation: OAuth is not implemented
+
+Many web connector UIs (for example Claude custom connectors, ChatGPT connectors) expect **OAuth 2.1** with
+discovery (`/.well-known/oauth-protected-resource`, authorization server metadata, dynamic client registration)
+rather than a static bearer token. This server only validates Supabase-style bearer JWTs. Clients that let you
+set an `Authorization` header (MCP Inspector, Cursor, custom/SDK clients, curl) work today; connectors that
+require OAuth discovery will not connect until an OAuth layer is added.
+
 ## Not verified
 
-No live Supabase project, Claude Desktop, or Cursor session was used in testing. The tests use the real MCP
+No live Supabase project, Claude Desktop, Cursor, claude.ai or ChatGPT session was used in testing (stdio or HTTP). The tests use the real MCP
 client over stdio, an in-memory fake of the supabase-js query builder, and the frontend's real `importFlow`,
 `validateDocument` and `decodeCloudDraftRows`, all imported read-only.

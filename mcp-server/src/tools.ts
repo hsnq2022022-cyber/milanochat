@@ -264,3 +264,49 @@ export function registerFlowTools(server: McpServer, deps: ToolDeps): void {
   server.registerTool("connect_nodes", { title: "Connect nodes", description: TOOL_DESCRIPTIONS.connect_nodes, inputSchema: connectNodesShape }, a => t.connect_nodes(a));
   server.registerTool("list_flows", { title: "List flows", description: TOOL_DESCRIPTIONS.list_flows, inputSchema: listFlowsShape }, a => t.list_flows(a));
 }
+
+/* ------------------------------------------------------------------------------------------------
+ * Remote (HTTP) mode. Tool schemas contain NO tenant_id: the tenant comes only from the
+ * authenticated request context. Schemas are strict, so a client-supplied tenant_id is rejected.
+ * The context tenant is injected into the stdio handlers with allowedTenantId set to the same value,
+ * so every store call is tenant-filtered and every loaded flow is re-checked (not-found otherwise).
+ * ---------------------------------------------------------------------------------------------- */
+
+export type RemoteToolDeps = {
+  store: FlowStore;
+  /** Tenant resolved from the verified request (JWT or testing header). */
+  tenantId: string;
+  logError?: (msg: string) => void;
+};
+
+const { tenant_id: _a, ...remoteAddNodeShape } = addNodeShape;
+const { tenant_id: _c, ...remoteConnectNodesShape } = connectNodesShape;
+export const remoteSchemas = {
+  create_flow: z.object({ name: createFlowShape.name }).strict(),
+  add_node: z.object(remoteAddNodeShape).strict(),
+  connect_nodes: z.object(remoteConnectNodesShape).strict(),
+  list_flows: z.object({}).strict(),
+};
+type RemoteName = keyof typeof remoteSchemas;
+
+export function createRemoteFlowTools(deps: RemoteToolDeps) {
+  const tenantId = deps.tenantId.trim().toLowerCase();
+  if (!z.string().uuid().safeParse(tenantId).success) throw new Error("remote tools require a uuid tenant context");
+  const inner = createFlowTools({ store: deps.store, allowedTenantId: tenantId, logError: deps.logError });
+  const wrap = (name: RemoteName) => async (raw: unknown): Promise<CallToolResult> => {
+    const parsed = remoteSchemas[name].safeParse(raw ?? {});
+    if (!parsed.success)
+      return err("Invalid arguments: " + parsed.error.issues.map(i => (i.path.join(".") || "input") + ": " + i.message).join("; "));
+    return inner[name]({ ...parsed.data, tenant_id: tenantId });
+  };
+  return { create_flow: wrap("create_flow"), add_node: wrap("add_node"), connect_nodes: wrap("connect_nodes"), list_flows: wrap("list_flows") };
+}
+
+export function registerRemoteFlowTools(server: McpServer, deps: RemoteToolDeps): void {
+  const t = createRemoteFlowTools(deps);
+  const note = " The workspace (tenant) is taken from your authenticated connection.";
+  server.registerTool("create_flow", { title: "Create flow", description: TOOL_DESCRIPTIONS.create_flow + note, inputSchema: remoteSchemas.create_flow }, a => t.create_flow(a));
+  server.registerTool("add_node", { title: "Add node", description: TOOL_DESCRIPTIONS.add_node, inputSchema: remoteSchemas.add_node }, a => t.add_node(a));
+  server.registerTool("connect_nodes", { title: "Connect nodes", description: TOOL_DESCRIPTIONS.connect_nodes, inputSchema: remoteSchemas.connect_nodes }, a => t.connect_nodes(a));
+  server.registerTool("list_flows", { title: "List flows", description: TOOL_DESCRIPTIONS.list_flows + note, inputSchema: remoteSchemas.list_flows }, a => t.list_flows(a));
+}
