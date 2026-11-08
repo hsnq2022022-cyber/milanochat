@@ -3454,8 +3454,9 @@ Deno.serve(async (req) => {
               Boolean(phoneId),
 
             phoneId,
-            // S9: additive; false until an operator verified the binding.
-            verified: phoneId ? await readBindingVerified(sb, phoneId, tenant.id) : false,
+            // S9: additive; false until an operator verified the binding,
+            // null when the tenant has no binding.
+            verified: phoneId ? await readBindingVerified(sb, phoneId, tenant.id) : null,
           });
         }
 

@@ -187,8 +187,8 @@ test("TypeScript: only the durable ingress calls the new function; V2 call site 
    ["          // S9 interim control (20261029290000): new bindings start\n          // UNVERIFIED and get no auto-replies until an operator approves them\n          // (SQL in the migration header). Same-tenant re-bind never touches\n          // the flag (INSERT .. ON CONFLICT DO NOTHING).\n          // TODO(security): permanent fix — require the tenant's WhatsApp\n          // Business access token, call GET https://graph.facebook.com/<ver>/{phone_number_id}\n          // with it (fail closed on any error / mismatch) and set\n          // is_verified = true automatically instead of manual approval.\n          return json({\n            ok: true,\n            verified: await readBindingVerified(sb, phoneId, tenant.id),\n",
     "          return json({\n            ok: true,\n"],
    // S9: wa_status additive verified flag
-   ["            phoneId,\n            // S9: additive; false until an operator verified the binding.\n            verified: phoneId ? await readBindingVerified(sb, phoneId, tenant.id) : false,\n",
-    "            phoneId,\n"]
+   ["            phoneId,\n            // S9: additive; false until an operator verified the binding,\n            // null when the tenant has no binding.\n            verified: phoneId ? await readBindingVerified(sb, phoneId, tenant.id) : null,\n",
+    "            phoneId,\n            // S9: additive; false until an operator verified the binding.\n            verified: phoneId ? await readBindingVerified(sb, phoneId, tenant.id) : false,\n"]
   ];
   let cur=src(IDX);
   if(cur!==head.stdout)for(const [now,was] of allowed){

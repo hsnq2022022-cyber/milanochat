@@ -201,6 +201,7 @@ export default function Dashboard() {
   const [claimBusy, setClaimBusy] = useState(false);
 
   const [tab, setTab] = useState<"convs" | "unresolved" | "knowledge" | "widgets" | "channels">("convs");
+  const [waVerified, setWaVerified] = useState<boolean | null>(null);
   const [socialChannels, setSocialChannels] = useState<any[]>([]);
   const [activeConv, setActiveConv] = useState<string | null>(null);
   const [mobileThread, setMobileThread] = useState(false);
@@ -629,6 +630,14 @@ export default function Dashboard() {
     loadChannels();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [demo, authed, token, needClaim]);
+
+  // حالة اعتماد رقم واتساب (verified=false → قيد المراجعة)
+  useEffect(() => {
+    if (demo || backendMode !== "supabase" || tab !== "channels" || !token || !st?.tenantId) return;
+    let cancelled = false;
+    api.wa.getSession(st.tenantId, token).then((r) => { if (!cancelled) setWaVerified(r.verified ?? null); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [demo, tab, token, st?.tenantId]);
 
   useEffect(() => {
     if (demo || backendMode !== "supabase") return;
@@ -1668,6 +1677,12 @@ export default function Dashboard() {
                 <p className="text-xs text-sage mb-2 leading-5">الرسائل عبر WhatsApp Cloud API.</p>
                 {st.phone && (
                   <p className="text-[11px] text-mist mb-3 tabular-nums" dir="ltr">+{st.phone.replace(/\D/g, "")}</p>
+                )}
+                {st.phone && waVerified === false && (
+                  <div data-testid="wa-pending-badge" className="mb-3">
+                    <span className="inline-block text-[11px] font-bold px-2 py-1 rounded-full border border-[#E5B54B]/40 bg-[#E5B54B]/10 text-[#E5B54B]">قيد المراجعة</span>
+                    <p className="text-[11px] text-sage mt-1 leading-5">سيبدأ الرد بعد موافقة الإدارة</p>
+                  </div>
                 )}
                 <div className="mt-auto">
                   <button onClick={() => handleConnectChannel("whatsapp")} className={`${cls.btn} w-full py-2.5 text-xs`}>

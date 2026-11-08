@@ -91,6 +91,11 @@ test("index.ts: webhook gates wa_bindings on is_verified; bind_number / wa_statu
   assert.match(b, /TODO\(security\): permanent fix/);
   assert.match(b, /GET https:\/\/graph\.facebook\.com\/<ver>\/\{phone_number_id\}/);
   assert.match(b, /ok: true,\n\s+verified: await readBindingVerified\(sb, phoneId, tenant\.id\),/);
-  assert.match(b, /verified: phoneId \? await readBindingVerified\(sb, phoneId, tenant\.id\) : false,/);
+  // wa_status: true/false for the caller's own bound row, null when unbound.
+  const st = IDX.slice(IDX.indexOf('case "wa_status": {'), IDX.indexOf('case "qa_extract": {'));
+  assert.match(st, /const phoneId =\s+await boundPhone\(\s+sb,\s+tenant\.id\s+\);/, "bound row resolved from the claim tenant only");
+  assert.match(st, /bound:\s+Boolean\(phoneId\),\s+phoneId,/);
+  assert.match(st, /verified: phoneId \? await readBindingVerified\(sb, phoneId, tenant\.id\) : null,/);
+  assert.doesNotMatch(st, /body\.tenantId/, "never trusts the body tenant id");
   assert.ok(b.indexOf("return json(BIND_CONFLICT_BODY, 409);") < b.indexOf("verified: await readBindingVerified"));
 });

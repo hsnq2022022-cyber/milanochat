@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { MOCK_HOST, mockActivation } from "./flowActivationMock";
 test("editor loads, deletes an edge and undoes without touching other screens",async({page})=>{
   await page.goto("/milanochat/#/flows");
   await expect(page.locator(".react-flow__node")).toHaveCount(6);
@@ -122,25 +123,6 @@ test("rich message content adds data collection blocks that survive preview",asy
   await expect(page.getByText("customer@example.com")).toBeVisible();
 });
 
-test("flow enable toggle is local-only and persists when switching documents",async({page})=>{
- await page.goto("/milanochat/#/flows");
- const toggle=page.getByTestId("flow-enabled-toggle");
- await expect(toggle).toHaveAttribute("aria-pressed","false");
- await toggle.click();
- await expect(toggle).toHaveAttribute("aria-pressed","true");
- await expect(page.getByText("تم تفعيل المسودة محليًا فقط.")).toBeVisible();
- await page.getByRole("button",{name:"إنشاء تدفق جديد"}).click();
- await expect(toggle).toHaveAttribute("aria-pressed","false");
- const select=page.getByRole("combobox",{name:"اختيار التدفق"});
- await select.selectOption("default");
- await expect(toggle).toHaveAttribute("aria-pressed","true");
- await page.waitForTimeout(900);
- await page.reload();
- await expect(toggle).toHaveAttribute("aria-pressed","true");
- await toggle.click();
- await expect(toggle).toHaveAttribute("aria-pressed","false");
-});
-
 test("start from scratch opens a separate flow with only a trigger, preserving the original flow",async({page})=>{
  await page.goto("/milanochat/#/flows");
  await expect(page.locator(".react-flow__node")).toHaveCount(6);
@@ -153,8 +135,11 @@ test("start from scratch opens a separate flow with only a trigger, preserving t
 });
 
 test("default pricing messages show three nonblocking warnings and can be enabled",async({page})=>{
+  test.skip(!MOCK_HOST,"needs mock Supabase host");
+  await mockActivation(page,{active:null,calls:[]});
   await page.goto("/milanochat/#/flows");
   const toggle=page.getByTestId("flow-enabled-toggle");
+  await expect(toggle).toBeEnabled();
   await expect(toggle).toHaveAttribute("aria-pressed","false");
   await toggle.click();
   await expect(toggle).toHaveAttribute("aria-pressed","true");
@@ -164,8 +149,11 @@ test("default pricing messages show three nonblocking warnings and can be enable
   await expect(page.getByText(/● خطأ:/)).toHaveCount(0);
 });
 test("an isolated node and a question option without a route block activation",async({page})=>{
+  test.skip(!MOCK_HOST,"needs mock Supabase host");
+  await mockActivation(page,{active:null,calls:[]});
   await page.goto("/milanochat/#/flows");
   const toggle=page.getByTestId("flow-enabled-toggle");
+  await expect(toggle).toBeEnabled();
   await page.getByRole("button",{name:"فتح إضافة خطوة"}).click();
   await page.getByTestId("add-step-menu").getByRole("button",{name:"إرسال رسالة"}).click();
   await toggle.click();
@@ -175,26 +163,18 @@ test("an isolated node and a question option without a route block activation",a
   await expect(page.getByText(/● خطأ:/).first()).toBeVisible();
 });
 
-test("an unconnected quick reply blocks local activation and identifies its question node",async({page})=>{
+test("an unconnected quick reply blocks activation and identifies its question node",async({page})=>{
+  test.skip(!MOCK_HOST,"needs mock Supabase host");
+  await mockActivation(page,{active:null,calls:[]});
   await page.goto("/milanochat/#/flows");
   await page.locator(".react-flow__node").nth(2).click();
   await page.locator("aside [data-testid^='flow-button']").first().click();
   await page.getByRole("combobox",{name:"ربط الزر بخطوة"}).selectOption("");
   const toggle=page.getByTestId("flow-enabled-toggle");
+  await expect(toggle).toBeEnabled();
   await toggle.click();
   await expect(toggle).toHaveAttribute("aria-pressed","false");
   await expect(page.getByText(/بلا وجهة/).first()).toBeVisible();
-});
-
-test("batch 2 undo restores local flow enabled toggle",async({page})=>{
- await page.goto("/milanochat/#/flows");
- const toggle=page.getByTestId("flow-enabled-toggle");
- await toggle.click();
- await expect(toggle).toHaveAttribute("aria-pressed","true");
- await page.getByTitle("تراجع Ctrl+Z").click();
- await expect(toggle).toHaveAttribute("aria-pressed","false");
- await page.getByTitle("إعادة Ctrl+Shift+Z").click();
- await expect(toggle).toHaveAttribute("aria-pressed","true");
 });
 
 test("batch 2 repeated node duplicates have separate positions and undo",async({page})=>{

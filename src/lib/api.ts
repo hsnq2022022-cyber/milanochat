@@ -315,6 +315,8 @@ export type WaSnapshot = {
   sessionId: string;
   state: WAState;
   phone: string | null;
+  /** false = bound but awaiting admin approval; undefined/null/true = no badge. */
+  verified?: boolean | null;
   error: string | null;
 };
 
@@ -370,11 +372,12 @@ export const api = {
   wa: {
     createSession: (tenantId: string, token?: string | null) =>
       backendMode === "supabase"
-        ? fn<{ bound: boolean; phoneId: string | null }>("wa_status", { body: { tenantId }, claim: token ?? storedClaim() ?? tenantId }).then(
+        ? fn<{ bound: boolean; phoneId: string | null; verified?: boolean | null }>("wa_status", { body: { tenantId }, claim: token ?? storedClaim() ?? tenantId }).then(
             (r): WaSnapshot => ({
               sessionId: tenantId,
               state: r.bound ? "CONNECTED" : "UNBOUND",
               phone: r.phoneId,
+              verified: r.verified,
               error: null,
             })
           )
@@ -386,11 +389,12 @@ export const api = {
 
     getSession: (sessionId: string, token?: string | null) =>
       backendMode === "supabase"
-        ? fn<{ bound: boolean; phoneId: string | null }>("wa_status", { body: { tenantId: sessionId }, claim: token ?? storedClaim() ?? sessionId }).then(
+        ? fn<{ bound: boolean; phoneId: string | null; verified?: boolean | null }>("wa_status", { body: { tenantId: sessionId }, claim: token ?? storedClaim() ?? sessionId }).then(
             (r): WaSnapshot => ({
               sessionId,
               state: r.bound ? "CONNECTED" : "UNBOUND",
               phone: r.phoneId,
+              verified: r.verified,
               error: null,
             })
           )

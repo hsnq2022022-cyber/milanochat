@@ -38,6 +38,7 @@ import { getLibraryRecoveryReport, saveLibrary, snapshotLibrary } from "../flow/
 import { flowText, flowKindLabel } from "../flow/uiLocale";
 import type { FlowLanguage } from "../flow/uiLocale";
 import { uuid } from "../lib/uuid.ts";
+import { useFlowActivation } from "../flow/useFlowActivation";
 
 // لا تعرض أدوات الحفظ السحابي في الإنتاج قبل تجهيز الجدول والموافقة على النشر.
 const CLOUD_DRAFT_UI_ENABLED=(import.meta as ImportMeta & {env?:Record<string,string|undefined>}).env?.VITE_ENABLE_CLOUD_FLOW_DRAFTS==="true";
@@ -52,7 +53,6 @@ type EdgeMenu={id:string;x:number;y:number}|null;
 function Editor(){
   const doc=useFlowStore(s=>s.doc),selectedId=useFlowStore(s=>s.selectedId);
   const activeFlowId=useFlowStore(s=>s.activeFlowId),flows=useFlowStore(s=>s.flows);
-  const activeEnabled=flows.find(flow=>flow.id===activeFlowId)?.enabled===true;
   const store=useFlowStore.getState;
   const nodesChanged=useFlowStore(s=>s.nodesChanged),edgesChanged=useFlowStore(s=>s.edgesChanged);
   const selected=doc.nodes.find(n=>n.id===selectedId)||null;
@@ -60,6 +60,9 @@ function Editor(){
   const [publishedPreview,setPublishedPreview]=useState<FlowDocument|null>(null);
   const [showCloudDrafts,setShowCloudDrafts]=useState(false);
   const [showPublications,setShowPublications]=useState(false);
+  const {state:activation,toggle:toggleActivation}=useFlowActivation(activeFlowId,showPublications);
+  const activeEnabled=activation.phase==="ready"&&activation.active;
+  const activationLocked=activation.phase!=="ready"||activation.busy||(!activation.active&&!activation.canActivate);
   const [toolbarCollapsed,setToolbarCollapsed]=useState(false);
   const [language,setLanguage]=useState<FlowLanguage>("ar");
   const t=(key:Parameters<typeof flowText>[0])=>flowText(key,language);
@@ -308,15 +311,17 @@ function Editor(){
         </div>
       {!toolbarCollapsed&&<div className="fs-tb-row fs-scroll-row" data-testid="flow-toolbar-secondary">
         <button data-testid="flow-enabled-toggle" type="button" aria-label={t("activate")} aria-pressed={activeEnabled}
-          className={"fs-toggle"+(activeEnabled?" is-on":"")}
+          aria-busy={activation.phase==="loading"||activation.busy} disabled={activationLocked}
+          title={activation.reason||undefined}
+          className={"fs-toggle disabled:cursor-not-allowed disabled:opacity-50"+(activeEnabled?" is-on":"")+(activation.phase==="loading"?" animate-pulse":"")}
           onClick={()=>{
-            if(!activeEnabled&&errors.length>0){setShowIssues(true);setNotice("راجع الأخطاء قبل تفعيل المسودة.");return;}
-            store().setFlowEnabled(activeFlowId,!activeEnabled);
-            setNotice(!activeEnabled?"تم تفعيل المسودة محليًا فقط. لم تُفعّل الأتمتة على الحساب المرتبط.":"تم تعطيل المسودة محليًا.");
+            if(!activeEnabled&&errors.length>0){setShowIssues(true);setNotice("راجع الأخطاء قبل تفعيل التدفق.");return;}
+            void toggleActivation().then(r=>setNotice(r.message));
           }}>
           <span className="fs-toggle-track"><span className="fs-toggle-thumb"/></span>
-          {activeEnabled?t("enabled"):t("disabled")}
+          {activation.phase==="loading"?(language==="en"?"Checking…":"جارٍ التحقق…"):activation.busy?(language==="en"?"Working…":"جارٍ التنفيذ…"):activeEnabled?t("enabled"):t("disabled")}
         </button>
+        {activation.reason&&<span data-testid="flow-activation-reason" className="text-xs text-[#E5B54B]">{activation.reason}</span>}
         <div className="fs-grp">
           <button className="fs-ibtn" onClick={()=>store().undo()} title={t("undo")}><Undo2 size={17}/></button>
           <button className="fs-ibtn" onClick={()=>store().redo()} title={t("redo")}><Redo2 size={17}/></button>
