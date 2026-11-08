@@ -655,7 +655,9 @@ test("collection controls genuinely update the canvas and do not ask twice for t
  await answer.fill("customer@example.org");
  await answer.press("Enter");
  await expect(sim.getByText("تواصل ويانا لمعرفة الأسعار الحالية لخدمتك في العراق.")).toBeVisible();
- await expect(answer).toHaveCount(0);
+ // Asked exactly once; after the answer the simulator no longer accepts input on this path.
+ await expect(sim.getByText("أرسل بريدك الآن")).toHaveCount(1);
+ await expect(answer).toBeDisabled();
 });
 
 test("image and delay blocks can be added, edited, reordered and removed",async({page})=>{

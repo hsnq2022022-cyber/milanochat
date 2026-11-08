@@ -11,7 +11,7 @@ test("simulator follows the connected edge for each quick reply, not static text
   await expect(sim.getByText("تواصل ويانا لمعرفة الأسعار الحالية لخدمتك في عمان.")).toBeVisible();
   await expect(sim.getByText("في العراق.")).toHaveCount(0);
   await expect(sim.getByText("في الإمارات.")).toHaveCount(0);
-  await sim.getByRole("button",{name:"إعادة"}).click();
+  await sim.getByRole("button",{name:"إعادة",exact:true}).click();
   await sim.getByRole("button",{name:"العراق"}).click();
   await expect(sim.getByText("تواصل ويانا لمعرفة الأسعار الحالية لخدمتك في العراق.")).toBeVisible();
 });

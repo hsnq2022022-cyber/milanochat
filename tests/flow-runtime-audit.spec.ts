@@ -34,8 +34,8 @@ test("functional: condition executes yes branch after set_field, delay and 100% 
   const sim=page.getByTestId("flow-simulator");
   await expect(sim).toContainText("وصلت للفرع الصحيح");
   await expect(sim).not.toContainText("لا يفترض الوصول لهذا الفرع");
-  await expect(sim).toContainText("تم تخطي انتظار");
-  await expect(sim).toContainText("انتهى التدفق");
+  await expect(sim).toContainText("⏳ ينتظر 4 دقائق…");
+  await expect(sim).toContainText("✅ اكتملت المحاكاة");
 });
 
 test("functional: goto follows its actual target and end terminates",async({page})=>{
@@ -47,7 +47,7 @@ test("functional: goto follows its actual target and end terminates",async({page
  await page.getByRole("button",{name:"تجربة"}).click();
  const sim=page.getByTestId("flow-simulator");
  await expect(sim).toContainText("خطوة الانتقال وصلت بالفعل");
- await expect(sim).toContainText("انتهى التدفق");
+ await expect(sim).toContainText("✅ اكتملت المحاكاة");
 });
 
 test("functional: HTTP is explicitly NOT executed, and preview picks error path",async({page})=>{
