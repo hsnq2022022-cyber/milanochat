@@ -48,6 +48,7 @@
   .flow-skin .fs-ibtn:hover:not(:disabled){background:var(--fs-field);color:var(--fs-text)}
   .flow-skin .fs-ibtn:active:not(:disabled){transform:scale(.93)}
   .flow-skin .fs-ibtn:disabled{opacity:.35;cursor:default}
+  .flow-skin .fs-ibtn[aria-pressed="true"]{background:var(--fs-field);color:#3DD189}
   .flow-skin .fs-ibtn-sm{width:34px;height:34px;border-radius:10px}
   .flow-skin .fs-select{min-height:42px;flex:none;border-radius:12px;border:1px solid var(--fs-line);background:var(--fs-field);color:var(--fs-text);
     padding:0 10px;font-size:12.5px;transition:border-color .2s}
