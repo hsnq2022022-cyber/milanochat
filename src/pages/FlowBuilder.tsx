@@ -39,6 +39,7 @@ import { flowText, flowKindLabel } from "../flow/uiLocale";
 import type { FlowLanguage } from "../flow/uiLocale";
 import { uuid } from "../lib/uuid.ts";
 import { useFlowActivation } from "../flow/useFlowActivation";
+import { commentTriggerProviderPlatform } from "../flow/serverPublicationValidation";
 
 // لا تعرض أدوات الحفظ السحابي في الإنتاج قبل تجهيز الجدول والموافقة على النشر.
 const CLOUD_DRAFT_UI_ENABLED=(import.meta as ImportMeta & {env?:Record<string,string|undefined>}).env?.VITE_ENABLE_CLOUD_FLOW_DRAFTS==="true";
@@ -60,7 +61,9 @@ function Editor(){
   const [publishedPreview,setPublishedPreview]=useState<FlowDocument|null>(null);
   const [showCloudDrafts,setShowCloudDrafts]=useState(false);
   const [showPublications,setShowPublications]=useState(false);
-  const {state:activation,toggle:toggleActivation}=useFlowActivation(activeFlowId,showPublications);
+  // Comment flows may target a Facebook Page account (server decides; UI hint only).
+  const commentPlatform=useMemo(()=>commentTriggerProviderPlatform(doc),[doc]);
+  const {state:activation,toggle:toggleActivation}=useFlowActivation(activeFlowId,showPublications,commentPlatform);
   const activeEnabled=activation.phase==="ready"&&activation.active;
   const activationLocked=activation.phase!=="ready"||activation.busy||(!activation.active&&!activation.canActivate);
   const [toolbarCollapsed,setToolbarCollapsed]=useState(false);

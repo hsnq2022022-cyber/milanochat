@@ -1,5 +1,7 @@
 import {useCallback,useEffect,useRef,useState} from "react";
 import {getSupabase} from "../lib/supabase";
+import {accountCanActivate,pickActivationAccount,type ActivationAccount} from "./activationAccount.ts";
+import type {ProviderPlatform} from "./serverPublicationValidation.ts";
 
 /**
  * Real (server) activation state for one flow, via the existing `flow-publication`
@@ -16,7 +18,7 @@ export type ActivationState={
 };
 export type ToggleResult={ok:boolean;message:string};
 
-type Account={id:string;platform:string;is_active:boolean|null;canActivate?:boolean};
+type Account=ActivationAccount;
 type Reply={ok?:boolean;error?:string;accounts?:Account[];
  items?:Array<{revision:number}>;activation?:{revision:number;is_active:boolean}|null;
  active?:boolean;revision?:number};
@@ -66,7 +68,12 @@ export function activationErrorMessage(e:unknown,verb:"التفعيل"|"الإي
 
 const UNAVAILABLE_REASON="حالة التفعيل غير متاحة الآن: خدمة التدفقات السحابية غير متاحة أو غير مفعّلة.";
 
-export function useFlowActivation(flowKey:string,refreshToken:unknown){
+/**
+ * `commentPlatform`: provider platform of the open flow's comment trigger
+ * (commentTriggerProviderPlatform), null for other flows. A hint for picking
+ * the account; the server decides on activate.
+ */
+export function useFlowActivation(flowKey:string,refreshToken:unknown,commentPlatform:ProviderPlatform|null=null){
  const [state,setState]=useState<ActivationState>({phase:"loading",active:false,revision:null,busy:false,canActivate:false,reason:""});
  const account=useRef<Account|null>(null);
  const latest=useRef<number|null>(null);
@@ -79,7 +86,7 @@ export function useFlowActivation(flowKey:string,refreshToken:unknown){
    if(!account.current){
     const r=await invokeService({action:"accounts"});
     const list=(r.accounts??[]).filter(a=>a.is_active!==false);
-    account.current=list.find(a=>a.canActivate===true)??list[0]??null;
+    account.current=pickActivationAccount(list,commentPlatform);
     if(!account.current){
      if(mine===seq.current)setState(s=>({...s,phase:"unavailable",active:false,revision:null,canActivate:false,
       reason:"لا يوجد حساب قناة نشط مرتبط؛ اربط حسابًا لتتمكن من تفعيل التدفق."}));
@@ -90,14 +97,17 @@ export function useFlowActivation(flowKey:string,refreshToken:unknown){
    if(mine!==seq.current)return;
    latest.current=r.items?.[0]?.revision??null;
    const on=r.activation?.is_active===true;
+   const allowed=accountCanActivate(account.current,commentPlatform);
    setState(s=>({...s,phase:"ready",active:on,revision:on?r.activation!.revision:null,
-    canActivate:account.current?.canActivate===true,
-    reason:on||account.current?.canActivate===true?"":"التفعيل غير متاح لحسابك حاليًا؛ يلزم موافقة الخادم والإدارة."}));
+    canActivate:allowed,
+    reason:on||allowed?"":"التفعيل غير متاح لحسابك حاليًا؛ يلزم موافقة الخادم والإدارة."}));
   }catch{
    if(mine===seq.current)setState(s=>({...s,phase:"unavailable",active:false,revision:null,canActivate:false,reason:UNAVAILABLE_REASON}));
   }
- },[flowKey]);
+ },[flowKey,commentPlatform]);
 
+ // A different comment platform may need a different account: pick again.
+ useEffect(()=>{account.current=null;},[commentPlatform]);
  useEffect(()=>{void load();return()=>{seq.current++;};},[load,refreshToken]);
 
  const toggle=useCallback(async():Promise<ToggleResult>=>{

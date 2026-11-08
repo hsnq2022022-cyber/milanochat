@@ -3,8 +3,10 @@ import {getSupabase} from "../lib/supabase";
 import type {FlowDocument} from "./model.ts";
 import type {FlowLanguage} from "./uiLocale.ts";
 import { copyText } from "../lib/clipboard.ts";
+import {accountCanActivate,type ActivationAccount} from "./activationAccount.ts";
+import {commentTriggerProviderPlatform} from "./serverPublicationValidation.ts";
 
-type Account={id:string;platform:string;is_active:boolean|null;canActivate?:boolean};
+type Account=ActivationAccount;
 type Version={revision:number;created_at:string};
 type Activation={revision:number;is_active:boolean}|null;
 type PublishedFlow={flowKey:string;latestRevision:number};
@@ -74,8 +76,11 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
  const [notice,setNotice]=useState("");
  const [readiness,setReadiness]=useState<Readiness|null>(null);
  const [checkedRevision,setCheckedRevision]=useState<number|null>(null);
- const productionReady=accounts.some(a=>a.id===accountId&&a.canActivate===true);
  const isEditingLocalFlow=managedFlowKey===flowKey;
+ // Comment flows: the server's canActivateComments hint (Facebook Page comments
+ // need server flags). Other managed server flows keep the old canActivate rule.
+ const commentPlatform=isEditingLocalFlow?commentTriggerProviderPlatform(document):null;
+ const productionReady=accounts.some(a=>a.id===accountId&&accountCanActivate(a,commentPlatform));
  const showActivationControls=CANARY_UI||productionReady;
 
  const call=useCallback(async(body:Record<string,unknown>):Promise<Reply>=>{
