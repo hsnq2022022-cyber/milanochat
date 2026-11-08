@@ -1,34 +1,28 @@
-import { Settings } from "lucide-react";
-import { IconLog, IconSparkle } from "./Icons";
+import { NAV_ITEMS, type NavId } from "./navItems";
 
-export type BottomNavId = "home" | "flows" | "settings";
+export type BottomNavId = NavId;
 
-const ITEMS: { id: BottomNavId; href: string; label: string; testid: string; icon: JSX.Element }[] = [
-  { id: "home", href: "#/dashboard", label: "الرئيسية", testid: "bottom-nav-home", icon: <IconLog className="w-5 h-5" /> },
-  { id: "flows", href: "#/flows", label: "التدفقات", testid: "bottom-nav-flows", icon: <IconSparkle className="w-5 h-5" /> },
-  { id: "settings", href: "#/settings", label: "الإعدادات", testid: "bottom-nav-settings", icon: <Settings className="w-5 h-5" aria-hidden="true" /> },
-];
-
-export default function BottomNav({ active }: { active: BottomNavId }) {
+export default function BottomNav({ active }: { active: NavId | null }) {
   return (
     <nav
       data-testid="bottom-nav"
       aria-label="التنقل الرئيسي"
-      className="fixed bottom-0 inset-x-0 z-40 bg-night/95 backdrop-blur-md border-t border-verde/15 pb-[env(safe-area-inset-bottom)]"
+      className="md:hidden fixed bottom-0 inset-x-0 z-40 bg-[#061A14]/95 backdrop-blur-md border-t border-[#173D30] pb-[env(safe-area-inset-bottom)]"
     >
-      <div className="max-w-6xl mx-auto grid grid-cols-3 h-16">
-        {ITEMS.map((i) => {
+      <div className="grid grid-cols-5 h-16">
+        {NAV_ITEMS.map((i) => {
           const current = i.id === active;
+          const Icon = i.icon;
           return (
             <a
-              key={i.testid}
+              key={i.id}
               href={i.href}
-              data-testid={i.testid}
+              data-testid={`bottom-nav-${i.id}`}
               aria-current={current ? "page" : undefined}
-              className={`flex flex-col items-center min-h-[44px] focus-visible:outline focus-visible:outline-2 focus-visible:outline-oro justify-center gap-1 text-xs font-bold transition-colors ${current ? "text-oro" : "text-sage hover:text-bone"}`}
+              className={`flex flex-col items-center justify-center gap-1 min-h-[44px] min-w-0 px-1 text-xs font-bold transition-colors duration-200 ease-out focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#3DD189] ${current ? "text-[#E5B54B]" : "text-[#8B9E96] hover:text-white"}`}
             >
-              {i.icon}
-              <span>{i.label}</span>
+              <Icon className="w-5 h-5 shrink-0" aria-hidden="true" />
+              <span className="max-w-full truncate">{i.label}</span>
             </a>
           );
         })}

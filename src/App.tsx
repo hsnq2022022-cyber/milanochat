@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useState } from "react";
 import Navbar from "./components/Navbar";
 import FlowErrorBoundary from "./components/FlowErrorBoundary";
 import RouteErrorBoundary from "./components/RouteErrorBoundary";
+import AppShell from "./components/AppShell";
 import Hero from "./components/Hero";
 import { Marquee, Footer } from "./components/Extras";
 import Guarantees from "./components/Guarantees";
@@ -9,14 +10,12 @@ import ChatDemo from "./components/ChatDemo";
 import ChannelsSection from "./components/ChannelsSection";
 import Pricing from "./components/Pricing";
 import FAQ from "./components/FAQ";
-import { getSupabase } from "./lib/supabase";
 
 /* لوحة التحكم وحدة منفصلة — لا يتحمل زائر الصفحة الرئيسية حجمها */
 const Dashboard = lazy(() => import("./pages/Dashboard"));
 const Settings = lazy(() => import("./pages/Settings"));
 const Widgets = lazy(() => import("./pages/Widgets"));
 const FlowBuilder = lazy(() => import("./pages/FlowBuilder"));
-const LandingPage = lazy(() => import("./pages/LandingPage"));
 
 export default function App() {
   const [route, setRoute] = useState(() => window.location.hash);
@@ -27,67 +26,48 @@ export default function App() {
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
-  /* حالة الجلسة: null = قيد التحقق. بدون إعداد Supabase يُعامل الزائر كغير مسجّل. */
-  const [authed, setAuthed] = useState<boolean | null>(() => (getSupabase() ? null : false));
-  useEffect(() => {
-    const sb = getSupabase();
-    if (!sb) return;
-    let alive = true;
-    sb.auth.getSession().then(({ data }) => alive && setAuthed(Boolean(data.session)), () => alive && setAuthed(false));
-    const { data: sub } = sb.auth.onAuthStateChange((_e, session) => alive && setAuthed(Boolean(session)));
-    return () => {
-      alive = false;
-      sub.subscription.unsubscribe();
-    };
-  }, []);
-
   /* معاينة مستقلة لمصمم التدفقات؛ لا تغيّر لوحة التحكم أو الدوال المنشورة. */
   if (route.startsWith("#/flows")) {
-    return <FlowErrorBoundary><Suspense fallback={<div className="min-h-screen bg-night" />}><FlowBuilder /></Suspense></FlowErrorBoundary>;
+    /* محرر كامل الشاشة: Sidebar على سطح المكتب فقط؛ BottomNav مخفي كي لا يغطي لوحاته السفلية */
+    return <AppShell hideBottomNav><FlowErrorBoundary><Suspense fallback={<div className="min-h-screen bg-night" />}><FlowBuilder /></Suspense></FlowErrorBoundary></AppShell>;
   }
 
   /* لوحة التحكم: #/dashboard */
   if (route.startsWith("#/dashboard")) {
     return (
-      <RouteErrorBoundary key="dashboard">
-        <Suspense fallback={<div className="min-h-screen bg-night" />}>
-          <Dashboard />
-        </Suspense>
-      </RouteErrorBoundary>
+      <AppShell>
+        <RouteErrorBoundary key="dashboard">
+          <Suspense fallback={<div className="min-h-screen bg-night" />}>
+            <Dashboard />
+          </Suspense>
+        </RouteErrorBoundary>
+      </AppShell>
     );
   }
 
   /* الإعدادات: #/settings (و#/profile كاسم بديل) */
   if (route.startsWith("#/settings") || route.startsWith("#/profile")) {
     return (
-      <RouteErrorBoundary key="settings">
-        <Suspense fallback={<div className="min-h-screen bg-night" />}>
-          <Settings />
-        </Suspense>
-      </RouteErrorBoundary>
+      <AppShell>
+        <RouteErrorBoundary key="settings">
+          <Suspense fallback={<div className="min-h-screen bg-night" />}>
+            <Settings />
+          </Suspense>
+        </RouteErrorBoundary>
+      </AppShell>
     );
   }
 
   /* صفحة Widgets: #/widgets */
   if (route.startsWith("#/widgets")) {
     return (
-      <RouteErrorBoundary key="widgets">
-        <Suspense fallback={<div className="min-h-screen bg-night" />}>
-          <Widgets />
-        </Suspense>
-      </RouteErrorBoundary>
-    );
-  }
-
-  /* الصفحة الرئيسية: غير المسجّل يرى صفحة الهبوط، والمسجّل يبقى على الصفحة الحالية. #/start يفتح الصفحة الحالية دائماً. */
-  const isHome = !route.startsWith("#/") || route === "#/" || route.startsWith("#/?");
-  if (isHome && authed !== true) {
-    return (
-      <RouteErrorBoundary key="landing">
-        <Suspense fallback={<div className="min-h-screen bg-night" />}>
-          {authed === null ? <div className="min-h-screen bg-night" /> : <LandingPage />}
-        </Suspense>
-      </RouteErrorBoundary>
+      <AppShell padBottom>
+        <RouteErrorBoundary key="widgets">
+          <Suspense fallback={<div className="min-h-screen bg-night" />}>
+            <Widgets />
+          </Suspense>
+        </RouteErrorBoundary>
+      </AppShell>
     );
   }
 

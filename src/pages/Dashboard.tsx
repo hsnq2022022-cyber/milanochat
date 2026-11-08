@@ -4,7 +4,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import confetti from "canvas-confetti";
 import SafeAvatar from "../components/SafeAvatar";
-import BottomNav from "../components/BottomNav";
+import OnboardingWizard, { readOnboardingDone, writeOnboardingDone } from "../components/OnboardingWizard";
+import { ROUTE_SYNC_EVENT } from "../components/AppShell";
 import { api, apiAuthFetch, apiBase, apiEnabled, backendMode, paymentCheckoutEnabled, type WaSnapshot } from "../lib/api";
 import { getSupabase, getStoredClaim, clearStoredClaim } from "../lib/supabase";
 import { CHANNELS, ChannelBadge, detectChannel, type ChannelId } from "../lib/channels";
@@ -179,6 +180,17 @@ const cls = {
 
 const now = () => new Date().toISOString();
 
+/* اختيار التبويب من الرابط: #/dashboard?tab=inbox|channels|knowledge|widgets|unresolved */
+type DashTab = "convs" | "unresolved" | "knowledge" | "widgets" | "channels";
+const TAB_PARAM: Record<DashTab, string> = { convs: "inbox", unresolved: "unresolved", knowledge: "knowledge", widgets: "widgets", channels: "channels" };
+function tabFromHash(hash: string): DashTab | null {
+  if (!hash.startsWith("#/dashboard")) return null;
+  const v = new URLSearchParams(hash.split("?")[1] ?? "").get("tab");
+  if (v === "inbox" || v === "convs") return "convs";
+  if (v === "unresolved" || v === "knowledge" || v === "widgets" || v === "channels") return v;
+  return null;
+}
+
 /* ═══════════ المكوّن الرئيسي ═══════════ */
 
 export default function Dashboard() {
@@ -200,7 +212,7 @@ export default function Dashboard() {
   const [claimErr, setClaimErr] = useState("");
   const [claimBusy, setClaimBusy] = useState(false);
 
-  const [tab, setTab] = useState<"convs" | "unresolved" | "knowledge" | "widgets" | "channels">("convs");
+  const [tab, setTab] = useState<DashTab>(() => tabFromHash(window.location.hash) ?? "convs");
   const [waVerified, setWaVerified] = useState<boolean | null>(null);
   const [socialChannels, setSocialChannels] = useState<any[]>([]);
   const [activeConv, setActiveConv] = useState<string | null>(null);
@@ -233,6 +245,8 @@ export default function Dashboard() {
   const [chSummary, setChSummary] = useState<ChannelSummary | null>(null);
   const [metaStatus, setMetaStatus] = useState<MetaStatus | null>(null);
   const [chLoading, setChLoading] = useState(false);
+  const [chLoaded, setChLoaded] = useState(false);
+  const [onbDismissed, setOnbDismissed] = useState(false);
   const [chBusyId, setChBusyId] = useState<string | null>(null);
   const [chBusyPlatform, setChBusyPlatform] = useState<string | null>(null);
   const [manageAcc, setManageAcc] = useState<ChannelAccount | null>(null);
@@ -618,12 +632,37 @@ export default function Dashboard() {
 
       setChAccounts(normalized);
       setChSummary(summary ?? null);
+      setChLoaded(true);
     } catch (e) {
       console.error("[Dashboard] channels load error:", e);
     } finally {
       setChLoading(false);
     }
   }, [token, demo]);
+
+  /* روابط التنقل الجانبي: تغيّر الهاش أثناء بقاء اللوحة مفتوحة */
+  useEffect(() => {
+    const onHash = () => {
+      if (!window.location.hash.startsWith("#/dashboard")) return;
+      setTab(tabFromHash(window.location.hash) ?? "convs");
+    };
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+
+  /* إبقاء الهاش مطابقًا للتبويب الحالي حتى يعرف التنقل العنصر النشط */
+  const tabSynced = useRef(false);
+  useEffect(() => {
+    if (!tabSynced.current) { tabSynced.current = true; return; }
+    if (!window.location.hash.startsWith("#/dashboard")) return;
+    const cur = tabFromHash(window.location.hash) ?? (window.location.hash.includes("tab=") ? null : "convs");
+    if (cur === tab) return;
+    const [, q = ""] = window.location.hash.split("?");
+    const params = new URLSearchParams(q);
+    params.set("tab", TAB_PARAM[tab]);
+    window.history.replaceState(null, "", `#/dashboard?${params.toString()}`);
+    window.dispatchEvent(new Event(ROUTE_SYNC_EVENT));
+  }, [tab]);
 
   useEffect(() => {
     if (demo || !authed || !token || needClaim) return;
@@ -1205,6 +1244,23 @@ export default function Dashboard() {
   ];
 
   const waLive = st.waStatus === "connected" || !!st.phone;
+  /* المعالج: مستخدم موثّق، لم يُنهِ/يتخطَّ المعالج، وبلا أي قناة (بعد اكتمال تحميل القنوات بنجاح) */
+  const showOnboarding =
+    !demo && authed && !!token && !needClaim && chLoaded && !onbDismissed &&
+    chAccounts.length === 0 && !waLive && !readOnboardingDone(st.tenantId);
+  const finishOnboarding = (how: "done" | "skipped") => {
+    writeOnboardingDone(st.tenantId, how);
+    setOnbDismissed(true);
+  };
+  const createOnboardingFlow = async () => {
+    const { useFlowStore } = await import("../flow/store");
+    if (!useFlowStore.getState().createFlow("تدفق ترحيب")) {
+      showToast("وصلت إلى الحد الأقصى للتدفقات المحلية (30).");
+      return;
+    }
+    finishOnboarding("done");
+    window.location.hash = "#/flows";
+  };
   const fbAccounts = chAccounts.filter((a) => a.channel === "facebook");
   const igAccounts = chAccounts.filter((a) => a.channel === "instagram");
 
@@ -1927,7 +1983,18 @@ export default function Dashboard() {
         </div>
       )}
 
-      <BottomNav active="home" />
+      {showOnboarding && (
+        <OnboardingWizard
+          agentPrompt={agentPrompt}
+          onAgentPromptChange={setAgentPrompt}
+          onSavePrompt={saveAgentPrompt}
+          savingPrompt={agentPromptSaving}
+          onConnectSocial={(pl) => { void handleConnectChannel(pl); }}
+          onOpenChannels={() => { setOnbDismissed(true); setTab("channels"); }}
+          onCreateFlow={createOnboardingFlow}
+          onFinish={finishOnboarding}
+        />
+      )}
 
       {toast && (
         <div className="fixed bottom-24 inset-x-0 z-50 flex justify-center px-4 pointer-events-none">

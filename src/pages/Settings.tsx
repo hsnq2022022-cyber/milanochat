@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { ChevronDown, Wallet, Bell, ShieldCheck, MessageSquare, HelpCircle, Loader2 } from "lucide-react";
 import { getSupabase } from "../lib/supabase";
 import { apiAuthFetch } from "../lib/api";
-import BottomNav from "../components/BottomNav";
 import DeliveryReviewPanel from "./DeliveryReviewPanel";
 import StaffInboxPanel from "./StaffInboxPanel";
 
@@ -180,7 +179,6 @@ export default function Settings() {
         </button>
       </main>
 
-      <BottomNav active="settings" />
     </div>
   );
 }

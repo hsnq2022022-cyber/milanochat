@@ -31,6 +31,7 @@ async function setup(page: Page) {
 }
 
 test("dashboard bottom nav has flows + settings and settings page shows email/plan/logout", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 }); // BottomNav is mobile-only (md:hidden)
   await setup(page);
   await page.goto("/milanochat/#/dashboard");
   const nav = page.getByTestId("bottom-nav");
