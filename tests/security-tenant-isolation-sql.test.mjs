@@ -35,7 +35,7 @@ const WB_RB="supabase/rollbacks/20261029280000_widget_credit_reservations.rollba
 const WA="supabase/migrations/20261029290000_wa_bindings_verification.sql";
 const WA_RB="supabase/rollbacks/20261029290000_wa_bindings_verification.rollback.sql";
 const S2="supabase/migrations/20261029240000_tenants_billing_rls.sql";
-const NEW=["20261029260000","20261029270000","20261029280000","20261029290000","20261029300000"];
+const NEW=["20261029260000","20261029270000","20261029280000","20261029290000","20261029300000","20261029310000"];
 const src=f=>readFileSync(f,"utf8");
 const noComments=s=>s.split("\n").map(l=>l.replace(/--.*$/,"")).join("\n");
 

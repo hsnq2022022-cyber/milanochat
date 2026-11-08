@@ -61,7 +61,7 @@ test("230000 is the newest migration and follows the 125000..220000 chain",()=>{
  const stamps=readdirSync("supabase/migrations").filter(f=>f.endsWith(".sql")).map(f=>f.split("_")[0].padEnd(14,"0"));
  assert.equal(stamps.filter(s=>s==="20261029230000").length,1);
  // 240000 / 250000: security migrations, independent of the flow chain.
- for(const s of stamps)if(!["20261029230000","20261029240000","20261029250000","20261029260000","20261029270000","20261029280000","20261029290000","20261029300000"].includes(s))assert.ok(s<"20261029230000",s);
+ for(const s of stamps)if(!["20261029230000","20261029240000","20261029250000","20261029260000","20261029270000","20261029280000","20261029290000","20261029300000","20261029310000"].includes(s))assert.ok(s<"20261029230000",s);
  for(const f of [...CHAIN125_190,M210,M220,RB,...OLDER_RB])assert.ok(existsSync(f),f);
 });
 test("migration and rollback: one bounded transaction, seven same-signature replacements, no billing, no row writes",()=>{

@@ -7,7 +7,7 @@ import {
 import type { Connection, Edge, XYPosition } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import "../flow/flowSkin.css";
-import { ArrowRight, Plus, Play, Save, Upload, Download, Undo2, Redo2, LayoutGrid, Trash2, AlertTriangle, CheckCircle2, X, Copy, ChevronUp, ChevronDown, Send } from "lucide-react";
+import { ArrowRight, Plus, Play, Save, Upload, Download, Undo2, Redo2, LayoutGrid, Trash2, AlertTriangle, CheckCircle2, X, Copy, ChevronUp, ChevronDown, Send, Sparkles } from "lucide-react";
 import AutomationNode from "../flow/AutomationNode";
 import AutomationEdge from "../flow/AutomationEdge";
 import NodeEditor from "../flow/NodeEditor";
@@ -16,6 +16,7 @@ import CloudDraftPanel from "../flow/CloudDraftPanel";
 import FlowPublicationPanel from "../flow/FlowPublicationPanel";
 import FlowSwitcher from "../flow/FlowSwitcher";
 import WorkspaceTools from "../flow/WorkspaceTools";
+import AiFlowAssistant from "../flow/AiFlowAssistant";
 import { FlowIssuesContext, SKIN_COLOR, SKIN_ICON, skinHint } from "../flow/skin";
 import type { NodeIssueSummary } from "../flow/skin";
 import { SHEET_HALF } from "../flow/useBottomSheet";
@@ -61,6 +62,7 @@ function Editor(){
   const [publishedPreview,setPublishedPreview]=useState<FlowDocument|null>(null);
   const [showCloudDrafts,setShowCloudDrafts]=useState(false);
   const [showPublications,setShowPublications]=useState(false);
+  const [showAi,setShowAi]=useState(false);
   // Comment flows may target a Facebook Page account (server decides; UI hint only).
   const commentPlatform=useMemo(()=>commentTriggerProviderPlatform(doc),[doc]);
   const {state:activation,toggle:toggleActivation}=useFlowActivation(activeFlowId,showPublications,commentPlatform);
@@ -411,6 +413,8 @@ function Editor(){
         </ReactFlow>
         </FlowIssuesContext.Provider>
         <WorkspaceTools language={language}/>
+        <button type="button" data-testid="ai-flow-fab" className="fs-ai-fab nodrag nopan" aria-haspopup="dialog" onClick={()=>setShowAi(true)}>
+          <Sparkles size={18} aria-hidden="true"/><span>مساعد الذكاء الاصطناعي</span></button>
 
         <button className="fs-fab nodrag" title={t("add")} aria-label={t("openAdd")} aria-expanded={paletteAnchored} onClick={e=>{if(paletteAnchored){closeAdd();return;}openAdd({x:e.clientX,y:e.clientY});}}><Plus size={28}/></button>
         {showIssues&&<div className="fs-popover fs-issues">
@@ -459,6 +463,7 @@ function Editor(){
       </section>
       {selected&&<NodeEditor node={selected} language={language} onClose={()=>store().setSelected(null)}/>}
     </div>
+    {showAi&&<AiFlowAssistant onClose={()=>setShowAi(false)} onApplied={message=>{setNotice(message);window.setTimeout(()=>void instance.fitView({padding:.2,maxZoom:1,duration:window.matchMedia?.("(prefers-reduced-motion: reduce)").matches?0:300}),80);}}/>}
     {notice&&<div role="status" className="fs-toast" onClick={()=>setNotice("")}>{notice} ×</div>}
     <div className="fs-local-hint pointer-events-none hidden sm:block">{t("localOnly")}</div>
     {showSimulator&&<FlowSimulator language={language} doc={publishedPreview??doc} flowId={publishedPreview?"published-preview":activeFlowId} flows={publishedPreview?[{id:"published-preview",doc:publishedPreview,enabled:false}]:snapshotLibrary(activeFlowId,doc,flows).flows} onVisited={publishedPreview?undefined:setTrail} onClose={()=>{setShowSimulator(false);setPublishedPreview(null);}}/>}

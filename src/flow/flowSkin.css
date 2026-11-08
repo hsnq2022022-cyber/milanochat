@@ -149,6 +149,13 @@
   .flow-skin .fs-fab:active{transform:scale(.94)}
   .flow-skin .fs-fab svg{transition:transform .3s var(--fs-ease)}
   .flow-skin .fs-fab[aria-expanded="true"] svg{transform:rotate(135deg)}
+  .flow-skin .fs-ai-fab{position:absolute;z-index:16;right:12px;top:68px;min-height:44px;display:inline-flex;align-items:center;gap:8px;padding:0 14px;border-radius:14px;
+    border:1px solid rgba(229,181,75,.6);background:rgba(11,36,28,.95);color:var(--fs-gold);font-weight:800;font-size:13px;cursor:pointer;
+    box-shadow:0 10px 28px -10px rgba(229,181,75,.45);transition:background-color .2s,border-color .2s,transform .15s var(--fs-ease)}
+  .flow-skin .fs-ai-fab:hover{background:rgba(229,181,75,.16);border-color:var(--fs-gold)}
+  .flow-skin .fs-ai-fab:active{transform:scale(.97)}
+  .flow-skin .fs-ai-fab:focus-visible{outline:2px solid var(--fs-brand);outline-offset:2px}
+  @media (min-width:768px){.flow-skin .fs-ai-fab{top:12px;right:16px;font-size:14px}}
   .flow-skin .fs-popover{border-radius:20px;border:1px solid var(--fs-line);background:rgba(11,36,28,.97);color:var(--fs-text);
     box-shadow:0 26px 60px -16px rgba(0,0,0,.85);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);padding:16px;animation:fs-pop .2s var(--fs-ease)}
   .flow-skin .fs-issues{position:absolute;z-index:20;left:12px;top:12px;width:min(340px,calc(100% - 24px))}

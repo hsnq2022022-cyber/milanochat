@@ -49,7 +49,8 @@ const removed=(prev,now)=>lines(prev).filter(l=>!lines(now).includes(l));
 test("300000 is the newest migration; rollback exists",()=>{
  const stamps=readdirSync(M).filter(f=>f.endsWith(".sql")).map(f=>f.split("_")[0].padEnd(14,"0"));
  assert.equal(stamps.filter(s=>s==="20261029300000").length,1);
- for(const s of stamps)assert.ok(s<="20261029300000",s);
+ // 20261029310000_flow_ai_generations (AI flow builder credits) is independent of the comment chain.
+ for(const s of stamps)assert.ok(s<="20261029300000"||s==="20261029310000",s);
  assert.ok(existsSync(RB));
 });
 test("migration and rollback: one bounded transaction, no SECURITY DEFINER, no billing, service_role-only RPCs",()=>{
