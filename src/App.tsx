@@ -9,12 +9,14 @@ import ChatDemo from "./components/ChatDemo";
 import ChannelsSection from "./components/ChannelsSection";
 import Pricing from "./components/Pricing";
 import FAQ from "./components/FAQ";
+import { getSupabase } from "./lib/supabase";
 
 /* لوحة التحكم وحدة منفصلة — لا يتحمل زائر الصفحة الرئيسية حجمها */
 const Dashboard = lazy(() => import("./pages/Dashboard"));
 const Settings = lazy(() => import("./pages/Settings"));
 const Widgets = lazy(() => import("./pages/Widgets"));
 const FlowBuilder = lazy(() => import("./pages/FlowBuilder"));
+const LandingPage = lazy(() => import("./pages/LandingPage"));
 
 export default function App() {
   const [route, setRoute] = useState(() => window.location.hash);
@@ -23,6 +25,20 @@ export default function App() {
     const onHash = () => setRoute(window.location.hash);
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+
+  /* حالة الجلسة: null = قيد التحقق. بدون إعداد Supabase يُعامل الزائر كغير مسجّل. */
+  const [authed, setAuthed] = useState<boolean | null>(() => (getSupabase() ? null : false));
+  useEffect(() => {
+    const sb = getSupabase();
+    if (!sb) return;
+    let alive = true;
+    sb.auth.getSession().then(({ data }) => alive && setAuthed(Boolean(data.session)), () => alive && setAuthed(false));
+    const { data: sub } = sb.auth.onAuthStateChange((_e, session) => alive && setAuthed(Boolean(session)));
+    return () => {
+      alive = false;
+      sub.subscription.unsubscribe();
+    };
   }, []);
 
   /* معاينة مستقلة لمصمم التدفقات؛ لا تغيّر لوحة التحكم أو الدوال المنشورة. */
@@ -58,6 +74,18 @@ export default function App() {
       <RouteErrorBoundary key="widgets">
         <Suspense fallback={<div className="min-h-screen bg-night" />}>
           <Widgets />
+        </Suspense>
+      </RouteErrorBoundary>
+    );
+  }
+
+  /* الصفحة الرئيسية: غير المسجّل يرى صفحة الهبوط، والمسجّل يبقى على الصفحة الحالية. #/start يفتح الصفحة الحالية دائماً. */
+  const isHome = !route.startsWith("#/") || route === "#/" || route.startsWith("#/?");
+  if (isHome && authed !== true) {
+    return (
+      <RouteErrorBoundary key="landing">
+        <Suspense fallback={<div className="min-h-screen bg-night" />}>
+          {authed === null ? <div className="min-h-screen bg-night" /> : <LandingPage />}
         </Suspense>
       </RouteErrorBoundary>
     );
