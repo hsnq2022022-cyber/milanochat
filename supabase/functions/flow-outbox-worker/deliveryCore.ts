@@ -12,6 +12,12 @@ export type ProviderRequest={
   * `imageHost` = SUPABASE_URL for the allowlist host check.
   */
  imageUrl?:string;imageHost?:string;
+ /**
+  * Comment automation only (FLOW_COMMENT_AUTOMATION_ENABLED): Instagram /
+  * Messenger private reply to this comment id (recipient {comment_id}).
+  * Absent: the request is byte-identical to before.
+  */
+ recipientCommentId?:string;
 };
 /** Non-2xx provider response; message identical to the previous plain Error. */
 export class ProviderHttpError extends Error{
@@ -68,6 +74,10 @@ export async function sendProviderMessage(input:ProviderRequest,perform:typeof f
  if(image&&(input.platform!=="instagram"||input.quickReplies||input.websiteButtons||
   !isAllowedFlowImageUrl(input.imageUrl,input.imageHost)))
   throw Error("Invalid provider image message");
+ const privateReply=input.recipientCommentId!==undefined;
+ if(privateReply&&(image||input.platform==="whatsapp"||
+  typeof input.recipientCommentId!=="string"||!/^[0-9]{1,32}(_[0-9]{1,32})?$/.test(input.recipientCommentId)))
+  throw Error("Invalid private reply");
  let url="",headers:Record<string,string>={"content-type":"application/json"};
  if(input.quickReplies&&input.websiteButtons)throw Error("Mixed rich button formats not supported");
  let payload:Record<string,unknown>={};
@@ -87,7 +97,8 @@ export async function sendProviderMessage(input:ProviderRequest,perform:typeof f
    else if(input.platform!=="facebook")throw Error("Website buttons require Facebook Messenger");
    else message=messengerWebsiteButtons(input.text,input.websiteButtons);
   }
-  const envelope={recipient:{id:input.recipient},message};
+  const envelope=privateReply?{recipient:{comment_id:input.recipientCommentId},message}:
+   {recipient:{id:input.recipient},message};
   if(input.platform==="instagram"&&input.token.startsWith("IG")){
    url="https://graph.instagram.com/v21.0/me/messages";
    headers.authorization="Bearer "+input.token;

@@ -69,6 +69,18 @@ async function topupSupabase(
   return data as { invoiceId: string; paymentUrl: string | null };
 }
 
+export type CommentReplyStatus = "pending" | "sent" | "failed";
+export type CommentActivityItem = {
+  id: string;
+  customerName: string | null;
+  commentText: string;
+  createdAt: string;
+  publicReplyStatus: CommentReplyStatus;
+  publicReplyText: string | null;
+  dmStatus: CommentReplyStatus | "skipped";
+};
+export type CommentActivityPage = { ok: true; items: CommentActivityItem[]; nextCursor: string | null };
+
 /** نداء Edge Function في نمط Supabase */
 async function fn<T>(
   action: string,
@@ -368,6 +380,16 @@ export const api = {
           method: "POST",
           body: JSON.stringify({ text }),
         }),
+
+  /** نشاط التعليقات (milan-api: comment_activity) — قراءة فقط، مقيّد بالمستأجر. أخطاء: invalid_limit | invalid_cursor | unavailable */
+  getCommentActivity: (tenantId: string, token: string | null | undefined, limit = 20, cursor?: string | null) =>
+    fn<CommentActivityPage | { ok: false; error?: string }>("comment_activity", {
+      body: { tenantId, limit, ...(cursor ? { cursor } : {}) },
+      claim: token ?? storedClaim() ?? tenantId,
+    }).then((r) => {
+      if (!r || r.ok !== true) throw new Error((r as { error?: string } | undefined)?.error ?? "unavailable");
+      return r;
+    }),
 
   wa: {
     createSession: (tenantId: string, token?: string | null) =>

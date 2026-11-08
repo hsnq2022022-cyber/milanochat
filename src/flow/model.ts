@@ -68,6 +68,11 @@ export type FlowData = Record<string, unknown> & {
   platform: Platform;
   keywords: string;
   triggerMode: TriggerMode;
+  /** Comment triggers only. Old documents lack these; they are defaulted on load. */
+  commentScope: "all" | "specific";
+  commentPostId: string;
+  commentMatchType: "any" | "keyword";
+  publicReplyText: string;
   inputMode: "buttons" | "text" | "email" | "phone" | "number";
   inputField: string;
   conditionField: string;
@@ -98,13 +103,24 @@ export const ACCENT: Record<Kind,string> = {
 };
 export const KIND_LIST = Object.keys(LABELS) as Kind[];
 const id = () => uuid();
+export const PUBLIC_REPLY_MAX=2200;
 export function makeNode(kind: Kind, position: XYPosition, opts?: Partial<FlowData>): FlowNode {
+  const node=makeNodeBase(kind,position,opts);
+  const d=node.data;
+  if(d.commentScope!=="specific")d.commentScope="all";
+  if(typeof d.commentPostId!=="string")d.commentPostId="";
+  if(typeof d.publicReplyText!=="string")d.publicReplyText="";
+  if(d.commentMatchType!=="any"&&d.commentMatchType!=="keyword")d.commentMatchType=String(d.keywords||"").trim()?"keyword":"any";
+  return node;
+}
+function makeNodeBase(kind: Kind, position: XYPosition, opts?: Partial<FlowData>): FlowNode {
   return {
     id: id(), position, type:"flowNode",
     data: {
       kind, title: LABELS[kind], text: kind==="message"?"أهلاً بيك! شلون نكدر نساعدك؟":kind==="question"?"اختار شتحتاج":"", image:"",
       options: kind==="question"?[{id:id(),label:"الأسعار"},{id:id(),label:"موظف"}]:kind==="randomizer"?[{id:id(),label:"A",weight:50},{id:id(),label:"B",weight:50}]:[],
-      contentBlocks:[],platform:"instagram",keywords:"",triggerMode:"keyword",inputMode:"buttons",inputField:"response",
+      contentBlocks:[],platform:"instagram",keywords:"",triggerMode:"keyword",
+      commentScope:"all",commentPostId:"",commentMatchType:undefined as unknown as "any",publicReplyText:"",inputMode:"buttons",inputField:"response",
       conditionField:"message",operator:"contains",conditionValue:"",
       delayValue:1,delayUnit:"minutes",actionType:"tag",actionValue:"",
       gotoNode:"",requestMethod:"GET",requestUrl:"",...opts,
@@ -204,6 +220,11 @@ export function validateDocument(doc: FlowDocument, library?: readonly Validatio
       error("حدث البداية غير متاح للقناة المحددة");
     if(d.kind==="trigger"&&d.triggerMode==="keyword"&&!d.keywords.trim())
       error("أضف كلمة مفتاحية واحدة على الأقل لتشغيل هذا الحدث");
+    if(d.kind==="trigger"&&d.triggerMode==="comment"){
+      if(!String(d.publicReplyText||"").trim())error("اكتب الرد العام على التعليق");
+      if(d.commentScope==="specific"&&!String(d.commentPostId||"").trim())error("أدخل معرّف المنشور المحدد");
+      if(d.commentMatchType==="keyword"&&!d.keywords.trim())error("أضف كلمة مفتاحية واحدة على الأقل لتعليقات الكلمات");
+    }
     if(d.kind==="question"&&d.inputMode!=="buttons"&&!d.inputField.trim())
       error("اسم حقل الإجابة مطلوب");
     if(d.kind==="question"&&d.inputMode!=="buttons"){
@@ -364,6 +385,9 @@ function cleanImported(raw:unknown): FlowDocument | null {
     const clean=makeNode(kind,position,{title:safeString(d.title,LABELS[kind]).slice(0,120),text:safeString(d.text).slice(0,2000),image:safeString(d.image).slice(0,1500000),options,keywords:safeString(d.keywords).slice(0,500),
       platform:["instagram","messenger","whatsapp"].includes(String(d.platform))?d.platform as Platform:"instagram",contentBlocks,
       triggerMode:["keyword","message","comment","story","ad","live","referral"].includes(String(d.triggerMode))?d.triggerMode as FlowData["triggerMode"]:"keyword",
+      commentScope:d.commentScope==="specific"?"specific":"all",commentPostId:safeString(d.commentPostId).trim().slice(0,100),
+      publicReplyText:safeString(d.publicReplyText).slice(0,PUBLIC_REPLY_MAX),
+      commentMatchType:d.commentMatchType==="keyword"||d.commentMatchType==="any"?d.commentMatchType as "any"|"keyword":(safeString(d.keywords).trim()?"keyword":"any"),
       inputMode:["buttons","text","email","phone","number"].includes(String(d.inputMode))?d.inputMode as FlowData["inputMode"]:"buttons",
       inputField:safeString(d.inputField,"response").slice(0,100),conditionField:safeString(d.conditionField,"message").slice(0,100),
       operator:["contains","equals","not_equals","exists"].includes(String(d.operator))?d.operator as FlowData["operator"]:"contains",

@@ -30,6 +30,8 @@ export const FB_REQUIRED_SCOPES = [
   "pages_messaging",
   "pages_manage_metadata",
   "pages_read_engagement",
+  // Comment automation: public reply to a Page post comment (POST /{comment-id}/comments).
+  "pages_manage_engagement",
 ] as const;
 export const MAX_ACCOUNT_PAGES = 5;
 export const MAX_LINKED_PAGES = 100;

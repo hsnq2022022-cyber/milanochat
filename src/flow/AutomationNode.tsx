@@ -76,6 +76,7 @@ export default function AutomationNode({id,data,selected}:NodeProps<FlowNodeType
           </div>}
         {data.triggerMode==="message"&&<p className="fs-node-chip">أي رسالة واردة</p>}
         {data.triggerMode==="comment"&&!data.keywords.trim()&&<p className="fs-node-chip">أي تعليق</p>}
+        {data.triggerMode==="comment"&&data.commentScope==="specific"&&<p className="fs-node-chip">منشور محدد</p>}
       </>}
       {message&&<>
         <p className="fs-node-text line-clamp-4 whitespace-pre-wrap break-words">{data.text||"اضغط لتعديل الرسالة"}</p>

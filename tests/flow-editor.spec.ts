@@ -252,7 +252,8 @@ test("trigger settings show event-specific keyword chips instead of step title",
  await editor.getByRole("button",{name:"حذف الكلمة عراق"}).click();
  await expect(editor.getByTestId("saved-keywords")).not.toContainText("عراق");
  await event.selectOption("comment");
- await expect(editor.getByRole("checkbox",{name:"تحديد كلمات للتعليقات"})).toBeChecked();
+ await expect(aside.getByRole("radio",{name:"كلمة مفتاحية"})).toBeChecked();
+ await expect(aside.getByTestId("trigger-keyword-settings")).toBeVisible();
  await event.selectOption("message");
  await expect(aside.getByTestId("trigger-keyword-settings")).toHaveCount(0);
 });
@@ -262,15 +263,18 @@ test("comment keywords are optional and saved chips appear as selected criteria"
  await page.locator(".react-flow__node").first().click();
  const aside=page.locator("aside");
  await aside.getByRole("combobox",{name:"نوع الحدث"}).selectOption("comment");
+ await aside.getByRole("radio",{name:"أي تعليق"}).check();
+ await expect(aside.getByTestId("trigger-keyword-settings")).toHaveCount(0);
+ await aside.getByRole("radio",{name:"كلمة مفتاحية"}).check();
  const editor=aside.getByTestId("trigger-keyword-settings");
- await editor.getByRole("checkbox",{name:"تحديد كلمات للتعليقات"}).check();
  const field=editor.getByRole("textbox",{name:"إدخال كلمة مفتاحية"});
  await field.fill("TOD");
  await field.press("Enter");
  await expect(editor.getByTestId("saved-keywords")).toContainText("TOD");
  await expect(page.locator(".react-flow__node").first()).toContainText("TOD");
- await editor.getByRole("checkbox",{name:"تحديد كلمات للتعليقات"}).uncheck();
- await expect(editor.getByText("سيُطبَّق الحدث على أي تعليق")).toBeVisible();
+ await aside.getByRole("radio",{name:"أي تعليق"}).check();
+ await expect(aside.getByTestId("trigger-keyword-settings")).toHaveCount(0);
+ await expect(page.locator(".react-flow__node").first()).toContainText("أي تعليق");
 });
 
 test("message content controls are available without expanding and legacy image stays visible",async({page})=>{

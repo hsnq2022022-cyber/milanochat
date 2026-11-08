@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import confetti from "canvas-confetti";
 import SafeAvatar from "../components/SafeAvatar";
+import CommentActivity from "../components/CommentActivity";
 import OnboardingWizard, { readOnboardingDone, writeOnboardingDone } from "../components/OnboardingWizard";
 import { ROUTE_SYNC_EVENT } from "../components/AppShell";
 import { api, apiAuthFetch, apiBase, apiEnabled, backendMode, paymentCheckoutEnabled, type WaSnapshot } from "../lib/api";
@@ -186,10 +187,14 @@ const TAB_PARAM: Record<DashTab, string> = { convs: "inbox", unresolved: "unreso
 function tabFromHash(hash: string): DashTab | null {
   if (!hash.startsWith("#/dashboard")) return null;
   const v = new URLSearchParams(hash.split("?")[1] ?? "").get("tab");
-  if (v === "inbox" || v === "convs") return "convs";
+  if (v === "inbox" || v === "convs" || v === "comments") return "convs";
   if (v === "unresolved" || v === "knowledge" || v === "widgets" || v === "channels") return v;
   return null;
 }
+
+/* تبويب فرعي داخل المحادثات: ?tab=comments يفتح «التعليقات» */
+const inboxViewFromHash = (hash: string): "chats" | "comments" =>
+  hash.startsWith("#/dashboard") && new URLSearchParams(hash.split("?")[1] ?? "").get("tab") === "comments" ? "comments" : "chats";
 
 /* ═══════════ المكوّن الرئيسي ═══════════ */
 
@@ -213,6 +218,7 @@ export default function Dashboard() {
   const [claimBusy, setClaimBusy] = useState(false);
 
   const [tab, setTab] = useState<DashTab>(() => tabFromHash(window.location.hash) ?? "convs");
+  const [inboxView, setInboxView] = useState<"chats" | "comments">(() => inboxViewFromHash(window.location.hash));
   const [waVerified, setWaVerified] = useState<boolean | null>(null);
   const [socialChannels, setSocialChannels] = useState<any[]>([]);
   const [activeConv, setActiveConv] = useState<string | null>(null);
@@ -645,6 +651,7 @@ export default function Dashboard() {
     const onHash = () => {
       if (!window.location.hash.startsWith("#/dashboard")) return;
       setTab(tabFromHash(window.location.hash) ?? "convs");
+      setInboxView(inboxViewFromHash(window.location.hash));
     };
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
@@ -1345,6 +1352,37 @@ export default function Dashboard() {
         </div>
 
         {tab === "convs" && (
+          <div className={`flex gap-1.5 mb-3 max-w-2xl ${mobileThread && inboxView === "chats" ? "hidden lg:flex" : ""}`} role="tablist" aria-label="عرض صندوق الوارد" data-testid="inbox-subtabs">
+            {([["chats", "المحادثات"], ["comments", "التعليقات"]] as const).map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                role="tab"
+                aria-selected={inboxView === id}
+                data-testid={`inbox-subtab-${id}`}
+                onClick={() => {
+                  setInboxView(id);
+                  if (window.location.hash.startsWith("#/dashboard")) {
+                    const params = new URLSearchParams(window.location.hash.split("?")[1] ?? "");
+                    params.set("tab", id === "comments" ? "comments" : "inbox");
+                    window.history.replaceState(null, "", `#/dashboard?${params.toString()}`);
+                  }
+                }}
+                className={`flex-1 min-h-[44px] rounded-xl border text-[13px] font-bold transition-colors duration-200 ease-out focus:outline-none focus:ring-2 focus:ring-verde ${
+                  inboxView === id ? "bg-moss text-oro border-oro/40" : "text-sage border-verde/15 hover:text-bone"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {tab === "convs" && inboxView === "comments" && (
+          <CommentActivity tenantId={st.tenantId} token={token} demo={demo} formatTime={fmtDate} />
+        )}
+
+        {tab === "convs" && inboxView === "chats" && (
           <div className="grid lg:grid-cols-[320px_1fr] gap-4 items-start">
             <aside className={`${cls.card} overflow-hidden ${mobileThread ? "hidden lg:block" : ""}`}>
               <div className="px-4 py-3.5 border-b border-verde/10 flex items-center justify-between">

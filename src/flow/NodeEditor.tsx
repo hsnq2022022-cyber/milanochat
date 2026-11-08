@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { CSSProperties } from "react";
 import { Plus, Trash2, Check, Copy, AlertTriangle, Sparkles, ChevronDown, ChevronUp } from "lucide-react";
-import { LABELS, makeNode, outputs, canConnect, edgeFor, PLATFORM_LABELS, TRIGGER_OPTIONS } from "./model";
+import { LABELS, PUBLIC_REPLY_MAX, makeNode, outputs, canConnect, edgeFor, PLATFORM_LABELS, TRIGGER_OPTIONS } from "./model";
 import ButtonActionEditor from "./ButtonActionEditor";
 import MessageBlocksEditor from "./MessageBlocksEditor";
 import TriggerKeywordsEditor from "./TriggerKeywordsEditor";
@@ -99,7 +99,8 @@ export default function NodeEditor({node,onClose,language="ar"}:{node:FlowNode|n
         <select className={input} aria-label={t("event")} value={d.triggerMode} onChange={e=>edit({triggerMode:e.target.value as FlowData["triggerMode"]})}>
           {TRIGGER_OPTIONS[d.platform].map(event=><option key={event.id} value={event.id}>{event.label}</option>)}
         </select>
-        <TriggerKeywordsEditor key={node.id+":"+d.triggerMode} mode={d.triggerMode} value={d.keywords} onChange={keywords=>edit({keywords})}/>
+        {d.triggerMode==="comment"?<CommentTriggerForm d={d} edit={edit} t={t} nodeId={node.id}/>
+          :<TriggerKeywordsEditor key={node.id+":"+d.triggerMode} mode={d.triggerMode} value={d.keywords} onChange={keywords=>edit({keywords})}/>}
         <p className="mt-2 text-[11px] leading-5 text-[#E5B54B]">هذه إعدادات التدفق فقط. اختيار WhatsApp أو Instagram أو Messenger لا يُنشئ ربط حساب جديدًا، ولا يمنح صلاحيات Meta تلقائيًا. الأحداث المسموح بها فعليًا تعتمد على القناة وحالة ربطها.</p>
         {d.platform!=="instagram"&&<p className="mt-2 text-[11px] leading-5 text-[#E5B54B]">{t("multichannelNote")}</p>}
       </>}
@@ -199,4 +200,46 @@ export default function NodeEditor({node,onClose,language="ar"}:{node:FlowNode|n
     </div>}
     {!collapsed&&<div className="fs-insp-foot sticky bottom-0 p-3"><button className="fs-btn fs-btn-primary w-full" onClick={closePanel}><Check size={16}/> {t("done")}</button></div>}
   </aside>;
+}
+
+const radioRow="flex min-h-11 cursor-pointer items-center gap-3 rounded-xl border border-[#173D30] bg-[#0F2E24] px-3 text-sm text-white focus-within:ring-2 focus-within:ring-[#3DD189]";
+function RadioGroup<V extends string>({legend,name,value,options,onChange}:{legend:string;name:string;value:V;options:{id:V;label:string}[];onChange:(v:V)=>void}){
+  return <fieldset className="mt-4 min-w-0 border-0 p-0">
+    <legend className="mb-2 text-xs font-semibold text-[#B8D0C3]">{legend}</legend>
+    <div className="flex flex-col gap-2" role="radiogroup" aria-label={legend}>
+      {options.map(o=><label key={o.id} className={radioRow+(value===o.id?" border-[#3DD189]":"")}>
+        <input type="radio" name={name} value={o.id} checked={value===o.id} onChange={()=>onChange(o.id)} className="h-4 w-4 shrink-0 accent-[#3DD189]"/>
+        <span>{o.label}</span>
+      </label>)}
+    </div>
+  </fieldset>;
+}
+function CommentTriggerForm({d,edit,t,nodeId}:{d:FlowData;edit:(part:Partial<FlowData>)=>void;t:(key:Parameters<typeof flowText>[0])=>string;nodeId:string}){
+  const reply=String(d.publicReplyText||"");
+  const specific=d.commentScope==="specific";
+  const keyword=d.commentMatchType==="keyword";
+  const postMissing=specific&&!String(d.commentPostId||"").trim();
+  return <div data-testid="comment-trigger-form">
+    <RadioGroup legend={t("commentScopeLabel")} name={"scope-"+nodeId} value={d.commentScope} onChange={commentScope=>edit({commentScope})}
+      options={[{id:"all",label:t("commentScopeAll")},{id:"specific",label:t("commentScopeSpecific")}]}/>
+    {specific&&<div className="mt-3">
+      <label htmlFor={"post-"+nodeId} className="mb-2 block text-xs font-semibold text-[#B8D0C3]">{t("commentPostId")}</label>
+      <input id={"post-"+nodeId} dir="ltr" inputMode="numeric" required aria-required="true" aria-invalid={postMissing} className={input+" min-h-11 text-left"} value={String(d.commentPostId||"")} maxLength={100}
+        onChange={e=>edit({commentPostId:e.target.value.trim()})}/>
+      {postMissing&&<p role="alert" className="mt-1 text-[11px] text-[#E5B54B]">{t("commentPostIdRequired")}</p>}
+    </div>}
+    <RadioGroup legend={t("commentMatchLabel")} name={"match-"+nodeId} value={d.commentMatchType} onChange={commentMatchType=>edit(commentMatchType==="any"?{commentMatchType,keywords:""}:{commentMatchType})}
+      options={[{id:"any",label:t("commentMatchAny")},{id:"keyword",label:t("commentMatchKeyword")}]}/>
+    {keyword&&<TriggerKeywordsEditor key={nodeId+":comment-keywords"} mode="keyword" value={d.keywords} onChange={keywords=>edit({keywords})}/>}
+    <div className="mt-4">
+      <label htmlFor={"reply-"+nodeId} className="mb-2 block text-xs font-semibold text-[#B8D0C3]">{t("publicReplyLabel")} <span className="text-[#E5B54B]" aria-hidden="true">*</span></label>
+      <textarea id={"reply-"+nodeId} data-testid="public-reply-text" required aria-required="true" aria-invalid={!reply.trim()} aria-describedby={"reply-meta-"+nodeId}
+        rows={4} maxLength={PUBLIC_REPLY_MAX} value={reply} placeholder={t("publicReplyPlaceholder")} className={input+" min-h-24 resize-y leading-6"}
+        onChange={e=>edit({publicReplyText:e.target.value.slice(0,PUBLIC_REPLY_MAX)})}/>
+      <div id={"reply-meta-"+nodeId} className="mt-1 flex items-start justify-between gap-2">
+        {!reply.trim()?<p role="alert" data-testid="public-reply-error" className="text-[11px] text-[#E5B54B]">{t("publicReplyRequired")}</p>:<span/>}
+        <span dir="ltr" data-testid="public-reply-counter" className="shrink-0 text-[11px] text-[#8B9E96]">{reply.length}/{PUBLIC_REPLY_MAX}</span>
+      </div>
+    </div>
+  </div>;
 }

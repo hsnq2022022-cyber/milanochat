@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import {readFileSync} from "node:fs";
 import {
   linkFacebookPages, facebookDb, appSecretProof, FB_GRAPH_V, FB_PAGE_SUBSCRIBED_FIELDS,
-  type FbDb, type FbPageRow, type FbLinkDeps,
+  FB_REQUIRED_SCOPES, type FbDb, type FbPageRow, type FbLinkDeps,
 } from "../supabase/functions/meta-auth/facebook.ts";
 
 const TA = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
@@ -182,4 +182,15 @@ test("index.ts wiring: facebook route verifies state (platform facebook) before 
   const ig = m.slice(m.indexOf("Deno.serve("), m.indexOf("async function handleFacebookCallback"));
   assert.match(ig, /expectedPlatform: "instagram"/);
   assert.match(ig, /!url\.pathname\.endsWith\("\/instagram\/callback"\)/);
+});
+
+test("FB_REQUIRED_SCOPES: exact Page permission list incl. comment automation", () => {
+  // Kept in sync with the channels /meta/oauth-url dialog scope
+  // (tests/channels-oauth-url-scope.test.ts). Order and content are pinned.
+  assert.deepEqual([...FB_REQUIRED_SCOPES], [
+    "pages_show_list", "pages_messaging", "pages_manage_metadata",
+    "pages_read_engagement", "pages_manage_engagement",
+  ]);
+  assert.equal(new Set(FB_REQUIRED_SCOPES).size, FB_REQUIRED_SCOPES.length);
+  assert.ok(!FB_REQUIRED_SCOPES.some((s) => /business_management/.test(s)));
 });

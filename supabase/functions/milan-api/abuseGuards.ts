@@ -131,6 +131,13 @@ export const aiActionRules = (ipHash: string, tenantId: string): LimitRule[] => 
   { key: `ai:t:${tenantId}`, limit: AI_ACTION_LIMITS.tenantPerHour, windowSec: 3600, code: "ai_tenant" },
 ];
 
+/** Read-only claim action "comment_activity" (Inbox comment log). */
+export const COMMENT_ACTIVITY_LIMITS = { ipPerMinute: 60, tenantPerMinute: 120 };
+export const commentActivityRules = (ipHash: string, tenantId: string): LimitRule[] => [
+  { key: `ca:ip:${ipHash}`, limit: COMMENT_ACTIVITY_LIMITS.ipPerMinute, windowSec: 60, code: "comment_activity_ip" },
+  { key: `ca:t:${tenantId}`, limit: COMMENT_ACTIVITY_LIMITS.tenantPerMinute, windowSec: 60, code: "comment_activity_tenant" },
+];
+
 export const knowledgeAddRules = (tenantId: string): LimitRule[] => [
   { key: `kb:t:${tenantId}`, limit: AI_ACTION_LIMITS.knowledgeAddTenantPerHour, windowSec: 3600, code: "kb_tenant" },
 ];

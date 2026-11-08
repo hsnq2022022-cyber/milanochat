@@ -53,7 +53,7 @@ test("180000 follows the whole 125000..170000 chain; only 190000 (requires 18000
  // 20261029210000_flow_media_effects requires 190000 (tests/flow-media-effects.test.mjs).
  // 20261029220000_flow_media_stale_sweep requires 210000 (tests/flow-media-stale-sweep.test.mjs).
  // 20261029230000_flow_multichannel_support requires 220000 (tests/flow-multichannel-support.test.mjs).
- for(const s of stamps)if(!["20261029180000","20261029190000","20261029200000","20261029210000","20261029220000","20261029230000","20261029240000","20261029250000","20261029260000","20261029270000","20261029280000","20261029290000"].includes(s))assert.ok(s<"20261029180000",s);
+ for(const s of stamps)if(!["20261029180000","20261029190000","20261029200000","20261029210000","20261029220000","20261029230000","20261029240000","20261029250000","20261029260000","20261029270000","20261029280000","20261029290000","20261029300000"].includes(s))assert.ok(s<"20261029180000",s);
  for(const f of [M125,...LATER])assert.ok(existsSync(f),f);
 });
 test("bodies: 125000 copies are byte-identical (migration, rollback, proposal); 180000 adds exactly the guards",()=>{

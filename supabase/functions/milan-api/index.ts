@@ -47,6 +47,10 @@ import { prepareSimpleFlowReply } from "./flowPrepareMessage.ts";
 import {attemptDurableInstagram,selectedFlowChoice,multichannelEnabled} from "./flowDurableIngress.ts";
 import { normalizeMetaMessages } from "./normalizeMetaMessage.ts";
 import { chargeWidgetReply } from "./widgetCredit.ts";
+// Comment automation (FLOW_COMMENT_AUTOMATION_ENABLED, default OFF) and its Inbox read contract.
+import { ingestSignedComments, commentAutomationEnabled } from "./commentIngress.ts";
+import { readCommentActivity } from "./commentActivity.ts";
+import { commentActivityRules } from "./abuseGuards.ts";
 import { verifyMetaWebhookSignature } from "./metaSignature.ts";
 import { recordVerifiedMetaReceipts } from "./metaDeliveryReceipts.ts";
 // Security hardening (S1 / S3 / S4): pure, unit-tested modules.
@@ -2788,6 +2792,15 @@ Deno.serve(async (req) => {
               );
             }
           }
+
+          // FLOW_COMMENT_AUTOMATION_ENABLED (default OFF; commentIngress.ts):
+          // signed Instagram "comments" / Page "feed" comment changes start a
+          // comment run (public reply first, then the DM). OFF: never parsed.
+          if (commentAutomationEnabled()) {
+            await ingestSignedComments(sb, body.object, entry, {
+              env, encrypt: encryptField,
+            });
+          }
         }
 
         return json({
@@ -3357,6 +3370,7 @@ Deno.serve(async (req) => {
       "qa_save",
       "ingest_text",
       "qa_test",
+      "comment_activity",
     ];
 
     if (
@@ -3392,6 +3406,22 @@ Deno.serve(async (req) => {
         /* ─────────────────────────────────────────────────────────────
            ربط الرقم
         ───────────────────────────────────────────────────────────── */
+
+        // Inbox comment activity (commentActivity.ts): read-only, scoped to
+        // the claim-verified tenant, rate limited, at most 100 per page.
+        case "comment_activity": {
+          const caLimited = await rateGate({
+            rpc: sb, headers: req.headers, salt: env("RATE_LIMIT_IP_SALT"), cors: CORS,
+            rules: (ipHash) => commentActivityRules(ipHash, String(tenant.id)),
+          });
+          if (caLimited) return caLimited;
+          const activity = await readCommentActivity(sb, String(tenant.id),
+            { limit: body.limit, cursor: body.cursor }, decryptField);
+          if (!activity.ok) {
+            return json({ ok: false, error: activity.error }, activity.status);
+          }
+          return json(activity);
+        }
 
         case "bind_number": {
           const phoneId =

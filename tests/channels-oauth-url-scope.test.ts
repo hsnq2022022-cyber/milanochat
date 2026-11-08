@@ -19,6 +19,9 @@ test("facebook oauth URL requests the Page scopes meta-auth requires", () => {
   assert.ok(m, "facebook URL has a scope parameter");
   assert.deepEqual(m[1].split(","), [...FB_REQUIRED_SCOPES], "same list as meta-auth FB_REQUIRED_SCOPES");
   assert.doesNotMatch(m[1], /business_management/);
+  // Comment automation (public reply to Page comments) needs these two.
+  assert.ok(m[1].split(",").includes("pages_manage_engagement"));
+  assert.ok(m[1].split(",").includes("pages_read_engagement"));
   // scope sits on the dialog URL, before the signed state; state signing intact
   assert.match(fb, /"https:\/\/www\.facebook\.com\/v21\.0\/dialog\/oauth" \+/);
   assert.ok(fb.indexOf('"&scope="') < fb.indexOf('"&state=" + encodeURIComponent(state)'));
@@ -31,7 +34,7 @@ test("facebook oauth URL requests the Page scopes meta-auth requires", () => {
   assert.equal(url.searchParams.get("scope"), FB_REQUIRED_SCOPES.join(","));
 });
 
-test("instagram oauth URL is unchanged", () => {
+test("instagram oauth URL: Instagram Login scopes incl. comment management", () => {
   const expected =
     '        const oauthUrl =\n' +
     '          "https://www.instagram.com/oauth/authorize" +\n' +
@@ -40,9 +43,12 @@ test("instagram oauth URL is unchanged", () => {
     '          `&redirect_uri=${encodeURIComponent(redirectUri)}` +\n' +
     '          "&response_type=code" +\n' +
     '          "&scope=" +\n' +
-    '          encodeURIComponent("instagram_business_basic,instagram_business_manage_messages") +\n' +
+    '          encodeURIComponent("instagram_business_basic,instagram_business_manage_messages,instagram_business_manage_comments") +\n' +
     '          `&state=${encodeURIComponent(state)}`;\n';
-  assert.ok(ig.includes(expected), "instagram URL construction byte-identical");
+  assert.ok(ig.includes(expected), "instagram URL construction byte-identical except the added comment scope");
   assert.doesNotMatch(ig, /pages_/);
+  // Instagram API with Instagram Login only accepts the instagram_business_*
+  // names; the legacy Facebook-Login name would make the dialog fail.
+  assert.doesNotMatch(ig, /"[^"]*\binstagram_manage_comments\b/);
   assert.match(ig, /createSignedState\(\{ platform: "instagram", userId \}\)/);
 });

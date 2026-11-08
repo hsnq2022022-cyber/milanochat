@@ -212,7 +212,7 @@ Deno.serve(async (req: Request) => {
           `&redirect_uri=${encodeURIComponent(redirectUri)}` +
           "&response_type=code" +
           "&scope=" +
-          encodeURIComponent("instagram_business_basic,instagram_business_manage_messages") +
+          encodeURIComponent("instagram_business_basic,instagram_business_manage_messages,instagram_business_manage_comments") +
           `&state=${encodeURIComponent(state)}`;
 
         if (debug) {
@@ -240,7 +240,7 @@ Deno.serve(async (req: Request) => {
           `?client_id=${encodeURIComponent(appId)}` +
           `&redirect_uri=${encodeURIComponent(redirectUri)}` +
           "&scope=" +
-          encodeURIComponent("pages_show_list,pages_messaging,pages_manage_metadata,pages_read_engagement") +
+          encodeURIComponent("pages_show_list,pages_messaging,pages_manage_metadata,pages_read_engagement,pages_manage_engagement") +
           "&state=" + encodeURIComponent(state);
         if (debug) {
           return jsonResponse({ clientId: appId, redirectUri, provider: "facebook", url: oauthUrl });

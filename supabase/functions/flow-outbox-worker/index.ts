@@ -41,6 +41,7 @@ import {sendMultichannelMessage,multichannelPayloadProblem,classifyMultichannelF
 import {mediaEffectGate,classifyMediaFailure,finishOutcome,type MediaFailure,type FinishOutcome}
  from "./mediaPolicy.ts";
 import {runInternalEffects,internalActionsReleased} from "../flow-internal-worker/internalEffects.ts";
+import {executeCommentReply,COMMENT_REPLY_MAX_ATTEMPTS,type CommentClaim} from "./commentReply.ts";
 
 const env=(name:string)=>Deno.env.get(name)??"";
 const json=(body:unknown,status=200)=>new Response(JSON.stringify(body),
@@ -96,8 +97,22 @@ Deno.serve(async req=>{
   .in("effect_kind",["message","question"])
   .order("retry_at",{ascending:true}).limit(OUTBOX_DISPATCH_LIMIT);
  if(retryListError)console.error("[outbox] retry lookup failed",{code:retryListError.code});
+ // FLOW_COMMENT_AUTOMATION_ENABLED (default OFF; 20261029300000): reply_comment
+ // effects (public reply BEFORE the DM). Their own bounded query, so the
+ // queries above stay exactly as before; flow_claim_comment_reply decides
+ // whether a pending / due retry_wait / lease-expired row is claimable.
+ const commentOn=env("FLOW_COMMENT_AUTOMATION_ENABLED")==="true";
+ let replyRows:typeof listed=[];
+ if(commentOn){
+  const {data:rr,error:replyListError}=await sb.from("automation_flow_outbox")
+   .select(OUTBOX_COLUMNS)
+   .eq("effect_kind","reply_comment").in("delivery_status",["pending","retry_wait","leased"])
+   .order("created_at",{ascending:true}).limit(OUTBOX_DISPATCH_LIMIT);
+  if(replyListError)console.error("[outbox] reply lookup failed",{code:replyListError.code});
+  else replyRows=rr??[];
+ }
  const seen=new Set<string>();
- const items=[...(listed??[]),...(retryListError?[]:dueRetries??[])]
+ const items=[...(listed??[]),...(retryListError?[]:dueRetries??[]),...(replyRows??[])]
   .filter(e=>!seen.has(e.id)&&!!seen.add(e.id))
   .sort(compareOutbox);
  // Per-run order (effectOrder.ts): ONE tenant-scoped query per tenant per tick
@@ -122,6 +137,7 @@ Deno.serve(async req=>{
  // Scan more rows than are dispatched: rows still waiting on an operator gate
  // (paused tenant, approval, credit, flags) must not starve newer effects.
  let dispatched=0;
+ let commentReplies=0;
  for(const effect of items??[]){
   if(dispatched>=OUTBOX_DISPATCH_LIMIT)break;
   const report=(key:string)=>{
@@ -143,6 +159,15 @@ Deno.serve(async req=>{
     p_tenant:effect.tenant_id,p_outbox:effect.id,p_reason:reason
    });
    if(skipError)console.error("[outbox] skip failed",{code:skipError.code,id:effect.id});
+   // Cancelled public reply: mirror it into the comment activity (DM skipped).
+   if(!skipError&&skipped===true&&effect.effect_kind==="reply_comment"){
+    const {error:mirrorError}=await sb.from("automation_comment_replies")
+     .update({reply_status:"failed",reply_error_code:"cancelled_"+reason,dm_status:"skipped",
+      dm_updated_at:new Date().toISOString(),updated_at:new Date().toISOString()})
+     .eq("tenant_id",effect.tenant_id).eq("run_id",effect.run_id)
+     .in("reply_status",["pending","uncertain","attempting"]);
+    if(mirrorError)console.error("[outbox] comment mirror failed",{code:mirrorError.code});
+   }
    report(!skipError&&skipped===true?"skipped_"+reason:fallback);
   };
   try{
@@ -227,6 +252,67 @@ Deno.serve(async req=>{
    const expectedPrefix=account.platform==="facebook"?"facebook":account.platform;
    if(!recipientRaw.startsWith(expectedPrefix+":")){await skip("ineligible");continue;}
    const recipient=recipientRaw.slice(expectedPrefix.length+1);
+   // Comment runs (provider event "comment:<id>", 20261029300000) exist only
+   // through flow_begin_comment_run. Flag OFF: held, never sent as a plain DM.
+   const commentRun=String(run.provider_event_id??"").startsWith("comment:");
+   if(commentRun&&!commentOn){report("blocked");continue;}
+   if(effect.effect_kind==="reply_comment"){
+    if(!commentRun||(account.platform!=="instagram"&&account.platform!=="facebook")){
+     report("blocked");continue;
+    }
+    // Own per-tick budget: public replies never consume the DM dispatch slots.
+    if(++commentReplies>OUTBOX_DISPATCH_LIMIT){report("comment_reply_deferred");continue;}
+    let replyToken="";
+    try{replyToken=await decryptAccountToken(String(account.access_token_encrypted??""),fieldKey);}
+    catch{report("blocked");continue;}
+    if(!replyToken){report("blocked");continue;}
+    const outcome=await executeCommentReply({
+     claim:async():Promise<CommentClaim|null>=>{
+      const {data,error}=await sb.rpc("flow_claim_comment_reply",{
+       p_tenant:effect.tenant_id,p_outbox:effect.id,p_lease_seconds:120
+      });
+      if(error){console.error("[outbox] comment claim error",{code:error.code});return null;}
+      const row=Array.isArray(data)?data[0]:data;
+      if(!row||row.outcome!=="claimed")return row?.outcome==="not_claimable"?{outcome:"not_claimable"}:null;
+      return typeof row.claim_token==="string"&&typeof row.comment_id==="string"&&
+       typeof row.reply_text==="string"&&(row.prior_status==="pending"||row.prior_status==="uncertain")&&
+       Number.isInteger(row.attempts)?
+       {outcome:"claimed",token:row.claim_token,commentId:row.comment_id,replyText:row.reply_text,
+        prior:row.prior_status,attempts:row.attempts}:null;
+     },
+     finish:async(token,result,replyId,code,delaySeconds,posted)=>{
+      const {data,error}=await sb.rpc("flow_finish_comment_reply",{
+       p_tenant:effect.tenant_id,p_outbox:effect.id,p_token:token,p_result:result,
+       p_reply_id:replyId,p_error_code:code,p_delay_seconds:delaySeconds,p_posted:posted,
+       p_max_attempts:COMMENT_REPLY_MAX_ATTEMPTS
+      });
+      if(error){console.error("[outbox] comment finish error",{code:error.code});return null;}
+      return typeof data==="string"?data:null;
+     },
+     request:(commentId,text)=>({platform:account.platform as "instagram"|"facebook",token:replyToken,
+      externalId:String(account.external_id??""),commentId,text})
+    });
+    if(outcome==="comment_reply_failed")
+     console.warn("[outbox] public reply failed; DM skipped",{tenantId:effect.tenant_id,outboxId:effect.id});
+    report(outcome);
+    if(outcome==="comment_reply_sent")localStatus.set(effect.id,"settled");
+    continue;
+   }
+   // DM of a comment run: only after the public reply is 'sent' (the reserve
+   // RPC refuses it otherwise); sent as a private reply to the comment.
+   let commentRecipientId:string|undefined;
+   if(commentRun){
+    const {data:cr,error:crError}=await sb.from("automation_comment_replies")
+     .select("tenant_id,run_id,comment_id,reply_status,dm_status")
+     .eq("tenant_id",effect.tenant_id).eq("run_id",effect.run_id).maybeSingle();
+    if(crError){report("blocked");continue;}
+    if(!cr||cr.tenant_id!==effect.tenant_id||cr.run_id!==effect.run_id){await skip("ineligible");continue;}
+    if(cr.reply_status!=="sent"){report("held_comment_reply");continue;}
+    if(cr.dm_status!=="pending"||effect.effect_kind!=="message"||typeof cr.comment_id!=="string"){
+     report("blocked");continue;
+    }
+    commentRecipientId=cr.comment_id;
+   }
    // FLOW_MULTICHANNEL_ENABLED (default OFF): WhatsApp/Facebook effects use the
    // separate multichannelSend.ts senders. OFF: false, every gate and request
    // below is exactly as before. Instagram is never affected.
@@ -420,7 +506,8 @@ Deno.serve(async req=>{
     {platform:account.platform,externalId:String(account.external_id??""),
      token,recipient,text:"",imageUrl,imageHost:base}:
     {platform:account.platform,externalId:String(account.external_id??""),
-     token,recipient,text:messageText,quickReplies,websiteButtons};
+     token,recipient,text:messageText,quickReplies,websiteButtons,
+     ...(commentRecipientId!==undefined?{recipientCommentId:commentRecipientId}:{})};
    if(multichannel){
      const problem=multichannelPayloadProblem(multichannelRequest("validation-only"));
      if(problem){
@@ -566,7 +653,8 @@ Deno.serve(async req=>{
     },
     send:()=>imageUrl===undefined?sendProviderMessage({
      platform:account.platform,externalId:String(account.external_id??""),
-     token,recipient,text:messageText,quickReplies,websiteButtons
+     token,recipient,text:messageText,quickReplies,websiteButtons,
+     ...(commentRecipientId!==undefined?{recipientCommentId:commentRecipientId}:{})
     }):sendProviderMessage({
      platform:account.platform,externalId:String(account.external_id??""),
      token,recipient,text:"",imageUrl,imageHost:base
@@ -592,6 +680,18 @@ Deno.serve(async req=>{
     persistAndBill
    });
    report(media.rejected?"dead_letter_media_rejected":res);
+   if(commentRecipientId!==undefined){
+    // Activity log of the DM (tenant-scoped; only after a sent public reply).
+    const dm=["settled","billing_pending","sent_unconfirmed"].includes(res)?"sent":
+     res==="uncertain"?"failed":null;
+    if(dm){
+     const {error:dmError}=await sb.from("automation_comment_replies")
+      .update({dm_status:dm,dm_updated_at:new Date().toISOString(),updated_at:new Date().toISOString()})
+      .eq("tenant_id",effect.tenant_id).eq("run_id",effect.run_id)
+      .eq("reply_status","sent").eq("dm_status","pending");
+     if(dmError)console.error("[outbox] comment dm status failed",{code:dmError.code});
+    }
+   }
    if(media.failure){
     console.warn("[outbox] image send failed",{id:effect.id,code:media.failure});
     report(media.failure==="media_rejected"?"media_rejected":"media_"+media.failure);

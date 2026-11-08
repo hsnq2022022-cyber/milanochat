@@ -186,9 +186,14 @@ export function buildFacebookRequest(raw:ProviderRequest):BuildResult{
  const image=raw.imageUrl!==undefined;
  const input=image?raw:scrubPlaceholders(raw);
  if(!baseOk(input))return {ok:false,code:"mc_request_invalid"};
+ // Comment automation (FLOW_COMMENT_AUTOMATION_ENABLED): private reply to a
+ // Page comment, recipient {comment_id}. Absent: unchanged body.
+ const privateReply=raw.recipientCommentId!==undefined;
+ if(privateReply&&(image||typeof raw.recipientCommentId!=="string"||
+  !/^[0-9]{1,32}(_[0-9]{1,32})?$/.test(raw.recipientCommentId)))return {ok:false,code:"mc_request_invalid"};
  const envelope=(message:Record<string,unknown>):BuildResult=>({ok:true,request:{url:GRAPH+"/me/messages",
   headers:{"content-type":"application/json",authorization:"Bearer "+input.token},
-  payload:{recipient:{id:input.recipient},messaging_type:"RESPONSE",message}}});
+  payload:{recipient:privateReply?{comment_id:raw.recipientCommentId}:{id:input.recipient},messaging_type:"RESPONSE",message}}});
  if(image){
   const problem=imageProblem(input);
   if(problem)return {ok:false,code:problem};

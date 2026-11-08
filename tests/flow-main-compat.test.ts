@@ -14,8 +14,20 @@ test("golden fixtures were generated from main importer and cover all six scenar
     assert.ok(names.includes(name),name);
   }
 });
+/* Fields added after main (comment triggers). Old documents must load with exactly these defaults, and
+   every other field must stay byte-identical to the main importer output. */
+const ADDED=["commentScope","commentPostId","commentMatchType","publicReplyText"];
 for(const {name,input,expected} of gold.cases){
   test("no import output regression against main: "+name,()=>{
-    assert.deepEqual(JSON.parse(JSON.stringify(importFlow(input))),expected);
+    const actual=JSON.parse(JSON.stringify(importFlow(input)));
+    for(const n of actual.nodes){
+      const d=n.data as Record<string,unknown>;
+      assert.equal(d.commentScope,"all");
+      assert.equal(d.commentPostId,"");
+      assert.equal(d.publicReplyText,"");
+      assert.equal(d.commentMatchType,String(d.keywords||"").trim()?"keyword":"any");
+      for(const k of ADDED)delete d[k];
+    }
+    assert.deepEqual(actual,expected);
   });
 }

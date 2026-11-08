@@ -48,7 +48,7 @@ test("170000 is the newest migration and follows 130000/140000/150000/160000",()
  // 20261029210000_flow_media_effects (requires 190000) and
  // 20261029220000_flow_media_stale_sweep (requires 210000) and
  // 20261029230000_flow_multichannel_support (requires 220000) are newer.
- for(const s of stamps)if(!["20261029170000","20261029180000","20261029190000","20261029200000","20261029210000","20261029220000","20261029230000","20261029240000","20261029250000","20261029260000","20261029270000","20261029280000","20261029290000"].includes(s))assert.ok(s<"20261029170000",s);
+ for(const s of stamps)if(!["20261029170000","20261029180000","20261029190000","20261029200000","20261029210000","20261029220000","20261029230000","20261029240000","20261029250000","20261029260000","20261029270000","20261029280000","20261029290000","20261029300000"].includes(s))assert.ok(s<"20261029170000",s);
  for(const f of [CLAIM,LC,AI,TK,CP])assert.ok(existsSync(f),f);
 });
 test("migration: bounded, additive, service_role only, never touches flow_claim_inbound or billing",()=>{
@@ -188,7 +188,21 @@ test("TypeScript: only the durable ingress calls the new function; V2 call site 
     "          return json({\n            ok: true,\n"],
    // S9: wa_status additive verified flag
    ["            phoneId,\n            // S9: additive; false until an operator verified the binding,\n            // null when the tenant has no binding.\n            verified: phoneId ? await readBindingVerified(sb, phoneId, tenant.id) : null,\n",
-    "            phoneId,\n            // S9: additive; false until an operator verified the binding.\n            verified: phoneId ? await readBindingVerified(sb, phoneId, tenant.id) : false,\n"]
+    "            phoneId,\n            // S9: additive; false until an operator verified the binding.\n            verified: phoneId ? await readBindingVerified(sb, phoneId, tenant.id) : false,\n"],
+   // Comment automation (20261029300000; FLOW_COMMENT_AUTOMATION_ENABLED, default
+   // OFF): exactly these hunks. The logic lives in commentIngress.ts /
+   // commentActivity.ts (tests/flow-comment-automation.test.ts,
+   // tests/flow-comment-replies-sql.test.mjs).
+   ["import { chargeWidgetReply } from \"./widgetCredit.ts\";\n// Comment automation (FLOW_COMMENT_AUTOMATION_ENABLED, default OFF) and its Inbox read contract.\nimport { ingestSignedComments, commentAutomationEnabled } from \"./commentIngress.ts\";\nimport { readCommentActivity } from \"./commentActivity.ts\";\nimport { commentActivityRules } from \"./abuseGuards.ts\";\n",
+    "import { chargeWidgetReply } from \"./widgetCredit.ts\";\n"],
+   // signed comment changes, only while the flag is on (after the message loop)
+   ["              );\n            }\n          }\n\n          // FLOW_COMMENT_AUTOMATION_ENABLED (default OFF; commentIngress.ts):\n          // signed Instagram \"comments\" / Page \"feed\" comment changes start a\n          // comment run (public reply first, then the DM). OFF: never parsed.\n          if (commentAutomationEnabled()) {\n            await ingestSignedComments(sb, body.object, entry, {\n              env, encrypt: encryptField,\n            });\n          }\n        }\n",
+    "              );\n            }\n          }\n        }\n"],
+   // claim action list + the read-only, rate-limited comment_activity action
+   ["      \"qa_test\",\n      \"comment_activity\",\n    ];\n",
+    "      \"qa_test\",\n    ];\n"],
+   ["        // Inbox comment activity (commentActivity.ts): read-only, scoped to\n        // the claim-verified tenant, rate limited, at most 100 per page.\n        case \"comment_activity\": {\n          const caLimited = await rateGate({\n            rpc: sb, headers: req.headers, salt: env(\"RATE_LIMIT_IP_SALT\"), cors: CORS,\n            rules: (ipHash) => commentActivityRules(ipHash, String(tenant.id)),\n          });\n          if (caLimited) return caLimited;\n          const activity = await readCommentActivity(sb, String(tenant.id),\n            { limit: body.limit, cursor: body.cursor }, decryptField);\n          if (!activity.ok) {\n            return json({ ok: false, error: activity.error }, activity.status);\n          }\n          return json(activity);\n        }\n\n        case \"bind_number\": {\n",
+    "        case \"bind_number\": {\n"]
   ];
   let cur=src(IDX);
   if(cur!==head.stdout)for(const [now,was] of allowed){
@@ -198,7 +212,7 @@ test("TypeScript: only the durable ingress calls the new function; V2 call site 
    if(head.stdout.includes(now))continue;
    cur=cur.replace(now,()=>was);
   }
-  assert.equal(cur,head.stdout,"milan-api/index.ts differs from HEAD only by the authorized multichannel / page-hardening / security hunks");
+  assert.equal(cur,head.stdout,"milan-api/index.ts differs from HEAD only by the authorized multichannel / page-hardening / security / comment-automation hunks");
  }
  assert.match(src(CHECKS),new RegExp(`cf\\.h IS DISTINCT FROM '${md5(body(MIG,"claim"))}'`),"170000 body hash embedded in checks");
  assert.match(src(CHECKS),new RegExp(`v2\\.h='${md5(body(CLAIM,"claim"))}'`),"220000 body hash embedded in checks");

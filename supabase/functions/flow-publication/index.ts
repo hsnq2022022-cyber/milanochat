@@ -14,6 +14,7 @@ import {evaluateFlowReadiness} from "./readiness.ts";
 import {simpleMessageFromDocument} from "../milan-api/flowPrepareMessage.ts";
 import {supportedDurableDocument,durableCandidateKind,durableRuntimeNeeds,durableNeedsInternalActions,
  type DurableCandidateKind} from "../milan-api/flowDurableIngress.ts";
+import {documentCommentTriggerProblem,commentFlowPlan} from "../milan-api/commentTrigger.ts";
 
 const env=(k:string)=>Deno.env.get(k)??"";
 // Only the existing production GitHub Pages origin. Never reflect Origin.
@@ -259,6 +260,10 @@ export async function handleFlowPublication(req:Request,
     return error("Account is disabled",403);
    const doc=preparePublishedDocument(request.document,scope.platform);
    if(!doc)return error("Flow document is invalid or targets another channel",422);
+   // Comment trigger config (scope/post id/match type/keywords/public reply):
+   // server-side validation. Other triggers: no new requirement.
+   if(documentCommentTriggerProblem(doc)!==null)
+    return error("Comment trigger configuration is invalid",422);
    const {data,error:dbError}=await client.rpc("flow_publish_revision",{
     p_tenant_id:scope.tenantId,p_account_id:scope.accountId,
     p_platform:scope.platform,p_flow_key:flowKey,p_actor_id:scope.actorId,
@@ -365,6 +370,29 @@ export async function handleFlowPublication(req:Request,
     (!needsInternal||env("FLOW_INTERNAL_ACTIONS_ENABLED")==="true")&&
     (!needsMedia||mediaAllowed)&&
     (!needs.scheduler||env("FLOW_DURABLE_SCHEDULER_ENABLED")==="true");
+   // Comment automation (20261029300000; FLOW_COMMENT_AUTOMATION_ENABLED,
+   // default OFF): the single supported comment graph (commentTrigger.ts
+   // commentFlowPlan) under the same operator gates as the durable path.
+   // OFF: false, so activation is decided exactly as before.
+   const commentFlow=!durableGraph&&production&&scope.platform==="instagram"&&
+    env("FLOW_COMMENT_AUTOMATION_ENABLED")==="true"&&
+    commentFlowPlan(rawDocument,scope.platform)!==null&&
+    env("FLOW_DURABLE_ACTIVATION_READY")==="true"&&
+    env("FLOW_DURABLE_INGRESS_ENABLED")==="true"&&
+    env("FLOW_DURABLE_CANARY_ACCOUNT_ID")===scope.accountId&&
+    env("FLOW_WORKERS_OPERATOR_RELEASE")==="production-canary-approved"&&
+    env("FLOW_OUTBOX_SEND_ENABLED")==="true"&&
+    env("FLOW_ATOMIC_CONSUME_READY")==="true"&&
+    env("FIELD_ENCRYPTION_KEY").length>0;
+   if(commentFlow){
+    const {data:enabled,error:dbError}=await client.rpc("flow_activate_revision",{
+     p_tenant_id:scope.tenantId,p_account_id:scope.accountId,
+     p_platform:scope.platform,p_flow_key:flowKey,p_revision:rev,p_actor_id:scope.actorId
+    });
+    if(dbError)return error("Activation unavailable",503);
+    if(enabled!==true)return error("Global/tenant switch is OFF",423);
+    return respond({ok:true,active:true,revision:rev});
+   }
    if(!durable){
     if(simpleMessageFromDocument(publication.document,scope.platform)===null)
      return error("This flow uses unsupported runtime features",422);
