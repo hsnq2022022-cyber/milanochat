@@ -14,6 +14,7 @@
 
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { consumeOAuthState, oauthStateSecret } from "../_shared/oauthState.ts";
+import { facebookDb, linkFacebookPages } from "./facebook.ts";
 
 const IG_TOKEN_URL = "https://api.instagram.com/oauth/access_token";
 const IG_GRAPH_HOST = "https://graph.instagram.com";
@@ -74,6 +75,12 @@ Deno.serve(async (req: Request) => {
       INSTAGRAM_APP_ID: Deno.env.get("INSTAGRAM_APP_ID") ?? null,
       USE_INSTAGRAM_DIRECT_LOGIN: Deno.env.get("USE_INSTAGRAM_DIRECT_LOGIN") ?? null,
     }, null, 2), { headers: { "Content-Type": "application/json" } });
+  }
+
+  // Facebook Login (Pages / Messenger): state issued by channels with
+  // platform "facebook"; see handleFacebookCallback below.
+  if (req.method === "GET" && url.pathname.endsWith("/facebook/callback")) {
+    return await handleFacebookCallback(url);
   }
 
   if (req.method !== "GET" || !url.pathname.endsWith("/instagram/callback")) {
@@ -250,3 +257,79 @@ Deno.serve(async (req: Request) => {
     return fail(e instanceof Error ? e.message.slice(0, 120) : "unknown");
   }
 });
+
+// ─── GET /meta-auth/facebook/callback?code=...&state=... ───
+// Secrets: META_APP_ID, META_APP_SECRET, FIELD_ENCRYPTION_KEY,
+//          OAUTH_STATE_SECRET, META_REDIRECT_URI (exactly the value channels
+//          sends to the dialog; default .../meta-auth/facebook/callback).
+// The state is verified and its nonce claimed (platform "facebook") BEFORE
+// any DB write or Graph call; the tenant comes ONLY from the verified state.
+async function handleFacebookCallback(url: URL): Promise<Response> {
+  try {
+    const supaUrl = Deno.env.get("SUPABASE_URL");
+    const srvKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+    const appId = Deno.env.get("META_APP_ID");
+    const appSecret = Deno.env.get("META_APP_SECRET");
+
+    if (!supaUrl || !srvKey || !appId || !appSecret) {
+      console.error("[meta-auth] facebook: missing configuration");
+      return fail("config_missing");
+    }
+
+    const metaError = url.searchParams.get("error");
+    if (metaError) return fail(metaError === "access_denied" ? "user_cancelled" : "oauth_denied");
+
+    const code = (url.searchParams.get("code") ?? "").replace(/#_$/, "");
+    const state = url.searchParams.get("state") ?? "";
+    if (!code || !state) return fail("missing_params");
+
+    const sb = createClient(supaUrl, srvKey, {
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+
+    const st = await consumeOAuthState({
+      secret: oauthStateSecret((k) => Deno.env.get(k)),
+      state,
+      expectedPlatform: "facebook",
+      nowSec: Math.floor(Date.now() / 1000),
+      claimNonce: async (c) => {
+        const { data: claimed, error: claimErr } = await sb
+          .from("meta_oauth_states")
+          .update({ consumed: true })
+          .eq("id", c.nonce)
+          .eq("consumed", false)
+          .eq("user_id", c.userId)
+          .eq("tenant_id", c.tenantId)
+          .eq("platform", c.platform)
+          .gt("expires_at", new Date().toISOString())
+          .select("id")
+          .maybeSingle();
+        if (claimErr) return "error";
+        return claimed ? "claimed" : "not_found";
+      },
+    });
+    if (!st.ok) {
+      return fail(st.reason === "config_missing" ? "config_missing" : `oauth_state:${st.reason}`);
+    }
+
+    const fbTenantId: string = st.tenantId;
+    const redirectUri = (Deno.env.get("META_REDIRECT_URI") ?? "").trim().replace(/\/+$/, "") ||
+      `${supaUrl}/functions/v1/meta-auth/facebook/callback`;
+
+    const r = await linkFacebookPages(code, {
+      fetch: (u, init) => fetch(u, init),
+      appId,
+      appSecret,
+      redirectUri,
+      tenantId: fbTenantId,
+      encryptField,
+      db: facebookDb(sb, fbTenantId),
+      nowMs: () => Date.now(),
+    });
+    if (!r.ok) return fail(r.code);
+    return back({ channel_connected: "facebook", name: r.name, count: String(r.saved) });
+  } catch (e) {
+    console.error("[meta-auth] facebook", e instanceof Error ? e.name : "unknown");
+    return fail("unknown");
+  }
+}

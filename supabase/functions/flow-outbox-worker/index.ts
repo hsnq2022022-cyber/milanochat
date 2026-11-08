@@ -24,7 +24,9 @@ import {answerWithVerifiedKnowledgeOutcome,knowledgeQuestionValid,openAIKnowledg
 import {aiStepEnabled,lastInboundQuestion,generateAiStepAnswer,liveBotKnowledgeDependencies}
  from "./aiStep.ts";
 import {resolveKnowledgeEffect,recoverKnowledgeCharge,AI_MAX_ATTEMPTS,AI_CLAIM_LEASE_SECONDS,
- AI_ANSWER_MISSING_CODE,BILLING_BLOCKED_ANSWER_MISSING,type AiClaim} from "./knowledgeRetry.ts";
+ AI_ANSWER_MISSING_CODE,BILLING_BLOCKED_ANSWER_MISSING,type AiClaim,type AiEscalationReason}
+ from "./knowledgeRetry.ts";
+import {escalateAiFailure} from "./aiEscalation.ts";
 import {executeOnce} from "./executeOnce.ts";
 import {canDispatchOutbox} from "./productionGate.ts";
 import {confirmedOutboxMid,matchesPreviouslyPersistedReply} from "./confirmedSettlement.ts";
@@ -374,7 +376,20 @@ Deno.serve(async req=>{
        });
        if(error)console.error("[outbox] ai finish error",{code:error.code});
        return !error&&typeof data==="string"?data:null;
-      }
+      },
+      // I4 (aiEscalation.ts): FLOW_AI_STEP_ENABLED only. An AI step that ends
+      // without an answer is escalated (unresolved question + 'ai_handoff'),
+      // idempotently and tenant-scoped, before it is finished. OFF: absent,
+      // so knowledge_ai behaves exactly as before. No credit is touched.
+      ...(aiStep?{escalate:async(reason:AiEscalationReason)=>{
+       const ok=await escalateAiFailure(sb,{tenantId:String(tenant.id),
+        conversationId:String(conversation.id),accountId:String(account.id),
+        since:String(effect.created_at),question,nowMs:Date.now()},
+        plain=>encryptMessageBody(plain,fieldKey));
+       if(ok)console.info("[outbox] ai step escalated",{tenantId:effect.tenant_id,outboxId:effect.id,reason});
+       else console.error("[outbox] ai step escalation failed",{tenantId:effect.tenant_id,outboxId:effect.id,reason});
+       return ok;
+      }}:{})
      });
      if(resolved.status!=="send"){
       if(resolved.key!=="ai_retry_scheduled"&&resolved.key!=="ai_busy"&&resolved.key!=="ai_not_due")

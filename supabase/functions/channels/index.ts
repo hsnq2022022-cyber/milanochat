@@ -239,6 +239,8 @@ Deno.serve(async (req: Request) => {
           "https://www.facebook.com/v21.0/dialog/oauth" +
           `?client_id=${encodeURIComponent(appId)}` +
           `&redirect_uri=${encodeURIComponent(redirectUri)}` +
+          "&scope=" +
+          encodeURIComponent("pages_show_list,pages_messaging,pages_manage_metadata,pages_read_engagement") +
           "&state=" + encodeURIComponent(state);
         if (debug) {
           return jsonResponse({ clientId: appId, redirectUri, provider: "facebook", url: oauthUrl });

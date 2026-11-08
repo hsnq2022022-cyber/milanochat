@@ -11,6 +11,10 @@
  *  - transient     -> retry_wait + retry_at (next attempt time) with bounded
  *                     exponential backoff; after AI_MAX_ATTEMPTS the effect is
  *                     dead_letter / cancel_reason 'ai_retries_exhausted'.
+ * I4: with the optional `escalate` dependency (FLOW_AI_STEP_ENABLED only),
+ * no_knowledge, ai_unavailable and ai_retries_exhausted are escalated to a
+ * human (unresolved question + handoff, aiEscalation.ts) BEFORE the terminal
+ * transition; without it the behaviour above is unchanged.
  * The atomic claim / store / finish transitions live in SQL
  * (20261029140000_flow_outbox_ai_retry.sql); this module only decides.
  * Provider sending stays one-shot through flow_reserve_outbox_delivery.
@@ -87,8 +91,32 @@ export type KnowledgeEffectDeps={
  store(token:string,text:string):Promise<boolean>;
  /** Terminal / backoff transition under the claim token (flow_finish_outbox_ai). */
  finish(token:string,decision:Exclude<AiDecision,{action:"send"}>):Promise<string|null>;
+ /**
+  * I4 (optional; the worker passes it only while FLOW_AI_STEP_ENABLED is on).
+  * Idempotent human escalation (unresolved question + handoff,
+  * aiEscalation.ts) for an AI attempt that ends without an answer. Called
+  * BEFORE finish, under the live claim. true = escalation in place.
+  * Absent: behaviour is exactly the previous one.
+  */
+ escalate?(reason:AiEscalationReason):Promise<boolean>;
  random?:()=>number;
 };
+
+export type AiEscalationReason="no_knowledge"|"ai_unavailable"|"ai_retries_exhausted";
+/**
+ * Terminal outcomes that leave the customer without an answer. "ineligible"
+ * (scope precondition: takeover, credits, agent off, tenant mismatch) and a
+ * scheduled retry are NOT escalated.
+ */
+export function aiEscalationReason(decision:Exclude<AiDecision,{action:"send"}>):AiEscalationReason|null{
+ if(decision.result==="no_knowledge")return "no_knowledge";
+ if(decision.result==="permanent")return "ai_unavailable";
+ if(decision.result==="retry"&&decision.exhausted)return "ai_retries_exhausted";
+ return null;
+}
+async function tryEscalate(d:KnowledgeEffectDeps,reason:AiEscalationReason):Promise<boolean>{
+ try{return (await d.escalate!(reason))===true;}catch{return false;}
+}
 export type KnowledgeEffectResult={status:"send";text:string}|{status:"report";key:string};
 
 /**
@@ -150,7 +178,13 @@ export async function resolveKnowledgeEffect(d:KnowledgeEffectDeps):Promise<Know
   if(!text||text.length>4000)return {status:"report",key:"ai_cached_unreadable"};
   return {status:"send",text};
  }
- if(claim.outcome==="exhausted")return {status:"report",key:"dead_letter_ai_retries_exhausted"};
+ if(claim.outcome==="exhausted"){
+  // Budget used up by abandoned attempts (SQL already moved the row to
+  // dead_letter). Last, idempotent chance to escalate (I4).
+  if(d.escalate&&!await tryEscalate(d,"ai_retries_exhausted"))
+   return {status:"report",key:"dead_letter_ai_escalation_failed"};
+  return {status:"report",key:"dead_letter_ai_retries_exhausted"};
+ }
  if(claim.outcome!=="claimed")return {status:"report",key:"ai_"+claim.outcome};
  let outcome:KnowledgeOutcome;
  try{outcome=await d.generate();}
@@ -163,6 +197,12 @@ export async function resolveKnowledgeEffect(d:KnowledgeEffectDeps):Promise<Know
   // claim lease expires and a later tick re-claims (counted, bounded).
   return stored?{status:"send",text:decision.text}:{status:"report",key:"ai_store_failed"};
  }
+ // I4: escalate BEFORE the terminal transition, under the live claim. On
+ // failure the effect is NOT finished: the claim lease expires and a later
+ // tick re-claims (counted, bounded by AI_MAX_ATTEMPTS; the escalation is
+ // idempotent, so a retry never duplicates the question or the handoff).
+ const reason=d.escalate?aiEscalationReason(decision):null;
+ if(reason&&!await tryEscalate(d,reason))return {status:"report",key:"ai_escalation_failed"};
  let next:string|null=null;
  try{next=await d.finish(claim.token,decision);}catch{next=null;}
  if(!next)return {status:"report",key:"ai_finish_failed"};
