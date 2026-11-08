@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { ChevronDown, Wallet, Bell, ShieldCheck, MessageSquare, HelpCircle, Loader2 } from "lucide-react";
+import { ArrowRight, ChevronDown, Wallet, Bell, ShieldCheck, MessageSquare, HelpCircle, Loader2 } from "lucide-react";
 import { getSupabase } from "../lib/supabase";
 import { apiAuthFetch } from "../lib/api";
 import DeliveryReviewPanel from "./DeliveryReviewPanel";
@@ -109,6 +109,9 @@ export default function Settings() {
   return (
     <div className="min-h-screen bg-night text-bone font-body" dir="rtl">
       <main className="max-w-md mx-auto px-4 pt-5 pb-[calc(6rem+env(safe-area-inset-bottom))]" data-testid="profile-page">
+        <a href="#/dashboard" data-testid="settings-back" className="md:hidden -mx-2 mb-2 inline-flex min-h-[44px] items-center gap-2 rounded-xl px-2 text-sm font-bold text-verde focus-visible:outline focus-visible:outline-2 focus-visible:outline-verde">
+          <ArrowRight className="w-5 h-5" aria-hidden="true" />لوحة التحكم
+        </a>
         <h1 className="font-display font-bold text-2xl text-bone mb-1">الإعدادات</h1>
         <p className="text-sm font-normal text-sage mb-4">بيانات حسابك وإدارة الرصيد والإشعارات.</p>
 

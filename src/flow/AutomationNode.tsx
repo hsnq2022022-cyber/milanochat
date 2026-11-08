@@ -41,7 +41,8 @@ export default function AutomationNode({id,data,selected}:NodeProps<FlowNodeType
     ?{right:-1,top:data.kind==="message"&&data.options.some(o=>!o.action||o.action==="step")?36:"50%"}
     :{left:data.kind==="message"&&data.options.some(o=>!o.action||o.action==="step")?14:"50%",bottom:-13};
   const Icon=SKIN_ICON[data.kind];
-  const color=PLATFORM_COLOR[platform]||SKIN_COLOR[data.kind];
+  // Per-kind colour for every node; only the Trigger takes its platform colour.
+  const color=data.kind==="trigger"?(PLATFORM_COLOR[platform]||SKIN_COLOR.trigger):SKIN_COLOR[data.kind];
   const hasOptions=allPorts.length>0;
   const label=data.kind==="trigger"?LABELS.trigger:(data.title||LABELS[data.kind]);
   const message=["message","question"].includes(data.kind);

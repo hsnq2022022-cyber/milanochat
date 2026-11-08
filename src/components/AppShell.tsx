@@ -10,6 +10,11 @@ export const ROUTE_SYNC_EVENT = "milano:route-sync";
 /* غلاف الصفحات المصادَق عليها: Sidebar على سطح المكتب وBottomNav على الجوال.
    لا يظهر أي تنقل بدون جلسة (شاشة الدخول والصفحات العامة تبقى كما هي).
    hideBottomNav: للمحرر الكامل الشاشة (التدفقات) كي لا يغطي BottomNav لوحاته السفلية. */
+/* مؤقت: BottomNav مخفي على الجوال حتى إعادة تصميم التنقل بعد مراجعة Meta
+   (لوحة التحكم فيها تبويبات علوية، والإعدادات/التدفقات/الودجات تُفتح من روابط الترويسات).
+   اجعلها true لإعادة تفعيله دون تغيير آخر. */
+export const SHOW_BOTTOM_NAV = false;
+
 export default function AppShell({ children, hideBottomNav = false, padBottom = false }: {
   children: ReactNode; hideBottomNav?: boolean; padBottom?: boolean;
 }) {
@@ -42,7 +47,7 @@ export default function AppShell({ children, hideBottomNav = false, padBottom = 
     <div className="flex min-h-screen bg-[#061A14]" dir="rtl" data-testid="app-shell">
       <Sidebar active={active} />
       <div className={`flex-1 min-w-0 ${padBottom ? "pb-[calc(5rem+env(safe-area-inset-bottom))] md:pb-0" : ""}`}>{children}</div>
-      {!hideBottomNav && <BottomNav active={active} />}
+      {SHOW_BOTTOM_NAV && !hideBottomNav && <BottomNav active={active} />}
     </div>
   );
 }

@@ -1286,6 +1286,9 @@ export default function Dashboard() {
               <IconCard className="w-4 h-4" />
               <span className="hidden sm:inline">اشحن الرصيد</span>
             </button>
+            <a href="#/settings" data-testid="dashboard-settings-link" aria-label="الإعدادات" title="الإعدادات" className="md:hidden inline-flex items-center justify-center w-11 h-11 rounded-xl text-sage hover:text-verde hover:bg-moss transition-colors duration-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-verde">
+              <IconSettings className="w-5 h-5" aria-hidden="true" />
+            </a>
             <button onClick={logout} title="خروج" className="p-2.5 rounded-xl text-sage hover:text-oro hover:bg-moss transition-all duration-300">
               <IconLogout className="w-5 h-5" />
             </button>

@@ -830,6 +830,16 @@ test("flow cards: colour and data-channel follow the live trigger channel, with 
  expect(ms).toBe("rgb(79, 195, 247)");
 });
 
+test("flow nodes: each kind keeps its own colour; only the trigger takes the platform colour",async({page})=>{
+ await page.addInitScript((lib)=>{localStorage.setItem("social_flow_library_v1",JSON.stringify(lib));},{activeFlowId:"a",flows:[
+  {id:"a",doc:seedDoc("إنستغرام","instagram")}]});
+ await page.goto("/milanochat/#/flows");
+ const c=(kind:string)=>page.locator(`.fs-node[data-kind="${kind}"]`).first().evaluate(el=>(el as HTMLElement).style.getPropertyValue("--c").toLowerCase());
+ await expect(page.locator('.fs-node[data-kind="message"]').first()).toBeVisible();
+ expect(await c("trigger")).toBe("#e1306c");
+ expect(await c("message")).toBe("#a78bfa");
+});
+
 test("flow cards: the active card reflects the live document after edits, not a stale snapshot",async({page})=>{
  await page.goto("/milanochat/#/flows");
  await page.getByTestId("flow-switcher").click();

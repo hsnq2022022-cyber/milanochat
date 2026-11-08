@@ -52,7 +52,7 @@ test.describe("desktop 1280", () => {
     await page.goto("/milanochat/#/dashboard");
     const sb = page.getByTestId("sidebar");
     await expect(sb).toBeVisible();
-    await expect(page.getByTestId("bottom-nav")).toBeHidden();
+    await expect(page.getByTestId("bottom-nav")).toHaveCount(0);
     for (let i = 0; i < 5; i++) {
       await expect(sb.getByTestId(`sidebar-${IDS[i]}`)).toHaveText(LABELS[i]);
     }
@@ -108,28 +108,28 @@ test.describe("desktop 1280", () => {
 test.describe("mobile 390", () => {
   test.use({ viewport: { width: 390, height: 844 } });
 
-  test("bottom nav shows the same 5 items, sidebar hidden, 44px targets, no overflow", async ({ page }) => {
+  test("no bottom nav and no sidebar on mobile (temporary); settings and flows stay reachable, no overflow", async ({ page }) => {
     await setup(page, { flags: { [`milano.onboarding.v1:${TENANT}`]: "skipped" } });
     await page.goto("/milanochat/#/dashboard");
-    const nav = page.getByTestId("bottom-nav");
-    await expect(nav).toBeVisible();
+    await expect(page.getByTestId("dashboard-tabs")).toBeVisible();
+    await expect(page.getByTestId("bottom-nav")).toHaveCount(0);
     await expect(page.getByTestId("sidebar")).toBeHidden();
-    for (let i = 0; i < 5; i++) {
-      const a = nav.getByTestId(`bottom-nav-${IDS[i]}`);
-      await expect(a).toHaveText(LABELS[i]);
-      const b = (await a.boundingBox())!;
-      expect(b.height).toBeGreaterThanOrEqual(44);
-      expect(b.width).toBeGreaterThanOrEqual(44);
-    }
-    await expect(nav.getByTestId("bottom-nav-home")).toHaveAttribute("aria-current", "page");
-    await nav.getByTestId("bottom-nav-channels").click();
-    await expect(nav.getByTestId("bottom-nav-channels")).toHaveAttribute("aria-current", "page");
-    await nav.getByTestId("bottom-nav-inbox").click();
-    await expect(nav.getByTestId("bottom-nav-inbox")).toHaveAttribute("aria-current", "page");
-    await nav.getByTestId("bottom-nav-flows").click();
-    await expect(page).toHaveURL(/#\/flows/);
-    await expect(page.getByTestId("bottom-nav")).toHaveCount(0); // full-screen editor: no bottom nav
+    const gear = page.getByTestId("dashboard-settings-link");
+    const gb = (await gear.boundingBox())!;
+    expect(gb.height).toBeGreaterThanOrEqual(44);
+    expect(gb.width).toBeGreaterThanOrEqual(44);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await gear.click();
+    await expect(page.getByTestId("profile-page")).toBeVisible();
+    await expect(page.getByTestId("bottom-nav")).toHaveCount(0);
+    await page.getByTestId("settings-back").click();
+    await expect(page).toHaveURL(/#\/dashboard/);
+    await expect(page.getByTestId("dashboard-tabs")).toBeVisible();
+    await page.getByRole("link", { name: "التدفقات" }).click();
+    await expect(page).toHaveURL(/#\/flows/);
+    await expect(page.getByTestId("bottom-nav")).toHaveCount(0);
+    await page.getByRole("link", { name: "الرجوع إلى لوحة التحكم" }).click();
+    await expect(page).toHaveURL(/#\/dashboard/);
   });
 });
 

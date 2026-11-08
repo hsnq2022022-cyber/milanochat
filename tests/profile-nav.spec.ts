@@ -30,23 +30,22 @@ async function setup(page: Page) {
   });
 }
 
-test("dashboard bottom nav has flows + settings and settings page shows email/plan/logout", async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 844 }); // BottomNav is mobile-only (md:hidden)
+test("mobile dashboard has no bottom nav; header links reach flows + settings; settings page shows email/plan/logout", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
   await setup(page);
   await page.goto("/milanochat/#/dashboard");
-  const nav = page.getByTestId("bottom-nav");
-  await expect(nav).toBeVisible();
-  await expect(nav.getByTestId("bottom-nav-flows")).toHaveText("التدفقات");
-  await expect(nav.getByTestId("bottom-nav-flows")).toHaveAttribute("href", "#/flows");
-  await expect(nav.getByTestId("bottom-nav-settings")).toHaveText("الإعدادات");
-  await nav.getByTestId("bottom-nav-settings").click();
+  await expect(page.getByTestId("dashboard-tabs")).toBeVisible();
+  await expect(page.getByTestId("bottom-nav")).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "التدفقات" })).toHaveAttribute("href", "#/flows");
+  await expect(page.getByTestId("dashboard-settings-link")).toHaveAttribute("href", "#/settings");
+  await page.getByTestId("dashboard-settings-link").click();
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("الإعدادات");
   await expect(page.getByTestId("profile-page")).toBeVisible();
   await expect(page.getByTestId("profile-email")).toHaveText("t@example.test");
   await expect(page.getByTestId("settings-store-name")).toHaveText("متجر تجريبي");
   await expect(page.getByTestId("profile-plan")).toHaveText("—");
   await expect(page.getByTestId("profile-logout")).toHaveText("تسجيل خروج");
-  await page.getByTestId("bottom-nav-home").click();
+  await page.getByTestId("settings-back").click();
   await expect(page).toHaveURL(/#\/dashboard/);
 });
 

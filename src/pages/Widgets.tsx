@@ -3,6 +3,7 @@
 // ═══════════════════════════════════════════════════════════════════════════════
 
 import { useCallback, useEffect, useState } from "react";
+import { ArrowRight } from "lucide-react";
 import { apiAuthFetch } from "../lib/api";
 import { getSupabase } from "../lib/supabase";
 import type { Widget, WidgetSettings } from "../types/widget";
@@ -161,6 +162,9 @@ return (
       {/* Header */}
       <header className="bg-pine/50 border-b border-verde/10">
         <div className="max-w-7xl mx-auto px-6 py-8">
+          <a href="#/settings" data-testid="widgets-back" className="md:hidden -mx-2 mb-2 inline-flex min-h-[44px] items-center gap-2 rounded-xl px-2 text-sm font-bold text-verde focus-visible:outline focus-visible:outline-2 focus-visible:outline-verde">
+            <ArrowRight className="w-5 h-5" aria-hidden="true" />الإعدادات
+          </a>
           <div className="flex items-center justify-between mb-6">
             <div>
               <h1 className="font-display font-bold text-3xl text-bone mb-2">الودجات</h1>
