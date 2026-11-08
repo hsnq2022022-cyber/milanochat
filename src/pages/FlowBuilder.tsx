@@ -358,6 +358,7 @@ function Editor(){
           onConnect={c=>store().connect(c)}
           isValidConnection={validConnection}
           edgesReconnectable
+          connectionRadius={40}
           reconnectRadius={16}
           onReconnectStart={()=>{reconnectOk.current=false;justReconnected.current=true;}}
           onReconnect={reconnect}

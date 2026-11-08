@@ -22,6 +22,13 @@ export const SKIN_COLOR: Record<Kind,string> = {
   request:"#818CF8",   // indigo (not in the mockup; kept distinct from question blue)
 };
 
+/** Per-platform accent, applied to every node of a flow based on its trigger. */
+export const PLATFORM_COLOR: Record<string,string> = {
+  instagram:"#E1306C",
+  messenger:"#38A0FF",
+  whatsapp:"#3DD189",
+};
+
 export const SKIN_ICON: Record<Kind,typeof Rocket> = {
   trigger:Rocket,message:MessageSquare,question:HelpCircle,condition:GitBranch,delay:Clock3,
   action:Zap,randomizer:Shuffle,goto:CornerDownRight,request:Globe,end:Flag,

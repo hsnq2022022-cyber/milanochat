@@ -6,7 +6,7 @@ import { Plus, AlertTriangle } from "lucide-react";
 import { LABELS, PLATFORM_LABELS, TRIGGER_OPTIONS, outputs } from "./model";
 import type { FlowNode as FlowNodeType } from "./model";
 import { useAddStepMenu } from "./addMenu";
-import { SKIN_COLOR, SKIN_ICON, useNodeIssues } from "./skin";
+import { PLATFORM_COLOR, SKIN_COLOR, SKIN_ICON, useNodeIssues } from "./skin";
 
 export default function AutomationNode({id,data,selected}:NodeProps<FlowNodeType>){
   const updateInternals=useUpdateNodeInternals();
@@ -19,14 +19,21 @@ export default function AutomationNode({id,data,selected}:NodeProps<FlowNodeType
     if(!target)return "";
     return target.title||(target.kind?LABELS[target.kind]:"")||"";
   });
+  const platform=useStore(s=>{
+    for(const n of s.nodeLookup.values()){
+      const d=n.data as {kind?:string;platform?:string};
+      if(d.kind==="trigger")return d.platform||"";
+    }
+    return "";
+  });
   const ports=outputs({id,position:{x:0,y:0},type:"flowNode",data});
-  const allPorts=data.kind==="message"?[{id:"next",label:"التالي"},...data.options]:
+  const allPorts=data.kind==="message"?data.options:
     data.kind==="question"&&data.inputMode==="buttons"?data.options:ports;
   const handleSignature=data.kind+":"+data.inputMode+":"+ports.map(p=>p.id).join(":");
   useEffect(()=>{updateInternals(id);},[id,handleSignature,updateInternals]);
 
   const Icon=SKIN_ICON[data.kind];
-  const color=SKIN_COLOR[data.kind];
+  const color=PLATFORM_COLOR[platform]||SKIN_COLOR[data.kind];
   const hasOptions=allPorts.length>0;
   const label=data.kind==="trigger"?LABELS.trigger:(data.title||LABELS[data.kind]);
   const message=["message","question"].includes(data.kind);
@@ -91,10 +98,10 @@ export default function AutomationNode({id,data,selected}:NodeProps<FlowNodeType
       <Handle id="valid" type="source" position={Position.Bottom}
         aria-label="مخرج التالي بعد جمع البيانات"
         className="fs-port fs-port-out"
-        style={{left:"50%",bottom:-9}}/>
+        style={{left:"50%",bottom:-13}}/>
       {/* Retain legacy connections by keeping their internal port without showing confusing buttons. */}
       <Handle id="invalid" type="source" position={Position.Bottom}
-        className="!invisible !pointer-events-none" style={{left:"50%",bottom:-9}}/>
+        className="!invisible !pointer-events-none" style={{left:"50%",bottom:-13}}/>
     </div>}
     {hasOptions&&!(data.kind==="question"&&data.inputMode!=="buttons")&&<div className="fs-node-ports px-3 pb-5 pt-3">
       <div className="grid gap-2" style={{gridTemplateColumns:`repeat(${Math.min(allPorts.length,3)},minmax(0,1fr))`}}>
@@ -103,10 +110,14 @@ export default function AutomationNode({id,data,selected}:NodeProps<FlowNodeType
           {data.kind==="randomizer"&&<span className="fs-node-weight">{port.weight||0}%</span>}
           {ports.some(p=>p.id===port.id)&&<Handle id={port.id} type="source" position={Position.Bottom}
             className="fs-port fs-port-out"
-            style={{left:"50%",bottom:-9}}/>}
+            style={{left:"50%",bottom:-13}}/>}
         </div>)}
       </div>
     </div>}
+
+    {data.kind==="message"&&<Handle id="next" type="source" position={Position.Bottom}
+      aria-label="مخرج الخطوة التالية" className="fs-port fs-port-out"
+      style={{left:data.options.some(o=>!o.action||o.action==="step")?14:"50%",bottom:-13}}/>}
 
     {!!ports.length&&
       <button type="button"
