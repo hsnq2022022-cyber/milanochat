@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useReactFlow, useStore } from "@xyflow/react";
 import { ZoomIn, ZoomOut, Maximize, SlidersHorizontal, ArrowDownUp, ArrowLeftRight } from "lucide-react";
 import { useFlowStore } from "./store";
+import { useLayoutDirection } from "./direction";
 import { arrangeFlow } from "./layout";
 import type { LayoutDirection } from "./layout";
 import { flowText } from "./uiLocale";
@@ -15,7 +16,9 @@ export default function WorkspaceTools({language}:{language:FlowLanguage}){
   const [collapsed,setCollapsed]=useState(false);
   const t=(key:Parameters<typeof flowText>[0])=>flowText(key,language);
   const reduce=typeof window!=="undefined"&&window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-  const [direction,setDirection]=useState<LayoutDirection>("TB");
+  const direction=useLayoutDirection(s=>s.direction),setDirection=useLayoutDirection(s=>s.setDirection);
+  // A freshly opened canvas starts vertical; the direction is view-only state.
+  useEffect(()=>{setDirection("TB");return()=>setDirection("TB");},[setDirection]);
   const applyLayout=(next:LayoutDirection)=>{
     setDirection(next);
     // replace() pushes undo history, so the layout change is undoable.
@@ -33,8 +36,8 @@ export default function WorkspaceTools({language}:{language:FlowLanguage}){
       <button type="button" className="fs-ibtn" aria-label={t("fitView")} title={t("fitView")} onClick={()=>void fitView({padding:.2,duration:reduce?0:300})}><Maximize size={18}/></button>
       <span className="fs-vsep" aria-hidden="true"/>
       <div role="group" aria-label={t("layoutDirection")} className="fs-tools-group" data-testid="flow-layout-toggle">
-        <button type="button" className="fs-ibtn" data-testid="layout-vertical" aria-pressed={direction==="TB"} aria-label={t("layoutVertical")} title={t("layoutVertical")} onClick={()=>applyLayout("TB")}><ArrowDownUp size={18}/></button>
-        <button type="button" className="fs-ibtn" data-testid="layout-horizontal" aria-pressed={direction==="LR"} aria-label={t("layoutHorizontal")} title={t("layoutHorizontal")} onClick={()=>applyLayout("LR")}><ArrowLeftRight size={18}/></button>
+        <button type="button" className="fs-ibtn fs-ibtn-layout" data-testid="layout-vertical" aria-pressed={direction==="TB"} aria-label={t("layoutVertical")} title={t("layoutVertical")} onClick={()=>applyLayout("TB")}><ArrowDownUp size={18}/></button>
+        <button type="button" className="fs-ibtn fs-ibtn-layout" data-testid="layout-horizontal" aria-pressed={direction==="LR"} aria-label={t("layoutHorizontal")} title={t("layoutHorizontal")} onClick={()=>applyLayout("LR")}><ArrowLeftRight size={18}/></button>
       </div>
     </div>
   </div>;

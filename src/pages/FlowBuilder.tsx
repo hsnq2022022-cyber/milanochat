@@ -20,6 +20,7 @@ import { FlowIssuesContext, SKIN_COLOR, SKIN_ICON, skinHint } from "../flow/skin
 import type { NodeIssueSummary } from "../flow/skin";
 import { SHEET_HALF } from "../flow/useBottomSheet";
 import { KIND_LIST, LABELS, SAVE_KEY, canConnect, edgeFor, importFlow, makeNode, outputs, validateDocument } from "../flow/model";
+import { useLayoutDirection } from "../flow/direction";
 import { arrangeFlow, cardSize, findOpenPosition } from "../flow/layout";
 import { useAddStepMenu } from "../flow/addMenu";
 import type { FlowNode, FlowEdge, Kind, FlowDocument, FlowData } from "../flow/model";
@@ -84,7 +85,9 @@ function Editor(){
     if(kind==="trigger"&&current.nodes.some(n=>n.data.kind==="trigger")){setNotice("توجد بداية واحدة بالفعل.");return;}
     const source=connectFrom?current.nodes.find(n=>n.id===connectFrom.source):null;
     const pos=point||(source
-      ? {x:source.position.x,y:source.position.y+cardSize(source).height+150}
+      ? (useLayoutDirection.getState().direction==="LR"
+        ?{x:source.position.x+cardSize(source).width+150,y:source.position.y}
+        :{x:source.position.x,y:source.position.y+cardSize(source).height+150})
       :instance.screenToFlowPosition({x:Math.round(window.innerWidth*.48),y:Math.round(window.innerHeight*.5)}));
     const candidateNode=makeNode(kind,pos,preset);
     const node={...candidateNode,position:findOpenPosition(current.nodes,candidateNode,pos)};
@@ -104,7 +107,7 @@ function Editor(){
           if(previous&&nextPort){
             edges.push(edgeFor({source:node.id,sourceHandle:nextPort.id,target:previous.target,targetHandle:previous.targetHandle||"in"},nextPort.label));
           }
-          store().replace(arrangeFlow({...candidate,edges}));
+          store().replace(arrangeFlow({...candidate,edges},useLayoutDirection.getState().direction));
           window.setTimeout(()=>instance.fitView({padding:.20,maxZoom:1,duration:300}),80);
         }
       }else{store().addNode(node);setNotice("أُضيفت الخطوة، لكن هذا الاتصال غير مسموح.");}
@@ -117,7 +120,7 @@ function Editor(){
     try{
       const key="social_flow_dagre_arranged_v2_"+activeFlowId;
       if(!localStorage.getItem(key)){
-        store().replace(arrangeFlow(store().doc));
+        store().replace(arrangeFlow(store().doc,useLayoutDirection.getState().direction));
         localStorage.setItem(key,"1");
         window.setTimeout(()=>instance.fitView({padding:.20,maxZoom:.85,duration:0}),350);
       }
@@ -182,7 +185,7 @@ function Editor(){
   },[]);
   useEffect(()=>{window.addEventListener("keydown",onKeyboard);return()=>window.removeEventListener("keydown",onKeyboard);},[onKeyboard]);
   const arrange=()=>{
-    store().replace(arrangeFlow(useFlowStore.getState().doc));
+    store().replace(arrangeFlow(useFlowStore.getState().doc,useLayoutDirection.getState().direction));
     window.setTimeout(()=>instance.fitView({padding:.22,maxZoom:1,duration:350}),75);
     setNotice("تم ترتيب التدفق هرميًا، مع الحفاظ على جميع محتوياته.");
   };

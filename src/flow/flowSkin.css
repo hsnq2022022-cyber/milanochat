@@ -137,6 +137,7 @@
   .flow-skin .fs-tools{position:absolute;z-index:15;top:12px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:2px;padding:4px;border-radius:18px;
     background:rgba(11,36,28,.9);border:1px solid var(--fs-line);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);box-shadow:0 14px 34px -14px rgba(0,0,0,.8)}
   .flow-skin .fs-tools .fs-ibtn{width:40px;height:40px}
+  .flow-skin .fs-tools .fs-ibtn.fs-ibtn-layout{width:44px;height:44px}
   .flow-skin .fs-tools-group{display:flex;align-items:center;gap:2px}
   .flow-skin .fs-tools-group[hidden]{display:none}
   .flow-skin .fs-zoom-lbl{min-width:50px;text-align:center;font-size:12.5px;font-weight:800;color:var(--fs-muted);font-variant-numeric:tabular-nums}

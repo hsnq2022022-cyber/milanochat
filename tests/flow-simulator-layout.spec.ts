@@ -52,3 +52,46 @@ test("layout toggle switches between vertical and horizontal and is undoable",as
     return Math.abs(p[0].y-p[1].y)<80;
   }).toBe(true);
 });
+
+async function handleSides(page:import("@playwright/test").Page){
+  return page.locator(".react-flow__node").first().evaluate(()=>{
+    const out:Record<string,string[]>={};
+    document.querySelectorAll(".react-flow__node").forEach(n=>{
+      n.querySelectorAll(".react-flow__handle").forEach(h=>{
+        const id=h.getAttribute("data-handleid")||"";
+        const kind=h.classList.contains("source")?"source":"target";
+        (out[kind]??=[]).push(h.getAttribute("data-handlepos")||"");
+        void id;
+      });
+    });
+    return out;
+  });
+}
+
+test("handles follow layout direction and layout buttons are 44px tap targets",async({page})=>{
+  await page.goto("/milanochat/#/flows");
+  await expect(page.locator(".react-flow__node")).toHaveCount(6);
+  const tools=page.getByTestId("flow-workspace-tools");
+  for(const name of ["عمودي","أفقي"]){
+    const box=await tools.getByRole("button",{name}).boundingBox();
+    expect(box!.width).toBeGreaterThanOrEqual(44);
+    expect(box!.height).toBeGreaterThanOrEqual(44);
+  }
+  await expect.poll(async()=>{
+    const s=await handleSides(page);
+    return [...new Set(s.target)].join()+"|"+[...new Set(s.source)].join();
+  }).toBe("top|bottom");
+
+  await tools.getByRole("button",{name:"أفقي"}).click();
+  await expect.poll(async()=>{
+    const s=await handleSides(page);
+    return [...new Set(s.target)].join()+"|"+[...new Set(s.source)].join();
+  }).toBe("left|right");
+  await page.screenshot({path:process.env.LAYOUT_SHOT||"test-results/horizontal.png"});
+
+  await tools.getByRole("button",{name:"عمودي"}).click();
+  await expect.poll(async()=>{
+    const s=await handleSides(page);
+    return [...new Set(s.target)].join()+"|"+[...new Set(s.source)].join();
+  }).toBe("top|bottom");
+});
