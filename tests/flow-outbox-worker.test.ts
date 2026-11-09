@@ -145,3 +145,524 @@ test("RAG rejects ungrounded text, fake quotes, no credit and manual takeover",a
  assert.equal(await answerWithVerifiedKnowledge(knowledgeClient() as never,
   {...scope,humanTakeover:true},"How much?",options),null);
 });
+
+// ---------------------------------------------------------------- skip policy
+import {readFileSync} from "node:fs";
+import {permanentOutboxBlock,temporaryOutboxPause,humanTakeoverActive,OUTBOX_SCAN_LIMIT,
+ OUTBOX_DISPATCH_LIMIT,OUTBOX_STALE_MINUTES,type OutboxSkipInput}
+ from "../supabase/functions/flow-outbox-worker/skipPolicy.ts";
+import {humanTakeoverActive as wakeTakeoverActive}
+ from "../supabase/functions/flow-runtime-worker/eligibility.ts";
+const skipNow=Date.parse("2026-10-29T18:00:00Z");
+const sendable:OutboxSkipInput={
+ tenantFound:true,tenantActive:true,runFound:true,accountFound:true,conversationFound:true,
+ accountTenantMatches:true,conversationTenantMatches:true,accountPlatformMatchesRun:true,
+ conversationAccountMatches:true,accountActive:true,agentEnabled:true,autoReply:true,
+ allowedChannel:true,humanTransferred:false,humanAgentExpiresAt:null,humanPausedReason:null,
+ revisionActive:true
+};
+// Canonical columns (transferred, human_agent_expires_at, auto_paused_reason);
+// the old human_agent_until column does not exist on production shapes.
+const TAKEOVER_CASES:[unknown,unknown,unknown,boolean][]=[
+ [false,null,null,false],[null,null,null,false],[undefined,null,null,false],
+ [false,"2026-10-29T19:00:00Z","manual_takeover",false],
+ [true,null,"manual_takeover",true],[true,null,null,true],
+ [true,"2026-10-29T19:00:00Z","manual_takeover",true],
+ [true,"2026-10-29T17:00:00Z","manual_takeover",false],
+ [true,"2026-10-29T17:00:00Z","ai_handoff",true],[true,"2026-10-29T17:00:00Z",null,true],
+ [true,"garbage","manual_takeover",true],[true,123,"manual_takeover",true],
+ ["true",null,null,true],[1,"2026-10-29T17:00:00Z","manual_takeover",true]
+];
+test("human takeover follows milan-api expiry and is fail-closed on corrupt values",()=>{
+ for(const [tr,at,why,want] of TAKEOVER_CASES){
+  assert.equal(humanTakeoverActive(tr,at,why,skipNow),want,JSON.stringify([tr,at,why]));
+  // Runtime worker and outbox worker apply the identical rule.
+  assert.equal(wakeTakeoverActive(tr,at,why,skipNow),want,"wake "+JSON.stringify([tr,at,why]));
+ }
+ assert.equal(humanTakeoverActive(true,"2026-10-29T17:00:00Z","manual_takeover",Number.NaN),true);
+});
+test("effects blocked by takeover, inactive revision or broken scope are skipped forever",()=>{
+ assert.equal(permanentOutboxBlock(sendable,skipNow),null);
+ for(const [field,value,reason] of [
+  ["humanTransferred",true,"human_takeover"],
+  ["revisionActive",undefined,"revision_inactive"],["revisionActive",false,"revision_inactive"],
+  ["tenantFound",false,"ineligible"],["runFound",false,"ineligible"],
+  ["accountFound",false,"ineligible"],["conversationFound",false,"ineligible"],
+  ["accountTenantMatches",false,"ineligible"],["conversationTenantMatches",false,"ineligible"],
+  ["accountPlatformMatchesRun",false,"ineligible"],["conversationAccountMatches",false,"ineligible"],
+  ["allowedChannel",false,"ineligible"]
+ ] as const){
+  assert.equal(permanentOutboxBlock({...sendable,[field]:value},skipNow),reason,field);
+ }
+ assert.equal(permanentOutboxBlock({...sendable,humanTransferred:true,
+  humanAgentExpiresAt:"2026-10-29T19:00:00Z",humanPausedReason:"manual_takeover"},skipNow),"human_takeover");
+ // Expired manual takeover: sendable again (milan-api resumes auto replies too).
+ assert.equal(permanentOutboxBlock({...sendable,humanTransferred:true,
+  humanAgentExpiresAt:"2026-10-29T17:00:00Z",humanPausedReason:"manual_takeover"},skipNow),null);
+ // A cross-tenant conversation never yields a takeover verdict for this tenant.
+ assert.equal(permanentOutboxBlock({...sendable,conversationTenantMatches:false,
+  humanTransferred:true},skipNow),"ineligible");
+ // Takeover wins over other reasons so the audit reason is accurate.
+ assert.equal(permanentOutboxBlock({...sendable,humanTransferred:true,revisionActive:false},
+  skipNow),"human_takeover");
+});
+// Old behaviour cancelled these effects permanently as 'ineligible'. They are
+// temporary: the effect stays pending (resumes when re-enabled) and only the
+// 60-minute stale sweep (flow_skip_blocked_outbox) can cancel it.
+test("temporarily disabled auto_reply/agent_enabled/tenant/account keeps effects pending",()=>{
+ assert.equal(temporaryOutboxPause(sendable),null);
+ for(const [field,value,pause] of [
+  ["tenantActive",false,"tenant_inactive"],["tenantActive",undefined,"tenant_inactive"],
+  ["accountActive",false,"account_inactive"],["agentEnabled",false,"agent_disabled"],
+  ["agentEnabled",null,"agent_disabled"],["autoReply",false,"auto_reply_off"],
+  ["autoReply",undefined,"auto_reply_off"]
+ ] as const){
+  assert.equal(permanentOutboxBlock({...sendable,[field]:value},skipNow),null,field+" not permanent");
+  assert.equal(temporaryOutboxPause({...sendable,[field]:value}),pause,field);
+ }
+ // A permanent reason still wins over a pause.
+ assert.equal(permanentOutboxBlock({...sendable,autoReply:false,revisionActive:false},skipNow),
+  "revision_inactive");
+ assert.equal(OUTBOX_STALE_MINUTES,60);
+ const code=readFileSync("supabase/functions/flow-outbox-worker/index.ts","utf8");
+ assert.match(code,/if\(!tenant\|\|!run\)\{await skip\("ineligible"\);continue;\}/);
+ assert.doesNotMatch(code,/tenant\.is_active!==true\|\|!run\)\{await skip/);
+ const permanent=code.indexOf("if(permanent){await skip(permanent);continue;}");
+ const pause=code.indexOf('if(pause){report("paused_"+pause);continue;}');
+ const gate=code.indexOf("!canDispatchOutbox({");
+ assert(permanent>0&&pause>permanent&&gate>pause);
+ assert.doesNotMatch(code,/human_agent_until/);
+ assert.match(code,/humanTakeover:takeover\b/);
+});
+test("worker sweeps stale/blocked effects before listing and fails closed without it",()=>{
+ const code=readFileSync("supabase/functions/flow-outbox-worker/index.ts","utf8");
+ const gateOff=code.indexOf("if(ge||g?.enabled!==true)return blocked();");
+ const sweep=code.indexOf('sb.rpc("flow_skip_blocked_outbox"');
+ const list=code.indexOf('sb.from("automation_flow_outbox")\n  .select(');
+ assert(gateOff>0&&sweep>gateOff&&list>sweep);
+ assert.match(code,/if\(sweepError\)\{[\s\S]{0,120}return json\(\{error:"Outbox lifecycle unavailable",sends:0\},503\);/);
+ assert.match(code,/p_max_age_minutes:OUTBOX_STALE_MINUTES,p_limit:200/);
+});
+test("blocked effects are skipped tenant-scoped, never in-flight, and cannot starve newer ones",()=>{
+ const code=readFileSync("supabase/functions/flow-outbox-worker/index.ts","utf8");
+ assert(OUTBOX_SCAN_LIMIT>OUTBOX_DISPATCH_LIMIT);
+ assert.match(code,/\.limit\(OUTBOX_SCAN_LIMIT\)/);
+ assert.match(code,/if\(dispatched>=OUTBOX_DISPATCH_LIMIT\)break;/);
+ // Only not-yet-sent rows (pending, or retry_wait during an AI backoff) are
+ // ever skipped; leased/charge_pending/settled rows fall through to report().
+ assert.match(code,/if\(effect\.delivery_status!=="pending"&&effect\.delivery_status!=="retry_wait"\)\{\s*report\(fallback\);return;\s*\}/);
+ assert.doesNotMatch(code,/delivery_status!=="(charge_pending|leased|settled)"\)\{\s*report\(fallback/);
+ assert.match(code,/sb\.rpc\("flow_skip_outbox_effect",\{\s*p_tenant:effect\.tenant_id,p_outbox:effect\.id,p_reason:reason/);
+ const permanent=code.indexOf("const permanent=permanentOutboxBlock(");
+ const skipped=code.indexOf("if(permanent){await skip(permanent);continue;}");
+ const gate=code.indexOf("!canDispatchOutbox({");
+ const reserve=code.indexOf('sb.rpc("flow_reserve_outbox_delivery"');
+ assert(permanent>0&&skipped>permanent&&gate>skipped&&reserve>gate);
+ // Lookup errors and paused tenants are transient: reported, not cancelled.
+ assert.match(code,/if\(tenantError\|\|switchError\|\|runError\)\{report\("blocked"\);continue;\}/);
+ assert.match(code,/if\(!sw\?\.enabled\)\{report\("blocked"\);continue;\}/);
+ assert.match(code,/if\(accountResult\.error\|\|conversationResult\.error\|\|activationResult\.error\)\{\s*report\("blocked"\);continue;/);
+});
+
+// ---------------------------------------------------------- per-run seq order
+import {compareOutbox,heldByEarlierEffect,effectSeq,statusAfterOutcome,type OrderRow}
+ from "../supabase/functions/flow-outbox-worker/effectOrder.ts";
+const T0="2026-11-05T10:00:00.123456+00:00",T1="2026-11-05T10:05:00.5+00:00";
+const row=(id:string,seq:number|undefined,status="pending",over:Partial<OrderRow>={}):OrderRow=>({
+ id,tenant_id:"A",run_id:"run-1",delivery_status:status,effect_kind:"message",
+ payload:seq===undefined?{kind:"message"}:{kind:"message",seq},created_at:T0,...over});
+test("candidates sort by (created_at, run, seq) even when one commit shares created_at",()=>{
+ const rows=[row("z",2),row("y",0),row("x",1),row("w",0,"pending",{run_id:"run-0"}),row("v",0,"pending",{created_at:T1})];
+ assert.deepEqual([...rows].sort(compareOutbox).map(r=>r.id),["w","y","x","z","v"]);
+ assert.equal(effectSeq({seq:3}),3);assert.equal(effectSeq({}),0);
+ assert.equal(effectSeq({seq:9}),0);assert.equal(effectSeq({seq:"1"}),0);assert.equal(effectSeq(null),0);
+});
+test("a later seq waits until every earlier effect of the same run is sent or terminally ended",()=>{
+ const s0=row("s0",0),s1=row("s1",1),s2=row("s2",2);
+ assert.equal(heldByEarlierEffect(s0,[s0,s1,s2]),false);
+ assert.equal(heldByEarlierEffect(s1,[s0,s1,s2]),true);
+ assert.equal(heldByEarlierEffect(s2,[s0,s1,s2]),true);
+ for(const status of ["pending","leased","retry_wait","uncertain","weird_new_status"])
+  assert.equal(heldByEarlierEffect(s1,[row("s0",0,status),s1]),true,"held by "+status);
+ for(const status of ["settled","charge_pending","cancelled","dead_letter","billing_blocked"])
+  assert.equal(heldByEarlierEffect(s1,[row("s0",0,status),s1]),false,"released by "+status);
+ // Blocked earlier effect holds ALL later ones, also when only seq 1 is done.
+ assert.equal(heldByEarlierEffect(s2,[row("s0",0,"pending"),row("s1",1,"settled"),s2]),true);
+ // Sends made during this tick release the next seq in the same tick.
+ const local=new Map([["s0","settled"]]);
+ assert.equal(heldByEarlierEffect(s1,[s0,s1,s2],local),false);
+ assert.equal(heldByEarlierEffect(s2,[s0,s1,s2],local),true);
+ assert.equal(statusAfterOutcome("settled"),"settled");
+ assert.equal(statusAfterOutcome("billing_pending"),"charge_pending");
+ assert.equal(statusAfterOutcome("uncertain"),"uncertain");
+ assert.equal(statusAfterOutcome("skipped_stale"),"cancelled");
+ assert.equal(statusAfterOutcome("billing_blocked_ai_answer_missing"),"billing_blocked");
+ assert.equal(statusAfterOutcome("blocked"),undefined);
+ assert.equal(statusAfterOutcome("not_reserved"),undefined);
+ // Non-provider rows (delay/tag) never hold a message.
+ assert.equal(heldByEarlierEffect(s1,[row("d0",0,"pending",{effect_kind:"delay"}),s1]),false);
+});
+test("an older commit holds only while not yet attempted; legacy single effects are unaffected",()=>{
+ const later=row("n0",0,"pending",{created_at:T1});
+ assert.equal(heldByEarlierEffect(later,[row("o0",0,"pending"),later]),true);
+ assert.equal(heldByEarlierEffect(later,[row("o0",0,"leased"),later]),true);
+ assert.equal(heldByEarlierEffect(later,[row("o0",0,"settled"),later]),false);
+ // A tapped question that ended uncertain must not block the tap's answer.
+ assert.equal(heldByEarlierEffect(later,[row("o0",0,"uncertain",{effect_kind:"question"}),later]),false);
+ assert.equal(heldByEarlierEffect(row("legacy",undefined),[row("legacy",undefined)]),false);
+});
+test("ordering is tenant- and run-isolated",()=>{
+ const s1=row("s1",1);
+ assert.equal(heldByEarlierEffect(s1,[row("b0",0,"pending",{tenant_id:"B"}),s1]),false,"other tenant, same run id");
+ assert.equal(heldByEarlierEffect(s1,[row("r0",0,"pending",{run_id:"run-2"}),s1]),false,"other run");
+ const code=readFileSync("supabase/functions/flow-outbox-worker/index.ts","utf8");
+ // ONE tenant-scoped sibling query per tenant per tick, before any dispatch.
+ assert.match(code,/for\(const tenantId of new Set\(items\.map\(e=>String\(e\.tenant_id\)\)\)\)\{/);
+ assert.match(code,/\.eq\("tenant_id",tenantId\)\.in\("run_id",runIds\)\.in\("effect_kind",ORDERED_KINDS\)/);
+ assert.match(code,/\(siblings as OrderRow\[\]\)\.filter\(r=>r\.tenant_id===tenantId\)/);
+ assert.match(code,/\.sort\(compareOutbox\)/);
+ const held=code.indexOf("if(heldByEarlierEffect(effect as OrderRow,siblings,localStatus))");
+ const failClosed=code.indexOf('if(!siblings){report("blocked_order");continue;}');
+ const tenant=code.indexOf('sb.from("tenants")');
+ const reserve=code.indexOf('sb.rpc("flow_reserve_outbox_delivery"');
+ assert(failClosed>0&&held>failClosed&&tenant>held&&reserve>tenant);
+ // Billing path untouched: one consume per settled effect.
+ assert.equal((code.match(/sb\.rpc\("consume_flow_reply"/g)??[]).length,1);
+});
+
+// ---- Typed-answer questions (text/email/phone): plain Instagram message.
+import {plainInputQuestion} from "../supabase/functions/flow-outbox-worker/questionMode.ts";
+import {ORDERED_KINDS} from "../supabase/functions/flow-outbox-worker/effectOrder.ts";
+test("text/email/phone questions are plain Instagram messages; buttons and unknown modes keep the old rules",()=>{
+ const q=(over:Record<string,unknown>={})=>({kind:"question",text:"ما بريدك؟",inputMode:"email",choices:[],choiceIds:[],seq:1,...over});
+ for(const mode of ["text","email","phone"])assert.equal(plainInputQuestion(q({inputMode:mode}),"instagram"),true,mode);
+ assert.equal(plainInputQuestion(q({choices:undefined,choiceIds:undefined}),"instagram"),true);
+ for(const mode of ["number","buttons","date","",undefined,null])
+  assert.equal(plainInputQuestion(q({inputMode:mode}),"instagram"),false,String(mode));
+ for(const platform of ["facebook","whatsapp","",undefined])
+  assert.equal(plainInputQuestion(q(),platform),false,"Instagram only: "+String(platform));
+ assert.equal(plainInputQuestion(q({choices:["a"],choiceIds:["a"]}),"instagram"),false,"no hidden quick replies");
+ assert.equal(plainInputQuestion(q({kind:"message"}),"instagram"),false);
+ for(const bad of [null,"x",[],42])assert.equal(plainInputQuestion(bad,"instagram"),false);
+ const code=readFileSync("supabase/functions/flow-outbox-worker/index.ts","utf8");
+ // Only the plain question skips the buttons gate; any other question is blocked as before.
+ assert.match(code,/const plainQuestion=effect\.effect_kind==="question"&&\n\s+plainInputQuestion\(payload,account\.platform\);/);
+ assert.match(code,/if\(effect\.effect_kind==="question" && !plainQuestion &&\n\s+\(env\("FLOW_RICH_BUTTONS_ENABLED"\)!=="true" \|\|\n\s+\(!\["instagram","facebook"\]\.includes\(account\.platform\) && !multichannelWhatsApp\) \|\|\n\s+payload\.inputMode!=="buttons"\)\)\{\n\s+report\("blocked"\);continue;\n\s+\}/);
+ assert.match(code,/const quickReplies=effect\.effect_kind==="question" && !plainQuestion &&/);
+ assert.match(code,/if\(effect\.effect_kind==="question" && !plainQuestion && !quickReplies\)\{await skip\("ineligible","invalid"\);continue;\}/);
+ // Decided after the production gate and payload checks, before any send.
+ const gate=code.indexOf("!canDispatchOutbox({"),plain=code.indexOf("const plainQuestion="),
+  reserve=code.indexOf('sb.rpc("flow_reserve_outbox_delivery"');
+ assert(gate>0&&plain>gate&&reserve>plain);
+ assert.equal((code.match(/sb\.rpc\("consume_flow_reply"/g)??[]).length,1,"billing untouched");
+});
+test("a plain question takes part in per-run seq ordering like any message",()=>{
+ const a=row("q0",0,"pending",{effect_kind:"question"}),b=row("m1",1);
+ assert.equal(heldByEarlierEffect(b,[a,b]),true,"the next effect waits for the question");
+ assert.equal(heldByEarlierEffect(b,[{...a,delivery_status:"settled"},b]),false);
+ assert.ok((ORDERED_KINDS as readonly string[]).includes("question"));
+});
+
+// ---- message_image (FLOW_MEDIA_SEND_ENABLED, default OFF): Instagram image attachment.
+import {mediaEffectGate,classifyMediaFailure,isAllowedFlowImageUrl}
+ from "../supabase/functions/flow-outbox-worker/mediaPolicy.ts";
+import {ProviderHttpError} from "../supabase/functions/flow-outbox-worker/deliveryCore.ts";
+const PROJECT="https://abcd1234.supabase.co";
+const IMG=PROJECT+"/storage/v1/object/public/flow-media/u1/0f8c2b1e-1111-4222-8333-444455556666.webp";
+const BAD_URLS=["http://abcd1234.supabase.co/storage/v1/object/public/flow-media/u1/a.webp",
+ "https://evil.example.com/storage/v1/object/public/flow-media/u1/a.webp",
+ "data:image/png;base64,AAAA","https://user:pw@abcd1234.supabase.co/storage/v1/object/public/flow-media/u1/a.webp",
+ PROJECT+"/storage/v1/object/public/flow-media/",PROJECT+"/storage/v1/object/public/other/a.webp",
+ PROJECT+"/storage/v1/object/public/flow-media/u1/%2e%2e/x.webp",PROJECT+"/storage/v1/object/public/flow-media/../x",
+ PROJECT+"/storage/v1/object/public/flow-media/u1/a.webp?x=1",PROJECT+"/storage/v1/object/public/flow-media/u1/a.webp#f",
+ " "+IMG,"",null,42];
+function recorder(status=200,body:unknown={message_id:"mid-img"}){
+ const calls:Array<{url:string;body:any}>=[];
+ const fake=(async(url:string,init:RequestInit)=>{
+  calls.push({url,body:JSON.parse(String(init.body))});
+  return new Response(JSON.stringify(body),{status});
+ }) as typeof fetch;
+ return {calls,fake};
+}
+const imageReq={platform:"instagram" as const,token:"IG-token",externalId:"",recipient:"123456",
+ text:"",imageUrl:IMG,imageHost:PROJECT};
+test("image payload is exactly {recipient:{id},message:{attachment:{type:'image',payload:{url}}}} with no text key",async()=>{
+ const r=recorder();
+ assert.equal(await sendProviderMessage(imageReq,r.fake),"mid-img");
+ assert.equal(r.calls.length,1);
+ assert.equal(r.calls[0].url,"https://graph.instagram.com/v21.0/me/messages");
+ assert.deepEqual(r.calls[0].body,{recipient:{id:"123456"},message:{attachment:{type:"image",payload:{url:IMG}}}});
+ assert.equal("text" in r.calls[0].body.message,false);
+ assert.equal(JSON.stringify(r.calls[0].body).includes("quick_replies"),false);
+ // Text path unchanged.
+ const t=recorder();
+ await sendProviderMessage({platform:"instagram",token:"IG-token",externalId:"",recipient:"123456",text:"اهلا"},t.fake);
+ assert.deepEqual(t.calls[0].body,{recipient:{id:"123456"},message:{text:"اهلا"}});
+});
+test("non-Instagram, mixed, invalid-URL or texted image requests are refused before any request",async()=>{
+ const r=recorder();
+ for(const platform of ["facebook","whatsapp"] as const)
+  await assert.rejects(()=>sendProviderMessage({...imageReq,platform,externalId:"100001"},r.fake),/Invalid provider image/);
+ for(const url of BAD_URLS.filter(u=>typeof u==="string"&&u!==""))
+  await assert.rejects(()=>sendProviderMessage({...imageReq,imageUrl:url as string},r.fake),/Invalid provider/,String(url));
+ await assert.rejects(()=>sendProviderMessage({...imageReq,text:"caption"},r.fake),/Invalid provider/);
+ await assert.rejects(()=>sendProviderMessage({...imageReq,quickReplies:[{id:"a",label:"A"}]},r.fake),/Invalid provider image/);
+ assert.equal(r.calls.length,0);
+});
+test("worker media gate: flag OFF holds, other platforms and bad URLs fail permanently, valid sends",()=>{
+ const p={kind:"message_image",url:IMG,seq:0};
+ assert.deepEqual(mediaEffectGate({flagEnabled:false,platform:"instagram",payload:p,supabaseUrl:PROJECT}),{action:"hold"});
+ assert.deepEqual(mediaEffectGate({flagEnabled:false,platform:"whatsapp",payload:{url:"x"},supabaseUrl:PROJECT}),{action:"hold"});
+ for(const platform of ["",undefined,"telegram","Instagram"])
+  for(const multichannelEnabled of [undefined,false,true])
+   assert.deepEqual(mediaEffectGate({flagEnabled:true,platform,payload:p,supabaseUrl:PROJECT,multichannelEnabled}),
+    {action:"fail",code:"media_platform_unsupported"},String(platform));
+ // WhatsApp/Facebook: FLOW_MULTICHANNEL_ENABLED OFF (or media OFF) leaves the row untouched (hold, no request);
+ // ON: the same allowlist as Instagram decides (multichannelSend.ts builds the request).
+ for(const platform of ["facebook","whatsapp"]){
+  for(const multichannelEnabled of [undefined,false])
+   assert.deepEqual(mediaEffectGate({flagEnabled:true,platform,payload:p,supabaseUrl:PROJECT,multichannelEnabled}),
+    {action:"hold"},platform);
+  assert.deepEqual(mediaEffectGate({flagEnabled:false,platform,payload:p,supabaseUrl:PROJECT,multichannelEnabled:true}),
+   {action:"hold"},platform);
+  assert.deepEqual(mediaEffectGate({flagEnabled:true,platform,payload:p,supabaseUrl:PROJECT,multichannelEnabled:true}),
+   {action:"send",url:IMG},platform);
+  for(const url of BAD_URLS)
+   assert.deepEqual(mediaEffectGate({flagEnabled:true,platform,payload:{...p,url},supabaseUrl:PROJECT,multichannelEnabled:true}),
+    {action:"fail",code:"media_url_invalid"},platform+" "+String(url));
+ }
+ // Instagram is identical with the multichannel flag on or off.
+ for(const multichannelEnabled of [undefined,false,true]){
+  assert.deepEqual(mediaEffectGate({flagEnabled:true,platform:"instagram",payload:p,supabaseUrl:PROJECT,multichannelEnabled}),{action:"send",url:IMG});
+  assert.deepEqual(mediaEffectGate({flagEnabled:true,platform:"instagram",payload:{...p,url:BAD_URLS[0]},supabaseUrl:PROJECT,multichannelEnabled}),
+   {action:"fail",code:"media_url_invalid"});
+ }
+ for(const url of BAD_URLS)
+  assert.deepEqual(mediaEffectGate({flagEnabled:true,platform:"instagram",payload:{...p,url},supabaseUrl:PROJECT}),
+   {action:"fail",code:"media_url_invalid"},String(url));
+ assert.deepEqual(mediaEffectGate({flagEnabled:true,platform:"instagram",payload:null,supabaseUrl:PROJECT}),
+  {action:"fail",code:"media_url_invalid"});
+ assert.deepEqual(mediaEffectGate({flagEnabled:true,platform:"instagram",payload:p,supabaseUrl:PROJECT}),{action:"send",url:IMG});
+ assert.equal(isAllowedFlowImageUrl(IMG,PROJECT),true);
+ assert.equal(isAllowedFlowImageUrl(IMG,"https://other.supabase.co"),false);
+});
+test("Meta 400 / code 100 on the image is permanent; 5xx/network uncertain; never resent",async()=>{
+ const run=async(status:number,body:unknown)=>{
+  const r=recorder(status,body);const events:string[]=[];let failure:string|null=null;
+  const res=await executeOnce({
+   reserve:async()=>{events.push("reserve");return true;},
+   send:()=>sendProviderMessage(imageReq,r.fake).catch(e=>{failure=classifyMediaFailure(e);throw e;}),
+   confirm:async(s,id)=>{events.push(s+":"+id);return true;},
+   persistAndBill:async()=>{events.push("UNEXPECTED_BILL");return true;}
+  });
+  return {res,events,failure,calls:r.calls.length};
+ };
+ const rejected=await run(400,{error:{code:100,message:"Invalid parameter"}});
+ assert.deepEqual(rejected,{res:"uncertain",events:["reserve","uncertain:null"],failure:"media_rejected",calls:1});
+ for(const status of [500,502,503]){
+  const out=await run(status,{error:{code:2}});
+  assert.deepEqual(out,{res:"uncertain",events:["reserve","uncertain:null"],failure:"uncertain",calls:1},String(status));
+ }
+ assert.equal((await run(429,{})).failure,"uncertain");
+ assert.equal((await run(401,{error:{code:190}})).failure,"auth");
+ assert.equal((await run(400,{error:{code:190}})).failure,"auth");
+ assert.equal(classifyMediaFailure(new Error("timeout")),"uncertain");
+ assert.equal(classifyMediaFailure(new ProviderHttpError(404,null)),"media_rejected");
+ // Text errors keep their previous message and remain plain uncertain.
+ const t=recorder(400,{error:{code:100}});
+ await assert.rejects(()=>sendProviderMessage({...imageReq,imageUrl:undefined,text:"hi"},t.fake),
+  (e:unknown)=>e instanceof Error&&!(e instanceof ProviderHttpError)&&e.message==="Provider HTTP 400");
+});
+test("an image 2xx without a provider id is uncertain and never resent nor billed",async()=>{
+ const r=recorder(200,{});const events:string[]=[];
+ const res=await executeOnce({reserve:async()=>true,send:()=>sendProviderMessage(imageReq,r.fake),
+  confirm:async(s,id)=>{events.push(s+":"+id);return true;},
+  persistAndBill:async()=>{events.push("UNEXPECTED_BILL");return true;}});
+ assert.equal(res,"uncertain");assert.deepEqual(events,["uncertain:null"]);assert.equal(r.calls.length,1);
+ const ok=recorder();const billed:string[]=[];
+ assert.equal(await executeOnce({reserve:async()=>true,send:()=>sendProviderMessage(imageReq,ok.fake),
+  confirm:async()=>true,persistAndBill:async(id)=>{billed.push(String(id));return true;}}),"settled");
+ assert.deepEqual(billed,["mid-img"],"one persist/debit per image, same path as text");
+});
+test("message_image takes part in per-run seq ordering with text effects",()=>{
+ const img=row("i0",0,"pending",{effect_kind:"message_image",payload:{kind:"message_image",url:IMG,seq:0}});
+ const txt=row("t1",1);
+ assert.ok((ORDERED_KINDS as readonly string[]).includes("message_image"));
+ assert.equal(heldByEarlierEffect(txt,[img,txt]),true,"text waits for the earlier image");
+ assert.equal(heldByEarlierEffect(txt,[{...img,delivery_status:"uncertain"},txt]),true,"uncertain image still holds same commit");
+ assert.equal(heldByEarlierEffect(txt,[{...img,delivery_status:"settled"},txt]),false);
+ const img1=row("i1",1,"pending",{effect_kind:"message_image",payload:{kind:"message_image",url:IMG,seq:1}});
+ assert.equal(heldByEarlierEffect(img1,[row("t0",0),img1]),true,"image waits for the earlier text");
+ assert.deepEqual([img1,row("t0",0)].sort(compareOutbox).map(r=>r.id),["t0","i1"]);
+});
+test("worker wiring: image gate precedes reservation, flag default OFF, retry query and billing unchanged",()=>{
+ const code=readFileSync("supabase/functions/flow-outbox-worker/index.ts","utf8");
+ assert.match(code,/DO NOT ENABLE/);
+ assert.match(code,/flagEnabled:env\("FLOW_MEDIA_SEND_ENABLED"\)==="true"/);
+ assert.match(code,/if\(media\.action==="hold"\|\|\(effect\.delivery_status==="charge_pending"&&media\.action!=="send"\)\)\{\s*report\("blocked"\);continue;\s*\}/);
+ assert.match(code,/if\(media\.action==="fail"\)\{[\s\S]{0,160}await skip\("ineligible","invalid"\);continue;\s*\}/);
+ const gate=code.indexOf("!canDispatchOutbox({"),media=code.indexOf("const media=mediaEffectGate("),
+  dispatched=code.indexOf("dispatched++;"),reserve=code.indexOf('sb.rpc("flow_reserve_outbox_delivery"');
+ assert(gate>0&&media>gate&&dispatched>media&&reserve>dispatched);
+ assert.match(code,/\.in\("effect_kind",\["message","question","message_image"\]\)/);
+ assert.match(code,/\.eq\("delivery_status","retry_wait"\)[^;]*\.in\("effect_kind",\["message","question"\]\)/);
+ assert.match(code,/text:"",imageUrl,imageHost:base/);
+ assert.equal((code.match(/sb\.rpc\("consume_flow_reply"/g)??[]).length,1,"billing untouched");
+ const mp=readFileSync("supabase/functions/flow-outbox-worker/mediaPolicy.ts","utf8");
+ assert.match(mp,/DO NOT ENABLE/);
+});
+// ---- 20261029210000: a permanent image rejection ends as dead_letter ('rejected'), never resent.
+import {finishOutcome} from "../supabase/functions/flow-outbox-worker/mediaPolicy.ts";
+test("finish outcome: only media_rejected becomes 'rejected'; confirmed, auth and uncertain unchanged",()=>{
+ assert.equal(finishOutcome("uncertain","media_rejected"),"rejected");
+ for(const f of ["auth","uncertain",null] as const)assert.equal(finishOutcome("uncertain",f),"uncertain",String(f));
+ for(const f of ["media_rejected","auth","uncertain",null] as const)assert.equal(finishOutcome("confirmed",f),"confirmed",String(f));
+ assert.equal(statusAfterOutcome("dead_letter_media_rejected"),"dead_letter");
+ assert.equal(statusAfterOutcome("media_rejected"),undefined,"the classification key alone changes nothing");
+ assert.equal(statusAfterOutcome("dead_letter_ai_retries_exhausted"),undefined,"AI path unchanged");
+ // A dead-lettered image no longer holds the next effect of the same commit.
+ const img=row("i0",0,"leased",{effect_kind:"message_image",payload:{kind:"message_image",url:IMG,seq:0}}),txt=row("t1",1);
+ assert.equal(heldByEarlierEffect(txt,[img,txt],new Map([["i0","dead_letter"]])),false);
+ assert.equal(heldByEarlierEffect(txt,[img,txt],new Map([["i0","uncertain"]])),true);
+});
+test("worker: Meta 400/code 100 on an image is finished 'rejected' once; 5xx/429/auth stay 'uncertain'; never resent nor billed",async()=>{
+ const run=async(status:number,body:unknown,db:"new"|"old"="new")=>{
+  const r=recorder(status,body);const calls:string[]=[];const media={failure:null as string|null,rejected:false};
+  const finish=async(result:string)=>{calls.push(result);return db==="new"||result!=="rejected";};
+  const res=await executeOnce({
+   reserve:async()=>true,
+   send:()=>sendProviderMessage(imageReq,r.fake).catch(e=>{media.failure=classifyMediaFailure(e);throw e;}),
+   // Same decision as flow-outbox-worker/index.ts confirm.
+   confirm:async(s)=>{
+    if(finishOutcome(s,media.failure as any)==="rejected"){
+     if(await finish("rejected")){media.rejected=true;return true;}
+    }
+    return finish(s);
+   },
+   persistAndBill:async()=>{calls.push("UNEXPECTED_BILL");return true;}
+  });
+  return {report:media.rejected?"dead_letter_media_rejected":res,calls,requests:r.calls.length};
+ };
+ assert.deepEqual(await run(400,{error:{code:100}}),{report:"dead_letter_media_rejected",calls:["rejected"],requests:1});
+ assert.deepEqual(await run(404,{}),{report:"dead_letter_media_rejected",calls:["rejected"],requests:1});
+ for(const [s,b] of [[500,{}],[502,{}],[429,{}],[401,{error:{code:190}}],[400,{error:{code:190}}]] as const)
+  assert.deepEqual(await run(s,b),{report:"uncertain",calls:["uncertain"],requests:1},String(s));
+ // Database without the 'rejected' outcome (210000 not applied): falls back to uncertain, as before.
+ assert.deepEqual(await run(400,{error:{code:100}},"old"),{report:"uncertain",calls:["rejected","uncertain"],requests:1});
+});
+test("worker wiring: finish maps media_rejected to 'rejected' (fallback uncertain), text path and billing unchanged",()=>{
+ const code=readFileSync("supabase/functions/flow-outbox-worker/index.ts","utf8");
+ const c=code.slice(code.indexOf("confirm:async(status,providerId)=>{"),code.indexOf("persistAndBill\n   });"));
+ assert.match(c,/sb\.rpc\("flow_finish_outbox_delivery",\{\n\s+p_tenant:effect\.tenant_id,p_outbox:effect\.id,p_result:result,\n\s+p_provider_message_id:providerId\n\s+\}\)/);
+ assert.match(c,/if\(finishOutcome\(status,media\.failure\)==="rejected"\)\{\n\s+const rejected=await finish\("rejected"\);\n\s+if\(rejected===true\)\{media\.rejected=true;return true;\}/);
+ assert.match(c,/if\(rejected===null\)return false;/);
+ assert.match(c,/return await finish\(status\)===true;/);
+ assert.match(code,/report\(media\.rejected\?"dead_letter_media_rejected":res\);/);
+ // media.failure is set only by the image sends' catch (Instagram; multichannel only when
+ // imageUrl is set): text sends never become 'rejected'.
+ assert.equal((code.match(/media\.failure=(?!=)/g)??[]).length,2);
+ assert.match(code,/\.catch\(e=>\{media\.failure=classifyMediaFailure\(e\);throw e;\}\)/);
+ assert.match(code,/\n\s+if\(imageUrl!==undefined\)media\.failure=classifyMediaFailure\(e\);\n/);
+ assert.equal((code.match(/sb\.rpc\("consume_flow_reply"/g)??[]).length,1,"billing untouched");
+ const eo=readFileSync("supabase/functions/flow-outbox-worker/executeOnce.ts","utf8");
+ assert.match(eo,/confirm\(status:"confirmed"\|"uncertain",providerId:string\|null\):Promise<boolean>;/,"executeOnce unchanged");
+});
+
+/* ---- Instagram website buttons: button template (flowRichActions.ts) ---- */
+import {instagramButtonTemplateProblem,instagramWebsiteButtons,messengerWebsiteButtons}
+ from "../supabase/functions/flow-outbox-worker/flowRichActions.ts";
+function igRecorder(status=200,body:unknown={message_id:"mid-ig-btn"}){
+ const calls:Array<{url:string;body:Record<string,unknown>}>=[];
+ const fake=(async(url:string,init:RequestInit)=>{
+  calls.push({url,body:JSON.parse(String(init.body))});
+  return new Response(JSON.stringify(body),{status});
+ }) as typeof fetch;
+ return {calls,fake};
+}
+const igBtn=(i:number)=>({label:"زر "+i,url:"https://example.com/p"+i});
+const igReq={platform:"instagram" as const,token:"IG-token",externalId:"",recipient:"123456",
+ text:"تفضل بزيارة متجرنا",websiteButtons:[igBtn(0),igBtn(1)]};
+test("Instagram website buttons are sent as the exact Meta button template",async()=>{
+ const r=igRecorder();
+ assert.equal(await sendProviderMessage(igReq,r.fake),"mid-ig-btn");
+ assert.equal(r.calls.length,1);
+ assert.equal(r.calls[0].url,"https://graph.instagram.com/v21.0/me/messages");
+ assert.deepEqual(r.calls[0].body,{recipient:{id:"123456"},message:{attachment:{type:"template",
+  payload:{template_type:"button",text:"تفضل بزيارة متجرنا",buttons:[
+   {type:"web_url",url:"https://example.com/p0",title:"زر 0"},
+   {type:"web_url",url:"https://example.com/p1",title:"زر 1"}]}}}});
+ assert.equal(JSON.stringify(r.calls[0].body),
+  '{"recipient":{"id":"123456"},"message":{"attachment":{"type":"template","payload":{"template_type":"button","text":"تفضل بزيارة متجرنا","buttons":[{"type":"web_url","url":"https://example.com/p0","title":"زر 0"},{"type":"web_url","url":"https://example.com/p1","title":"زر 1"}]}}}}');
+ // Graph API (page token) route: same message, plus access_token as before.
+ const g=igRecorder();
+ await sendProviderMessage({...igReq,token:"EAAtoken",externalId:"1784000001"},g.fake);
+ assert.equal(g.calls[0].url,"https://graph.facebook.com/v21.0/1784000001/messages");
+ assert.deepEqual(g.calls[0].body.message,r.calls[0].body.message);
+ assert.equal(g.calls[0].body.access_token,"EAAtoken");
+});
+test("Instagram button template limits: 3/4 buttons, title 20/21, text 640/641, url rules (no request)",async()=>{
+ const P=instagramButtonTemplateProblem;
+ assert.equal(P("t",[igBtn(0),igBtn(1),igBtn(2)]),null);
+ assert.equal(P("t",[igBtn(0),igBtn(1),igBtn(2),igBtn(3)]),"ig_buttons_count_invalid");
+ assert.equal(P("t",[]),"ig_buttons_count_invalid");
+ assert.equal(P("t",[{label:"a".repeat(20),url:"https://x.example"}]),null);
+ assert.equal(P("t",[{label:"😀".repeat(20),url:"https://x.example"}]),null);
+ assert.equal(P("t",[{label:"a".repeat(21),url:"https://x.example"}]),"ig_button_title_invalid");
+ assert.equal(P("t",[{label:"  ",url:"https://x.example"}]),"ig_button_title_invalid");
+ assert.equal(P("ن".repeat(640),[igBtn(0)]),null);
+ assert.equal(P("ن".repeat(641),[igBtn(0)]),"ig_buttons_text_too_long");
+ assert.equal(P(" ",[igBtn(0)]),"ig_buttons_text_invalid");
+ for(const url of ["http://example.com","https://user:pass@example.com","https://u@example.com",
+   "javascript:alert(1)","https://localhost/a","https://exa mple.com","not a url",""])
+  assert.equal(P("t",[{label:"site",url}]),"ig_button_url_invalid",url);
+ const r=igRecorder();
+ for(const bad of [
+  {...igReq,websiteButtons:[igBtn(0),igBtn(1),igBtn(2),igBtn(3)]},
+  {...igReq,websiteButtons:[{label:"a".repeat(21),url:"https://x.example"}]},
+  {...igReq,text:"ن".repeat(641)},
+  {...igReq,websiteButtons:[{label:"site",url:"http://example.com"}]},
+  {...igReq,websiteButtons:[{label:"site",url:"https://user:pass@example.com"}]}])
+  await assert.rejects(()=>sendProviderMessage(bad,r.fake),/Invalid Instagram button template/);
+ assert.equal(r.calls.length,0,"no request for an unrepresentable template");
+ const ok=igRecorder();
+ await sendProviderMessage({...igReq,text:"ن".repeat(640),websiteButtons:[igBtn(0),igBtn(1),igBtn(2)]},ok.fake);
+ assert.equal((ok.calls[0].body as any).message.attachment.payload.buttons.length,3);
+ assert.throws(()=>instagramWebsiteButtons("t",[igBtn(0),igBtn(1),igBtn(2),igBtn(3)]),/ig_buttons_count_invalid/);
+});
+test("website buttons with quick replies stay refused; WhatsApp never gets template buttons",async()=>{
+ const r=igRecorder();
+ await assert.rejects(()=>sendProviderMessage({...igReq,quickReplies:[{id:"a",label:"A"}]},r.fake),/Mixed rich button formats/);
+ await assert.rejects(()=>sendProviderMessage({...igReq,platform:"whatsapp",token:"wa",externalId:"100001",
+  recipient:"9647712345678"},r.fake),/WhatsApp rich buttons/);
+ assert.equal(r.calls.length,0);
+});
+test("Messenger website payload unchanged (generic template, page endpoint)",async()=>{
+ const r=igRecorder();
+ await sendProviderMessage({platform:"facebook",token:"EAApage",externalId:"",recipient:"123456",
+  text:"Choose",websiteButtons:[{label:"موقعنا",url:"https://example.com/p"}]},r.fake);
+ assert.equal(r.calls[0].url,"https://graph.facebook.com/v21.0/me/messages");
+ assert.equal(JSON.stringify(r.calls[0].body),
+  '{"recipient":{"id":"123456"},"message":{"attachment":{"type":"template","payload":{"template_type":"generic","elements":[{"title":"Choose","buttons":[{"type":"web_url","title":"موقعنا","url":"https://example.com/p"}]}]}}},"access_token":"EAApage"}');
+ assert.deepEqual(messengerWebsiteButtons("Choose",[{label:"موقعنا",url:"https://example.com/p"}]),
+  (r.calls[0].body as any).message);
+});
+test("Meta errors on a button template follow the text path: uncertain, never resent",async()=>{
+ for(const status of [400,500,429]){
+  const r=igRecorder(status,{error:{code:100}});
+  let sends=0;
+  const res=await executeOnce({reserve:async()=>true,
+   send:()=>{sends++;return sendProviderMessage(igReq,r.fake);},
+   confirm:async()=>true,persistAndBill:async()=>true});
+  assert.equal(res,"uncertain",String(status));
+  assert.equal(sends,1);assert.equal(r.calls.length,1);
+ }
+});
+test("worker gates Instagram website buttons on FLOW_RICH_BUTTONS_ENABLED and pre-validates before reserving",()=>{
+ const code=readFileSync("supabase/functions/flow-outbox-worker/index.ts","utf8");
+ assert.match(code,/if\(websiteButtons && \(env\("FLOW_RICH_BUTTONS_ENABLED"\)!=="true" \|\|\n\s+\(!\["facebook","instagram"\]\.includes\(account\.platform\) && !multichannelWhatsApp\)\)\)\{\n\s+report\("blocked"\);continue;/);
+ // multichannelWhatsApp is false unless FLOW_MULTICHANNEL_ENABLED==="true" AND the account is WhatsApp.
+ assert.match(code,/const multichannel=env\("FLOW_MULTICHANNEL_ENABLED"\)==="true"&&\n\s+\(account\.platform==="whatsapp"\|\|account\.platform==="facebook"\);\n\s+const multichannelWhatsApp=multichannel&&account\.platform==="whatsapp";/);
+ const gate=code.indexOf("instagramButtonTemplateProblem(messageText,websiteButtons)");
+ assert.ok(gate>0&&gate<code.indexOf("const res=await executeOnce({"),"validated before reservation");
+ assert.match(code,/report\(problem\);await skip\("ineligible","invalid"\);continue;/);
+});

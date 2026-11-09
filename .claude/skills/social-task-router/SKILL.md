@@ -20,38 +20,42 @@ Your objective is to complete development efficiently while preserving existing 
 
 ## 2. Task analysis and strict model routing
 
-Before implementation, you MUST strictly classify the task. Do not overthink this.
+Before implementation, classify every new user request by its actual difficulty. Do this quickly; do not overthink it. Do not match keywords or task names. The examples below are illustrative, not an exhaustive or fixed list.
 
 ### 🚨 STRICT ROUTING RULES (NON-NEGOTIABLE)
-- **Default Model:** You are FORBIDDEN from using Opus unless the task EXPLICITLY matches the Opus conditions below. Default to Sonnet.
-- **Delegation:** You MUST use the `Task` tool to delegate tasks to the specific model. Do not just "act" like the model.
-- **No Opus for Reading:** You are FORBIDDEN from using Opus to read files, search code, or run basic terminal commands.
+- **Default Model:** Sonnet is the default for implementation. Do not use Opus unless the task matches the Opus conditions below or is sensitive work (section 10).
+- **Delegation:** You MUST use the Agent tool (formerly `Task`) to delegate tasks to the specific agent/model. Do not just "act" like the model.
+- **No Opus for Reading:** Do not use Opus for standalone file reading, code search, or basic terminal commands; route those to Haiku (or do them directly when section 10 allows).
+- **Keywords are not sensitivity:** Do not use Opus just because a word like "Supabase" or "Instagram" is mentioned. Work that actually touches a sensitive path or area (definition in section 10) always goes to Opus, regardless of size.
 
-### Haiku-level (MUST delegate to Haiku using Task tool)
-- Reading specific files (when path is provided).
-- Searching for a specific symbol or string (grep).
-- Formatting, naming, or simple text replacements.
-- Running standard tests or build commands.
-- *Rule:* If the task is just retrieving information or making a 1-line change, USE HAIKU.
+### Haiku - simple tasks
+Simple, straightforward work needing minimal reasoning or basic coding knowledge, completable safely without deep investigation.
+Examples: reading specific files (when the path is provided); searching for a specific symbol or string; formatting, naming, or simple text replacements; running standard tests or build commands; obvious minor bug fixes; changing text, labels, colors, icons, or spacing; small UI adjustments; simple code corrections; minor changes to existing components; other routine tasks.
+*Rule:* If the task is just retrieving information or making a 1-line non-sensitive change, use Haiku.
 
-### Sonnet-level (Default for implementation)
-- Writing new code, building features.
-- Fixing standard bugs.
-- Modifying files across multiple directories.
-- UI/API integration.
-- *Rule:* If you are writing code, use SONNET.
+### Sonnet - above-simple / moderate tasks (default for implementation)
+More involved than simple: needs reasonable programming knowledge, analysis, or several implementation steps, but no advanced professional expertise or complex engineering decisions. Sonnet is the default for ordinary feature development and normal bug fixing that is beyond Haiku's scope.
+Examples: writing new code and ordinary features; fixes that require investigating the cause; creating or modifying React components; forms, filters, settings, and standard pages; improving existing functionality; UI/API integration using established patterns; moderate changes across multiple files or directories.
 
-### Opus-level (STRICTLY RESTRICTED)
-You may ONLY use Opus if the task strictly requires one of the following:
-1. Designing a completely new system architecture from scratch.
-2. Debugging a critical failure that Haiku and Sonnet have already failed to fix (provide proof of failure).
-3. High-risk security or authentication changes.
-- *Rule:* Do not use Opus just because the word "Supabase" or "Instagram" is mentioned.
+### Opus - difficult, advanced, and professional tasks (restricted)
+Needs advanced expertise, deep reasoning, professional-level implementation, complex problem-solving, or significant architectural or design decisions.
+Examples: designing a new system architecture; complete professional UI/UX redesigns; rebuilding major interface systems or dashboards; complex new features requiring substantial engineering; designing or rebuilding automation engines and workflows; major architectural changes or refactoring; critical or difficult bugs across interconnected systems, especially ones Haiku or Sonnet already failed to fix (with evidence of the failure); complex integrations and high-risk security or authentication work; every sensitive task (section 10); tasks where quality depends on expert-level judgment.
+
+### Classification rules
+1. Determine actual difficulty before selecting a model, using: technical difficulty; reasoning depth required; programming expertise required; number and complexity of implementation steps; architectural and design decisions; cross-system dependencies; risk and impact of mistakes; required quality and professional standards.
+2. Never classify by keywords, task names, or file count alone. "Add a feature" or "fix a bug" does not fix the tier: simple goes to Haiku, ordinary or moderate to Sonnet, complex or professional or interconnected to Opus.
+3. Do not use Opus for routine work. Never downgrade a genuinely difficult task to Haiku or Sonnet merely to save usage.
+4. If a request has several distinct subtasks that can be safely separated (disjoint files, no shared dependency; see Concurrency in section 10), classify each by its own difficulty. Otherwise use the tier able to handle the complete task.
+5. Security-sensitive work and protected project areas always go to Opus regardless of apparent simplicity, size, or number of files (definition in section 10). Opus executes PLAN -> IMPLEMENT autonomously, with no user approval gate.
+6. If Haiku or Sonnet finds the task exceeds its level, it stops and escalates to the router.
 
 ### Escalation
-- Start with Sonnet (or Haiku for reads).
-- ONLY escalate to Opus if Sonnet explicitly returns an error or states it cannot complete the task.
+- For non-sensitive work, start with Sonnet (or Haiku for reads and simple tasks) unless the task is clearly Opus-level by the criteria above.
+- Escalate a non-sensitive task to Opus only when Sonnet returns an error, states it cannot complete the task, or escalates per section 10.
 - Pass concise context when escalating; never re-read the whole project.
+
+### Router behavior before dispatch
+Understand the complete request; inspect relevant project context only when necessary; evaluate actual difficulty and expertise; select exactly one tier per task; dispatch it to the matching agent (unless section 10 says the current session can finish it directly; that shortcut never applies to sensitive work).
 
 ## 3. Token efficiency
 
@@ -129,3 +133,36 @@ After completing a task, report:
 - Tests actually executed and their results.
 - Any unresolved risks or limitations.
 - The next necessary step, if one exists.
+
+## 10. Subagent dispatch
+
+Agents live in `.claude/agents/`: `task-haiku` (model: haiku), `task-sonnet` (model: sonnet), `task-opus` (model: opus). Section 2 stays the classification guide; this section is how to act on it.
+
+**Do not dispatch** non-sensitive work when the current session's own model already matches the task's tier (section 2) and it can finish the task in a few tool calls; an agent costs a cold start and its own context. When the task's tier differs from the current session's model (for example a simple task in a Sonnet session, or a complex task in a Sonnet session), dispatch to the matching agent. This shortcut never applies to sensitive work: sensitive work is ALWAYS routed to `task-opus`, regardless of apparent simplicity, size, or number of files, and this rule takes absolute priority over the shortcut. The current session, Haiku, and Sonnet must never bypass it.
+
+**Routing (by actual difficulty per section 2, not cheapest by default):** `task-haiku` for simple tasks, `task-sonnet` for moderate tasks and as the default for ordinary development and normal bug fixing, `task-opus` for difficult, advanced, and professional tasks and for every sensitive task.
+
+**Sensitive definition (single source; the three agent files repeat it verbatim):**
+- Sensitive paths: `supabase/**` (functions, migrations, proposals, rollbacks, `*.sql`), `.github/workflows/**`, `.env*`, `server/src/rag/**`, `server/src/wa/**`, `server/src/middleware/**`, `server/railway.json`.
+- Sensitive areas, wherever the code lives: authentication, permissions, tenant isolation (`tenant_id`), database schema/migrations, RAG, webhooks, billing/payments, secrets, deployment/CI, Meta/Instagram/WhatsApp/Salla/Wayl integrations, and security reviews.
+- Sensitive work goes directly to Opus regardless of edit size or apparent simplicity. Haiku and Sonnet never modify sensitive paths, including comments and typo fixes.
+- Architecture, refactoring, and cross-system debugging are complex, not sensitive, unless they touch the paths or areas above.
+
+**Opus phases and mode selection:** the router chooses the mode explicitly in every Opus brief.
+- Sensitive changes: Opus runs PLAN -> IMPLEMENT autonomously. PLAN is an internal analysis and planning phase, not an approval gate: send `MODE=PLAN`, check the returned plan against the requested scope, then send `MODE=IMPLEMENT` immediately (or send one `MODE=IMPLEMENT` brief that requires an internal plan first). Do not wait for, or ask for, user confirmation. The user's request authorizes implementation within the scope it explicitly states; the brief lists those files.
+- Complex but non-sensitive tasks: send `MODE=IMPLEMENT` directly. Opus investigates, picks the smallest safe solution, and implements it in one session, with no PLAN/approval cycle. The user's task request authorizes implementation within the scope it explicitly states; the brief lists those files.
+- `MODE=PLAN`: analysis and planning, no file changes. `MODE=REVIEW`: read-only review of code or a diff, no modifications and no approval cycle (security reviews use it); use it when the user asks for a review or to verify a sensitive change the router did not write.
+- Out-of-scope work: if additional work is needed beyond the explicitly requested scope, do not perform it, do not escalate it to Opus automatically, and do not ask for approval. Complete the original authorized task wherever possible and report the scope limitation. Do not request approval for ordinary implementation, architecture, or security-fix decisions within the requested scope. Reassess complexity from scratch if the user later explicitly expands the scope.
+- Production-impacting or destructive database changes, deployments, secrets, and similarly high-risk actions always need separate explicit user approval. Agents never apply migrations, deploy functions, or touch secrets.
+
+**Brief each agent with:** goal, exact files in scope, confirmed findings (not re-investigation), forbidden areas, and the report format. Do not paste the conversation or the whole skill.
+
+**Concurrency:** one writing agent per file set. Parallel agents only for read-only work or disjoint files. Track which files each running agent owns, and do not start a writer on a file another running agent owns; wait for it to finish.
+
+**Duplicate work:** keep a short ledger of confirmed findings (question, files examined, answer) and of dispatched tasks (agent, files, status). Before any dispatch, check it: reuse an existing finding instead of re-reading the same files, and never send the same task to a second agent. Pass agents the relevant findings, not the investigation again. Do not send two agents the same question in parallel.
+
+**Escalation:** on `ESCALATE`, re-dispatch with the agent's findings and reason. Haiku and Sonnet must stop and escalate to the router when a task exceeds their level; they never continue beyond it. Haiku goes to Sonnet for moderate tasks, and to Opus for sensitive, complex, or professional-redesign tasks. Sonnet goes to Opus for sensitive, architectural, advanced, or professional-redesign work. Out-of-scope needs are not an escalation reason: report them as scope limitations. Opus reports to the router (`BLOCKED`, or `NEEDS_APPROVAL` read as a scope limitation) and does not ask for approval of in-scope decisions. Agents never delegate to other agents; only the router re-dispatches. Do not retry the same tier without new evidence.
+
+**Model availability:** if a required model is unavailable or the call is rejected, stop and tell the user. Never silently substitute another model.
+
+**Review and verification:** the router reviews each report and the resulting diff. Record per task: agent, requested model, model confirmed (or "unverified"), status. Check running agents with `/tasks`. Report tests as passed only if actually run.

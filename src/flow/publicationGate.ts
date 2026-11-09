@@ -13,6 +13,40 @@ export type FlowCapability=
 export type ReleaseIssue={severity:"error"|"warning";message:string;nodeId?:string;capability?:FlowCapability};
 export type ReleaseAudit={canPublish:boolean;issues:ReleaseIssue[];required:FlowCapability[]};
 
+/**
+ * True when the document contains image content the live sender must deliver:
+ * a legacy node image or an image content block on a message/question node.
+ * Accepts untrusted input (stored publication documents); never throws.
+ */
+export function flowNeedsMedia(doc:unknown):boolean{
+  const nodes=doc&&typeof doc==="object"?(doc as {nodes?:unknown}).nodes:undefined;
+  if(!Array.isArray(nodes))return false;
+  return nodes.some(n=>{
+    const d=n&&typeof n==="object"?(n as {data?:unknown}).data as Record<string,unknown>|undefined:undefined;
+    if(!d||typeof d!=="object"||(d.kind!=="message"&&d.kind!=="question"))return false;
+    return (typeof d.image==="string"&&d.image!=="")||
+      (Array.isArray(d.contentBlocks)&&d.contentBlocks.some(b=>!!b&&typeof b==="object"&&(b as {type?:unknown}).type==="image"));
+  });
+}
+/** Server capability list (e.g. FLOW_ACTIVATION_CAPABILITIES, comma separated). */
+export function parseCapabilities(raw:string):FlowCapability[]{
+  return raw.split(",").map(s=>s.trim()).filter(Boolean) as FlowCapability[];
+}
+/**
+ * Images may go live only when the SERVER capability set contains
+ * message:image AND image sending is enabled (FLOW_MEDIA_SEND_ENABLED).
+ * message:pdf is never implied.
+ */
+export function mediaActivationAllowed(capabilities:Iterable<string>,mediaSendEnabled:boolean):boolean{
+  return mediaSendEnabled===true&&[...capabilities].includes("message:image");
+}
+/** The server capability set with message:image removed while image sending is off. */
+export function withMediaGate(capabilities:Iterable<FlowCapability>,mediaSendEnabled:boolean):Set<FlowCapability>{
+  const out=new Set(capabilities);
+  if(!mediaActivationAllowed(out,mediaSendEnabled))out.delete("message:image");
+  return out;
+}
+
 /** The browser must NEVER supply its own trusted capabilities to a publishing endpoint.
  * An authenticated server supplies this set from deployed runtime support and Meta permissions.
  * The default empty set deliberately FAILS CLOSED until backend is implemented.

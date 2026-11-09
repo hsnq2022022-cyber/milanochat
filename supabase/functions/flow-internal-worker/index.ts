@@ -2,8 +2,17 @@
  * REVIEW ONLY. Not deployed, not scheduled.
  * Internal effects are stored in PostgreSQL, never sent to Meta.
  * FLOW_INTERNAL_ACTIONS_ENABLED is OFF unless explicitly approved.
+ *
+ * Optional standalone tick of the internal executor (internalEffects.ts).
+ * The scheduled flow-outbox-worker runs the same executor after its message
+ * pass, so no extra Cron job is required; both are safe to run concurrently
+ * (conditional lease claim + idempotent writes).
+ * The previous body called flow_apply_internal_effect (20261028228000),
+ * which only serves test_only tenants and ignores per-run effect order;
+ * that SQL function is left installed and unchanged.
  */
 import {createClient} from "npm:@supabase/supabase-js@2";
+import {runInternalEffects,internalActionsReleased} from "./internalEffects.ts";
 const env=(key:string)=>Deno.env.get(key)??"";
 const reply=(status:number,data:unknown)=>new Response(JSON.stringify(data),{
  status,headers:{"content-type":"application/json","cache-control":"no-store"}});
@@ -12,7 +21,7 @@ Deno.serve(async req=>{
  const key=env("SUPABASE_SERVICE_ROLE_KEY");
  if(!key||req.headers.get("authorization")!=="Bearer "+key)
   return reply(401,{error:"Unauthorized"});
- if(env("FLOW_INTERNAL_ACTIONS_ENABLED")!=="true")return reply(423,{enabled:false});
+ if(!internalActionsReleased(k=>Deno.env.get(k)))return reply(423,{enabled:false});
  let body:unknown;
  try{body=await req.json();}catch{return reply(400,{error:"Invalid JSON"});}
  if(!body||typeof body!=="object"||
@@ -21,28 +30,7 @@ Deno.serve(async req=>{
  const sb=createClient(env("SUPABASE_URL"),key,{
   auth:{persistSession:false,autoRefreshToken:false}
  });
- const {data:global,error:ge}=await sb.from("automation_flow_global_switch")
-  .select("enabled").eq("singleton",true).single();
- if(ge||global?.enabled!==true)return reply(423,{enabled:false});
- const {data,error:eRror}=await sb.from("automation_flow_outbox")
-  .select("tenant_id,id,effect_kind")
-  .eq("delivery_status","pending")
-  .in("effect_kind",["tag","untag","staff_notification"])
-  .order("created_at",{ascending:true}).limit(30);
- if(eRror)return reply(503,{error:"Unable to load internal effects"});
- let applied=0,skipped=0;
- for(const item of data??[]){
-  const {data:ok,error}=await sb.rpc("flow_apply_internal_effect",{
-   p_tenant:item.tenant_id,p_outbox:item.id
-  });
-  if(error){
-   console.error("[flow-internal] atomic effect error",{
-    code:error.code??"unknown",outboxId:item.id
-   });
-   skipped++;continue;
-  }
-  if(ok===true)applied++;
-  else skipped++;
- }
- return reply(200,{processed:(data??[]).length,applied,skipped,sends:0});
+ const status=await runInternalEffects(sb,{canaryAccountId:env("FLOW_DURABLE_CANARY_ACCOUNT_ID")});
+ if(status.blocked_global)return reply(423,{enabled:false});
+ return reply(200,{status,sends:0});
 });

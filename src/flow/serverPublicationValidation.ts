@@ -60,16 +60,58 @@ export function testCanaryArmed(
 }
 
 /**
+ * Server-owned comment automation context for productionActivationAuthorized.
+ * Populate ONLY from the Edge Function environment (and, for commentTrigger,
+ * from the server-stored published document). Never from a browser request.
+ */
+export type CommentActivationContext={
+ /** The flow is a comment-trigger flow (server-side check of the stored document). */
+ commentTrigger:boolean;
+ /** FLOW_COMMENT_AUTOMATION_ENABLED==="true" (default OFF). */
+ commentAutomationEnabled:boolean;
+ /** FLOW_MULTICHANNEL_ENABLED==="true" (default OFF; Facebook Page comment ingress). */
+ multichannelEnabled:boolean;
+};
+
+/**
  * Live tenant approval is a separate, operator-owned database boundary.
  * Browser arguments, a published document, or a feature flag cannot approve it.
  * Text-only Instagram is the first supported live sending capability.
+ *
+ * Comment flows (optional `comment` context, server-populated only):
+ * - instagram: unchanged (the same result with or without the context).
+ * - facebook: authorized ONLY for a comment-trigger flow while BOTH
+ *   FLOW_COMMENT_AUTOMATION_ENABLED and FLOW_MULTICHANNEL_ENABLED are on.
+ *   Facebook DM (non-comment) flows stay NOT authorized.
+ * - whatsapp: never. Meta's WhatsApp Cloud API has no comment surface, so a
+ *   WhatsApp comment flow cannot exist; WhatsApp DM flows stay NOT authorized.
+ * Absent context or any flag not exactly true: exactly the previous result.
  */
 export function productionActivationAuthorized(
  platform:ProviderPlatform,
  globalEnabled:unknown,
  tenantEnabled:unknown,
- productionApproved:unknown
+ productionApproved:unknown,
+ comment?:CommentActivationContext
 ):boolean {
- return platform==="instagram" && globalEnabled===true &&
-  tenantEnabled===true && productionApproved===true;
+ if(globalEnabled!==true||tenantEnabled!==true||productionApproved!==true)return false;
+ if(platform==="instagram")return true;
+ return platform==="facebook"&&comment?.commentTrigger===true&&
+  comment.commentAutomationEnabled===true&&comment.multichannelEnabled===true;
+}
+
+/**
+ * Provider platform of a document's single comment trigger, else null.
+ * A UI hint only (account selection / showing controls); never an
+ * authorization: the server re-derives everything from the stored document.
+ */
+export function commentTriggerProviderPlatform(doc:unknown):ProviderPlatform|null{
+ if(!doc||typeof doc!=="object"||Array.isArray(doc))return null;
+ const nodes=(doc as {nodes?:unknown}).nodes;
+ if(!Array.isArray(nodes))return null;
+ const triggers=nodes.filter(n=>!!n&&typeof n==="object"&&
+  (n as {data?:{kind?:unknown}}).data?.kind==="trigger") as Array<{data:Record<string,unknown>}>;
+ if(triggers.length!==1||triggers[0].data.triggerMode!=="comment")return null;
+ const p=triggers[0].data.platform;
+ return p==="instagram"||p==="messenger"?providerPlatform(p):null;
 }

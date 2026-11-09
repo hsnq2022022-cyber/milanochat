@@ -22,8 +22,17 @@ test("outbox Cron requires same distinct operator release before any DB or provi
  const gate=code.indexOf('env("FLOW_WORKERS_OPERATOR_RELEASE")!=="production-canary-approved"');
  const existing=code.indexOf('env("FLOW_OUTBOX_SEND_ENABLED")!=="true"');
  const db=code.indexOf("const sb=createClient(base,secret");
- const send=code.indexOf("send:()=>sendProviderMessage(");
+ // Text and image sends share one executeOnce `send` (image-send commit).
+ const send=code.indexOf("send:()=>imageUrl===undefined?sendProviderMessage(");
  assert(auth>0 && gate>auth && existing>gate && db>existing && send>db);
+ // EVERY provider call and EVERY DB client/query comes after the gate: no
+ // sendProviderMessage( call, createClient( or sb. use precedes it.
+ const all=(re:RegExp)=>[...code.matchAll(re)].map(m=>m.index!);
+ const sends=all(/sendProviderMessage\(/g);
+ assert.equal(sends.length,2,"exactly the text and the image call");
+ assert(sends.every(i=>i>db));
+ assert(all(/createClient\(/g).every(i=>i===db+"const sb=".length));
+ assert(all(/\bsb\./g).every(i=>i>db));
  assert.match(code,/return blocked\(\);/);
 });
 

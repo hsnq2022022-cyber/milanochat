@@ -4,16 +4,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import confetti from "canvas-confetti";
 import SafeAvatar from "../components/SafeAvatar";
-import DeliveryReviewPanel from "./DeliveryReviewPanel";
+import CommentActivity from "../components/CommentActivity";
+import OnboardingWizard, { readOnboardingDone, writeOnboardingDone } from "../components/OnboardingWizard";
+import { ROUTE_SYNC_EVENT } from "../components/AppShell";
 import { api, apiAuthFetch, apiBase, apiEnabled, backendMode, paymentCheckoutEnabled, type WaSnapshot } from "../lib/api";
 import { getSupabase, getStoredClaim, clearStoredClaim } from "../lib/supabase";
 import { CHANNELS, ChannelBadge, detectChannel, type ChannelId } from "../lib/channels";
 import {
   IconWhatsapp, IconCheck, IconX, IconPlus, IconTrash, IconSend,
-  IconLogout, IconRefresh, IconDatabase, IconCard, IconGlobe, IconMapPin,
-  IconPen, IconQuestion, IconHandoff, IconLog, IconCoin, IconSparkle, IconChevronDown,
+  IconLogout, IconDatabase, IconCard, IconGlobe, IconMapPin,
+  IconPen, IconSettings, IconQuestion, IconHandoff, IconLog, IconCoin, IconSparkle, IconChevronDown,
   IconFacebook, IconInstagram,
 } from "../components/Icons";
+import { copyText } from "../lib/clipboard.ts";
 
 /* ═══════════ الأنواع ═══════════ */
 
@@ -178,6 +181,21 @@ const cls = {
 
 const now = () => new Date().toISOString();
 
+/* اختيار التبويب من الرابط: #/dashboard?tab=inbox|channels|knowledge|widgets|unresolved */
+type DashTab = "convs" | "unresolved" | "knowledge" | "widgets" | "channels";
+const TAB_PARAM: Record<DashTab, string> = { convs: "inbox", unresolved: "unresolved", knowledge: "knowledge", widgets: "widgets", channels: "channels" };
+function tabFromHash(hash: string): DashTab | null {
+  if (!hash.startsWith("#/dashboard")) return null;
+  const v = new URLSearchParams(hash.split("?")[1] ?? "").get("tab");
+  if (v === "inbox" || v === "convs" || v === "comments") return "convs";
+  if (v === "unresolved" || v === "knowledge" || v === "widgets" || v === "channels") return v;
+  return null;
+}
+
+/* تبويب فرعي داخل المحادثات: ?tab=comments يفتح «التعليقات» */
+const inboxViewFromHash = (hash: string): "chats" | "comments" =>
+  hash.startsWith("#/dashboard") && new URLSearchParams(hash.split("?")[1] ?? "").get("tab") === "comments" ? "comments" : "chats";
+
 /* ═══════════ المكوّن الرئيسي ═══════════ */
 
 export default function Dashboard() {
@@ -199,7 +217,9 @@ export default function Dashboard() {
   const [claimErr, setClaimErr] = useState("");
   const [claimBusy, setClaimBusy] = useState(false);
 
-  const [tab, setTab] = useState<"convs" | "unresolved" | "knowledge" | "widgets" | "channels">("convs");
+  const [tab, setTab] = useState<DashTab>(() => tabFromHash(window.location.hash) ?? "convs");
+  const [inboxView, setInboxView] = useState<"chats" | "comments">(() => inboxViewFromHash(window.location.hash));
+  const [waVerified, setWaVerified] = useState<boolean | null>(null);
   const [socialChannels, setSocialChannels] = useState<any[]>([]);
   const [activeConv, setActiveConv] = useState<string | null>(null);
   const [mobileThread, setMobileThread] = useState(false);
@@ -231,6 +251,8 @@ export default function Dashboard() {
   const [chSummary, setChSummary] = useState<ChannelSummary | null>(null);
   const [metaStatus, setMetaStatus] = useState<MetaStatus | null>(null);
   const [chLoading, setChLoading] = useState(false);
+  const [chLoaded, setChLoaded] = useState(false);
+  const [onbDismissed, setOnbDismissed] = useState(false);
   const [chBusyId, setChBusyId] = useState<string | null>(null);
   const [chBusyPlatform, setChBusyPlatform] = useState<string | null>(null);
   const [manageAcc, setManageAcc] = useState<ChannelAccount | null>(null);
@@ -616,6 +638,7 @@ export default function Dashboard() {
 
       setChAccounts(normalized);
       setChSummary(summary ?? null);
+      setChLoaded(true);
     } catch (e) {
       console.error("[Dashboard] channels load error:", e);
     } finally {
@@ -623,11 +646,44 @@ export default function Dashboard() {
     }
   }, [token, demo]);
 
+  /* روابط التنقل الجانبي: تغيّر الهاش أثناء بقاء اللوحة مفتوحة */
+  useEffect(() => {
+    const onHash = () => {
+      if (!window.location.hash.startsWith("#/dashboard")) return;
+      setTab(tabFromHash(window.location.hash) ?? "convs");
+      setInboxView(inboxViewFromHash(window.location.hash));
+    };
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+
+  /* إبقاء الهاش مطابقًا للتبويب الحالي حتى يعرف التنقل العنصر النشط */
+  const tabSynced = useRef(false);
+  useEffect(() => {
+    if (!tabSynced.current) { tabSynced.current = true; return; }
+    if (!window.location.hash.startsWith("#/dashboard")) return;
+    const cur = tabFromHash(window.location.hash) ?? (window.location.hash.includes("tab=") ? null : "convs");
+    if (cur === tab) return;
+    const [, q = ""] = window.location.hash.split("?");
+    const params = new URLSearchParams(q);
+    params.set("tab", TAB_PARAM[tab]);
+    window.history.replaceState(null, "", `#/dashboard?${params.toString()}`);
+    window.dispatchEvent(new Event(ROUTE_SYNC_EVENT));
+  }, [tab]);
+
   useEffect(() => {
     if (demo || !authed || !token || needClaim) return;
     loadChannels();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [demo, authed, token, needClaim]);
+
+  // حالة اعتماد رقم واتساب (verified=false → قيد المراجعة)
+  useEffect(() => {
+    if (demo || backendMode !== "supabase" || tab !== "channels" || !token || !st?.tenantId) return;
+    let cancelled = false;
+    api.wa.getSession(st.tenantId, token).then((r) => { if (!cancelled) setWaVerified(r.verified ?? null); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [demo, tab, token, st?.tenantId]);
 
   useEffect(() => {
     if (demo || backendMode !== "supabase") return;
@@ -638,6 +694,10 @@ export default function Dashboard() {
   useEffect(() => {
     const q = new URLSearchParams(window.location.search);
     if (q.get("tab") === "channels") setTab("channels");
+    /* روابط من الإعدادات: #/dashboard?tab=unresolved أو ?pay=1 */
+    const hq = new URLSearchParams(window.location.hash.split("?")[1] ?? "");
+    if (hq.get("tab") === "unresolved") setTab("unresolved");
+    if (hq.get("pay") === "1") setPayOpen(true);
     const connected = q.get("channel_connected");
     if (connected) {
       const name = q.get("name");
@@ -740,22 +800,6 @@ export default function Dashboard() {
     } catch (e: any) {
       showToast(String(e?.message ?? "") || "تعذر بدء ربط Meta");
       setChBusyPlatform(null);
-    }
-  };
-
-  const disconnectSocialChannel = async (platform: "facebook" | "instagram") => {
-    if (!token || !st?.tenantId) return;
-    if (!window.confirm(`فصل ${platform === "facebook" ? "Facebook" : "Instagram"}؟`)) return;
-    try {
-      await apiAuthFetch(token, "/api/auth/disconnect", {
-        method: "POST",
-        body: JSON.stringify({ platform, tenantId: st.tenantId }),
-      });
-      showToast("تم فصل القناة");
-      loadSocialChannels();
-      loadChannels();
-    } catch (e: any) {
-      showToast(e?.message || "تعذر الفصل");
     }
   };
 
@@ -1017,7 +1061,7 @@ export default function Dashboard() {
   }, [demo, token, loadWidgets]);
 
   const createWidget = async () => {
-    if (!widgetForm.name.trim()) { showToast("أدخل اسم الـ widget"); return; }
+    if (!widgetForm.name.trim()) { showToast("أدخل اسم الودجة"); return; }
     try {
       const newWidget = await apiAuthFetch(token!, "/api/widgets/dashboard", {
         method: "POST",
@@ -1032,21 +1076,21 @@ export default function Dashboard() {
         }),
       });
       setWidgets([newWidget, ...widgets]);
-      showToast("تم إنشاء الـ widget بنجاح");
+      showToast("تم إنشاء الودجة بنجاح");
       setWidgetForm({ name: "", welcomeMessage: "مرحباً! كيف يمكنني مساعدتك؟", primaryColor: "#2ec27e", position: "left", placeholder: "اكتب رسالتك..." });
     } catch (e: any) {
-      showToast(e?.message || "تعذر إنشاء الـ widget");
+      showToast(e?.message || "تعذر إنشاء الودجة");
     }
   };
 
   const deleteWidget = async (id: string) => {
-    if (!confirm("هل أنت متأكد من حذف هذا الـ widget؟")) return;
+    if (!confirm("هل أنت متأكد من حذف هذا الودجة؟")) return;
     try {
       await apiAuthFetch(token!, `/api/widgets/dashboard/${id}`, { method: "DELETE" });
       setWidgets(widgets.filter(w => w.id !== id));
-      showToast("تم حذف الـ widget");
+      showToast("تم حذف الودجة");
     } catch (e: any) {
-      showToast(e?.message || "تعذر حذف الـ widget");
+      showToast(e?.message || "تعذر حذف الودجة");
     }
   };
 
@@ -1065,7 +1109,7 @@ export default function Dashboard() {
   const copyEmbedCode = (token: string) => {
     const API = apiBase; // Keep prior legacy embed behavior; Widget out of launch scope.
     const code = `<script src="${apiEnabled ? API : "https://your-server.com"}/widget.js" data-token="${token}"></script>`;
-    navigator.clipboard.writeText(code);
+    copyText(code);
     setCopiedCode(token);
     setTimeout(() => setCopiedCode(null), 2000);
     showToast("تم نسخ كود التضمين");
@@ -1156,7 +1200,7 @@ export default function Dashboard() {
         <div className="max-w-xl mx-auto px-5 pt-24 pb-20">
           <div className={`${cls.card} p-8`}>
             <h2 className="font-display font-bold text-2xl text-bone mb-2">اربط حسابك بمشروعك</h2>
-            <p className="text-sm text-sage leading-6 mb-6">الصق رمز الضم الذي ظهر لك.</p>
+            <p className="text-sm text-sage leading-6 mb-4 font-normal">الصق رمز الضم الذي ظهر لك.</p>
             <input dir="ltr" value={claimVal} onChange={(e) => setClaimVal(e.target.value)} className={`${cls.input} text-left mb-3`} placeholder="claim token" />
             {claimErr && <p className="text-[11.5px] text-oro-soft mb-3">{claimErr}</p>}
             <button
@@ -1199,17 +1243,31 @@ export default function Dashboard() {
 
   /* ═══════════ اللوحة ═══════════ */
 
-  const creditPct = Math.max(0, Math.min(100, (st.credits / 1000) * 100));
-  const active = st.convs.find((c) => c.id === activeConv) ?? null;
+    const active = st.convs.find((c) => c.id === activeConv) ?? null;
   const TABS = [
     { id: "convs" as const, label: "المحادثات", icon: <IconLog className="w-4 h-4" /> },
-    { id: "unresolved" as const, label: "العالقة", icon: <IconQuestion className="w-4 h-4" />, badge: st.openUnresolved },
     { id: "knowledge" as const, label: "المعرفة", icon: <IconDatabase className="w-4 h-4" /> },
-    { id: "widgets" as const, label: "Widgets", icon: <span className="text-sm">💬</span> },
     { id: "channels" as const, label: "القنوات", icon: <IconGlobe className="w-4 h-4" /> },
   ];
 
   const waLive = st.waStatus === "connected" || !!st.phone;
+  /* المعالج: مستخدم موثّق، لم يُنهِ/يتخطَّ المعالج، وبلا أي قناة (بعد اكتمال تحميل القنوات بنجاح) */
+  const showOnboarding =
+    !demo && authed && !!token && !needClaim && chLoaded && !onbDismissed &&
+    chAccounts.length === 0 && !waLive && !readOnboardingDone(st.tenantId);
+  const finishOnboarding = (how: "done" | "skipped") => {
+    writeOnboardingDone(st.tenantId, how);
+    setOnbDismissed(true);
+  };
+  const createOnboardingFlow = async () => {
+    const { useFlowStore } = await import("../flow/store");
+    if (!useFlowStore.getState().createFlow("تدفق ترحيب")) {
+      showToast("وصلت إلى الحد الأقصى للتدفقات المحلية (30).");
+      return;
+    }
+    finishOnboarding("done");
+    window.location.hash = "#/flows";
+  };
   const fbAccounts = chAccounts.filter((a) => a.channel === "facebook");
   const igAccounts = chAccounts.filter((a) => a.channel === "instagram");
 
@@ -1235,6 +1293,9 @@ export default function Dashboard() {
               <IconCard className="w-4 h-4" />
               <span className="hidden sm:inline">اشحن الرصيد</span>
             </button>
+            <a href="#/settings" data-testid="dashboard-settings-link" aria-label="الإعدادات" title="الإعدادات" className="md:hidden inline-flex items-center justify-center w-11 h-11 rounded-xl text-sage hover:text-verde hover:bg-moss transition-colors duration-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-verde">
+              <IconSettings className="w-5 h-5" aria-hidden="true" />
+            </a>
             <button onClick={logout} title="خروج" className="p-2.5 rounded-xl text-sage hover:text-oro hover:bg-moss transition-all duration-300">
               <IconLogout className="w-5 h-5" />
             </button>
@@ -1242,12 +1303,7 @@ export default function Dashboard() {
         </div>
       </header>
 
-      <main className="max-w-6xl mx-auto px-5 pt-7 pb-24">
-        {import.meta.env.VITE_ENABLE_DELIVERY_REVIEW !== "false" && st?.tenantId && (
-          <div className="mb-6">
-            <DeliveryReviewPanel token={token} tenantId={st.tenantId} />
-          </div>
-        )}
+      <main className="max-w-6xl mx-auto px-4 pt-5 pb-[calc(6rem+env(safe-area-inset-bottom))]">
         {st.credits <= 0 ? (
           <div className="mb-5 flex flex-wrap items-center gap-3 bg-oro/10 border border-oro/40 rounded-2xl px-5 py-3.5 msg-in">
             <span className="text-oro"><IconCoin className="w-5 h-5" /></span>
@@ -1262,61 +1318,7 @@ export default function Dashboard() {
           </div>
         ) : null}
 
-        <div className="grid md:grid-cols-12 gap-4 mb-7">
-          <section className={`${cls.card} md:col-span-5 p-5 relative overflow-hidden group hover:border-verde/35 transition-colors duration-300`}>
-            <div className="absolute -bottom-14 -start-14 w-44 h-44 rounded-full bg-verde/10 blur-2xl group-hover:bg-verde/15 transition-colors duration-500" aria-hidden="true" />
-            <div className="flex items-start justify-between gap-3 relative">
-              <div>
-                <p className="text-[11px] text-sage mb-1.5">حالة واتساب</p>
-                <p className="flex items-center gap-2 font-display font-bold text-lg text-bone">
-                  <span className={`w-2.5 h-2.5 rounded-full ${st.waStatus === "connected" ? "bg-verde live-dot" : "bg-oro"}`} />
-                  {st.waStatus === "connected" ? "متصل" : st.waStatus === "qr" ? "بانتظار المسح" : "غير متصل"}
-                </p>
-                <p className="text-[11.5px] text-sage mt-1" dir="ltr">
-                  {st.waStatus === "connected" ? "WhatsApp Cloud API" : "غير مُعدّ"}
-                </p>
-              </div>
-              {st.waStatus === "connected" ? (
-                <span className="text-xs text-verde font-semibold flex items-center gap-1">
-                  <IconWhatsapp className="w-4 h-4" /> متصل عبر Cloud API
-                </span>
-              ) : (
-                <span className="text-xs text-oro font-semibold flex items-center gap-1">
-                  <IconWhatsapp className="w-4 h-4" /> تحقق من إعدادات Cloud API
-                </span>
-              )}
-            </div>
-            <div className="mt-4 flex items-center gap-2 text-[11px] text-sage relative">
-              <IconRefresh className="w-3.5 h-3.5 text-verde" />
-              تتحدث الحالة تلقائيًا كل بضع ثوانٍ
-            </div>
-          </section>
-
-          <section className={`${cls.card} md:col-span-4 p-5 group hover:border-verde/35 transition-colors duration-300`}>
-            <div className="flex items-center justify-between mb-2">
-              <p className="text-[11px] text-sage">رصيد الردود</p>
-              <span className="text-verde"><IconCoin className="w-4.5 h-4.5" /></span>
-            </div>
-            <p className="font-display font-bold text-3xl text-bone tabular-nums leading-none">
-              {st.credits.toLocaleString("en")}
-              <span className="text-xs text-sage font-body font-normal ms-1.5">من 1,000</span>
-            </p>
-            <div className="mt-3.5 flex gap-[3px]" aria-hidden="true">
-              {Array.from({ length: 25 }).map((_, i) => (
-                <span
-                  key={i}
-                  className={`h-2 flex-1 rounded-full transition-all duration-500 ${
-                    i < (creditPct / 100) * 25
-                      ? creditPct > 40 ? "bg-verde" : creditPct > 15 ? "bg-oro" : "bg-oro-soft"
-                      : "bg-moss"
-                  }`}
-                  style={{ transitionDelay: `${i * 18}ms` }}
-                />
-              ))}
-            </div>
-          </section>
-
-          <section className="md:col-span-3 grid grid-rows-2 gap-4">
+        <div className="grid grid-cols-2 gap-3 mb-5" data-testid="dashboard-kpis">
             <button onClick={() => setTab("convs")} className={`${cls.card} p-4 text-start group hover:border-verde/40 hover:-translate-y-0.5 transition-all duration-300`}>
               <div className="flex items-center justify-between">
                 <span className="text-sage group-hover:text-verde transition-colors"><IconLog className="w-4.5 h-4.5" /></span>
@@ -1333,29 +1335,54 @@ export default function Dashboard() {
               </div>
               <p className="text-[11px] text-sage mt-1">سؤال ينتظر تدخلّك</p>
             </button>
-          </section>
         </div>
 
-        <div className="relative bg-pine/50 border border-verde/12 rounded-2xl p-1.5 grid grid-cols-5 mb-6 max-w-2xl">
+        <div className="relative bg-pine/50 border border-verde/12 rounded-2xl p-1.5 grid grid-cols-3 mb-4 max-w-2xl" data-testid="dashboard-tabs">
           {TABS.map((t) => (
             <button
               key={t.id}
               onClick={() => setTab(t.id)}
-              className={`flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-[13px] font-bold transition-colors duration-300 ${
+              className={`flex items-center justify-center gap-1.5 min-h-[44px] rounded-xl text-[13px] font-bold transition-colors duration-300 focus-visible:outline focus-visible:outline-2 focus-visible:outline-oro ${
                 tab === t.id ? "text-oro bg-moss" : "text-sage hover:text-bone"
               }`}
             >
               {t.icon}{t.label}
-              {t.badge ? (
-                <span className="min-w-5 h-5 px-1 rounded-full bg-oro text-ink text-[10.5px] font-bold flex items-center justify-center tabular-nums">
-                  {t.badge}
-                </span>
-              ) : null}
             </button>
           ))}
         </div>
 
         {tab === "convs" && (
+          <div className={`flex gap-1.5 mb-3 max-w-2xl ${mobileThread && inboxView === "chats" ? "hidden lg:flex" : ""}`} role="tablist" aria-label="عرض صندوق الوارد" data-testid="inbox-subtabs">
+            {([["chats", "المحادثات"], ["comments", "التعليقات"]] as const).map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                role="tab"
+                aria-selected={inboxView === id}
+                data-testid={`inbox-subtab-${id}`}
+                onClick={() => {
+                  setInboxView(id);
+                  if (window.location.hash.startsWith("#/dashboard")) {
+                    const params = new URLSearchParams(window.location.hash.split("?")[1] ?? "");
+                    params.set("tab", id === "comments" ? "comments" : "inbox");
+                    window.history.replaceState(null, "", `#/dashboard?${params.toString()}`);
+                  }
+                }}
+                className={`flex-1 min-h-[44px] rounded-xl border text-[13px] font-bold transition-colors duration-200 ease-out focus:outline-none focus:ring-2 focus:ring-verde ${
+                  inboxView === id ? "bg-moss text-oro border-oro/40" : "text-sage border-verde/15 hover:text-bone"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {tab === "convs" && inboxView === "comments" && (
+          <CommentActivity tenantId={st.tenantId} token={token} demo={demo} formatTime={fmtDate} />
+        )}
+
+        {tab === "convs" && inboxView === "chats" && (
           <div className="grid lg:grid-cols-[320px_1fr] gap-4 items-start">
             <aside className={`${cls.card} overflow-hidden ${mobileThread ? "hidden lg:block" : ""}`}>
               <div className="px-4 py-3.5 border-b border-verde/10 flex items-center justify-between">
@@ -1687,12 +1714,12 @@ export default function Dashboard() {
           <div className="grid lg:grid-cols-[1fr_400px] gap-4 items-start">
             <section className={`${cls.card} overflow-hidden`}>
               <div className="px-5 py-4 border-b border-verde/10 flex items-center justify-between">
-                <p className="text-sm font-bold text-bone">💬 Widgets الخاصة بك</p>
-                <span className="text-[11px] text-sage">{widgets.length} widget</span>
+                <p className="text-sm font-bold text-bone">💬 الودجات الخاصة بك</p>
+                <span className="text-[11px] text-sage">{widgets.length} ودجة</span>
               </div>
               <ul className="divide-y divide-verde/8">
                 {widgets.length === 0 && (
-                  <li className="px-5 py-12 text-center text-xs text-sage/70">لا widgets بعد.</li>
+                  <li className="px-5 py-12 text-center text-xs text-sage/70">لا ودجات بعد.</li>
                 )}
                 {widgets.map((w) => (
                   <li key={w.id} className="px-5 py-4">
@@ -1713,18 +1740,18 @@ export default function Dashboard() {
             </section>
 
             <aside className={`${cls.card} p-5`}>
-              <p className="text-sm font-bold text-bone mb-4">إنشاء Widget جديد</p>
+              <p className="text-sm font-bold text-bone mb-4">إنشاء ودجة جديدة</p>
               <div className="space-y-3">
-                <input value={widgetForm.name} onChange={(e) => setWidgetForm({ ...widgetForm, name: e.target.value })} className={cls.input} placeholder="اسم الـ widget" />
+                <input value={widgetForm.name} onChange={(e) => setWidgetForm({ ...widgetForm, name: e.target.value })} className={cls.input} placeholder="اسم الودجة" />
                 <textarea value={widgetForm.welcomeMessage} onChange={(e) => setWidgetForm({ ...widgetForm, welcomeMessage: e.target.value })} rows={2} className={`${cls.input} resize-none`} placeholder="رسالة الترحيب" />
-                <button onClick={createWidget} className={`${cls.btn} w-full py-3`}>إنشاء Widget</button>
+                <button onClick={createWidget} className={`${cls.btn} w-full py-3`}>إنشاء ودجة</button>
               </div>
             </aside>
           </div>
         )}
 
         {tab === "channels" && (
-          <div className="space-y-6">
+          <div className="space-y-4">
             <div>
               <h2 className="font-display font-bold text-2xl text-bone">القنوات والحسابات</h2>
               <p className="text-sm text-sage mt-1">اربط قنوات التواصل الخاصة بنشاطك التجاري.</p>
@@ -1747,6 +1774,12 @@ export default function Dashboard() {
                 <p className="text-xs text-sage mb-2 leading-5">الرسائل عبر WhatsApp Cloud API.</p>
                 {st.phone && (
                   <p className="text-[11px] text-mist mb-3 tabular-nums" dir="ltr">+{st.phone.replace(/\D/g, "")}</p>
+                )}
+                {st.phone && waVerified === false && (
+                  <div data-testid="wa-pending-badge" className="mb-3">
+                    <span className="inline-block text-[11px] font-bold px-2 py-1 rounded-full border border-[#E5B54B]/40 bg-[#E5B54B]/10 text-[#E5B54B]">قيد المراجعة</span>
+                    <p className="text-[11px] text-sage mt-1 leading-5">سيبدأ الرد بعد موافقة الإدارة</p>
+                  </div>
                 )}
                 <div className="mt-auto">
                   <button onClick={() => handleConnectChannel("whatsapp")} className={`${cls.btn} w-full py-2.5 text-xs`}>
@@ -1835,11 +1868,6 @@ export default function Dashboard() {
                   <button onClick={() => handleConnectChannel("instagram")} className={`${cls.btn} w-full py-2.5 text-xs`} disabled={chBusyPlatform === "instagram"}>
                     {chBusyPlatform === "instagram" ? "جارٍ التحويل…" : igAccounts.length > 0 ? "ربط حساب آخر" : "ربط Instagram"}
                   </button>
-                  {igAccounts.length > 0 && (
-                    <button onClick={() => disconnectSocialChannel("instagram")} className="w-full py-2 text-[11px] font-bold text-red-300/80 hover:text-red-300 border border-red-400/20 rounded-xl">
-                      فصل القناة
-                    </button>
-                  )}
                 </div>
               </div>
             </div>
@@ -1945,7 +1973,7 @@ export default function Dashboard() {
             <button onClick={() => setWidgetPreview(null)} className="absolute top-4 left-4 text-sage hover:text-bone">
               <IconX className="w-5 h-5" />
             </button>
-            <h3 className="font-display font-bold text-xl text-bone mb-4 text-center">معاينة Widget</h3>
+            <h3 className="font-display font-bold text-xl text-bone mb-4 text-center">معاينة الودجة</h3>
             <p className="text-center text-sm text-sage">{widgetPreview.name}</p>
           </div>
         </div>
@@ -1996,8 +2024,21 @@ export default function Dashboard() {
         </div>
       )}
 
+      {showOnboarding && (
+        <OnboardingWizard
+          agentPrompt={agentPrompt}
+          onAgentPromptChange={setAgentPrompt}
+          onSavePrompt={saveAgentPrompt}
+          savingPrompt={agentPromptSaving}
+          onConnectSocial={(pl) => { void handleConnectChannel(pl); }}
+          onOpenChannels={() => { setOnbDismissed(true); setTab("channels"); }}
+          onCreateFlow={createOnboardingFlow}
+          onFinish={finishOnboarding}
+        />
+      )}
+
       {toast && (
-        <div className="fixed bottom-6 inset-x-0 z-50 flex justify-center px-4 pointer-events-none">
+        <div className="fixed bottom-24 inset-x-0 z-50 flex justify-center px-4 pointer-events-none">
           <p className="bg-pine border border-verde/35 text-bone text-[12.5px] font-semibold rounded-full px-5 py-2.5 shadow-[0_16px_50px_-12px_rgba(0,0,0,0.8)] msg-in">
             {toast}
           </p>

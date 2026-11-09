@@ -1,5 +1,8 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 import Navbar from "./components/Navbar";
+import FlowErrorBoundary from "./components/FlowErrorBoundary";
+import RouteErrorBoundary from "./components/RouteErrorBoundary";
+import AppShell from "./components/AppShell";
 import Hero from "./components/Hero";
 import { Marquee, Footer } from "./components/Extras";
 import Guarantees from "./components/Guarantees";
@@ -10,6 +13,7 @@ import FAQ from "./components/FAQ";
 
 /* لوحة التحكم وحدة منفصلة — لا يتحمل زائر الصفحة الرئيسية حجمها */
 const Dashboard = lazy(() => import("./pages/Dashboard"));
+const Settings = lazy(() => import("./pages/Settings"));
 const Widgets = lazy(() => import("./pages/Widgets"));
 const FlowBuilder = lazy(() => import("./pages/FlowBuilder"));
 
@@ -24,24 +28,46 @@ export default function App() {
 
   /* معاينة مستقلة لمصمم التدفقات؛ لا تغيّر لوحة التحكم أو الدوال المنشورة. */
   if (route.startsWith("#/flows")) {
-    return <Suspense fallback={<div className="min-h-screen bg-night" />}><FlowBuilder /></Suspense>;
+    /* محرر كامل الشاشة: Sidebar على سطح المكتب فقط؛ BottomNav مخفي كي لا يغطي لوحاته السفلية */
+    return <AppShell hideBottomNav><FlowErrorBoundary><Suspense fallback={<div className="min-h-screen bg-night" />}><FlowBuilder /></Suspense></FlowErrorBoundary></AppShell>;
   }
 
   /* لوحة التحكم: #/dashboard */
   if (route.startsWith("#/dashboard")) {
     return (
-      <Suspense fallback={<div className="min-h-screen bg-night" />}>
-        <Dashboard />
-      </Suspense>
+      <AppShell>
+        <RouteErrorBoundary key="dashboard">
+          <Suspense fallback={<div className="min-h-screen bg-night" />}>
+            <Dashboard />
+          </Suspense>
+        </RouteErrorBoundary>
+      </AppShell>
+    );
+  }
+
+  /* الإعدادات: #/settings (و#/profile كاسم بديل) */
+  if (route.startsWith("#/settings") || route.startsWith("#/profile")) {
+    return (
+      <AppShell>
+        <RouteErrorBoundary key="settings">
+          <Suspense fallback={<div className="min-h-screen bg-night" />}>
+            <Settings />
+          </Suspense>
+        </RouteErrorBoundary>
+      </AppShell>
     );
   }
 
   /* صفحة Widgets: #/widgets */
   if (route.startsWith("#/widgets")) {
     return (
-      <Suspense fallback={<div className="min-h-screen bg-night" />}>
-        <Widgets />
-      </Suspense>
+      <AppShell padBottom>
+        <RouteErrorBoundary key="widgets">
+          <Suspense fallback={<div className="min-h-screen bg-night" />}>
+            <Widgets />
+          </Suspense>
+        </RouteErrorBoundary>
+      </AppShell>
     );
   }
 

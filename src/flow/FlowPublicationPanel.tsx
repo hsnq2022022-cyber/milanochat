@@ -2,21 +2,42 @@ import {useCallback,useEffect,useState} from "react";
 import {getSupabase} from "../lib/supabase";
 import type {FlowDocument} from "./model.ts";
 import type {FlowLanguage} from "./uiLocale.ts";
+import { copyText } from "../lib/clipboard.ts";
+import {accountCanActivate,type ActivationAccount} from "./activationAccount.ts";
+import {commentTriggerProviderPlatform} from "./serverPublicationValidation.ts";
 
-type Account={id:string;platform:string;is_active:boolean|null;canActivate?:boolean};
+type Account=ActivationAccount;
 type Version={revision:number;created_at:string};
 type Activation={revision:number;is_active:boolean}|null;
 type PublishedFlow={flowKey:string;latestRevision:number};
 type ActiveFlow={flow_key:string;revision:number}|null;
 type ReadinessChecks={
- instagram:boolean;tenant:boolean;account:boolean;globalSwitch:boolean;
+ // Comment-trigger reports replace the Instagram channel check with commentTrigger.
+ instagram?:boolean;commentTrigger?:boolean;tenant:boolean;account:boolean;globalSwitch:boolean;
  tenantSwitch:boolean;credits:boolean;activeRevision:boolean;supportedCandidate:boolean;ingress:boolean;activation:boolean;
  canary:boolean;operatorRelease:boolean;outbox:boolean;atomicDebit:boolean;
- encryption:boolean;scheduler:boolean;buttons:boolean;
+ encryption:boolean;scheduler:boolean;buttons:boolean;internalActions?:boolean;media?:boolean;
 };
-type Readiness={checks:ReadinessChecks;candidateKind:"buttons"|"delay"|"unsupported";buttonsConfigured:boolean;delayConfigured:boolean};
+type ServerText={ar:string;en:string};
+// Server-provided (status, labels): rendered as sent, never derived in the browser.
+type CommentReadiness={status:"supported"|"unsupported";label:ServerText;statusLabel:ServerText;detail?:ServerText};
+type Readiness={checks:ReadinessChecks;candidateKind:"buttons"|"delay"|"mixed"|"text"|"comment"|"unsupported";
+ commentTrigger?:CommentReadiness|null;checkLabels?:Record<string,ServerText>;
+ buttonsConfigured:boolean;delayConfigured:boolean;
+ // Absent on older servers; the per-kind fallbacks below preserve the old behaviour.
+ configured?:boolean;needsButtons?:boolean;needsScheduler?:boolean;needsInternalActions?:boolean;needsMedia?:boolean};
+const readinessNeeds=(r:Readiness)=>({
+ buttons:typeof r.needsButtons==="boolean"?r.needsButtons:r.candidateKind==="buttons",
+ scheduler:typeof r.needsScheduler==="boolean"?r.needsScheduler:r.candidateKind==="delay",
+ // Absent on older servers = not needed (same default the server uses).
+ internalActions:r.needsInternalActions===true,
+ media:r.needsMedia===true
+});
+const readinessConfigured=(r:Readiness)=>typeof r.configured==="boolean"?r.configured:
+ r.candidateKind==="buttons"?r.buttonsConfigured:r.candidateKind==="delay"?r.delayConfigured:false;
 const readinessLabels:Record<keyof ReadinessChecks,{ar:string;en:string}>={
  instagram:{ar:"قناة Instagram",en:"Instagram channel"},
+ commentTrigger:{ar:"مشغّل التعليقات",en:"Comment trigger"},
  tenant:{ar:"نشاط المتجر",en:"Active store"},
  account:{ar:"نشاط حساب القناة والرد التلقائي",en:"Active channel and auto reply"},
  globalSwitch:{ar:"مفتاح التشغيل العام",en:"Global automation switch"},
@@ -32,7 +53,13 @@ const readinessLabels:Record<keyof ReadinessChecks,{ar:string;en:string}>={
  atomicDebit:{ar:"الخصم المحمي",en:"Atomic debit enabled"},
  encryption:{ar:"تشفير الرسائل",en:"Message encryption configured"},
  scheduler:{ar:"جدولة التأخير",en:"Delay scheduler enabled"},
- buttons:{ar:"إرسال الأزرار التفاعلية",en:"Rich buttons enabled"}
+ buttons:{ar:"إرسال الأزرار التفاعلية",en:"Rich buttons enabled"},
+ internalActions:{ar:"تفعيل الإجراءات الداخلية (وسم/إزالة وسم/إشعار/تحويل لموظف)",en:"Internal actions enabled (tag/untag/notify/handoff)"},
+ media:{ar:"إرسال الصور (message:image وFLOW_MEDIA_SEND_ENABLED)",en:"Image sending enabled (message:image and FLOW_MEDIA_SEND_ENABLED)"}
+};
+const serverText=(t:unknown,en:boolean):string|null=>{
+ const v=t&&typeof t==="object"?(t as Record<string,unknown>)[en?"en":"ar"]:undefined;
+ return typeof v==="string"&&v.length>0?v:null;
 };
 type Reply={ok?:boolean;error?:string;accounts?:Account[];
  items?:Version[];activation?:Activation;revision?:number;
@@ -59,8 +86,11 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
  const [notice,setNotice]=useState("");
  const [readiness,setReadiness]=useState<Readiness|null>(null);
  const [checkedRevision,setCheckedRevision]=useState<number|null>(null);
- const productionReady=accounts.some(a=>a.id===accountId&&a.canActivate===true);
  const isEditingLocalFlow=managedFlowKey===flowKey;
+ // Comment flows: the server's canActivateComments hint (Facebook Page comments
+ // need server flags). Other managed server flows keep the old canActivate rule.
+ const commentPlatform=isEditingLocalFlow?commentTriggerProviderPlatform(document):null;
+ const productionReady=accounts.some(a=>a.id===accountId&&accountCanActivate(a,commentPlatform));
  const showActivationControls=CANARY_UI||productionReady;
 
  const call=useCallback(async(body:Record<string,unknown>):Promise<Reply>=>{
@@ -132,17 +162,18 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
 
  const missingReadinessChecks=(report:Readiness)=>Object.entries(report.checks)
   .filter(([key,ready])=>ready!==true&&
-   (key!=="scheduler"||report.candidateKind==="delay")&&
-   (key!=="buttons"||report.candidateKind==="buttons"));
+   (key!=="scheduler"||readinessNeeds(report).scheduler)&&
+   (key!=="buttons"||readinessNeeds(report).buttons)&&
+   (key!=="internalActions"||readinessNeeds(report).internalActions)&&
+   (key!=="media"||readinessNeeds(report).media));
  const copyReadiness=async()=>{
   if(!readiness)return;
   const missing=missingReadinessChecks(readiness).map(([key])=>key);
-  const configured=readiness.candidateKind==="buttons"?readiness.buttonsConfigured:
-   readiness.candidateKind==="delay"?readiness.delayConfigured:false;
+  const configured=readinessConfigured(readiness);
   // No token, account ID, customer identity, message or tenant information.
   const report={revision:checkedRevision,kind:readiness.candidateKind,configured,missing};
   try{
-   await navigator.clipboard.writeText(JSON.stringify(report,null,2));
+   await copyText(JSON.stringify(report,null,2));
    setNotice(en?"Readiness report copied.":"تم نسخ تقرير الجاهزية.");
   }catch{
    setNotice(en?"Could not copy the readiness report.":"تعذر نسخ تقرير الجاهزية.");
@@ -286,15 +317,38 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
       {readiness.candidateKind==="delay"&&<p className="mt-2">
        {en?"Delayed messages: ":"الرسائل المؤجلة: "}
        {readiness.delayConfigured?(en?"Configured":"الإعدادات مكتملة"):(en?"Not configured":"الإعدادات غير مكتملة")}</p>}
-      {readiness.candidateKind==="unsupported"&&<p className="mt-2 text-[#F5D99C]">
+      {readiness.candidateKind==="text"&&<p className="mt-2">
+       {en?"Text / data-collection flow: ":"تدفق نصي / جمع بيانات: "}
+       {readinessConfigured(readiness)?(en?"Configured":"الإعدادات مكتملة"):(en?"Not configured":"الإعدادات غير مكتملة")}</p>}
+      {readiness.candidateKind==="mixed"&&<p className="mt-2">
+       {en?"Mixed flow (buttons and delay): ":"تدفق مختلط (أزرار وتأخير): "}
+       {readinessConfigured(readiness)?(en?"Configured":"الإعدادات مكتملة"):(en?"Not configured":"الإعدادات غير مكتملة")}</p>}
+      {readiness.candidateKind==="comment"&&<p className="mt-2">
+       {en?"Comment flow: ":"تدفق تعليقات: "}
+       {readinessConfigured(readiness)?(en?"Configured":"الإعدادات مكتملة"):(en?"Not configured":"الإعدادات غير مكتملة")}</p>}
+      {readiness.commentTrigger&&<div data-testid="flow-readiness-comment-trigger"
+       data-status={readiness.commentTrigger.status}
+       className={"mt-2 "+(readiness.commentTrigger.status==="supported"?"text-[#C9E8D9]":"text-[#F5D99C]")}>
+       <p>{(serverText(readiness.commentTrigger.label,en)??"")+": "}
+        <strong data-testid="flow-readiness-comment-status">{serverText(readiness.commentTrigger.statusLabel,en)}</strong></p>
+       {serverText(readiness.commentTrigger.detail,en)&&<p className="mt-1">{serverText(readiness.commentTrigger.detail,en)}</p>}
+      </div>}
+      {readiness.candidateKind==="unsupported"&&!readiness.commentTrigger&&<p className="mt-2 text-[#F5D99C]">
        {en?"This revision is not an advanced buttons or delay candidate.":
         "هذا الإصدار ليس تدفق أزرار أو تأخير مدعومًا."}</p>}
+      {readiness.needsInternalActions===true&&<p data-testid="flow-readiness-internal-actions"
+       className={"mt-2 "+(readiness.checks.internalActions===true?"text-[#C9E8D9]":"text-[#F5D99C]")}>
+       {readiness.checks.internalActions===true
+        ?(en?"Internal actions (tag, untag, notify, handoff): feature enabled.":
+          "الإجراءات الداخلية (وسم، إزالة وسم، إشعار، تحويل لموظف): الميزة مفعّلة.")
+        :(en?"This flow contains internal actions (tag, untag, notify, handoff). They are NOT executed until the internal-actions feature is enabled on the server, and the flow is not ready.":
+          "يحتوي هذا التدفق على إجراءات داخلية (وسم، إزالة وسم، إشعار، تحويل لموظف). لن تُنفَّذ هذه الإجراءات ما لم تُفعَّل ميزة الإجراءات الداخلية على الخادم، والتدفق غير جاهز حتى ذلك.")}</p>}
       <p className="mt-2 text-[#BED4C9]">{en
        ?"This verifies configuration only. It does not send messages, change live revisions, or prove delivery."
        :"هذا فحص للإعدادات فقط؛ لا يرسل رسائل أو يغيّر الإصدار المنشور، ولا يثبت وصول الرسائل."}</p>
       {missingReadinessChecks(readiness)
        .map(([key])=><p key={key} className="mt-1 text-[#F5D99C]">
-        {"• "+(readinessLabels[key as keyof ReadinessChecks]?.[en?"en":"ar"]??key)}
+        {"• "+(serverText(readiness.checkLabels?.[key],en)??readinessLabels[key as keyof ReadinessChecks]?.[en?"en":"ar"]??key)}
        </p>)}
       <button type="button" className={style+" mt-3"}
        data-testid="flow-copy-readiness" onClick={()=>void copyReadiness()}>

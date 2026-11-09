@@ -2,11 +2,12 @@ import { useState } from "react";
 import { Trash2, ArrowUp, ArrowDown, Type, Image as ImageIcon, FileText, Clock3, ClipboardList } from "lucide-react";
 import type { ContentBlock, FlowNode } from "./model";
 import { useFlowStore } from "./store";
+import { getSupabase } from "../lib/supabase";
+import { uuid } from "../lib/uuid.ts";
 
 const types: Array<{id:ContentBlock["type"];label:string;note:string;icon:typeof Type}>=[
   {id:"text",label:"نص",note:"رسالة نصية إضافية",icon:Type},
   {id:"image",label:"صورة",note:"صورة داخل التسلسل",icon:ImageIcon},
-  {id:"pdf",label:"PDF",note:"ملف PDF أو رابط مباشر",icon:FileText},
   {id:"delay",label:"انتظار",note:"فاصل زمني بين المحتويات",icon:Clock3},
   {id:"collection",label:"جمع بيانات",note:"اسم العميل، البريد أو الهاتف",icon:ClipboardList}
 ];
@@ -17,11 +18,12 @@ export default function MessageBlocksEditor({node}:{node:FlowNode}){
   const store=useFlowStore();
   const blocks=node.data.contentBlocks||[];
   const [status,setStatus]=useState("");
+  const [uploading,setUploading]=useState("");
   const edit=(items:ContentBlock[])=>store.changeNode(node.id,{contentBlocks:items});
   const patch=(id:string,part:Partial<ContentBlock>)=>edit(blocks.map(b=>b.id===id?{...b,...part}:b));
   const add=(type:ContentBlock["type"])=>{
     if(blocks.length>=24){setStatus("الحد الأقصى 24 مكوّنًا في الرسالة.");return;}
-    edit([...blocks,{id:crypto.randomUUID(),type,text:type==="text"?"اكتب نصًا إضافيًا":type==="collection"?"اكتب بياناتك هنا":"",url:"",seconds:3,field:"response",inputMode:"text"}]);
+    edit([...blocks,{id:uuid(),type,text:type==="text"?"اكتب نصًا إضافيًا":type==="collection"?"اكتب بياناتك هنا":"",url:"",seconds:3,field:"response",inputMode:"text"}]);
   };
   const reorder=(index:number,dir:-1|1)=>{
     const i=index+dir;if(i<0||i>=blocks.length)return;
@@ -29,27 +31,33 @@ export default function MessageBlocksEditor({node}:{node:FlowNode}){
   };
   const upload=async(block:ContentBlock,file?:File)=>{
     if(!file)return;
-    if(block.type==="pdf"){
-      if(file.type!=="application/pdf"||file.size>350000){setStatus("ملف PDF المحلي يجب ألا يتجاوز 350KB. للملفات الأكبر استخدم رابط HTTPS.");return;}
-      const reader=new FileReader();
-      reader.onload=()=>{const url=String(reader.result||"");if(url.startsWith("data:application/pdf;base64,")){patch(block.id,{url});setStatus("حُفظ PDF داخل المسودة المحلية.");}};
-      reader.onerror=()=>setStatus("تعذر قراءة ملف PDF.");
-      reader.readAsDataURL(file);
-      return;
-    }
-    if(!["image/jpeg","image/png","image/webp"].includes(file.type)||file.size>5*1024*1024){setStatus("اختر JPG أو PNG أو WebP بحجم أقصى 5MB.");return;}
+    if(!["image/jpeg","image/png","image/webp"].includes(file.type)){setStatus("صيغة غير مدعومة. اختر JPG أو PNG أو WebP فقط.");return;}
+    if(file.size>5*1024*1024){setStatus("حجم الصورة أكبر من 5MB، اختر صورة أصغر.");return;}
     const url=URL.createObjectURL(file);
+    setUploading(block.id);
     try{
       const image=new Image();
       await new Promise<void>((resolve,reject)=>{image.onload=()=>resolve();image.onerror=()=>reject(new Error());image.src=url;});
       const size=Math.min(1,1000/Math.max(image.naturalWidth,image.naturalHeight));
       const canvas=document.createElement("canvas");canvas.width=Math.max(1,Math.round(image.naturalWidth*size));canvas.height=Math.max(1,Math.round(image.naturalHeight*size));
       const ctx=canvas.getContext("2d");if(!ctx)throw new Error();
+      ctx.fillStyle="#FFFFFF";ctx.fillRect(0,0,canvas.width,canvas.height); // JPEG بلا شفافية: خلفية بيضاء بدل الأسود
       ctx.drawImage(image,0,0,canvas.width,canvas.height);
-      const output=canvas.toDataURL("image/webp",.68);
-      if(output.length>700000){setStatus("الصورة كبيرة بعد الضغط، اختر صورة أصغر.");return;}
-      patch(block.id,{url:output});setStatus("أُضيفت الصورة بنجاح إلى الرسالة.");
-    }catch{setStatus("لم نتمكن من معالجة هذه الصورة.");}finally{URL.revokeObjectURL(url);}
+      const blob=await new Promise<Blob|null>(resolve=>canvas.toBlob(resolve,"image/jpeg",.82));
+      if(!blob)throw new Error();
+      if(blob.size>2*1024*1024){setStatus("الصورة كبيرة بعد الضغط (أكثر من 2MB)، اختر صورة أصغر.");return;}
+      const client=getSupabase();
+      const uid=client?(await client.auth.getSession()).data.session?.user?.id:undefined;
+      if(!client||!uid){
+        const output=canvas.toDataURL("image/jpeg",.82);
+        if(output.length>700000){setStatus("الصورة كبيرة بعد الضغط، اختر صورة أصغر.");return;}
+        patch(block.id,{url:output});setStatus("الصورة مسودة محلية فقط ولا يمكن إرسالها فعليًا قبل تسجيل الدخول.");return;
+      }
+      const path=`${uid}/${uuid()}.jpg`;
+      const {error}=await client.storage.from("flow-media").upload(path,blob,{contentType:"image/jpeg",upsert:false});
+      if(error){setStatus("فشل رفع الصورة: "+(error.message||"خطأ غير معروف"));return;}
+      patch(block.id,{url:client.storage.from("flow-media").getPublicUrl(path).data.publicUrl});setStatus("رُفعت الصورة بنجاح وأُضيفت إلى الرسالة.");
+    }catch{setStatus("لم نتمكن من معالجة هذه الصورة.");}finally{URL.revokeObjectURL(url);setUploading("");}
   };
   return <section className="mt-5 rounded-2xl border border-[#275443] bg-[#061A14]/50 p-3" dir="rtl">
     <div className="mb-1 flex items-center justify-between gap-2"><h3 className="text-sm font-bold">محتويات الرسالة</h3><span className="text-[11px] text-[#8B9E96]">{blocks.length} / 24</span></div>
@@ -72,7 +80,7 @@ export default function MessageBlocksEditor({node}:{node:FlowNode}){
     </div>}
     <div className="space-y-3">
       {blocks.map((block,i)=>{
-        const def=types.find(t=>t.id===block.type)!;const Icon=def.icon;
+        const def=block.type==="pdf"?{id:"pdf" as const,label:"PDF (غير مدعوم)",note:"",icon:FileText}:types.find(t=>t.id===block.type)!;const Icon=def.icon;
         return <div key={block.id} className="rounded-xl border border-[#275443] bg-[#0F2E24] p-3" data-testid={"content-block-"+block.type}>
           <header className="mb-2 flex items-center gap-2"><Icon size={16} className="text-[#3DD189]"/><span className="flex-1 text-xs font-bold">{def.label}</span>
             <button aria-label="نقل للأعلى" title="نقل للأعلى" disabled={i===0} onClick={()=>reorder(i,-1)}><ArrowUp size={15}/></button>
@@ -82,14 +90,14 @@ export default function MessageBlocksEditor({node}:{node:FlowNode}){
           {block.type==="text"&&<textarea className={input} rows={3} maxLength={2000} aria-label="نص المكوّن" value={block.text||""} onChange={e=>patch(block.id,{text:e.target.value})}/>}
           {block.type==="image"&&<>
             <input className={input} dir="ltr" aria-label="رابط صورة المكوّن" placeholder="https://example.com/image.jpg" value={block.url?.startsWith("data:")?"":block.url||""} onChange={e=>patch(block.id,{url:e.target.value})}/>
-            <label className={btn+" mt-2 cursor-pointer"}><ImageIcon size={15}/> اختر صورة من الجهاز<input type="file" accept="image/jpeg,image/png,image/webp" className="hidden" onChange={e=>{void upload(block,e.target.files?.[0]);e.target.value="";}}/></label>
+            <label className={btn+" mt-2 "+(uploading?"cursor-not-allowed opacity-60":"cursor-pointer")}><ImageIcon size={15}/> {uploading===block.id?"جارٍ رفع الصورة...":"اختر صورة من الجهاز"}<input type="file" accept="image/jpeg,image/png,image/webp" className="hidden" disabled={!!uploading} onChange={e=>{void upload(block,e.target.files?.[0]);e.target.value="";}}/></label>
             {!!block.url&&<img alt="معاينة المكوّن" src={block.url} className="mt-2 max-h-40 w-full rounded-lg object-contain"/>}
+            <div data-testid="image-send-flag-note" className="mt-2 text-[11px] leading-5 text-[#8B9E96]">
+              <p>تُرسل الصورة إلى العملاء الحقيقيين فقط عندما يفعّل المسؤول ميزة إرسال الوسائط على الخادم؛ وإلا تظهر في المعاينة فقط ولا يُرسل أي شيء.</p>
+              <p dir="ltr" className="mt-1 text-[10px] opacity-70" title="FLOW_MEDIA_SEND_ENABLED + message:image">FLOW_MEDIA_SEND_ENABLED · message:image</p>
+            </div>
           </>}
-          {block.type==="pdf"&&<>
-            <input className={input} dir="ltr" aria-label="رابط PDF" placeholder="https://example.com/document.pdf" value={block.url?.startsWith("data:")?"":block.url||""} onChange={e=>patch(block.id,{url:e.target.value})}/>
-            <label className={btn+" mt-2 cursor-pointer"}><FileText size={15}/> رفع PDF صغير<input type="file" accept="application/pdf,.pdf" className="hidden" onChange={e=>{void upload(block,e.target.files?.[0]);e.target.value="";}}/></label>
-            {!!block.url&&<p className="mt-2 text-xs text-[#3DD189]">ملف PDF مُضاف إلى المسودة</p>}
-          </>}
+          {block.type==="pdf"&&<p role="note" className="text-xs text-[#E5B54B]">لم يعد PDF مدعومًا. هذا المكوّن محفوظ للقراءة فقط ويمنع النشر؛ احذفه للمتابعة.</p>}
           {block.type==="delay"&&<div className="flex items-center gap-2"><input type="number" min={1} max={3600} className={input} aria-label="فاصل الانتظار بالثواني" value={block.seconds||3} onChange={e=>patch(block.id,{seconds:Math.max(1,Math.min(3600,Number(e.target.value)||1))})}/><span className="shrink-0 text-xs text-[#8B9E96]">ثانية</span></div>}
           {block.type==="collection"&&<>
             <input className={input} aria-label="سؤال جمع البيانات" placeholder="اكتب رقم هاتفك" value={block.text||""} onChange={e=>patch(block.id,{text:e.target.value})}/>
@@ -107,6 +115,6 @@ export default function MessageBlocksEditor({node}:{node:FlowNode}){
       <t.icon size={17} className="text-[#3DD189]"/><span><span className="block text-xs font-bold">{t.label}</span><span className="text-[11px] text-[#8B9E96]">{t.note}</span></span>
     </button>)}</div>
     {!!status&&<p role="status" className="mt-3 text-xs text-[#3DD189]">{status}</p>}
-    <p className="mt-3 text-[11px] text-[#8B9E96]">المرفقات والمعلومات موجودة في المسودة المحلية فقط؛ دعم إرسال الصور وPDF يعتمد على القناة وصلاحيات Meta بعد تفعيل الخادم.</p>
+    <p className="mt-3 text-[11px] text-[#8B9E96]">المرفقات والمعلومات موجودة في المسودة المحلية فقط؛ دعم إرسال الصور يعتمد على القناة وصلاحيات Meta بعد تفعيل الخادم.</p>
   </section>;
 }

@@ -7,6 +7,7 @@ import { stageCloudDraftCopy } from "./cloudDraft";
 import type { CloudDraft } from "./cloudDraft";
 import type { SavedFlow } from "./library";
 import type { FlowDocument, FlowData, FlowEdge, FlowNode } from "./model";
+import { uuid } from "../lib/uuid.ts";
 
 export type FlowState = {
   doc: FlowDocument;
@@ -50,7 +51,7 @@ export const useFlowStore=create<FlowState>((set,get)=>({
   doc:initial,activeFlowId:initialLibrary.activeFlowId,flows:initialLibrary.flows,past:[],future:[],pastEnabled:[],futureEnabled:[],selectedId:null,
   createFlow:(name,fromScratch=false)=>{
     if(get().flows.length>=30)return null;
-    const id=crypto.randomUUID();
+    const id=uuid();
     set(s=>{
       if(s.flows.length>=30)return s;
       const current=snapshotLibrary(s.activeFlowId,s.doc,s.flows);
@@ -73,7 +74,7 @@ export const useFlowStore=create<FlowState>((set,get)=>({
   duplicateFlow:()=>{
     const s=get();
     if(s.flows.length>=30)return null;
-    const id=crypto.randomUUID();
+    const id=uuid();
     const doc=structuredClone(s.doc);
     doc.name=s.doc.name+" (نسخة)";
     set({doc,activeFlowId:id,flows:[...snapshotLibrary(s.activeFlowId,s.doc,s.flows).flows,{id,doc,enabled:false}],selectedId:null,past:[],future:[],pastEnabled:[],futureEnabled:[]});

@@ -3,6 +3,7 @@
 // ═══════════════════════════════════════════════════════════════════════════════
 
 import { useCallback, useEffect, useState } from "react";
+import { ArrowRight } from "lucide-react";
 import { apiAuthFetch } from "../lib/api";
 import { getSupabase } from "../lib/supabase";
 import type { Widget, WidgetSettings } from "../types/widget";
@@ -17,6 +18,7 @@ import {
   IconX,
   IconChat,
 } from "../components/Icons";
+import { copyText } from "../lib/clipboard.ts";
 
 export default function Widgets() {
   const sb = getSupabase();
@@ -134,7 +136,7 @@ return (
   // Copy
   const copyEmbedCode = (widget: Widget) => {
     const code = `<script src="https://nmhefwvhoholcjrbbila.supabase.co/functions/v1/milan-api?action=widget.js" data-token="${widget.public_token}"></script>`;
-    navigator.clipboard.writeText(code);
+    copyText(code);
     setCopiedToken(widget.public_token);
     setTimeout(() => setCopiedToken(null), 2000);
     showToast("تم نسخ كود التضمين");
@@ -160,21 +162,24 @@ return (
       {/* Header */}
       <header className="bg-pine/50 border-b border-verde/10">
         <div className="max-w-7xl mx-auto px-6 py-8">
+          <a href="#/settings" data-testid="widgets-back" className="md:hidden -mx-2 mb-2 inline-flex min-h-[44px] items-center gap-2 rounded-xl px-2 text-sm font-bold text-verde focus-visible:outline focus-visible:outline-2 focus-visible:outline-verde">
+            <ArrowRight className="w-5 h-5" aria-hidden="true" />الإعدادات
+          </a>
           <div className="flex items-center justify-between mb-6">
             <div>
-              <h1 className="font-display font-bold text-3xl text-bone mb-2">Widgets</h1>
+              <h1 className="font-display font-bold text-3xl text-bone mb-2">الودجات</h1>
               <p className="text-sage text-sm">أنشئ مساعدًا ذكيًا وادمجه في موقعك بسهولة</p>
             </div>
             <button onClick={() => openEditor()} className="btn-primary flex items-center gap-2">
               <IconPlus className="w-5 h-5" />
-              إنشاء Widget
+              إنشاء ودجة
             </button>
           </div>
 
           {/* Stats */}
           <div className="grid grid-cols-3 gap-4">
             <div className="bg-pine/70 border border-verde/15 rounded-2xl p-5">
-              <p className="text-sage text-xs mb-1">إجمالي Widgets</p>
+              <p className="text-sage text-xs mb-1">إجمالي الودجات</p>
               <p className="font-display font-bold text-3xl text-bone">{stats.total}</p>
             </div>
             <div className="bg-pine/70 border border-verde/15 rounded-2xl p-5">
@@ -196,10 +201,10 @@ return (
             <div className="w-20 h-20 mx-auto mb-6 rounded-full bg-moss flex items-center justify-center">
               <IconChat className="w-10 h-10 text-verde" />
             </div>
-            <h3 className="font-display font-bold text-xl text-bone mb-2">لا توجد Widgets بعد</h3>
+            <h3 className="font-display font-bold text-xl text-bone mb-2">لا توجد ودجات بعد</h3>
             <p className="text-sage text-sm mb-6">أنشئ أول widget وادمجه في موقعك</p>
             <button onClick={() => openEditor()} className="btn-primary">
-              إنشاء Widget
+              إنشاء ودجة
             </button>
           </div>
         ) : (
@@ -299,7 +304,7 @@ return (
       {showDeleteConfirm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-night/80 backdrop-blur-sm">
           <div className="bg-pine border border-verde/20 rounded-2xl p-6 max-w-md">
-            <h3 className="font-display font-bold text-xl text-bone mb-3">حذف Widget</h3>
+            <h3 className="font-display font-bold text-xl text-bone mb-3">حذف ودجة</h3>
             <p className="text-sage text-sm mb-6">
               هل أنت متأكد من حذف هذا الـ widget؟ لا يمكن التراجع عن هذا الإجراء.
             </p>

@@ -113,8 +113,103 @@ jobs:
           psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-exclusive-claim-bootstrap.sql
           psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028220000_webhook_exclusive_claim.sql
           psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028225000_flow_runtime_advance.sql
-          psql -X -v ON_ERROR_STOP=1 -f supabase/proposals/flow_durable_button_ingress.review.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261029125000_flow_durable_button_run.sql
           psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-durable-button-ingress.test.sql
+      - name: Durable button run guards 20261029180000 over the full 125000..230000 chain
+        shell: bash
+        run: |
+          set -euo pipefail
+          createdb flow_guards_review
+          export PGDATABASE=flow_guards_review
+          sed '/^CREATE ROLE /d' tests/sql/fixtures/flow-live-shape-bootstrap.sql | psql -X -v ON_ERROR_STOP=1
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/fixtures/installed-flow-switches.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/fixtures/installed-flow-runtime.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-exclusive-claim-bootstrap.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028220000_webhook_exclusive_claim.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028224000_delivery_attempts.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028225000_flow_runtime_advance.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261028226000_flow_outbox_delivery_attempts.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261029125000_flow_durable_button_run.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/sql/flow-durable-button-ingress.test.sql
+          for m in 20261029130000_flow_run_lifecycle 20261029140000_flow_outbox_ai_retry \
+            20261029150000_flow_takeover_resume 20261029160000_flow_credits_pause \
+            20261029170000_flow_canary_claim_durable 20261029180000_flow_durable_button_run_guards \
+            20261029180000_flow_durable_button_run_guards \
+            20261029190000_flow_begin_durable_run_superseding 20261029190000_flow_begin_durable_run_superseding \
+            20261029210000_flow_media_effects 20261029210000_flow_media_effects \
+            20261029220000_flow_media_stale_sweep 20261029220000_flow_media_stale_sweep \
+            20261029230000_flow_multichannel_support 20261029230000_flow_multichannel_support; do
+            psql -X -v ON_ERROR_STOP=1 -f "supabase/migrations/$m.sql"
+          done
+          test "$(psql -XAtq -c "SELECT count(*) FROM pg_constraint WHERE conrelid IN ('public.automation_flow_outbox'::regclass,'public.automation_flow_delivery_attempts'::regclass) AND obj_description(oid,'pg_constraint') LIKE 'CREATED_BY_20261029210000_FLOW_MEDIA_EFFECTS %'")" = 2
+          test "$(psql -XAtq -c "SELECT count(*) FROM pg_proc WHERE oid='public.flow_skip_blocked_outbox(integer,integer)'::regprocedure AND obj_description(oid,'pg_proc')='CREATED_BY_20261029130000_FLOW_RUN_LIFECYCLE' AND md5(btrim(regexp_replace(prosrc,'[[:space:]]+',' ','g')))='dacdf7bb582a7d380651d478f47c6b97'")" = 1
+          test "$(psql -XAtq -c "SELECT count(*) FROM pg_proc WHERE pronamespace='public'::regnamespace AND proname IN ('flow_begin_durable_run','flow_resume_button_run') AND obj_description(oid,'pg_proc') LIKE 'CREATED_BY_20261029180000_FLOW_DURABLE_BUTTON_RUN_GUARDS %'")" = 2
+          test "$(psql -XAtq -c "SELECT count(*) FROM pg_proc WHERE pronamespace='public'::regnamespace AND proname='flow_begin_durable_run_superseding' AND obj_description(oid,'pg_proc')='CREATED_BY_20261029190000_FLOW_BEGIN_DURABLE_RUN_SUPERSEDING'")" = 1
+          test "$(psql -XAtq -c "SELECT count(*) FROM pg_constraint WHERE conname='automation_flow_canary_accounts_platform_chk' AND obj_description(oid,'pg_constraint') LIKE 'CREATED_BY_20261029230000_FLOW_MULTICHANNEL_SUPPORT %'")" = 1
+          # Behaviour of the 180000 bodies: throwaway unix-socket cluster from the runner's
+          # own PostgreSQL server binaries (PG_BIN or /usr/lib/postgresql/*/bin); PG* is stripped.
+          node --test --test-reporter=tap tests/flow-durable-button-run-guards.test.mjs | tee "$RUNNER_TEMP/flow-guards.tap"
+          grep -qx '# fail 0' "$RUNNER_TEMP/flow-guards.tap"
+          grep -qx '# cancelled 0' "$RUNNER_TEMP/flow-guards.tap"
+          grep -qx '# skipped 0' "$RUNNER_TEMP/flow-guards.tap"
+  flow-throwaway-pg-suites:
+    # Each suite builds its own throwaway unix-socket cluster from the runner's
+    # PostgreSQL server binaries (PG_BIN or /usr/lib/postgresql/*/bin); PG* is stripped.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Superseding durable run start 20261029190000 in throwaway PG
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test --test-reporter=tap tests/flow-begin-durable-run-superseding.test.mjs | tee "$RUNNER_TEMP/flow-superseding.tap"
+          grep -qx '# fail 0' "$RUNNER_TEMP/flow-superseding.tap"
+          grep -qx '# cancelled 0' "$RUNNER_TEMP/flow-superseding.tap"
+          grep -qx '# skipped 0' "$RUNNER_TEMP/flow-superseding.tap"
+      - name: Predeploy checks in throwaway PG
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test --test-reporter=tap tests/flow-predeploy-checks.test.mjs | tee "$RUNNER_TEMP/flow-predeploy.tap"
+          grep -qx '# fail 0' "$RUNNER_TEMP/flow-predeploy.tap"
+          grep -qx '# cancelled 0' "$RUNNER_TEMP/flow-predeploy.tap"
+          grep -qx '# skipped 0' "$RUNNER_TEMP/flow-predeploy.tap"
+      - name: Outbox AI retry SQL transitions in throwaway PG
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test --test-reporter=tap tests/flow-outbox-ai-retry.test.mjs | tee "$RUNNER_TEMP/flow-ai-retry.tap"
+          grep -qx '# fail 0' "$RUNNER_TEMP/flow-ai-retry.tap"
+          grep -qx '# cancelled 0' "$RUNNER_TEMP/flow-ai-retry.tap"
+          grep -qx '# skipped 0' "$RUNNER_TEMP/flow-ai-retry.tap"
+      - name: Media effects 20261029210000 in throwaway PG
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test --test-reporter=tap tests/flow-media-effects.test.mjs | tee "$RUNNER_TEMP/flow-media-effects.tap"
+          grep -qx '# fail 0' "$RUNNER_TEMP/flow-media-effects.tap"
+          grep -qx '# cancelled 0' "$RUNNER_TEMP/flow-media-effects.tap"
+          grep -qx '# skipped 0' "$RUNNER_TEMP/flow-media-effects.tap"
+      - name: Media stale sweep 20261029220000 in throwaway PG
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test --test-reporter=tap tests/flow-media-stale-sweep.test.mjs | tee "$RUNNER_TEMP/flow-media-stale-sweep.tap"
+          grep -qx '# fail 0' "$RUNNER_TEMP/flow-media-stale-sweep.tap"
+          grep -qx '# cancelled 0' "$RUNNER_TEMP/flow-media-stale-sweep.tap"
+          grep -qx '# skipped 0' "$RUNNER_TEMP/flow-media-stale-sweep.tap"
+      - name: Multichannel support 20261029230000 in throwaway PG
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test --test-reporter=tap tests/flow-multichannel-support.test.mjs | tee "$RUNNER_TEMP/flow-multichannel-support.tap"
+          grep -qx '# fail 0' "$RUNNER_TEMP/flow-multichannel-support.tap"
+          grep -qx '# cancelled 0' "$RUNNER_TEMP/flow-multichannel-support.tap"
+          grep -qx '# skipped 0' "$RUNNER_TEMP/flow-multichannel-support.tap"
   staff-delivery-pg:
     runs-on: ubuntu-latest
     timeout-minutes: 18
@@ -259,6 +354,8 @@ jobs:
           node --experimental-strip-types --test tests/flow-outbox-confirmed-settlement.test.ts
           node --experimental-strip-types --test tests/flow-outbox-production-gate.test.ts
           node --experimental-strip-types --test tests/flow-rich-actions-meta.test.ts
+          node --experimental-strip-types --test tests/flow-outbox-ai-retry.test.ts
+          node --experimental-strip-types --test tests/flow-internal-actions-ui.test.ts
           node --experimental-strip-types --test src/flow/runtimeExtra.test.ts
           node --experimental-strip-types --test src/flow/runtimePlan.test.ts
           node --experimental-strip-types --test src/flow/aiMetricsGate.test.ts

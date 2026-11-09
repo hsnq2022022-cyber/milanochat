@@ -31,7 +31,6 @@ export const backendMode: BackendMode = HAS_SUPABASE ? "supabase" : "demo";
 /** عنوان Edge Function الواحدة التي تحوي الباك-إند كله */
 const FN_URL = `${FUNCTIONS_BASE}/milan-api`;
 const CHANNELS_FN_URL = `${FUNCTIONS_BASE}/channels`;
-const WA_FN_URL = `${FUNCTIONS_BASE}/wa-webhook`;
 
 /* ─── نقل عام (عام فقط — لم يعد يوجد خادم خارجي) ─── */
 
@@ -70,10 +69,22 @@ async function topupSupabase(
   return data as { invoiceId: string; paymentUrl: string | null };
 }
 
+export type CommentReplyStatus = "pending" | "sent" | "failed";
+export type CommentActivityItem = {
+  id: string;
+  customerName: string | null;
+  commentText: string;
+  createdAt: string;
+  publicReplyStatus: CommentReplyStatus;
+  publicReplyText: string | null;
+  dmStatus: CommentReplyStatus | "skipped";
+};
+export type CommentActivityPage = { ok: true; items: CommentActivityItem[]; nextCursor: string | null };
+
 /** نداء Edge Function في نمط Supabase */
 async function fn<T>(
   action: string,
-  opts: { body?: unknown; token?: string | null; claim?: string | null; wa?: boolean } = {}
+  opts: { body?: unknown; token?: string | null; claim?: string | null } = {}
 ): Promise<T> {
   const headers: Record<string, string> = {
     "content-type": "application/json",
@@ -81,7 +92,7 @@ async function fn<T>(
     authorization: `Bearer ${opts.token && opts.token.split(".").length === 3 ? opts.token : SUPABASE_ANON}`,
   };
   if (opts.claim) headers["x-tenant-token"] = opts.claim;
-  const res = await fetch(`${opts.wa ? WA_FN_URL : FN_URL}?action=${action}`, {
+  const res = await fetch(`${FN_URL}?action=${action}`, {
     method: "POST",
     headers,
     body: JSON.stringify(opts.body ?? {}),
@@ -175,7 +186,7 @@ async function dashSupabase<T>(token: string, path: string, init?: RequestInit):
   }
 
   // Owner-only delivery review: separate service-authenticated Edge endpoint.
-  // Feature flag is OFF until the endpoint and RLS have an independent GO.
+  // Enabled by default; set VITE_ENABLE_DELIVERY_REVIEW=false to switch it off.
   if (path === "/api/dashboard/delivery-review" || path === "/api/dashboard/flow-metrics") {
     if (import.meta.env.VITE_ENABLE_DELIVERY_REVIEW === "false")
       throw new Error("مراجعة التسليم غير مفعّلة");
@@ -194,6 +205,28 @@ async function dashSupabase<T>(token: string, path: string, init?: RequestInit):
       body: JSON.stringify({ tenantId, mode }),
     });
     const result = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error((result as any)?.error ?? `HTTP ${res.status}`);
+    return result as T;
+  }
+
+  // Read-only staff notification inbox: Edge function gated by FLOW_STAFF_INBOX_ENABLED
+  // (423 = disabled). The client never queries flow_staff_notifications directly.
+  if (path === "/api/dashboard/staff-inbox") {
+    if (!token || token.split(".").length !== 3) throw new Error("يرجى تسجيل الدخول");
+    const tenantId = String(body.tenantId ?? "");
+    if (!/^[0-9a-f-]{36}$/i.test(tenantId)) throw new Error("معرّف المتجر غير صالح");
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/flow-staff-inbox`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        apikey: SUPABASE_ANON,
+        authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ tenantId }),
+    });
+    const result = await res.json().catch(() => ({}));
+    if (res.status === 423) throw new Error("STAFF_INBOX_DISABLED");
+    if (res.status === 401 || res.status === 403) throw new Error("STAFF_INBOX_FORBIDDEN");
     if (!res.ok) throw new Error((result as any)?.error ?? `HTTP ${res.status}`);
     return result as T;
   }
@@ -294,6 +327,8 @@ export type WaSnapshot = {
   sessionId: string;
   state: WAState;
   phone: string | null;
+  /** false = bound but awaiting admin approval; undefined/null/true = no badge. */
+  verified?: boolean | null;
   error: string | null;
 };
 
@@ -346,14 +381,25 @@ export const api = {
           body: JSON.stringify({ text }),
         }),
 
+  /** نشاط التعليقات (milan-api: comment_activity) — قراءة فقط، مقيّد بالمستأجر. أخطاء: invalid_limit | invalid_cursor | unavailable */
+  getCommentActivity: (tenantId: string, token: string | null | undefined, limit = 20, cursor?: string | null) =>
+    fn<CommentActivityPage | { ok: false; error?: string }>("comment_activity", {
+      body: { tenantId, limit, ...(cursor ? { cursor } : {}) },
+      claim: token ?? storedClaim() ?? tenantId,
+    }).then((r) => {
+      if (!r || r.ok !== true) throw new Error((r as { error?: string } | undefined)?.error ?? "unavailable");
+      return r;
+    }),
+
   wa: {
     createSession: (tenantId: string, token?: string | null) =>
       backendMode === "supabase"
-        ? fn<{ bound: boolean; phoneId: string | null }>("ping", { body: { tenantId }, wa: true }).then(
+        ? fn<{ bound: boolean; phoneId: string | null; verified?: boolean | null }>("wa_status", { body: { tenantId }, claim: token ?? storedClaim() ?? tenantId }).then(
             (r): WaSnapshot => ({
               sessionId: tenantId,
               state: r.bound ? "CONNECTED" : "UNBOUND",
               phone: r.phoneId,
+              verified: r.verified,
               error: null,
             })
           )
@@ -365,11 +411,12 @@ export const api = {
 
     getSession: (sessionId: string, token?: string | null) =>
       backendMode === "supabase"
-        ? fn<{ bound: boolean; phoneId: string | null }>("ping", { body: { tenantId: sessionId }, wa: true }).then(
+        ? fn<{ bound: boolean; phoneId: string | null; verified?: boolean | null }>("wa_status", { body: { tenantId: sessionId }, claim: token ?? storedClaim() ?? sessionId }).then(
             (r): WaSnapshot => ({
               sessionId,
               state: r.bound ? "CONNECTED" : "UNBOUND",
               phone: r.phoneId,
+              verified: r.verified,
               error: null,
             })
           )

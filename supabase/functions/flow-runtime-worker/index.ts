@@ -7,8 +7,13 @@
 import {createClient} from "npm:@supabase/supabase-js@2";
 import {acceptsFlowWorkerBearer} from "../flowWorkerAuth.ts";
 import type {FlowDocument} from "../../../src/flow/model.ts";
-import {planRuntimeTransition} from "../../../src/flow/runtimePlan.ts";
-import {canWakeDurableRun} from "./eligibility.ts";
+// Chained planning: after a wake, messages, a second delay, a question or the
+// end are planned together (max 5 effects, seq-tagged) and committed at once.
+import {planUntilWait,seedFromEventKey} from "../../../src/flow/runtimeChain.ts";
+import {aiStepEnabled} from "../flow-outbox-worker/aiStep.ts";
+import {canWakeDurableRun,wakeEndReason,type WakeEligibility} from "./eligibility.ts";
+import {wakeMediaSendEnabled,wakeEffectsMediaAllowed,endWakeForDisallowedMedia,
+ WAKE_MEDIA_END_REASON} from "./mediaGuard.ts";
 
 const base=Deno.env.get("SUPABASE_URL")??"";
 const service=Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")??"";
@@ -16,6 +21,10 @@ const maxPerTick=20;
 function answer(message:string,status=200){return new Response(JSON.stringify({message}),{
  status,headers:{"content-type":"application/json;charset=utf-8"}});
 }
+// Permanent ineligibility ENDS the run via flow_cancel_run (see
+// eligibility.ts wakeEndReason). Temporary pauses (tenant/account inactive,
+// agent_enabled/auto_reply off) and operator rollout gates return null: those
+// runs stay sleeping and resume when re-enabled.
 function validVariables(value:unknown):value is Record<string,string>{
  return !!value&&typeof value==="object"&&!Array.isArray(value)&&
  Object.entries(value).every(([k,v])=>/^[a-zA-Z_][a-zA-Z0-9_]{0,63}$/.test(k)&&
@@ -45,12 +54,18 @@ Deno.serve(async(req)=>{
  const {data:gate,error:ge}=await sb.from("automation_flow_global_switch")
   .select("enabled").eq("singleton",true).single();
  if(ge||gate?.enabled!==true)return answer("flow global switch OFF",423);
+ // Best-effort bounded sweep: ends awaiting_input/ready runs that waited past
+ // 24h or whose revision is inactive. Never blocks the delay tick.
+ const {data:expired,error:xe}=await sb.rpc("flow_expire_waiting_runs",{
+  p_max_age_minutes:1440,p_limit:100
+ });
+ if(xe)console.error("[flow-worker] expiry sweep failed",{code:xe.code});
  const {data:leases,error:le}=await sb.rpc("flow_lease_due_runs",{p_limit:maxPerTick});
  if(le||!Array.isArray(leases)){
   console.error("[flow-worker] lease failed",{code:le?.code??"invalid_result"});
   return answer("unable to lease due runs",503);
  }
- let committed=0,blocked=0;
+ let committed=0,blocked=0,cancelled=0;
  for(const item of leases){
   const tenantId=String(item.tenant_id??""),runId=String(item.run_id??"");
   const lease=String(item.lease_token??"");
@@ -67,8 +82,10 @@ Deno.serve(async(req)=>{
     sb.from("channel_accounts")
      .select("id,tenant_id,platform,is_active,agent_enabled,auto_reply")
      .eq("tenant_id",tenantId).eq("id",run.channel_account_id).maybeSingle(),
+    // human_agent_expires_at is the canonical takeover expiry (milan-api,
+    // human_agent_migration.sql); selecting a missing column fails the query.
     sb.from("conversations")
-     .select("tenant_id,account_id,transferred,human_agent_until")
+     .select("tenant_id,account_id,transferred,auto_paused_reason,human_agent_expires_at")
      .eq("tenant_id",tenantId).eq("id",run.conversation_id).maybeSingle(),
     sb.from("automation_flow_activations")
      .select("revision,is_active").eq("tenant_id",tenantId)
@@ -78,9 +95,11 @@ Deno.serve(async(req)=>{
    ]);
    if([tenant,flags,account,conversation,activation].some(v=>v.error))
     throw Error("wake eligibility query failed");
-   if(!canWakeDurableRun({
+   const nowMs=Date.now();
+   const wake:WakeEligibility={
     runPlatform:run.platform,runStatus:run.run_status,
     runRevision:Number(run.publication_revision),
+    tenantFound:tenant.data!=null,
     tenantActive:tenant.data?.is_active,
     tenantSwitchEnabled:flags.data?.enabled,
     tenantTestOnly:flags.data?.test_only,
@@ -94,10 +113,26 @@ Deno.serve(async(req)=>{
     conversationTenantMatches:conversation.data?.tenant_id===tenantId,
     conversationAccountMatches:conversation.data?.account_id===run.channel_account_id,
     humanTransferred:conversation.data?.transferred,
-    humanAgentUntil:conversation.data?.human_agent_until,
+    humanAgentExpiresAt:conversation.data?.human_agent_expires_at,
+    humanPausedReason:conversation.data?.auto_paused_reason,
     activeRevision:activation.data?Number(activation.data.revision):null,
     revisionIsActive:activation.data?.is_active
-   },Date.now()))throw Error("wake not eligible for current canary activation");
+   };
+   if(!canWakeDurableRun(wake,nowMs)){
+    const reason=wakeEndReason(wake,nowMs);
+    if(reason){
+     const {data:ended,error:ee}=await sb.rpc("flow_cancel_run",{
+      p_tenant:tenantId,p_run:runId,p_reason:reason,p_expect_status:"sleeping"
+     });
+     if(!ee&&ended===true){
+      cancelled++;
+      console.warn("[flow-worker] ineligible run ended",{tenantId,runId,reason});
+      continue;
+     }
+     console.error("[flow-worker] cancel failed",{tenantId,runId,code:ee?.code??"not_cancelled"});
+    }
+    throw Error("wake not eligible for current canary activation");
+   }
    const {data:published,error:pe}=await sb.from("automation_flow_publications")
     .select("document")
     .eq("tenant_id",tenantId).eq("flow_key",run.flow_key)
@@ -113,14 +148,30 @@ Deno.serve(async(req)=>{
     stepCount:Number(run.step_count),variables:run.variables,
     wakeAt:run.wake_at?new Date(run.wake_at).getTime():null
    };
-   const plan=planRuntimeTransition(doc,state,{
-    eventKey:"scheduled:"+runId,nowMs:Date.now(),seed:0
+   const plan=planUntilWait(doc,state,{
+    eventKey:"scheduled:"+runId,nowMs:Date.now(),seed:seedFromEventKey("scheduled:"+runId)
    });
    if(plan.error||plan.state.status==="blocked")throw Error("blocked runtime plan");
    // LLM needs owner-scoped verified knowledge and human/credit checks before
-   // any send. This worker does not emit unsupported AI effects.
-   if(plan.effects.some(e=>e.kind==="message"&&"source" in e&&e.source==="knowledge_ai"))
+   // any send. This worker does not emit unsupported AI effects. AI step
+   // (FLOW_AI_STEP_ENABLED + FLOW_RAG_ENABLED, aiStep.ts, fail-closed):
+   // Instagram runs may commit the knowledge_ai effect; the Outbox worker
+   // generates and sends the answer with all its gates. OFF: as before.
+   if(plan.effects.some(e=>e.kind==="message"&&"source" in e&&e.source==="knowledge_ai")&&
+      !(run.platform==="instagram"&&aiStepEnabled()))
     throw Error("knowledge AI requires trusted handler, no emission");
+   // Same image rule as the ingress (liveEffectKinds/safePlan): message_image
+   // only with FLOW_MEDIA_SEND_ENABLED on and a re-validated URL. Otherwise
+   // commit NOTHING and end the run (blocked runs are never leased again).
+   if(!wakeEffectsMediaAllowed(plan.effects,
+     wakeMediaSendEnabled(()=>Deno.env.get("FLOW_MEDIA_SEND_ENABLED")),base)){
+    if(await endWakeForDisallowedMedia((fn,args)=>sb.rpc(fn,args),tenantId,runId)){
+     cancelled++;
+     console.warn("[flow-worker] image wake ended",{tenantId,runId,reason:WAKE_MEDIA_END_REASON});
+     continue;
+    }
+    throw Error("image effect not allowed, run not ended");
+   }
    const effects=plan.effects.map(e=>({
     kind:e.kind,idempotencyKey:e.idempotencyKey,
     payload:e
@@ -145,6 +196,7 @@ Deno.serve(async(req)=>{
    });
   }
  }
- return new Response(JSON.stringify({leased:leases.length,committed,blocked,sends:0}),
+ return new Response(JSON.stringify({leased:leases.length,committed,blocked,cancelled,
+  expired:typeof expired==="number"?expired:0,sends:0}),
   {headers:{"content-type":"application/json"}});
 });

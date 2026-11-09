@@ -1,4 +1,5 @@
 import type { Node, Edge, XYPosition, Connection } from "@xyflow/react";
+import { uuid } from "../lib/uuid.ts";
 
 export type Kind = "trigger" | "message" | "question" | "condition" | "delay" | "action" | "randomizer" | "goto" | "request" | "end";
 export type Platform = "instagram" | "messenger" | "whatsapp";
@@ -11,6 +12,26 @@ export type Choice = {
   targetFlowId?: string;
   url?: string;
 };
+export const URL_BUTTON_LABEL_MAX = 20;
+export const URL_BUTTON_URL_MAX = 2000;
+/** Meta button template limits: at most 3 website buttons, message text <= 640 code points. */
+export const WEBSITE_BUTTONS_MAX = 3;
+export const WEBSITE_BUTTON_TEXT_MAX = 640;
+/** Publish-time problems (Arabic) for a website/URL button; empty array means valid. */
+export function websiteButtonProblems(label:string|undefined,url:string|undefined):string[]{
+  const out:string[]=[], l=(label||"").trim(), u=url||"", name=" «"+l+"»";
+  if(!l)out.push("نص زر الرابط مطلوب");
+  else{
+    if([...l].length>URL_BUTTON_LABEL_MAX)out.push("نص زر الرابط"+name+" يجب ألا يتجاوز "+URL_BUTTON_LABEL_MAX+" حرفًا");
+    if(/[\u0000-\u001F\u007F-\u009F]/.test(l))out.push("نص زر الرابط"+name+" يحتوي على رموز تحكم غير مسموحة");
+  }
+  let ok=!!u&&u.length<=URL_BUTTON_URL_MAX&&!/\s/.test(u)&&/^https:\/\//i.test(u);
+  if(ok){
+    try{const p=new URL(u);ok=p.protocol==="https:"&&!p.username&&!p.password&&!!p.hostname;}catch{ok=false;}
+  }
+  if(!ok)out.push("رابط الزر"+name+" يجب أن يكون HTTPS صالحًا بدون مسافات أو بيانات دخول وبحد أقصى "+URL_BUTTON_URL_MAX+" حرف");
+  return out;
+}
 export type ContentBlock = {
   id: string;
   type: "text" | "image" | "pdf" | "delay" | "collection";
@@ -47,6 +68,11 @@ export type FlowData = Record<string, unknown> & {
   platform: Platform;
   keywords: string;
   triggerMode: TriggerMode;
+  /** Comment triggers only. Old documents lack these; they are defaulted on load. */
+  commentScope: "all" | "specific";
+  commentPostId: string;
+  commentMatchType: "any" | "keyword";
+  publicReplyText: string;
   inputMode: "buttons" | "text" | "email" | "phone" | "number";
   inputField: string;
   conditionField: string;
@@ -76,14 +102,25 @@ export const ACCENT: Record<Kind,string> = {
   request:"#38BDF8", end:"#F87171",
 };
 export const KIND_LIST = Object.keys(LABELS) as Kind[];
-const id = () => crypto.randomUUID();
+const id = () => uuid();
+export const PUBLIC_REPLY_MAX=2200;
 export function makeNode(kind: Kind, position: XYPosition, opts?: Partial<FlowData>): FlowNode {
+  const node=makeNodeBase(kind,position,opts);
+  const d=node.data;
+  if(d.commentScope!=="specific")d.commentScope="all";
+  if(typeof d.commentPostId!=="string")d.commentPostId="";
+  if(typeof d.publicReplyText!=="string")d.publicReplyText="";
+  if(d.commentMatchType!=="any"&&d.commentMatchType!=="keyword")d.commentMatchType=String(d.keywords||"").trim()?"keyword":"any";
+  return node;
+}
+function makeNodeBase(kind: Kind, position: XYPosition, opts?: Partial<FlowData>): FlowNode {
   return {
     id: id(), position, type:"flowNode",
     data: {
       kind, title: LABELS[kind], text: kind==="message"?"أهلاً بيك! شلون نكدر نساعدك؟":kind==="question"?"اختار شتحتاج":"", image:"",
       options: kind==="question"?[{id:id(),label:"الأسعار"},{id:id(),label:"موظف"}]:kind==="randomizer"?[{id:id(),label:"A",weight:50},{id:id(),label:"B",weight:50}]:[],
-      contentBlocks:[],platform:"instagram",keywords:"",triggerMode:"keyword",inputMode:"buttons",inputField:"response",
+      contentBlocks:[],platform:"instagram",keywords:"",triggerMode:"keyword",
+      commentScope:"all",commentPostId:"",commentMatchType:undefined as unknown as "any",publicReplyText:"",inputMode:"buttons",inputField:"response",
       conditionField:"message",operator:"contains",conditionValue:"",
       delayValue:1,delayUnit:"minutes",actionType:"tag",actionValue:"",
       gotoNode:"",requestMethod:"GET",requestUrl:"",...opts,
@@ -127,6 +164,36 @@ export function exampleFlow(): FlowDocument {
   const edges=[edgeFor({source:a.id,sourceHandle:"next",target:b.id,targetHandle:"in"}),edgeFor({source:b.id,sourceHandle:"next",target:c.id,targetHandle:"in"}),...ds.map((n,i)=>edgeFor({source:c.id,sourceHandle:c.data.options[i].id,target:n.id,targetHandle:"in"},c.data.options[i].label))];
   return {version:3,name:"تدفق ترحيبي",nodes:[a,b,c,...ds],edges};
 }
+/** Live durable engine rule for collected field names; returns an Arabic reason or "" when accepted. */
+function liveFieldNameProblem(name:string):string{
+  if(name.toLowerCase()==="message")return "الاسم «message» محجوز";
+  if(name.startsWith("__"))return "لا يجوز أن يبدأ الاسم بـ __";
+  if(name==="constructor"||name==="prototype")return "الاسم كلمة محجوزة";
+  if(name.length>64)return "الاسم أطول من 64 حرفًا";
+  if(!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name))return "استخدم أحرفًا إنجليزية وأرقامًا و_ فقط، ولا تبدأ برقم";
+  return "";
+}
+const FLOW_MEDIA_PATH="/storage/v1/object/public/flow-media/";
+const configuredSupabaseUrl=():string=>{
+  try{return String(((import.meta as any).env??{}).VITE_SUPABASE_URL??"");}catch{return "";}
+};
+/** Publish-time image rule: https, no credentials, our flow-media public objects, no traversal. */
+export function isAllowedImageUrl(raw:unknown,supabaseUrl?:string):boolean{
+  if(typeof raw!=="string"||!raw||raw!==raw.trim())return false;
+  let u:URL;
+  try{u=new URL(raw);}catch{return false;}
+  if(u.protocol!=="https:"||u.username||u.password)return false;
+  const base=supabaseUrl===undefined?configuredSupabaseUrl():supabaseUrl;
+  if(base){
+    try{if(u.host!==new URL(base).host)return false;}catch{return false;}
+  }
+  if(!u.pathname.startsWith(FLOW_MEDIA_PATH)||u.pathname.length===FLOW_MEDIA_PATH.length)return false;
+  let decoded=u.pathname;
+  try{for(let i=0;i<3;i++)decoded=decodeURIComponent(decoded);}catch{return false;}
+  if(/(^|[\\/])\.\.?([\\/]|$)/.test(decoded)||decoded.includes("\\")||/%2e|%2f|%5c/i.test(u.pathname))return false;
+  return true;
+}
+const IMAGE_PUBLISH_MSG="رابط الصورة يجب أن يكون https وبعنوان مشروعنا قبل النشر";
 export type ValidationIssue = { message: string; nodeId?: string; severity: "error" | "warning" };
 export type ValidationLibraryItem = { id: string; doc?: FlowDocument };
 /** One issue per affected node/port. Existing v3 document fields remain unchanged. */
@@ -153,11 +220,24 @@ export function validateDocument(doc: FlowDocument, library?: readonly Validatio
       error("حدث البداية غير متاح للقناة المحددة");
     if(d.kind==="trigger"&&d.triggerMode==="keyword"&&!d.keywords.trim())
       error("أضف كلمة مفتاحية واحدة على الأقل لتشغيل هذا الحدث");
+    if(d.kind==="trigger"&&d.triggerMode==="comment"){
+      if(!String(d.publicReplyText||"").trim())error("اكتب الرد العام على التعليق");
+      if(d.commentScope==="specific"&&!String(d.commentPostId||"").trim())error("أدخل معرّف المنشور المحدد");
+      if(d.commentMatchType==="keyword"&&!d.keywords.trim())error("أضف كلمة مفتاحية واحدة على الأقل لتعليقات الكلمات");
+    }
     if(d.kind==="question"&&d.inputMode!=="buttons"&&!d.inputField.trim())
       error("اسم حقل الإجابة مطلوب");
+    if(d.kind==="question"&&d.inputMode!=="buttons"){
+      const reason=d.inputField.trim()?liveFieldNameProblem(d.inputField):"";
+      if(reason)add("تحذير للنشر المباشر: اسم حقل الإجابة غير مقبول — "+reason+" — "+(d.title||n.id),n.id,"warning");
+      if(d.inputMode==="number")
+        add("نمط الإجابة «رقم» غير مدعوم في المحرك المباشر (المدعوم: نص أو بريد أو هاتف) — "+(d.title||n.id),n.id,"warning");
+    }
     for(const option of d.options){
       if(option.action==="website"){
-        if(!option.url||!/^https:\/\/\S+$/i.test(option.url))error("رابط الموقع للزر "+option.label+" يجب أن يبدأ بـ HTTPS");
+        const problems=websiteButtonProblems(option.label,option.url);
+        if(d.kind==="message"&&!d.text.trim())problems.push("الزر «"+option.label+"» يحتاج نص رسالة أساسيًا ليُرسل تحته");
+        if(problems.length)problems.forEach(error);
         else externalExit.add(n.id);
       }
       if(option.action==="flow"){
@@ -171,14 +251,22 @@ export function validateDocument(doc: FlowDocument, library?: readonly Validatio
          !doc.edges.some(e=>e.source===n.id&&e.sourceHandle===option.id))
         error("الخيار «"+option.label+"» بلا وجهة");
     }
+    if(d.kind==="message"){
+      const web=d.options.filter(o=>o.action==="website").length;
+      if(web>WEBSITE_BUTTONS_MAX)error("الحد الأقصى لأزرار الروابط في رسالة واحدة هو "+WEBSITE_BUTTONS_MAX);
+      if(web>0&&[...d.text.trim()].length>WEBSITE_BUTTON_TEXT_MAX)
+        error("نص الرسالة التي تحتوي على أزرار روابط يجب ألا يتجاوز "+WEBSITE_BUTTON_TEXT_MAX+" حرفًا");
+    }
     for(const block of d.contentBlocks||[]){
-      if(["image","pdf"].includes(block.type)&&!(/^https:\/\/\S+$/i.test(block.url||"")||
-         block.type==="image"&&/^data:image\/(?:webp|jpeg|png);base64,/i.test(block.url||"")||
-         block.type==="pdf"&&/^data:application\/pdf;base64,/i.test(block.url||"")))
-        error("رابط "+(block.type==="pdf"?"PDF":"الصورة")+" غير صالح");
+      if(block.type==="pdf"){error("مكوّن PDF لم يعد مدعومًا؛ احذفه قبل النشر");continue;}
+      if(block.type==="image"&&!(/^https:\/\/\S+$/i.test(block.url||"")||
+         /^data:image\/(?:webp|jpeg|png);base64,/i.test(block.url||"")))
+        error("رابط الصورة غير صالح");
+      else if(block.type==="image"&&!isAllowedImageUrl(block.url))error(IMAGE_PUBLISH_MSG);
     }
     if(d.image&&!/^https:\/\//i.test(d.image)&&!/^data:image\/(?:png|jpeg|webp);base64,/i.test(d.image))
       error("رابط صورة غير آمن");
+    else if(d.image&&!isAllowedImageUrl(d.image))error(IMAGE_PUBLISH_MSG);
     if(d.kind==="question"&&d.inputMode==="buttons"&&d.options.length===0)error("أضف خيارًا للسؤال");
     if(d.kind==="randomizer"&&Math.abs(d.options.reduce((sum,o)=>sum+(o.weight||0),0)-100)>.01)
       error("مجموع نسب التوزيع يجب أن يساوي 100%");
@@ -204,6 +292,9 @@ export function validateDocument(doc: FlowDocument, library?: readonly Validatio
     const signature=edge.source+":"+(edge.sourceHandle||"next");
     if(unique.has(signature))add("هناك أكثر من اتصال لنفس مخرج الخطوة — "+byId.get(edge.source)!.data.title,edge.source);
     unique.set(signature,edge.id);
+    const from=byId.get(edge.source)!.data;
+    if(from.kind==="question"&&from.inputMode!=="buttons"&&edge.sourceHandle==="invalid")
+      add("مخرج «غير صالح» غير مدعوم في المحرك المباشر؛ استخدم مخرج «التالي» فقط — "+(from.title||edge.source),edge.source,"warning");
     if(!canConnect({source:edge.source,sourceHandle:edge.sourceHandle||"next",target:edge.target,targetHandle:edge.targetHandle||"in"},
       {...doc,edges:doc.edges.filter(e=>e.id!==edge.id)}))
       add("توصيل غير صالح — "+byId.get(edge.source)!.data.title,edge.source);
@@ -280,9 +371,10 @@ function cleanImported(raw:unknown): FlowDocument | null {
     const kind=kindOf(d.kind);
     const options:Array<Choice>=Array.isArray(d.options)?d.options.slice(0,12).filter((x:unknown)=>!!x&&typeof x==="object").map((x:unknown)=>{const c=x as Record<string,unknown>;
       const action:ButtonAction=["step","flow","website","ai","actions","condition","randomizer"].includes(String(c.action))?c.action as ButtonAction:"step";
-      return {id:safeString(c.id,id()),label:safeString(c.label).slice(0,100),weight:typeof c.weight==="number"?c.weight:undefined,
+      const web=action==="website";
+      return {id:safeString(c.id,id()),label:web?safeString(c.label).trim().slice(0,100):safeString(c.label).slice(0,100),weight:typeof c.weight==="number"?c.weight:undefined,
         buttonType:c.buttonType==="quick_reply"?"quick_reply":"button",action,
-        targetFlowId:safeString(c.targetFlowId).slice(0,150),url:safeString(c.url).slice(0,2000)};
+        targetFlowId:safeString(c.targetFlowId).slice(0,150),url:web?safeString(c.url).trim().slice(0,2000):safeString(c.url).slice(0,2000)};
     }):[];
     const contentBlocks:ContentBlock[]=Array.isArray(d.contentBlocks)?d.contentBlocks.slice(0,24).filter((x:unknown)=>!!x&&typeof x==="object").map((x:unknown)=>{
       const b=x as Record<string,unknown>;
@@ -293,6 +385,9 @@ function cleanImported(raw:unknown): FlowDocument | null {
     const clean=makeNode(kind,position,{title:safeString(d.title,LABELS[kind]).slice(0,120),text:safeString(d.text).slice(0,2000),image:safeString(d.image).slice(0,1500000),options,keywords:safeString(d.keywords).slice(0,500),
       platform:["instagram","messenger","whatsapp"].includes(String(d.platform))?d.platform as Platform:"instagram",contentBlocks,
       triggerMode:["keyword","message","comment","story","ad","live","referral"].includes(String(d.triggerMode))?d.triggerMode as FlowData["triggerMode"]:"keyword",
+      commentScope:d.commentScope==="specific"?"specific":"all",commentPostId:safeString(d.commentPostId).trim().slice(0,100),
+      publicReplyText:safeString(d.publicReplyText).slice(0,PUBLIC_REPLY_MAX),
+      commentMatchType:d.commentMatchType==="keyword"||d.commentMatchType==="any"?d.commentMatchType as "any"|"keyword":(safeString(d.keywords).trim()?"keyword":"any"),
       inputMode:["buttons","text","email","phone","number"].includes(String(d.inputMode))?d.inputMode as FlowData["inputMode"]:"buttons",
       inputField:safeString(d.inputField,"response").slice(0,100),conditionField:safeString(d.conditionField,"message").slice(0,100),
       operator:["contains","equals","not_equals","exists"].includes(String(d.operator))?d.operator as FlowData["operator"]:"contains",

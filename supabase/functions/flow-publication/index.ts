@@ -8,10 +8,13 @@ import {
  preparePublishedDocument,publicationCanActivate,testCanaryArmed,productionActivationAuthorized,
  UUID_REGEX,VALID_FLOW_KEY,type ProviderPlatform
 } from "../../../src/flow/serverPublicationValidation.ts";
-import type {FlowCapability} from "../../../src/flow/publicationGate.ts";
-import {evaluateFlowReadiness} from "./readiness.ts";
+import {flowNeedsMedia,parseCapabilities,mediaActivationAllowed,withMediaGate,
+ type FlowCapability} from "../../../src/flow/publicationGate.ts";
+import {evaluateFlowReadiness,documentHasCommentTrigger} from "./readiness.ts";
 import {simpleMessageFromDocument} from "../milan-api/flowPrepareMessage.ts";
-import {supportedDurableDocument} from "../milan-api/flowDurableIngress.ts";
+import {supportedDurableDocument,durableCandidateKind,durableRuntimeNeeds,durableNeedsInternalActions,
+ type DurableCandidateKind} from "../milan-api/flowDurableIngress.ts";
+import {documentCommentTriggerProblem,commentFlowPlan} from "../milan-api/commentTrigger.ts";
 
 const env=(k:string)=>Deno.env.get(k)??"";
 // Only the existing production GitHub Pages origin. Never reflect Origin.
@@ -29,6 +32,12 @@ const respond=(body:unknown,status=200)=>new Response(JSON.stringify(body),
 const error=(message:string,status:number)=>respond({ok:false,error:message},status);
 const hasPlatform=(v:unknown):v is ProviderPlatform=>
  v==="facebook"||v==="instagram"||v==="whatsapp";
+// Server-only comment automation flags, read fail-closed (absent/not "true" = OFF).
+// Facebook comment flows need both; WhatsApp has no comment surface (never).
+const commentSwitches=()=>({
+ commentAutomationEnabled:env("FLOW_COMMENT_AUTOMATION_ENABLED")==="true",
+ multichannelEnabled:env("FLOW_MULTICHANNEL_ENABLED")==="true"
+});
 
 const MAX_BODY_BYTES=4*1024*1024+4096;
 const MAX_BEARER_BYTES=8192;
@@ -119,14 +128,25 @@ export async function handleFlowPublication(req:Request,
    ]);
    if(accounts.error||globalSwitch.error||tenantSwitch.error)
     return error("Account list unavailable",503);
+   const switches=commentSwitches();
    const visible=(accounts.data??[]).filter((a:{platform:unknown})=>hasPlatform(a.platform))
-    .map((a:{id:string;platform:ProviderPlatform;is_active:boolean;agent_enabled:boolean;auto_reply:boolean})=>({
-      id:a.id,platform:a.platform,is_active:a.is_active,
-      canActivate:tenant.is_active===true&&a.is_active===true&&
-       a.agent_enabled===true&&a.auto_reply===true&&
-       productionActivationAuthorized(a.platform,globalSwitch.data?.enabled,
-        tenantSwitch.data?.enabled,tenantSwitch.data?.production_approved)
-    }));
+    .map((a:{id:string;platform:ProviderPlatform;is_active:boolean;agent_enabled:boolean;auto_reply:boolean})=>{
+      const accountReady=tenant.is_active===true&&a.is_active===true&&
+       a.agent_enabled===true&&a.auto_reply===true;
+      return {
+       id:a.id,platform:a.platform,is_active:a.is_active,
+       // Unchanged: DM (any flow) activation for this account.
+       canActivate:accountReady&&
+        productionActivationAuthorized(a.platform,globalSwitch.data?.enabled,
+         tenantSwitch.data?.enabled,tenantSwitch.data?.production_approved),
+       // UI hint only: a comment-trigger flow could be activated on this
+       // account. The activate action re-derives it from the stored document.
+       canActivateComments:accountReady&&
+        productionActivationAuthorized(a.platform,globalSwitch.data?.enabled,
+         tenantSwitch.data?.enabled,tenantSwitch.data?.production_approved,
+         {commentTrigger:true,...switches})
+      };
+    });
    return respond({ok:true,accounts:visible});
   }
 
@@ -177,10 +197,15 @@ export async function handleFlowPublication(req:Request,
      .eq("revision",revision).maybeSingle():null;
    if(candidate?.error)return error("Candidate revision unavailable",503);
    const published:unknown=candidate?.data?.document;
+   // Same whitelist and flag needs as the live ingress and the activation guard.
    const supported=supportedDurableDocument(published);
-   const candidateKind:"buttons"|"delay"|"unsupported"=supported?
-    (published.nodes.some(n=>n.data.kind==="question")?"buttons":"delay"):"unsupported";
+   const candidateKind:DurableCandidateKind=supported?durableCandidateKind(published):"unsupported";
+   // Comment-trigger documents (never durable DM graphs): the same plan and
+   // server-env flags (fail-closed) the activate action's comment path uses.
+   const comment=!supported&&documentHasCommentTrigger(published)?{
+    planValid:commentFlowPlan(published,scope.platform)!==null,...commentSwitches()}:undefined;
    const readiness=evaluateFlowReadiness({
+    comment,
     platform:scope.platform,candidateKind,tenantActive:tenant.is_active===true,
     accountActive:account.is_active===true,
     agentEnabled:account.agent_enabled===true,autoReply:account.auto_reply===true,
@@ -198,7 +223,14 @@ export async function handleFlowPublication(req:Request,
     outboxEnabled:env("FLOW_OUTBOX_SEND_ENABLED")==="true",
     atomicDebitReady:env("FLOW_ATOMIC_CONSUME_READY")==="true",
     richButtonsEnabled:env("FLOW_RICH_BUTTONS_ENABLED")==="true",
-    encryptionConfigured:env("FIELD_ENCRYPTION_KEY").length>0
+    encryptionConfigured:env("FIELD_ENCRYPTION_KEY").length>0,
+    // tag/untag/notify/handoff nodes need the internal executor flag.
+    needsInternalActions:supported&&durableNeedsInternalActions(published),
+    internalActionsEnabled:env("FLOW_INTERNAL_ACTIONS_ENABLED")==="true",
+    // Image blocks: message:image in the server capability set AND the media flag.
+    needsMedia:supported&&flowNeedsMedia(published),
+    mediaEnabled:mediaActivationAllowed(parseCapabilities(env("FLOW_ACTIVATION_CAPABILITIES")),
+     env("FLOW_MEDIA_SEND_ENABLED")==="true")
    });
    return respond({ok:true,readiness,candidateRevision:revision??null});
   }
@@ -250,6 +282,10 @@ export async function handleFlowPublication(req:Request,
     return error("Account is disabled",403);
    const doc=preparePublishedDocument(request.document,scope.platform);
    if(!doc)return error("Flow document is invalid or targets another channel",422);
+   // Comment trigger config (scope/post id/match type/keywords/public reply):
+   // server-side validation. Other triggers: no new requirement.
+   if(documentCommentTriggerProblem(doc)!==null)
+    return error("Comment trigger configuration is invalid",422);
    const {data,error:dbError}=await client.rpc("flow_publish_revision",{
     p_tenant_id:scope.tenantId,p_account_id:scope.accountId,
     p_platform:scope.platform,p_flow_key:flowKey,p_actor_id:scope.actorId,
@@ -317,7 +353,15 @@ export async function handleFlowPublication(req:Request,
    const production=productionActivationAuthorized(
     scope.platform,globalSwitch.data?.enabled,
     tenantSwitch.data?.enabled,tenantSwitch.data?.production_approved);
-   if(!canary&&!production)
+   // Platform-level comment authorization (instagram: same as production;
+   // facebook: only with FLOW_COMMENT_AUTOMATION_ENABLED+FLOW_MULTICHANNEL_ENABLED;
+   // whatsapp: never). It still needs a stored comment graph below.
+   const switches=commentSwitches();
+   const commentPlatformAuthorized=productionActivationAuthorized(
+    scope.platform,globalSwitch.data?.enabled,
+    tenantSwitch.data?.enabled,tenantSwitch.data?.production_approved,
+    {commentTrigger:true,...switches});
+   if(!canary&&!production&&!commentPlatformAuthorized)
     return error("Publication activation is disabled",423);
 
    const {data:publication,error:publicationError}=await client
@@ -334,7 +378,16 @@ export async function handleFlowPublication(req:Request,
    // Explicit operator gates remain independent of browser publication controls.
    const rawDocument:unknown=publication.document;
    const durableGraph=supportedDurableDocument(rawDocument);
-   const buttonGraph=durableGraph&&rawDocument.nodes.some(n=>n.data.kind==="question");
+   // Flags follow the actual nodes: buttons sender for question/button
+   // messages, scheduler for delays (both for mixed graphs, none for text).
+   const needs=durableGraph?durableRuntimeNeeds(rawDocument):{buttons:true,scheduler:true};
+   // tag/untag/notify/handoff run only through the internal executor.
+   const needsInternal=!durableGraph||durableNeedsInternalActions(rawDocument);
+   // Image blocks go live only with message:image in the server capability
+   // set (FLOW_ACTIVATION_CAPABILITIES) AND FLOW_MEDIA_SEND_ENABLED; PDF never.
+   const needsMedia=flowNeedsMedia(rawDocument);
+   const mediaAllowed=mediaActivationAllowed(parseCapabilities(env("FLOW_ACTIVATION_CAPABILITIES")),
+    env("FLOW_MEDIA_SEND_ENABLED")==="true");
    const durable=production&&scope.platform==="instagram"&&durableGraph&&
     env("FLOW_DURABLE_ACTIVATION_READY")==="true"&&
     env("FLOW_DURABLE_INGRESS_ENABLED")==="true"&&
@@ -343,14 +396,47 @@ export async function handleFlowPublication(req:Request,
     env("FLOW_OUTBOX_SEND_ENABLED")==="true"&&
     env("FLOW_ATOMIC_CONSUME_READY")==="true"&&
     env("FIELD_ENCRYPTION_KEY").length>0&&
-    (buttonGraph?env("FLOW_RICH_BUTTONS_ENABLED")==="true":
-     env("FLOW_DURABLE_SCHEDULER_ENABLED")==="true");
+    (!needs.buttons||env("FLOW_RICH_BUTTONS_ENABLED")==="true")&&
+    (!needsInternal||env("FLOW_INTERNAL_ACTIONS_ENABLED")==="true")&&
+    (!needsMedia||mediaAllowed)&&
+    (!needs.scheduler||env("FLOW_DURABLE_SCHEDULER_ENABLED")==="true");
+   // Comment automation (20261029300000; FLOW_COMMENT_AUTOMATION_ENABLED,
+   // default OFF): the single supported comment graph (commentTrigger.ts
+   // commentFlowPlan) under the same operator gates as the durable path.
+   // OFF: false, so activation is decided exactly as before.
+   // Platform rule lives in productionActivationAuthorized (instagram as
+   // before; facebook Page comments also need FLOW_MULTICHANNEL_ENABLED;
+   // whatsapp never: no comment surface), fed the stored document's plan.
+   const commentGraph=!durableGraph&&switches.commentAutomationEnabled&&
+    commentFlowPlan(rawDocument,scope.platform)!==null;
+   const commentFlow=commentGraph&&commentPlatformAuthorized&&
+    env("FLOW_DURABLE_ACTIVATION_READY")==="true"&&
+    env("FLOW_DURABLE_INGRESS_ENABLED")==="true"&&
+    env("FLOW_DURABLE_CANARY_ACCOUNT_ID")===scope.accountId&&
+    env("FLOW_WORKERS_OPERATOR_RELEASE")==="production-canary-approved"&&
+    env("FLOW_OUTBOX_SEND_ENABLED")==="true"&&
+    env("FLOW_ATOMIC_CONSUME_READY")==="true"&&
+    env("FIELD_ENCRYPTION_KEY").length>0;
+   if(commentFlow){
+    const {data:enabled,error:dbError}=await client.rpc("flow_activate_revision",{
+     p_tenant_id:scope.tenantId,p_account_id:scope.accountId,
+     p_platform:scope.platform,p_flow_key:flowKey,p_revision:rev,p_actor_id:scope.actorId
+    });
+    if(dbError)return error("Activation unavailable",503);
+    if(enabled!==true)return error("Global/tenant switch is OFF",423);
+    return respond({ok:true,active:true,revision:rev});
+   }
+   // Not a comment flow: DM gating exactly as before (facebook/whatsapp DM
+   // flows are never production-authorized; only the test canary remains).
+   if(!canary&&!production)
+    return error("Publication activation is disabled",423);
    if(!durable){
     if(simpleMessageFromDocument(publication.document,scope.platform)===null)
      return error("This flow uses unsupported runtime features",422);
-    const caps=new Set<FlowCapability>(canary?
-     (env("FLOW_ACTIVATION_CAPABILITIES").split(",").map(s=>s.trim()).filter(Boolean) as FlowCapability[]):
-     ["execution-engine","instagram","trigger:message","message:text","condition"]);
+    // message:image counts only while FLOW_MEDIA_SEND_ENABLED is on.
+    const caps=canary?
+     withMediaGate(parseCapabilities(env("FLOW_ACTIVATION_CAPABILITIES")),env("FLOW_MEDIA_SEND_ENABLED")==="true"):
+     new Set<FlowCapability>(["execution-engine","instagram","trigger:message","message:text","condition"]);
     if(!publicationCanActivate(publication.document,scope.platform,caps,true))
      return error("This flow uses unsupported runtime features",422);
    }

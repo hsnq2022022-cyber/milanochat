@@ -1,8 +1,25 @@
 @import "tailwindcss";
 
+/* Custom vintage Arabic face ("عام الحرف اليدوية"), bundled by Vite so the URL follows the app base path.
+   (@import must stay the first rule, so this sits right after it.) */
+@font-face {
+  font-family: "Handicrafts";
+  src: url("./assets/fonts/alfont_com_TheYearofHandicrafts-SemiBold.woff2") format("woff2");
+  font-weight: 400; /* single declared weight: 700 is synthesized (faux bold) for a visible hierarchy */
+  font-style: normal;
+  font-display: swap;
+}
+
+/* Force the custom font on every element, including ones with their own font-* class. */
+* {
+  font-family: "Handicrafts", "Tajawal", sans-serif !important;
+}
+
 @theme {
-  --font-display: "Changa", "IBM Plex Sans Arabic", sans-serif;
-  --font-body: "IBM Plex Sans Arabic", "Changa", sans-serif;
+  --font-sans: "Handicrafts", "Tajawal", sans-serif;
+  --font-Handicrafts: "Handicrafts", "Tajawal", sans-serif;
+  --font-display: "Handicrafts", "Tajawal", sans-serif;
+  --font-body: "Handicrafts", "Tajawal", sans-serif;
 
   --color-night: #06201a;
   --color-pine: #0a2c22;
@@ -24,6 +41,14 @@
 
 html {
   scroll-behavior: smooth;
+}
+
+/* Custom font is the app-wide default. Elements that set their own font (font-body / font-display
+   utilities) follow it through the --font-body / --font-display tokens in @theme above. */
+body,
+html,
+#root {
+  font-family: "Handicrafts", "Tajawal", sans-serif !important;
 }
 
 body {

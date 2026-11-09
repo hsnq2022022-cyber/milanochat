@@ -1,4 +1,15 @@
 \set ON_ERROR_STOP on
+-- Fixture (disposable PG only): flow_lease_due_runs from
+-- 20261029130000_flow_run_lifecycle ends sleeping runs whose exact revision is
+-- not active, and reads tenant/account/conversation rows as service_role (as
+-- on live Supabase). Provide the active phase4 revision and those read grants.
+-- Kept in this file, not the shared bootstrap, because later CI jobs insert the
+-- same activation in flow-outbox-delivery-bootstrap.sql.
+GRANT SELECT ON public.tenants,public.channel_accounts,public.conversations TO service_role;
+INSERT INTO public.automation_flow_activations(
+ tenant_id,channel_account_id,platform,flow_key,revision,is_active)
+VALUES('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+ '11111111-1111-4111-8111-111111111111','instagram','phase4',1,true);
 SET ROLE service_role;
 DO $test$
 DECLARE tenant uuid:='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';

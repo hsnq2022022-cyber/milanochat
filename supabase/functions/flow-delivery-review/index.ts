@@ -3,6 +3,7 @@
  * Owner-authenticated and read-only, disabled explicitly by FLOW_DELIVERY_REVIEW_ENABLED=false.
  */
 import {createClient} from "npm:@supabase/supabase-js@2";
+import {loadFlowReview} from "./review.ts";
 const env=(k:string)=>Deno.env.get(k)??"";
 const ORIGIN="https://hsnq2022022-cyber.github.io";
 const headers={"content-type":"application/json;charset=utf-8","cache-control":"no-store",
@@ -64,7 +65,12 @@ export async function handle(req:Request){
    .eq("tenant_id",tenant.id).eq("review_status","queued")
    .order("attempted_at",{ascending:false}).limit(100);
   if(error)return json({error:"Queue unavailable"},503);
-  return json({items:rows??[],readOnly:true});
+  // Additive V3/V4 fields; same owner-verified tenant.id. Failures here never break the V2 queue.
+  let flow;
+  try{flow=await loadFlowReview(sb,tenant.id);}
+  catch{flow={flowItems:[],flowFailures:[],flowRuns:[],runCounts:{},flowAvailable:false,
+   flowInternal:[],flowInternalAvailable:false};}
+  return json({items:rows??[],readOnly:true,...flow});
  }
  const since=new Date(Date.now()-30*86400000).toISOString();
  const {data:rows,error}=await sb.from("automation_flow_metrics")

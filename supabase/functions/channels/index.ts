@@ -4,6 +4,7 @@
 // ═══════════════════════════════════════════════════════════════════
 
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { issueOAuthState, oauthStateSecret, type IssueResult } from "../_shared/oauthState.ts";
 
 // ─── CORS ───
 const corsHeaders: Record<string, string> = {
@@ -30,48 +31,33 @@ function getAdmin(): SupabaseClient {
 type ChannelId = "whatsapp" | "instagram" | "facebook";
 const VALID_CHANNELS: ChannelId[] = ["whatsapp", "instagram", "facebook"];
 
-// ─── OAuth state (توقيع HMAC متوافق مع دالة meta-auth: base64url(body).base64url(sig)) ───
-const enc = new TextEncoder();
-
-function b64url(s: string): string {
-  return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
-async function hmacSign(secret: string, body: string): Promise<string> {
-  const key = await crypto.subtle.importKey(
-    "raw", enc.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"],
-  );
-  const sig = await crypto.subtle.sign("HMAC", key, enc.encode(body));
-  return b64url(String.fromCharCode(...new Uint8Array(sig)));
-}
-
-/** يبني state موقّعًا ويسجّله في meta_oauth_states (أفضل جهد — مثل خادم Node السابق) */
+// ─── OAuth state (S5): signed with OAUTH_STATE_SECRET by ../_shared/oauthState.ts ───
+// The tenant is derived ONLY from the verified user (ownedTenant(userId));
+// any tenantId in the query string is ignored. Missing secret -> 503.
+// The nonce row in meta_oauth_states makes the state single-use.
 async function createSignedState(opts: {
   platform: "instagram" | "facebook";
   userId: string;
-  tenantId?: string | null;
-}): Promise<string> {
-  const secret =
-    Deno.env.get("INSTAGRAM_APP_SECRET") ?? Deno.env.get("META_APP_SECRET") ?? "";
-  if (!secret) throw new Error("INSTAGRAM_APP_SECRET/META_APP_SECRET مفقود — لا يمكن توقيع OAuth state");
+}): Promise<IssueResult> {
+  return await issueOAuthState({
+    secret: oauthStateSecret((k) => Deno.env.get(k)),
+    userId: opts.userId,
+    platform: opts.platform,
+    ownedTenantOf: (uid) => ownedTenant(uid),
+    recordNonce: async (row) => {
+      const { error } = await getAdmin().from("meta_oauth_states").insert({ ...row, consumed: false });
+      if (error) console.error("[channels] oauth state store failed", { code: error.code ?? "unknown" });
+      return !error;
+    },
+    nowSec: Math.floor(Date.now() / 1000),
+    newNonce: () => crypto.randomUUID(),
+  });
+}
 
-  const nonce = crypto.randomUUID();
-  const bodyB64 = b64url(JSON.stringify({ i: nonce, p: opts.platform, exp: Math.floor(Date.now() / 1000) + 600 }));
-  const state = `${bodyB64}.${await hmacSign(secret, bodyB64)}`;
-
-  try {
-    const { error } = await getAdmin().from("meta_oauth_states").insert({
-      id: nonce,
-      user_id: opts.userId,
-      tenant_id: opts.tenantId ?? null,
-      platform: opts.platform,
-      expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
-    });
-    if (error) console.warn("[channels] meta_oauth_states insert failed:", error.message);
-  } catch (e: any) {
-    console.warn("[channels] meta_oauth_states insert error:", e?.message ?? e);
-  }
-  return state;
+function oauthStartError(r: Extract<IssueResult, { ok: false }>): Response {
+  if (r.code === "no_tenant") return jsonResponse({ error: "لا يوجد حساب مرتبط" }, 404);
+  console.error("[channels] oauth start refused", { code: r.code });
+  return jsonResponse({ error: "خدمة الربط غير مهيأة حاليًا — حاول لاحقًا", code: r.code }, 503);
 }
 
 // ─── Helpers ───
@@ -216,16 +202,9 @@ Deno.serve(async (req: Request) => {
             500,
           );
         }
-        let state: string;
-        try {
-          state = await createSignedState({
-            platform: "instagram",
-            userId,
-            tenantId: query.get("tenantId"),
-          });
-        } catch (e: any) {
-          return jsonResponse({ error: e?.message ?? "تعذر تجهيز جلسة OAuth" }, 500);
-        }
+        const issued = await createSignedState({ platform: "instagram", userId });
+        if (!issued.ok) return oauthStartError(issued);
+        const state = issued.state;
         const oauthUrl =
           "https://www.instagram.com/oauth/authorize" +
           "?force_reauth=true" +
@@ -233,7 +212,7 @@ Deno.serve(async (req: Request) => {
           `&redirect_uri=${encodeURIComponent(redirectUri)}` +
           "&response_type=code" +
           "&scope=" +
-          encodeURIComponent("instagram_business_basic,instagram_business_manage_messages") +
+          encodeURIComponent("instagram_business_basic,instagram_business_manage_messages,instagram_business_manage_comments") +
           `&state=${encodeURIComponent(state)}`;
 
         if (debug) {
@@ -253,20 +232,15 @@ Deno.serve(async (req: Request) => {
         if (!appId || !redirectUri) {
           return jsonResponse({ error: "إعدادات Facebook OAuth غير مكتملة" }, 500);
         }
-        let state: string;
-        try {
-          state = await createSignedState({
-            platform: "facebook",
-            userId,
-            tenantId: query.get("tenantId"),
-          });
-        } catch (e: any) {
-          return jsonResponse({ error: e?.message ?? "تعذر تجهيز جلسة OAuth" }, 500);
-        }
+        const issued = await createSignedState({ platform: "facebook", userId });
+        if (!issued.ok) return oauthStartError(issued);
+        const state = issued.state;
         const oauthUrl =
           "https://www.facebook.com/v21.0/dialog/oauth" +
           `?client_id=${encodeURIComponent(appId)}` +
           `&redirect_uri=${encodeURIComponent(redirectUri)}` +
+          "&scope=" +
+          encodeURIComponent("pages_show_list,pages_messaging,pages_manage_metadata,pages_read_engagement,pages_manage_engagement") +
           "&state=" + encodeURIComponent(state);
         if (debug) {
           return jsonResponse({ clientId: appId, redirectUri, provider: "facebook", url: oauthUrl });

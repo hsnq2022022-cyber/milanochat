@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { MOCK_HOST, mockActivation } from "./flowActivationMock";
 test("editor loads, deletes an edge and undoes without touching other screens",async({page})=>{
   await page.goto("/milanochat/#/flows");
   await expect(page.locator(".react-flow__node")).toHaveCount(6);
@@ -107,42 +108,19 @@ test("a quick reply can jump to a second locally saved flow and run its preview"
   await expect(page.getByRole("combobox",{name:"اختيار التدفق"}).locator("option")).toHaveCount(2);
 });
 
-test("rich message content adds PDF and data collection blocks that survive preview",async({page})=>{
+test("rich message content adds data collection blocks that survive preview",async({page})=>{
   await page.goto("/milanochat/#/flows");
   await page.locator(".react-flow__node").nth(1).click();
   await expect(page.getByTestId("content-block-menu")).toBeVisible();
-  await page.getByTestId("content-block-menu").getByRole("button").filter({hasText:"PDF"}).click();
-  await expect(page.getByTestId("content-block-pdf")).toBeVisible();
-  await page.getByRole("textbox",{name:"رابط PDF"}).fill("https://example.com/sample.pdf");
-  await expect(page.getByTestId("content-block-menu")).toBeVisible();
+  await expect(page.getByTestId("content-block-menu").getByRole("button").filter({hasText:"PDF"})).toHaveCount(0);
   await page.getByTestId("content-block-menu").getByRole("button").filter({hasText:"جمع بيانات"}).click();
   await page.getByRole("textbox",{name:"سؤال جمع البيانات"}).fill("شنو بريدك الإلكتروني؟");
   await page.getByRole("combobox",{name:"نوع البيانات"}).selectOption("email");
   await page.getByRole("button",{name:"تجربة"}).click();
-  await expect(page.getByText("ملف PDF مرفق")).toBeVisible();
   await expect(page.getByText("شنو بريدك الإلكتروني؟")).toBeVisible();
   await page.getByRole("textbox",{name:"إجابة العميل"}).fill("customer@example.com");
   await page.getByRole("textbox",{name:"إجابة العميل"}).press("Enter");
   await expect(page.getByText("customer@example.com")).toBeVisible();
-});
-
-test("flow enable toggle is local-only and persists when switching documents",async({page})=>{
- await page.goto("/milanochat/#/flows");
- const toggle=page.getByTestId("flow-enabled-toggle");
- await expect(toggle).toHaveAttribute("aria-pressed","false");
- await toggle.click();
- await expect(toggle).toHaveAttribute("aria-pressed","true");
- await expect(page.getByText("تم تفعيل المسودة محليًا فقط.")).toBeVisible();
- await page.getByRole("button",{name:"إنشاء تدفق جديد"}).click();
- await expect(toggle).toHaveAttribute("aria-pressed","false");
- const select=page.getByRole("combobox",{name:"اختيار التدفق"});
- await select.selectOption("default");
- await expect(toggle).toHaveAttribute("aria-pressed","true");
- await page.waitForTimeout(900);
- await page.reload();
- await expect(toggle).toHaveAttribute("aria-pressed","true");
- await toggle.click();
- await expect(toggle).toHaveAttribute("aria-pressed","false");
 });
 
 test("start from scratch opens a separate flow with only a trigger, preserving the original flow",async({page})=>{
@@ -157,8 +135,11 @@ test("start from scratch opens a separate flow with only a trigger, preserving t
 });
 
 test("default pricing messages show three nonblocking warnings and can be enabled",async({page})=>{
+  test.skip(!MOCK_HOST,"needs mock Supabase host");
+  await mockActivation(page,{active:null,calls:[]});
   await page.goto("/milanochat/#/flows");
   const toggle=page.getByTestId("flow-enabled-toggle");
+  await expect(toggle).toBeEnabled();
   await expect(toggle).toHaveAttribute("aria-pressed","false");
   await toggle.click();
   await expect(toggle).toHaveAttribute("aria-pressed","true");
@@ -168,8 +149,11 @@ test("default pricing messages show three nonblocking warnings and can be enable
   await expect(page.getByText(/● خطأ:/)).toHaveCount(0);
 });
 test("an isolated node and a question option without a route block activation",async({page})=>{
+  test.skip(!MOCK_HOST,"needs mock Supabase host");
+  await mockActivation(page,{active:null,calls:[]});
   await page.goto("/milanochat/#/flows");
   const toggle=page.getByTestId("flow-enabled-toggle");
+  await expect(toggle).toBeEnabled();
   await page.getByRole("button",{name:"فتح إضافة خطوة"}).click();
   await page.getByTestId("add-step-menu").getByRole("button",{name:"إرسال رسالة"}).click();
   await toggle.click();
@@ -179,26 +163,18 @@ test("an isolated node and a question option without a route block activation",a
   await expect(page.getByText(/● خطأ:/).first()).toBeVisible();
 });
 
-test("an unconnected quick reply blocks local activation and identifies its question node",async({page})=>{
+test("an unconnected quick reply blocks activation and identifies its question node",async({page})=>{
+  test.skip(!MOCK_HOST,"needs mock Supabase host");
+  await mockActivation(page,{active:null,calls:[]});
   await page.goto("/milanochat/#/flows");
   await page.locator(".react-flow__node").nth(2).click();
   await page.locator("aside [data-testid^='flow-button']").first().click();
   await page.getByRole("combobox",{name:"ربط الزر بخطوة"}).selectOption("");
   const toggle=page.getByTestId("flow-enabled-toggle");
+  await expect(toggle).toBeEnabled();
   await toggle.click();
   await expect(toggle).toHaveAttribute("aria-pressed","false");
   await expect(page.getByText(/بلا وجهة/).first()).toBeVisible();
-});
-
-test("batch 2 undo restores local flow enabled toggle",async({page})=>{
- await page.goto("/milanochat/#/flows");
- const toggle=page.getByTestId("flow-enabled-toggle");
- await toggle.click();
- await expect(toggle).toHaveAttribute("aria-pressed","true");
- await page.getByTitle("تراجع Ctrl+Z").click();
- await expect(toggle).toHaveAttribute("aria-pressed","false");
- await page.getByTitle("إعادة Ctrl+Shift+Z").click();
- await expect(toggle).toHaveAttribute("aria-pressed","true");
 });
 
 test("batch 2 repeated node duplicates have separate positions and undo",async({page})=>{
@@ -276,7 +252,8 @@ test("trigger settings show event-specific keyword chips instead of step title",
  await editor.getByRole("button",{name:"حذف الكلمة عراق"}).click();
  await expect(editor.getByTestId("saved-keywords")).not.toContainText("عراق");
  await event.selectOption("comment");
- await expect(editor.getByRole("checkbox",{name:"تحديد كلمات للتعليقات"})).toBeChecked();
+ await expect(aside.getByRole("radio",{name:"كلمة مفتاحية"})).toBeChecked();
+ await expect(aside.getByTestId("trigger-keyword-settings")).toBeVisible();
  await event.selectOption("message");
  await expect(aside.getByTestId("trigger-keyword-settings")).toHaveCount(0);
 });
@@ -286,15 +263,18 @@ test("comment keywords are optional and saved chips appear as selected criteria"
  await page.locator(".react-flow__node").first().click();
  const aside=page.locator("aside");
  await aside.getByRole("combobox",{name:"نوع الحدث"}).selectOption("comment");
+ await aside.getByRole("radio",{name:"أي تعليق"}).check();
+ await expect(aside.getByTestId("trigger-keyword-settings")).toHaveCount(0);
+ await aside.getByRole("radio",{name:"كلمة مفتاحية"}).check();
  const editor=aside.getByTestId("trigger-keyword-settings");
- await editor.getByRole("checkbox",{name:"تحديد كلمات للتعليقات"}).check();
  const field=editor.getByRole("textbox",{name:"إدخال كلمة مفتاحية"});
  await field.fill("TOD");
  await field.press("Enter");
  await expect(editor.getByTestId("saved-keywords")).toContainText("TOD");
  await expect(page.locator(".react-flow__node").first()).toContainText("TOD");
- await editor.getByRole("checkbox",{name:"تحديد كلمات للتعليقات"}).uncheck();
- await expect(editor.getByText("سيُطبَّق الحدث على أي تعليق")).toBeVisible();
+ await aside.getByRole("radio",{name:"أي تعليق"}).check();
+ await expect(aside.getByTestId("trigger-keyword-settings")).toHaveCount(0);
+ await expect(page.locator(".react-flow__node").first()).toContainText("أي تعليق");
 });
 
 test("message content controls are available without expanding and legacy image stays visible",async({page})=>{
@@ -394,6 +374,11 @@ for(const sample of [
  });
 }
 
+async function addActionStep(page:import("@playwright/test").Page){
+ await page.getByRole("button",{name:"فتح إضافة خطوة"}).click();
+ await page.getByTestId("add-step-menu").getByRole("button",{name:"إجراء",exact:true}).click();
+}
+
 for(const kind of [
  {label:"شرط",heading:"الحقل"},
  {label:"انتظار ذكي",heading:"مدة الانتظار"},
@@ -453,15 +438,97 @@ test("audit: quick reply connects to a real step and preview follows the connect
  await expect(sim.getByText("تواصل ويانا لمعرفة الأسعار الحالية لخدمتك في الإمارات.")).toBeVisible();
 });
 
-test("audit: AI Step and action buttons create editable nodes rather than inert buttons",async({page})=>{
+test("audit: the standalone action step (+ menu) creates an editable node; button picker no longer offers logic actions",async({page})=>{
  await page.goto("/milanochat/#/flows");
  await page.locator(".react-flow__node").nth(1).click();
  const panel=page.getByTestId("step-settings-panel");
  await panel.getByRole("button",{name:"إضافة زر"}).click();
- await panel.getByTestId("button-action-editor").getByRole("button",{name:"AI Step",exact:true}).click();
+ const picker=panel.getByTestId("button-action-editor");
+ for(const name of ["AI Step","تنفيذ إجراء","شرط","توزيع عشوائي"])await expect(picker.getByRole("button",{name,exact:true})).toHaveCount(0);
+ for(const name of ["إرسال رسالة أو الانتقال لخطوة","الانتقال إلى تدفق آخر","فتح موقع"])await expect(picker.getByRole("button",{name,exact:true})).toHaveCount(1);
+ await expect(picker.getByTestId("button-action-legacy")).toHaveCount(0);
+ await addActionStep(page);
  await expect(page.locator(".react-flow__node")).toHaveCount(7);
  await expect(panel.getByText("نوع الإجراء")).toBeVisible();
- await expect(panel.getByText("هذه إعدادات تصميمية، وليست أوامر مفعّلة في النظام الحقيقي.")).toBeVisible();
+ await expect(panel.getByText("هذه إعدادات تصميمية، وليست أوامر مفعّلة في النظام الحقيقي.")).toHaveCount(0);
+});
+
+test("feature-flag notes: image, URL button and internal actions explain server enablement",async({page})=>{
+ await page.goto("/milanochat/#/flows");
+ await page.locator(".react-flow__node").nth(1).click();
+ const panel=page.getByTestId("step-settings-panel");
+ await panel.getByTestId("content-block-menu").getByRole("button",{name:/صورة/}).click();
+ await expect(panel.getByTestId("image-send-flag-note")).toContainText("يفعّل المسؤول");
+ await expect(panel.getByTestId("image-send-flag-note")).toContainText("FLOW_MEDIA_SEND_ENABLED");
+ await panel.getByRole("button",{name:"رابط موقع جديد"}).click();
+ await expect(panel.getByTestId("url-button-flag-note")).toContainText("يفعّل المسؤول");
+ await expect(panel.getByTestId("url-button-flag-note")).toContainText("FLOW_RICH_BUTTONS_ENABLED");
+ await addActionStep(page);
+ const select=panel.locator("select").filter({hasText:"إضافة وسم"});
+ for(const v of ["tag","untag","notify","handoff"]){
+  await select.selectOption(v);
+  await expect(panel.getByTestId("internal-actions-flag-note")).toContainText("FLOW_INTERNAL_ACTIONS_ENABLED");
+ }
+});
+
+test("goto card shows the target step name, not its raw id; removed draft badge and version chip are gone",async({page})=>{
+ await page.goto("/milanochat/#/flows");
+ await expect(page.getByTestId("flow-preview-version")).toHaveCount(0);
+ await expect(page.locator(".fs-draft")).toHaveCount(0);
+ await page.getByRole("button",{name:"فتح إضافة خطوة"}).click();
+ await page.getByTestId("add-step-menu").getByRole("button",{name:"الانتقال لخطوة",exact:true}).click();
+ const panel=page.getByTestId("step-settings-panel");
+ const target=panel.locator("select").filter({hasText:"اختر خطوة"});
+ const option=target.locator("option").nth(1);
+ const name=(await option.textContent())||"";
+ const id=await option.getAttribute("value");
+ await target.selectOption(id!);
+ const card=page.getByTestId("goto-target-name");
+ await expect(card).toContainText(name.trim());
+ await expect(card).not.toContainText(id!);
+});
+
+test("handoff action hides the value field and shows a hint; other actions keep the value field",async({page})=>{
+ await page.goto("/milanochat/#/flows");
+ await page.locator(".react-flow__node").nth(1).click();
+ const panel=page.getByTestId("step-settings-panel");
+ await addActionStep(page);
+ const hint=panel.getByTestId("handoff-hint");
+ const valueLabel=panel.getByText("القيمة / اسم الوسم");
+ await panel.locator("select").filter({hasText:"إضافة وسم"}).selectOption("handoff");
+ await expect(hint).toBeVisible();
+ await expect(hint).toHaveText("يُفضّل إضافة رسالة قبل تحويل المحادثة إلى موظف");
+ await expect(valueLabel).toHaveCount(0);
+ await panel.locator("select").filter({hasText:"إضافة وسم"}).selectOption("tag");
+ await expect(valueLabel).toBeVisible();
+ await expect(hint).toHaveCount(0);
+});
+
+test("AI action hides the static text field, shows the note, and offers to clear legacy text",async({page})=>{
+ await page.goto("/milanochat/#/flows");
+ await page.locator(".react-flow__node").nth(1).click();
+ const panel=page.getByTestId("step-settings-panel");
+ await addActionStep(page);
+ const select=panel.locator("select").filter({hasText:"إضافة وسم"});
+ const valueLabel=panel.getByText("القيمة / اسم الوسم");
+ for(const v of ["tag","untag","set_field","notify"]) {
+  await select.selectOption(v);
+  await expect(valueLabel).toBeVisible();
+  await expect(panel.getByTestId("ai-node-note")).toHaveCount(0);
+ }
+ await select.selectOption("tag");
+ await valueLabel.locator("xpath=following-sibling::input[1]").fill("legacy text");
+ await select.selectOption("ai");
+ await expect(panel.getByTestId("ai-node-note")).toContainText("قاعدة المعرفة");
+ await expect(panel.getByTestId("ai-node-note")).toContainText("FLOW_AI_STEP_ENABLED");
+ await expect(valueLabel).toHaveCount(0);
+ await expect(panel.getByTestId("action-preview-only-note")).toHaveCount(0);
+ await expect(panel.getByTestId("ai-node-legacy-text")).toBeVisible();
+ await panel.getByRole("button",{name:"مسح النص"}).click();
+ await expect(panel.getByTestId("ai-node-legacy-text")).toHaveCount(0);
+ await expect(panel.getByTestId("ai-node-note")).toBeVisible();
+ await select.selectOption("tag");
+ await expect(valueLabel).toBeVisible();
 });
 
 test("batch 5 typed email and phone use input previews, never quick-reply buttons",async({page})=>{
@@ -537,7 +604,6 @@ test("batch 5 delete-and-reconnect bridges one input and output atomically",asyn
 
 test("root cause: correct branch marker and absolutely no old valid-invalid cards on typed questions",async({page})=>{
  await page.goto("/milanochat/#/flows");
- await expect(page.getByTestId("flow-preview-version")).toContainText("5.3");
  await page.locator(".react-flow__node").nth(2).click();
  const editor=page.getByTestId("step-settings-panel");
  for(const value of ["email","phone","number","text"]){
@@ -589,26 +655,26 @@ test("collection controls genuinely update the canvas and do not ask twice for t
  await answer.fill("customer@example.org");
  await answer.press("Enter");
  await expect(sim.getByText("تواصل ويانا لمعرفة الأسعار الحالية لخدمتك في العراق.")).toBeVisible();
- await expect(answer).toHaveCount(0);
+ // Asked exactly once; after the answer the simulator no longer accepts input on this path.
+ await expect(sim.getByText("أرسل بريدك الآن")).toHaveCount(1);
+ await expect(answer).toBeDisabled();
 });
 
-test("image, pdf and delay blocks can be added, edited, reordered and removed",async({page})=>{
+test("image and delay blocks can be added, edited, reordered and removed",async({page})=>{
  await page.goto("/milanochat/#/flows");
  await page.locator(".react-flow__node").nth(1).click();
  const editor=page.getByTestId("step-settings-panel");
  const menu=editor.getByTestId("content-block-menu");
  await menu.getByRole("button").filter({hasText:"صورة"}).click();
  await editor.getByTestId("content-block-image").getByRole("textbox",{name:"رابط صورة المكوّن"}).fill("https://example.com/photo.jpg");
- await menu.getByRole("button").filter({hasText:"PDF"}).click();
- await editor.getByTestId("content-block-pdf").getByRole("textbox",{name:"رابط PDF"}).fill("https://example.com/info.pdf");
  await menu.getByRole("button").filter({hasText:"انتظار"}).click();
  await editor.getByTestId("content-block-delay").getByRole("spinbutton",{name:"فاصل الانتظار بالثواني"}).fill("12");
- await expect(page.locator(".react-flow__node").nth(1)).toContainText("3 مكونات إضافية");
+ await expect(page.locator(".react-flow__node").nth(1)).toContainText("2 مكونات إضافية");
  await editor.getByTestId("content-block-delay").getByRole("button",{name:"نقل للأعلى"}).click();
- await expect(editor.locator('[data-testid^="content-block-"]').nth(1)).toHaveAttribute("data-testid","content-block-delay");
+ await expect(editor.locator('[data-testid^="content-block-"]').nth(0)).toHaveAttribute("data-testid","content-block-delay");
  await editor.getByTestId("content-block-delay").getByRole("button",{name:"حذف المكوّن"}).click();
  await expect(editor.getByTestId("content-block-delay")).toHaveCount(0);
- await expect(page.locator(".react-flow__node").nth(1)).toContainText("2 مكونات إضافية");
+ await expect(page.locator(".react-flow__node").nth(1)).toContainText("1 مكونات إضافية");
 });
 
 test("always-visible content choices have no dead Add Content button",async({page})=>{
@@ -616,5 +682,215 @@ test("always-visible content choices have no dead Add Content button",async({pag
  await page.locator(".react-flow__node").nth(1).click();
  const panel=page.getByTestId("step-settings-panel");
  await expect(panel.getByRole("button",{name:"إضافة محتوى"})).toHaveCount(0);
- await expect(panel.getByTestId("content-block-menu").getByRole("button")).toHaveCount(5);
+ await expect(panel.getByTestId("content-block-menu").getByRole("button")).toHaveCount(4);
+});
+
+test("url button can be added, edited with a 20 character limit, and removed",async({page})=>{
+ await page.goto("/milanochat/#/flows");
+ await page.locator(".react-flow__node").nth(1).click();
+ const panel=page.getByTestId("step-settings-panel");
+ await panel.getByRole("button",{name:"رابط موقع جديد"}).click();
+ const editor=panel.getByTestId("button-action-editor");
+ const label=editor.getByRole("textbox",{name:"عنوان الزر"});
+ await expect(label).toHaveAttribute("placeholder","زيارة الموقع");
+ await expect(label).toHaveAttribute("maxlength","20");
+ await label.fill("ا".repeat(25));
+ await expect(label).toHaveValue("ا".repeat(20));
+ await expect(editor.getByTestId("url-button-counter")).toHaveText("20/20");
+ await label.fill("زيارة الموقع");
+ await expect(editor.getByTestId("url-button-counter")).toHaveText("12/20");
+ await editor.getByRole("textbox",{name:"رابط الموقع"}).fill("https://example.com/shop");
+ await expect(editor.getByRole("textbox",{name:"رابط الموقع"})).toHaveValue("https://example.com/shop");
+ await editor.getByRole("button",{name:"حذف الزر"}).click();
+ await expect(panel.getByTestId("button-action-editor")).toHaveCount(0);
+});
+
+test("legacy pdf block is read-only with an unsupported note and can be deleted",async({page})=>{
+ await page.addInitScript(()=>{
+  const n=(id:string,kind:string,y:number,extra:Record<string,unknown>={})=>({id,type:"flowNode",position:{x:0,y},data:{kind,title:kind,text:"",...extra}});
+  localStorage.setItem("social_flow_reactflow_v3",JSON.stringify({version:3,name:"legacy",nodes:[
+   n("s","trigger",0,{keywords:"hi",triggerMode:"keyword",platform:"instagram"}),
+   n("m","message",200,{text:"مرحبا",contentBlocks:[{id:"p1",type:"pdf",url:"https://example.com/a.pdf"}]})],
+   edges:[{id:"e1",source:"s",target:"m",sourceHandle:"next",targetHandle:"in"}]}));
+ });
+ await page.goto("/milanochat/#/flows");
+ await page.locator(".react-flow__node").nth(1).click();
+ const block=page.getByTestId("step-settings-panel").getByTestId("content-block-pdf");
+ await expect(block).toContainText("لم يعد PDF مدعومًا");
+ await expect(block.getByRole("textbox")).toHaveCount(0);
+ await block.getByRole("button",{name:"حذف المكوّن"}).click();
+ await expect(page.getByTestId("content-block-pdf")).toHaveCount(0);
+});
+
+test("typed question with reserved live field name shows a live-engine warning in the findings panel",async({page})=>{
+  await page.goto("/milanochat/#/flows");
+  await page.locator(".react-flow__node").nth(2).click();
+  await page.locator("aside").getByRole("combobox").first().selectOption("email");
+  await page.locator("aside input[maxlength='100']").first().fill("message");
+  await page.getByTitle("فحص التدفق").click();
+  await expect(page.getByText(/⚠ تحذير: .*اسم حقل الإجابة غير مقبول — الاسم «message» محجوز/).first()).toBeVisible();
+});
+
+/* ---- image block upload to Supabase Storage (mock host only; run with VITE_SUPABASE_URL=http://mock.supabase.test VITE_SUPABASE_ANON_KEY=fake-anon-key) ---- */
+const SB_URL = process.env.VITE_SUPABASE_URL ?? "";
+const UP_UID = "33333333-3333-4333-8333-333333333333";
+const upB64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString("base64url");
+const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
+async function openImageBlock(page: import("@playwright/test").Page, signedIn: boolean) {
+  if (signedIn) {
+    const ref = new URL(SB_URL).hostname.split(".")[0];
+    await page.addInitScript(([key, value]) => localStorage.setItem(key, value), [
+      `sb-${ref}-auth-token`,
+      JSON.stringify({
+        access_token: `${upB64({ alg: "none" })}.${upB64({ sub: UP_UID, exp: 4102444800, role: "authenticated" })}.sig`,
+        refresh_token: "r", token_type: "bearer", expires_in: 3600, expires_at: 4102444800,
+        user: { id: UP_UID, aud: "authenticated", role: "authenticated", email: "t@example.test", app_metadata: {}, user_metadata: {}, created_at: "2024-01-01T00:00:00Z" },
+      }),
+    ]);
+  }
+  await page.goto("/milanochat/#/flows");
+  await page.locator(".react-flow__node").nth(1).click();
+  const aside = page.locator("aside");
+  await aside.getByTestId("content-block-menu").getByRole("button").filter({ hasText: "صورة" }).click();
+  await expect(aside.getByTestId("content-block-image")).toBeVisible();
+  return aside;
+}
+const pngFile = { name: "x.png", mimeType: "image/png", buffer: PNG };
+
+test.describe("image block storage upload", () => {
+  test.skip(!SB_URL.startsWith("http://mock."), "needs VITE_SUPABASE_URL=http://mock.supabase.test (fake host)");
+
+  test("uploads resized JPEG to flow-media under the user folder and stores the public https URL", async ({ page }) => {
+    const uploads: { path: string; ct: string }[] = [];
+    await page.route("**/storage/v1/object/flow-media/**", async (route) => {
+      const req = route.request();
+      if (req.method() === "OPTIONS") return route.fulfill({ status: 204, headers: { "access-control-allow-origin": "*", "access-control-allow-headers": "*", "access-control-allow-methods": "*" } });
+      uploads.push({ path: new URL(req.url()).pathname, ct: req.headers()["content-type"] ?? "" });
+      return route.fulfill({ status: 200, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify({ Key: "flow-media/x", Id: "i" }) });
+    });
+    const aside = await openImageBlock(page, true);
+    await aside.locator('[data-testid="content-block-image"] input[type=file]').setInputFiles(pngFile);
+    await expect(aside.getByText("رُفعت الصورة بنجاح")).toBeVisible();
+    expect(uploads.length).toBe(1);
+    expect(uploads[0].path).toMatch(new RegExp(`^/storage/v1/object/flow-media/${UP_UID}/[0-9a-f-]{36}\\.jpg$`));
+    const src = await aside.getByAltText("معاينة المكوّن").getAttribute("src");
+    expect(src).toMatch(new RegExp(`^${SB_URL.replace(/[.]/g, "\\.")}/storage/v1/object/public/flow-media/${UP_UID}/[0-9a-f-]{36}\\.jpg$`));
+    expect(src!.startsWith("data:")).toBe(false);
+  });
+
+  test("rejects unsupported file types without uploading", async ({ page }) => {
+    let hits = 0;
+    await page.route("**/storage/v1/object/flow-media/**", (route) => { hits++; return route.fulfill({ status: 200, body: "{}" }); });
+    const aside = await openImageBlock(page, true);
+    await aside.locator('[data-testid="content-block-image"] input[type=file]').setInputFiles({ name: "a.gif", mimeType: "image/gif", buffer: Buffer.from("GIF89a") });
+    await expect(aside.getByText("صيغة غير مدعومة")).toBeVisible();
+    await expect(aside.getByAltText("معاينة المكوّن")).toHaveCount(0);
+    expect(hits).toBe(0);
+  });
+
+  test("upload failure shows the error and leaves the block url unchanged", async ({ page }) => {
+    await page.route("**/storage/v1/object/flow-media/**", (route) => {
+      if (route.request().method() === "OPTIONS") return route.fulfill({ status: 204, headers: { "access-control-allow-origin": "*", "access-control-allow-headers": "*", "access-control-allow-methods": "*" } });
+      return route.fulfill({ status: 403, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify({ statusCode: "403", error: "Unauthorized", message: "new row violates row-level security policy" }) });
+    });
+    const aside = await openImageBlock(page, true);
+    await aside.getByRole("textbox", { name: "رابط صورة المكوّن" }).fill("https://example.com/keep.jpg");
+    await aside.locator('[data-testid="content-block-image"] input[type=file]').setInputFiles(pngFile);
+    await expect(aside.getByText("فشل رفع الصورة")).toBeVisible();
+    await expect(aside.getByRole("textbox", { name: "رابط صورة المكوّن" })).toHaveValue("https://example.com/keep.jpg");
+  });
+
+  test("without a session the image stays a local base64 draft with a notice", async ({ page }) => {
+    let hits = 0;
+    await page.route("**/storage/v1/**", (route) => { hits++; return route.fulfill({ status: 200, body: "{}" }); });
+    const aside = await openImageBlock(page, false);
+    await aside.locator('[data-testid="content-block-image"] input[type=file]').setInputFiles(pngFile);
+    await expect(aside.getByText("مسودة محلية فقط")).toBeVisible();
+    expect(await aside.getByAltText("معاينة المكوّن").getAttribute("src")).toMatch(/^data:image\/jpeg/);
+    expect(hits).toBe(0);
+  });
+});
+
+/* ---- flow cards (switcher), button legacy actions, benign-noise banner ---- */
+const seedNode=(id:string,kind:string,y:number,extra:Record<string,unknown>={})=>({id,type:"flowNode",position:{x:0,y},data:{kind,title:kind,text:"",...extra}});
+const seedDoc=(name:string,platform:string,extraNodes:unknown[]=[])=>({version:3,name,nodes:[
+ seedNode("s","trigger",0,{keywords:"hi",triggerMode:"keyword",platform}),seedNode("m","message",200,{text:"مرحبا"}),...extraNodes],
+ edges:[{id:"e1",source:"s",target:"m",sourceHandle:"next",targetHandle:"in"}]});
+
+test("flow cards: colour and data-channel follow the live trigger channel, with a text label",async({page})=>{
+ await page.addInitScript((lib)=>{localStorage.setItem("social_flow_library_v1",JSON.stringify(lib));},{activeFlowId:"a",flows:[
+  {id:"a",doc:seedDoc("إنستغرام","instagram")},{id:"b",doc:seedDoc("واتساب","whatsapp")},{id:"c",doc:seedDoc("ماسنجر","messenger")}]});
+ await page.goto("/milanochat/#/flows");
+ await page.getByTestId("flow-switcher").click();
+ const expected:Record<string,[string,string]>={a:["instagram","Instagram"],b:["whatsapp","WhatsApp"],c:["messenger","Messenger"]};
+ for(const id of Object.keys(expected)){
+  const card=page.locator(`[data-testid="flow-card"][data-flow-id="${id}"]`);
+  await expect(card).toHaveAttribute("data-channel",expected[id][0]);
+  await expect(card.getByTestId("flow-card-channel")).toHaveText(expected[id][1]);
+ }
+ const color=(id:string)=>page.locator(`[data-testid="flow-card"][data-flow-id="${id}"] [data-testid="flow-card-channel"]`).evaluate(el=>getComputedStyle(el).color);
+ const [ig,wa,ms]=[await color("a"),await color("b"),await color("c")];
+ expect(new Set([ig,wa,ms]).size).toBe(3);
+ expect(ig).toBe("rgb(244, 91, 105)");
+ expect(wa).toBe("rgb(61, 209, 137)");
+ expect(ms).toBe("rgb(79, 195, 247)");
+});
+
+test("flow nodes: each kind keeps its own colour; only the trigger takes the platform colour",async({page})=>{
+ await page.addInitScript((lib)=>{localStorage.setItem("social_flow_library_v1",JSON.stringify(lib));},{activeFlowId:"a",flows:[
+  {id:"a",doc:seedDoc("إنستغرام","instagram")}]});
+ await page.goto("/milanochat/#/flows");
+ const c=(kind:string)=>page.locator(`.fs-node[data-kind="${kind}"]`).first().evaluate(el=>(el as HTMLElement).style.getPropertyValue("--c").toLowerCase());
+ await expect(page.locator('.fs-node[data-kind="message"]').first()).toBeVisible();
+ expect(await c("trigger")).toBe("#e1306c");
+ expect(await c("message")).toBe("#a78bfa");
+});
+
+test("flow cards: the active card reflects the live document after edits, not a stale snapshot",async({page})=>{
+ await page.goto("/milanochat/#/flows");
+ await page.getByTestId("flow-switcher").click();
+ const card=page.locator('[data-testid="flow-card"][aria-current="true"]');
+ await expect(card).toHaveAttribute("data-nodes","6");
+ await page.keyboard.press("Escape");
+ await page.getByRole("button",{name:"فتح إضافة خطوة"}).click();
+ await page.getByTestId("add-step-menu").getByRole("button",{name:"نهاية",exact:true}).click();
+ await page.getByTestId("flow-switcher").click();
+ await expect(card).toHaveAttribute("data-nodes","7");
+ await page.keyboard.press("Escape");
+ await page.getByTitle("تراجع Ctrl+Z").click();
+ await page.getByTestId("flow-switcher").click();
+ await expect(card).toHaveAttribute("data-nodes","6");
+});
+
+test("button settings: removed logic actions are hidden; an existing legacy action stays visible read-only and unchanged",async({page})=>{
+ await page.addInitScript(()=>{
+  const doc={version:3,name:"legacy",nodes:[
+   {id:"s",type:"flowNode",position:{x:0,y:0},data:{kind:"trigger",title:"t",text:"",keywords:"hi",triggerMode:"keyword",platform:"instagram"}},
+   {id:"m",type:"flowNode",position:{x:0,y:200},data:{kind:"message",title:"m",text:"مرحبا",options:[{id:"o1",label:"قديم",buttonType:"button",action:"condition"}]}}],
+   edges:[{id:"e1",source:"s",target:"m",sourceHandle:"next",targetHandle:"in"}]};
+  localStorage.setItem("social_flow_reactflow_v3",JSON.stringify(doc));
+ });
+ await page.goto("/milanochat/#/flows");
+ await page.locator(".react-flow__node").nth(1).click();
+ const panel=page.getByTestId("step-settings-panel");
+ await panel.getByTestId("flow-button-o1").click();
+ const editor=panel.getByTestId("button-action-editor");
+ const legacy=editor.getByTestId("button-action-legacy");
+ await expect(legacy).toHaveText("شرط");
+ await expect(legacy).toBeDisabled();
+ for(const name of ["AI Step","تنفيذ إجراء","توزيع عشوائي"])await expect(editor.getByRole("button",{name,exact:true})).toHaveCount(0);
+ await expect(page.locator(".react-flow__node")).toHaveCount(2);
+});
+
+test("error banner ignores WebSocket/HMR noise but still shows real errors",async({page})=>{
+ await page.goto("/milanochat/#/flows");
+ await page.evaluate(()=>{
+  Promise.reject(new Error("WebSocket closed"));
+  Promise.reject(new Event("close"));
+  Promise.reject(new Error("[vite] server connection lost"));
+ });
+ await page.waitForTimeout(300);
+ await expect(page.locator("#flow-error-banner")).toHaveCount(0);
+ await page.evaluate(()=>{Promise.reject(new Error("real failure xyz"));});
+ await expect(page.locator("#flow-error-banner")).toContainText("real failure xyz");
 });

@@ -1,9 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
-import type { ChangeEvent } from "react";
 import type { Widget, WidgetSettings } from "../types/widget";
 import { DEFAULT_SETTINGS, APPEARANCE_PRESETS } from "../types/widget";
 import WidgetPreview from "./WidgetPreview";
-import { FUNCTIONS_BASE } from "../lib/api";
 import {
   IconX,
   IconSave,
@@ -18,6 +16,7 @@ import {
   IconCode,
   IconSparkle,
 } from "./Icons";
+import { copyText } from "../lib/clipboard.ts";
 
 type EditorTab =
   | "general"
@@ -219,7 +218,6 @@ export default function WidgetEditor({
   const [historyIndex, setHistoryIndex] = useState(0);
   const [copiedCode, setCopiedCode] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
-  const [uploading, setUploading] = useState(false);
 
   useEffect(() => {
     const initial = mergeWithDefaults(widget?.settings);
@@ -339,80 +337,11 @@ export default function WidgetEditor({
     }
 
     try {
-      await navigator.clipboard.writeText(embedCode);
+      await copyText(embedCode);
       setCopiedCode(true);
       window.setTimeout(() => setCopiedCode(false), 2000);
     } catch {
       window.alert("تعذر النسخ تلقائيًا. انسخ الكود يدويًا.");
-    }
-  };
-
-  const handleImageUpload = async (
-    event: ChangeEvent<HTMLInputElement>,
-    type: "logo" | "avatar" | "launcher_icon"
-  ) => {
-    const file = event.target.files?.[0];
-    event.target.value = "";
-
-    if (!file) return;
-
-    if (!widget?.id || !authToken) {
-      window.alert("احفظ الويدجت وسجّل الدخول قبل رفع الصور.");
-      return;
-    }
-
-    if (!file.type.startsWith("image/")) {
-      window.alert("اختر ملف صورة صالحًا.");
-      return;
-    }
-
-    if (file.size > 1024 * 1024) {
-      window.alert("حجم الصورة يجب ألا يتجاوز 1 ميغابايت.");
-      return;
-    }
-
-    setUploading(true);
-
-    try {
-      const formData = new FormData();
-      formData.append("file", file);
-      formData.append("widget_id", widget.id);
-      formData.append("type", type);
-
-      const response = await fetch(
-        `${String(FUNCTIONS_BASE).replace(/\/$/, "")}/milan-api?action=widget_dashboard_upload`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${authToken}`,
-          },
-          body: formData,
-        }
-      );
-
-      const result = await response.json();
-
-      if (!response.ok || !result?.url) {
-        throw new Error(result?.error || "تعذر رفع الصورة.");
-      }
-
-      if (type === "logo") {
-        updateSettings("avatar.headerLogo.url", result.url);
-      } else if (type === "avatar") {
-        updateSettings("avatar.botAvatar.url", result.url);
-        updateSettings("avatar.botAvatar.type", "upload");
-      } else {
-        updateSettings("appearance.launcher.customIcon", result.url);
-        updateSettings("appearance.launcher.icon", "custom");
-      }
-
-      window.alert("تم رفع الصورة بنجاح.");
-    } catch (error) {
-      window.alert(
-        error instanceof Error ? error.message : "حدث خطأ أثناء رفع الصورة."
-      );
-    } finally {
-      setUploading(false);
     }
   };
 
@@ -542,8 +471,6 @@ export default function WidgetEditor({
                 updateSettings={updateSettings}
                 applyPreset={applyPreset}
                 errors={errors}
-                handleImageUpload={handleImageUpload}
-                uploading={uploading}
               />
             )}
 
@@ -727,13 +654,29 @@ function GeneralTab({
   );
 }
 
+/* رفع الصور من الجهاز غير متاح بعد (لا يوجد إجراء خلفي له) — نعرض عنصرًا معطلًا بدل استدعاء مسار غير موجود */
+function UploadSoon() {
+  return (
+    <div className="flex items-center gap-2">
+      <input
+        type="file"
+        accept="image/*"
+        disabled
+        aria-disabled="true"
+        aria-label="رفع صورة من الجهاز (قريبًا)"
+        data-testid="widget-upload-disabled"
+        className="block w-full min-h-[44px] cursor-not-allowed text-xs text-sage opacity-50"
+      />
+      <span className="shrink-0 rounded-full border border-oro/30 px-2 py-0.5 text-[11px] font-bold text-oro">قريبًا</span>
+    </div>
+  );
+}
+
 function AppearanceTab({
   settings,
   updateSettings,
   applyPreset,
   errors,
-  handleImageUpload,
-  uploading,
 }: any) {
   const [palette, setPalette] = useState<"light" | "dark" | "auto">("auto");
 
@@ -1036,13 +979,7 @@ function AppearanceTab({
               className="mb-3 h-12 w-12 rounded-lg border border-verde/20 object-contain"
             />
           )}
-          <input
-            type="file"
-            accept="image/*"
-            onChange={(event) => handleImageUpload(event, "logo")}
-            disabled={uploading}
-            className="block w-full text-xs text-sage"
-          />
+          <UploadSoon />
         </Field>
 
         <Field label="صورة المساعد">
@@ -1053,13 +990,7 @@ function AppearanceTab({
               className="mb-3 h-12 w-12 rounded-full object-cover"
             />
           )}
-          <input
-            type="file"
-            accept="image/*"
-            onChange={(event) => handleImageUpload(event, "avatar")}
-            disabled={uploading}
-            className="block w-full text-xs text-sage"
-          />
+          <UploadSoon />
         </Field>
 
         <Field label="أيقونة الزر العائم">
@@ -1070,14 +1001,7 @@ function AppearanceTab({
               className="mb-3 h-12 w-12 object-contain"
             />
           )}
-          <input
-            type="file"
-            accept="image/*"
-            onChange={(event) => handleImageUpload(event, "launcher_icon")}
-            disabled={uploading}
-            className="block w-full text-xs text-sage"
-          />
-          {uploading && <p className="mt-2 text-xs text-sage">جارٍ رفع الصورة...</p>}
+          <UploadSoon />
         </Field>
 
         <Field label="أيقونة الزر العائم">

@@ -1,4 +1,5 @@
 import type { FlowDocument, FlowNode } from "./model";
+import { isAllowedImageUrl } from "./model.ts";
 import { chooseWeightedPort, validCustomerInput } from "./simulation.ts";
 
 export const MAX_RUNTIME_STEPS = 150;
@@ -16,6 +17,7 @@ export type RuntimeState = {
 };
 export type PlannedEffect =
   | { kind: "message"; idempotencyKey: string; nodeId: string; text: string; websiteButtons?: {label:string;url:string}[] }
+  | { kind: "message_image"; idempotencyKey: string; nodeId: string; url: string }
   | { kind: "question"; idempotencyKey: string; nodeId: string; text: string; inputMode: string; choices: string[]; choiceIds: string[] }
   | { kind: "delay"; idempotencyKey: string; nodeId: string; wakeAt: number }
   | { kind: "handoff"; idempotencyKey: string; nodeId: string }
@@ -67,6 +69,48 @@ function proceed(state: RuntimeState, nodeId: string | null): RuntimeState {
 function key(state: RuntimeState, input: RuntimeInput, nodeId: string): string {
   // لا يجوز اعتبار هذا المفتاح قفلاً في الذاكرة؛ قاعدة البيانات تطبّق UNIQUE.
   return JSON.stringify([state.flowId, state.revision, input.eventKey, state.stepCount, nodeId]);
+}
+/** Key of content block `index` of a node (distinct from the node text's key). */
+function blockKey(state: RuntimeState, input: RuntimeInput, nodeId: string, index: number): string {
+  return JSON.stringify([state.flowId, state.revision, input.eventKey, state.stepCount, nodeId, index]);
+}
+/** Same canonical-form rule as the server sender (no query/fragment, parser leaves it unchanged). */
+function canonicalUrl(raw: unknown): boolean {
+  try { const u = new URL(String(raw)); return u.href === raw && !u.search && !u.hash; } catch { return false; }
+}
+/** flow_commit_run_step accepts at most 5 effects per commit. */
+export const MAX_MESSAGE_EFFECTS = 5;
+/**
+ * A message node with text and image content blocks (the shape the live
+ * whitelist accepts behind FLOW_MEDIA_SEND_ENABLED): the node text, then every
+ * block in order, text blocks as "message" and image blocks as
+ * "message_image" effects. Pure: the image rule is the publish rule
+ * (isAllowedImageUrl) without the project-host check, which the server-side
+ * whitelist and the Outbox worker apply with SUPABASE_URL. Anything else
+ * (legacy image, pdf, collection, inline delay, buttons, no image) is refused.
+ */
+function mediaMessageEffects(state: RuntimeState, input: RuntimeInput, node: FlowNode, text: string):
+  { effects: PlannedEffect[] } | { error: string } {
+  const d = node.data;
+  const rich = "rich message requires a verified sender";
+  if (d.image || d.options.length > 0 ||
+      !d.contentBlocks.every(b => b && (b.type === "text" || b.type === "image")) ||
+      !d.contentBlocks.some(b => b.type === "image")) return { error: rich };
+  if (!text) return { error: "empty message" };
+  const effects: PlannedEffect[] = [{ kind: "message", idempotencyKey: key(state, input, node.id), nodeId: node.id, text }];
+  for (const [i, b] of d.contentBlocks.entries()) {
+    if (b.type === "text") {
+      const t = safeValue(b.text).trim();
+      if (!t) return { error: "empty message block" };
+      effects.push({ kind: "message", idempotencyKey: blockKey(state, input, node.id, i), nodeId: node.id, text: t });
+    } else {
+      if (!isAllowedImageUrl(b.url, "") || !canonicalUrl(b.url))
+        return { error: "image block URL is not an allowed https flow-media URL" };
+      effects.push({ kind: "message_image", idempotencyKey: blockKey(state, input, node.id, i), nodeId: node.id, url: b.url as string });
+    }
+  }
+  if (effects.length > MAX_MESSAGE_EFFECTS) return { error: "rich message exceeds " + MAX_MESSAGE_EFFECTS + " effects" };
+  return { effects };
 }
 function safeInput(input: RuntimeInput): boolean {
   return typeof input.eventKey === "string" && input.eventKey.length > 0 &&
@@ -153,10 +197,33 @@ export function planRuntimeTransition(
         return { state: { ...state, status: "completed" }, effects: [] };
       case "message": {
         // الصور والأزرار وما شابهها تتطلب مرسلاً يدعمها؛ لا نتظاهر بأنها نُفذت.
-        if (data.image || data.contentBlocks.length)
-          return fail(state, "rich message requires a verified sender");
+        if (data.image) return fail(state, "rich message requires a verified sender");
+        if (data.contentBlocks.length) {
+          // Text + image blocks only: ordered message / message_image effects.
+          const media = mediaMessageEffects(state, input, node, safeValue(data.text).trim());
+          if ("error" in media) return fail(state, media.error);
+          return { state: proceed(state, nextNode(doc, node, "next")), effects: media.effects };
+        }
         const webButtons=data.options.length>0 && data.options.every(o=>o.action==="website" && o.buttonType==="button");
-        if(webButtons){
+        // Instagram: button template (labels <= 20 code points, text <= 640);
+        // WhatsApp: interactive cta_url (exactly ONE button, display text <= 20
+        // code points, body <= 1024 code points);
+        // Messenger: unchanged rules below (1..3 buttons, text <= 80).
+        const igWeb=webButtons && data.platform==="instagram";
+        const waWeb=webButtons && data.platform==="whatsapp";
+        if(igWeb){
+          if(data.options.length>3 ||
+             data.options.some(o=>!o.label.trim() || [...o.label].length>20 ||
+               typeof o.url!=="string" || o.url.length>2000 ||
+               !/^https:\/\/[^/@?#]+/.test(o.url)))
+            return fail(state,"invalid Instagram website buttons");
+        }else if(waWeb){
+          if(data.options.length!==1 ||
+             data.options.some(o=>!o.label.trim() || [...o.label].length>20 ||
+               typeof o.url!=="string" || o.url.length>2000 ||
+               !/^https:\/\/[^/@?#]+/.test(o.url)))
+            return fail(state,"invalid WhatsApp website button");
+        }else if(webButtons){
           if(data.platform!=="messenger" || data.options.length>3 ||
              data.options.some(o=>!o.label.trim() || o.label.length>20 ||
                typeof o.url!=="string" || o.url.length>2048 ||
@@ -168,7 +235,8 @@ export function planRuntimeTransition(
         const text = safeValue(data.text).trim();
         if (!text) return fail(state, "empty message");
         if(webButtons){
-          if(text.length>80)return fail(state,"website card title too long");
+          if(igWeb ? [...text].length>640 : waWeb ? [...text].length>1024 : text.length>80)
+            return fail(state,"website card title too long");
           const effect:PlannedEffect={kind:"message",idempotencyKey:key(state,input,node.id),
             nodeId:node.id,text,websiteButtons:data.options.map(o=>({label:o.label,url:o.url!}))};
           return {state:proceed(state,nextNode(doc,node,"next")),effects:[effect]};

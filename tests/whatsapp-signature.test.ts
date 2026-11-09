@@ -33,3 +33,14 @@ test("WhatsApp POST checks signature BEFORE enumerating message events",()=>{
  assert.match(route,/env\("WHATSAPP_APP_SECRET"\)/);
  assert.match(route,/env\("META_APP_SECRET"\)/);
 });
+test("WhatsApp: interactive replies reach the durable path only with FLOW_MULTICHANNEL_ENABLED and the canary account",()=>{
+ const source=readFileSync("supabase/functions/milan-api/index.ts","utf8");
+ const route=source.slice(source.indexOf('case "whatsapp_webhook": {'),source.indexOf('case "instagram_webhook": {'));
+ const sig=route.indexOf("const whatsappSignatureValid = await verifyMetaWebhookSignature(");
+ const parse=route.indexOf("normalizeMetaMessages(");
+ assert.ok(sig>0&&parse>sig,"normalizer only after the signature");
+ assert.ok(route.indexOf('.from("wa_bindings")')<parse,"and after the account is resolved");
+ assert.match(route,/multichannelEnabled\(\) &&\n\s+typeof account\.id === "string" &&\n\s+account\.id === env\("FLOW_DURABLE_CANARY_ACCOUNT_ID"\)\n\s+\? new Map\(/);
+ // Flag OFF: durableReplies is null, so text, arguments and skips are exactly as before.
+ assert.match(route,/durableReply && !text \? durableReply\.text : text,/);
+});

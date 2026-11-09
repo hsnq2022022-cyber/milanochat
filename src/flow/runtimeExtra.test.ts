@@ -4,6 +4,7 @@ import {makeNode,edgeFor} from "./model.ts";
 import type {FlowDocument,FlowNode} from "./model.ts";
 import {createRuntimeState,planRuntimeTransition} from "./runtimePlan.ts";
 import {authorizeFlowAI,planFlowMetric} from "./aiMetricsGate.ts";
+import {planUntilWait} from "./runtimeChain.ts";
 
 const context={eventKey:"signed-event",nowMs:1793200000000,seed:7};
 const connect=(source:FlowNode,target:FlowNode,port="next")=>
@@ -101,6 +102,34 @@ test("Messenger HTTPS website buttons are a declared outbound effect, not a fake
  assert.equal(reject.state.status,"blocked");
  assert.deepEqual(reject.effects,[]);
 });
+test("Instagram website buttons: message effect carries label/url in order, then continues",()=>{
+ const web=(n:number,text="تفضل بزيارة متجرنا",label=(i:number)=>"زر "+i)=>{
+  const start=trigger(),card=makeNode("message",{x:0,y:40},{text,platform:"instagram",
+   options:Array.from({length:n},(_,i)=>({id:"w"+i,label:label(i),buttonType:"button" as const,
+    action:"website" as const,url:"https://example.org/p"+i}))});
+  const after=makeNode("message",{x:0,y:80},{text:"شكرًا",options:[]});
+  const d=graph([start,card,after],[connect(start,card),connect(card,after)]);
+  return planUntilWait(d,createRuntimeState(d,"ig-web",1),context);
+ };
+ const ok=web(3);
+ assert.equal(ok.error,undefined);
+ assert.deepEqual(ok.effects.map(e=>e.kind),["message","message"]);
+ assert.deepEqual((ok.effects[0] as {websiteButtons:unknown}).websiteButtons,
+  [0,1,2].map(i=>({label:"زر "+i,url:"https://example.org/p"+i})));
+ assert.equal((ok.effects[0] as {text:string}).text,"تفضل بزيارة متجرنا");
+ assert.ok(!("websiteButtons" in ok.effects[1]));
+ assert.equal(web(4).effects.length,0);
+ assert.equal(web(4).state.status,"blocked");
+ assert.equal(web(1,"ن".repeat(640)).effects.length,2);
+ assert.equal(web(1,"ن".repeat(641)).effects.length,0);
+ assert.equal(web(1,"x",()=>"😀".repeat(20)).effects.length,2);
+ assert.equal(web(1,"x",()=>"a".repeat(21)).effects.length,0);
+ // Website + step buttons together are not representable: refused, never dropped.
+ const start=trigger(),mixed=makeNode("message",{x:0,y:40},{text:"x",platform:"instagram",
+  options:[{id:"w",label:"site",buttonType:"button",action:"website",url:"https://example.org"},{id:"s",label:"step"}]});
+ const md=graph([start,mixed],[connect(start,mixed)]);
+ assert.equal(planRuntimeTransition(md,createRuntimeState(md,"mix",1),context).state.status,"blocked");
+});
 test("too many rich choices fail closed before producing Outbox effects",()=>{
  const start=trigger(),q=makeNode("question",{x:0,y:40},{
   inputMode:"buttons",options:Array.from({length:14},(_,i)=>({
@@ -110,4 +139,62 @@ test("too many rich choices fail closed before producing Outbox effects",()=>{
  const result=planRuntimeTransition(doc,createRuntimeState(doc,"limit",1),context);
  assert.equal(result.state.status,"blocked");
  assert.deepEqual(result.effects,[]);
+});
+test("WhatsApp website button: exactly ONE cta_url effect (label <= 20 code points, body <= 1024), then continues",()=>{
+ const web=(n:number,text="زوروا متجرنا",label=(i:number)=>"زر "+i,url=(i:number)=>"https://example.org/p"+i)=>{
+  const start=trigger(),card=makeNode("message",{x:0,y:40},{text,platform:"whatsapp",
+   options:Array.from({length:n},(_,i)=>({id:"w"+i,label:label(i),buttonType:"button" as const,
+    action:"website" as const,url:url(i)}))});
+  const after=makeNode("message",{x:0,y:80},{text:"شكرًا",options:[],platform:"whatsapp"});
+  const d=graph([start,card,after],[connect(start,card),connect(card,after)]);
+  return planUntilWait(d,createRuntimeState(d,"wa-web",1),context);
+ };
+ const ok=web(1);
+ assert.equal(ok.error,undefined);
+ assert.deepEqual(ok.effects.map(e=>e.kind),["message","message"]);
+ assert.deepEqual((ok.effects[0] as {websiteButtons:unknown}).websiteButtons,[{label:"زر 0",url:"https://example.org/p0"}]);
+ assert.equal((ok.effects[0] as {text:string}).text,"زوروا متجرنا");
+ for(const [why,plan] of [["2 buttons",web(2)],["3 buttons",web(3)],["label 21",web(1,"x",()=>"a".repeat(21))],
+  ["http",web(1,"x",undefined,()=>"http://example.org")],["body 1025",web(1,"ن".repeat(1025))]] as const){
+  assert.equal(plan.effects.length,0,why);
+  assert.equal(plan.state.status,"blocked",why);
+ }
+ assert.equal(web(1,"ن".repeat(1024)).effects.length,2,"1024 boundary");
+ assert.equal(web(1,"x",()=>"😀".repeat(20)).effects.length,2,"20 code points");
+ // Messenger keeps its rules (1..3 buttons, text <= 80); Instagram keeps 1..3 / 640.
+ const fb=(n:number,text="x")=>{
+  const start=trigger(),card=makeNode("message",{x:0,y:40},{text,platform:"messenger",
+   options:Array.from({length:n},(_,i)=>({id:"w"+i,label:"b"+i,buttonType:"button" as const,
+    action:"website" as const,url:"https://example.org/"+i}))});
+  const d=graph([start,card],[connect(start,card)]);
+  return planRuntimeTransition(d,createRuntimeState(d,"fb-web",1),context);
+ };
+ assert.equal((fb(3).effects[0] as {websiteButtons:unknown[]}).websiteButtons.length,3);
+ assert.equal(fb(4).state.status,"blocked");
+ assert.equal(fb(1,"x".repeat(81)).state.status,"blocked");
+});
+test("image blocks: the same ordered message / message_image effects on Instagram, WhatsApp and Messenger",()=>{
+ const IMG="https://abcd1234.supabase.co/storage/v1/object/public/flow-media/u1/0f8c2b1e-1111-4222-8333-444455556666.png";
+ const plan=(platform:"instagram"|"whatsapp"|"messenger")=>{
+  const start=trigger(),pic=makeNode("message",{x:0,y:40},{text:"صورة المنتج",platform,options:[],
+   contentBlocks:[{id:"b1",type:"image",url:IMG},{id:"b2",type:"text",text:"السعر 10"}]});
+  pic.id="pic";
+  const d=graph([start,pic],[connect(start,pic)]);
+  return planUntilWait(d,createRuntimeState(d,"img",1),context);
+ };
+ const strip=(p:ReturnType<typeof plan>)=>p.effects.map(e=>({...e}));
+ const ig=plan("instagram");
+ assert.equal(ig.error,undefined);
+ assert.deepEqual(ig.effects.map(e=>[e.kind,(e as {url?:string}).url??(e as {text?:string}).text]),
+  [["message","صورة المنتج"],["message_image",IMG],["message","السعر 10"]]);
+ assert.deepEqual(strip(plan("whatsapp")),strip(ig),"WhatsApp: identical effects");
+ assert.deepEqual(strip(plan("messenger")),strip(ig),"Messenger: identical effects");
+});
+test("WhatsApp cta_url text with placeholders is clipped at 1024 code points (not the Messenger 80)",()=>{
+ const start=trigger(),card=makeNode("message",{x:0,y:40},{text:"{{first_name}} "+"x".repeat(900),platform:"whatsapp",
+  options:[{id:"w",label:"site",buttonType:"button",action:"website",url:"https://example.org"}]});
+ const d=graph([start,card],[connect(start,card)]);
+ const text=(planUntilWait(d,createRuntimeState(d,"wa-ph",1),context).effects[0] as {text:string}).text;
+ assert.doesNotMatch(text,/\{\{/);
+ assert.ok([...text].length>80&&[...text].length<=1024,String([...text].length));
 });

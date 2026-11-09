@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import {makeNode,edgeFor} from "./model.ts";
 import type {FlowDocument} from "./model.ts";
 import {
- providerPlatform,preparePublishedDocument,publicationCanActivate,testCanaryArmed,productionActivationAuthorized
+ providerPlatform,preparePublishedDocument,publicationCanActivate,testCanaryArmed,productionActivationAuthorized,
+ commentTriggerProviderPlatform
 } from "./serverPublicationValidation.ts";
 import type {FlowCapability} from "./publicationGate.ts";
 
@@ -73,4 +74,45 @@ test("production activation requires operator-approved and enabled tenant plus g
  }
  assert.equal(productionActivationAuthorized("facebook",true,true,true),false);
  assert.equal(productionActivationAuthorized("whatsapp",true,true,true),false);
+});
+
+const COMMENT_ON={commentTrigger:true,commentAutomationEnabled:true,multichannelEnabled:true};
+test("facebook comment flows: authorized only with comment automation AND multichannel flags ON",()=>{
+ assert.equal(productionActivationAuthorized("facebook",true,true,true,COMMENT_ON),true);
+ // Flag off / unset (fail-closed): exactly the previous result (false).
+ assert.equal(productionActivationAuthorized("facebook",true,true,true,{...COMMENT_ON,commentAutomationEnabled:false}),false);
+ assert.equal(productionActivationAuthorized("facebook",true,true,true,{...COMMENT_ON,multichannelEnabled:false}),false);
+ assert.equal(productionActivationAuthorized("facebook",true,true,true),false);
+ // Not exactly true is OFF.
+ assert.equal(productionActivationAuthorized("facebook",true,true,true,
+  {...COMMENT_ON,commentAutomationEnabled:"true" as unknown as boolean}),false);
+ // DB switches and operator approval are still required.
+ for(const flags of [[false,true,true],[true,false,true],[true,true,false],[undefined,true,true]] as const)
+  assert.equal(productionActivationAuthorized("facebook",...flags,COMMENT_ON),false);
+});
+test("facebook DM flows stay unauthorized even with every flag ON",()=>{
+ assert.equal(productionActivationAuthorized("facebook",true,true,true,{...COMMENT_ON,commentTrigger:false}),false);
+});
+test("whatsapp is never authorized: no comment surface in Meta's API, DM unchanged",()=>{
+ assert.equal(productionActivationAuthorized("whatsapp",true,true,true,COMMENT_ON),false);
+ assert.equal(productionActivationAuthorized("whatsapp",true,true,true,{...COMMENT_ON,commentTrigger:false}),false);
+});
+test("instagram unchanged by the comment context",()=>{
+ for(const ctx of [undefined,COMMENT_ON,{...COMMENT_ON,commentTrigger:false},
+  {commentTrigger:true,commentAutomationEnabled:false,multichannelEnabled:false}]){
+  assert.equal(productionActivationAuthorized("instagram",true,true,true,ctx),true);
+  assert.equal(productionActivationAuthorized("instagram",true,true,false,ctx),false);
+  assert.equal(productionActivationAuthorized("instagram",false,true,true,ctx),false);
+ }
+});
+test("commentTriggerProviderPlatform: comment triggers only, messenger -> facebook",()=>{
+ const withTrigger=(platform:"instagram"|"messenger"|"whatsapp",triggerMode:string)=>{
+  const d=doc(platform);d.nodes[0].data.triggerMode=triggerMode as never;return d;
+ };
+ assert.equal(commentTriggerProviderPlatform(withTrigger("messenger","comment")),"facebook");
+ assert.equal(commentTriggerProviderPlatform(withTrigger("instagram","comment")),"instagram");
+ assert.equal(commentTriggerProviderPlatform(withTrigger("whatsapp","comment")),null);
+ assert.equal(commentTriggerProviderPlatform(withTrigger("messenger","message")),null);
+ assert.equal(commentTriggerProviderPlatform(null),null);
+ assert.equal(commentTriggerProviderPlatform({nodes:"x"}),null);
 });

@@ -34,8 +34,8 @@ test("functional: condition executes yes branch after set_field, delay and 100% 
   const sim=page.getByTestId("flow-simulator");
   await expect(sim).toContainText("وصلت للفرع الصحيح");
   await expect(sim).not.toContainText("لا يفترض الوصول لهذا الفرع");
-  await expect(sim).toContainText("تم تخطي انتظار");
-  await expect(sim).toContainText("انتهى التدفق");
+  await expect(sim).toContainText("⏳ ينتظر 4 دقائق…");
+  await expect(sim).toContainText("✅ اكتملت المحاكاة");
 });
 
 test("functional: goto follows its actual target and end terminates",async({page})=>{
@@ -47,7 +47,7 @@ test("functional: goto follows its actual target and end terminates",async({page
  await page.getByRole("button",{name:"تجربة"}).click();
  const sim=page.getByTestId("flow-simulator");
  await expect(sim).toContainText("خطوة الانتقال وصلت بالفعل");
- await expect(sim).toContainText("انتهى التدفق");
+ await expect(sim).toContainText("✅ اكتملت المحاكاة");
 });
 
 test("functional: HTTP is explicitly NOT executed, and preview picks error path",async({page})=>{
@@ -64,19 +64,17 @@ test("functional: HTTP is explicitly NOT executed, and preview picks error path"
 });
 
 for(const choice of [
- {action:"AI Step",kind:"action",label:"نوع الإجراء"},
- {action:"تنفيذ إجراء",kind:"action",label:"نوع الإجراء"},
+ {action:"إجراء",kind:"action",label:"نوع الإجراء"},
  {action:"شرط",kind:"condition",label:"الحقل"},
  {action:"توزيع عشوائي",kind:"randomizer",label:"نسب التوزيع"}
 ]){
- test("functional: action button "+choice.action+" creates an actual editable connected step",async({page})=>{
+ test("functional: action button "+choice.action+" is added from the + menu as an actual editable step",async({page})=>{
   await page.goto("/milanochat/#/flows");
   await page.locator(".react-flow__node").nth(1).click();
   const panel=page.getByTestId("step-settings-panel");
-  await panel.getByRole("button",{name:"إضافة زر"}).click();
-  await panel.getByTestId("button-action-editor").getByRole("button",{name:choice.action,exact:true}).click();
+  await page.getByRole("button",{name:"فتح إضافة خطوة"}).click();
+  await page.getByTestId("add-step-menu").getByRole("button",{name:choice.action,exact:true}).click();
   await expect(page.locator(".react-flow__node")).toHaveCount(7);
-  await expect(page.locator(".react-flow__edge")).toHaveCount(6);
   await expect(panel.getByText(choice.label).first()).toBeVisible();
  });
 }

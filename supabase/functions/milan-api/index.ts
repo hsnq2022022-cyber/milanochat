@@ -44,10 +44,22 @@ import { flowShadowMayObserve } from "./flowShadowGate.ts";
 import { persistInboundOnce } from "./persistInboundOnce.ts";
 import { processExclusiveEvent } from "./exclusiveMessageClaim.ts";
 import { prepareSimpleFlowReply } from "./flowPrepareMessage.ts";
-import {attemptDurableInstagram,selectedFlowChoice} from "./flowDurableIngress.ts";
+import {attemptDurableInstagram,selectedFlowChoice,multichannelEnabled} from "./flowDurableIngress.ts";
+import { normalizeMetaMessages } from "./normalizeMetaMessage.ts";
 import { chargeWidgetReply } from "./widgetCredit.ts";
+// Comment automation (FLOW_COMMENT_AUTOMATION_ENABLED, default OFF) and its Inbox read contract.
+import { ingestSignedComments, commentAutomationEnabled } from "./commentIngress.ts";
+import { readCommentActivity } from "./commentActivity.ts";
+import { commentActivityRules } from "./abuseGuards.ts";
 import { verifyMetaWebhookSignature } from "./metaSignature.ts";
 import { recordVerifiedMetaReceipts } from "./metaDeliveryReceipts.ts";
+// Security hardening (S1 / S3 / S4): pure, unit-tested modules.
+import { safeFetchText, denoResolver } from "./safeFetch.ts";
+import { rateGate, widgetIpRules, widgetScopeRules, aiActionRules, knowledgeAddRules, CLAIM_AI_ACTIONS } from "./abuseGuards.ts";
+import { bindWhatsappNumber, supabaseBindStore, BIND_CONFLICT_BODY } from "./waBinding.ts";
+// Security hardening (S8 Widget billing / S9 WhatsApp binding verification).
+import { widgetBillingEnabled, reserveWidgetAnswer, commitWidgetAnswer, releaseWidgetAnswer, widgetBillingEarlyReply } from "./widgetBilling.ts";
+import { bindingIsVerified, readBindingVerified } from "./waBinding.ts";
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
@@ -437,12 +449,12 @@ async function extractFromUrl(
   title: string;
   text: string;
 }> {
-  const res = await fetch(url, {
-    headers: {
-      "user-agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36",
-    },
-    redirect: "follow",
+  // S4 SSRF guard (safeFetch.ts): public http(s) hosts only, ports 80/443,
+  // manual re-validated redirects (max 3), 8s deadline, 1.5 MB cap,
+  // text/html | text/plain | application/xhtml+xml only.
+  const res = await safeFetchText(url, {
+    fetch: (u, init) => fetch(u, init),
+    resolve: denoResolver(),
   });
 
   if (!res.ok) {
@@ -451,7 +463,7 @@ async function extractFromUrl(
     );
   }
 
-  const raw = await res.text();
+  const raw = res.text;
 
   const $ = cheerio.load(raw);
 
@@ -1559,7 +1571,8 @@ async function handleIncomingWebhookMessage(
   externalMsgId: string | null,
   channel: "whatsapp" | "instagram" | "facebook",
   phoneId?: string,
-  selectedChoiceId?: string | null
+  selectedChoiceId?: string | null,
+  providerEventIdGenuine?: boolean
 ) {
   const tenantId: string =
     channel === "whatsapp"
@@ -1787,11 +1800,15 @@ async function handleIncomingWebhookMessage(
   // The durable engine is strictly isolated to the operator-selected
   // Instagram account and defaults OFF. No direct send is made in this path:
   // the atomic Outbox and an authenticated worker own actual provider calls.
-  if(channel==="instagram"){
+  // FLOW_MULTICHANNEL_ENABLED (default OFF): WhatsApp / Facebook events may
+  // also try the durable path (same canary, claim and SQL re-checks).
+  if(channel==="instagram"||
+     ((channel==="whatsapp"||channel==="facebook")&&multichannelEnabled())){
     const durable=await attemptDurableInstagram(sb,{
       tenantId,accountId:String(account.id),conversationId:String(conv.id),
       inboundId:inboundMessageId,eventId:externalMsgId,platform:channel,
-      selectedChoiceId
+      text:customerText,
+      selectedChoiceId,providerEventIdGenuine:providerEventIdGenuine===true
     });
     if(durable==="handled")return;
   }
@@ -2306,11 +2323,20 @@ Deno.serve(async (req) => {
              */
             let account: any = null;
 
-            const { data: binding } = await sb
+            // S9 (waBinding.ts): only operator-VERIFIED bindings route traffic
+            // (20261029290000). Unverified -> not answered; approve with the
+            // service role: UPDATE public.wa_bindings SET is_verified = true,
+            // verified_at = now(), verified_by = '<operator>:<ticket>'
+            // WHERE phone_id = '<id>' AND tenant_id = '<tenant>';
+            const { data: bindingRow } = await sb
               .from("wa_bindings")
-              .select("tenant_id, phone_id")
+              .select("tenant_id, phone_id, is_verified")
               .eq("phone_id", phoneId)
               .maybeSingle();
+            const binding = bindingIsVerified(bindingRow) ? bindingRow : null;
+            if (bindingRow && !binding) {
+              console.warn("[whatsapp_webhook] binding ignored", { code: "wa_binding_unverified" });
+            }
 
             if (binding) {
               account = {
@@ -2340,6 +2366,26 @@ Deno.serve(async (req) => {
               continue;
             }
 
+            // FLOW_MULTICHANNEL_ENABLED (default OFF), and ONLY for the
+            // operator-selected durable canary account: signed interactive
+            // button replies carrying "flow-choice:<id>" (parsed by
+            // normalizeMetaMessage.ts) reach the durable path as their title
+            // + choice id. OFF or any other account: null, and the text-only
+            // handling below is unchanged.
+            const durableReplies =
+              multichannelEnabled() &&
+              typeof account.id === "string" &&
+              account.id === env("FLOW_DURABLE_CANARY_ACCOUNT_ID")
+                ? new Map(
+                    normalizeMetaMessages({
+                      object: "whatsapp_business_account",
+                      entry: [{ changes: [change] }],
+                    })
+                      .filter((m) => m.choiceId !== null && m.providerMessageId !== null)
+                      .map((m) => [String(m.providerMessageId), m] as const)
+                  )
+                : null;
+
             const customerNameOf = (waId: string) => {
               const c = (value.contacts ?? []).find(
                 (x: any) => x.wa_id === waId
@@ -2366,7 +2412,12 @@ Deno.serve(async (req) => {
                   ? message.id
                   : null;
 
-              if (!text) {
+              const durableReply =
+                durableReplies && msgId
+                  ? durableReplies.get(msgId) ?? null
+                  : null;
+
+              if (!text && !durableReply) {
                 /*
                  * أنواع غير نصية — نسجلها الواردة فقط إن وُجد نص،
                  * وإلا نتجاهلها (كما في extractText القديم).
@@ -2400,10 +2451,12 @@ Deno.serve(async (req) => {
                 sb,
                 account,
                 chatId,
-                text,
+                durableReply && !text ? durableReply.text : text,
                 msgId,
                 "whatsapp",
-                phoneId
+                phoneId,
+                durableReplies ? durableReply?.choiceId ?? null : undefined,
+                durableReplies ? typeof msgId === "string" && msgId.length > 0 : undefined
               );
 
               if (name) {
@@ -2492,6 +2545,14 @@ Deno.serve(async (req) => {
         );
 
         if (!sigOk) {
+          // Facebook Page events (object "page"): a missing or bad signature
+          // is rejected like WhatsApp (401), before any parsing side effect
+          // or DB access. The Instagram object keeps its behaviour below.
+          if (body.object === "page") {
+            console.error("[instagram_webhook] invalid page signature");
+            return json({ error: "Invalid webhook signature" }, 401);
+          }
+
           console.error(
             "[instagram_webhook] invalid signature — ignored"
           );
@@ -2517,15 +2578,60 @@ Deno.serve(async (req) => {
 
           const msgs = extractIgMessages(entry);
 
-          for (const msg of msgs) {
+          // FLOW_MULTICHANNEL_ENABLED only: signed Facebook postbacks carrying
+          // "flow-choice:<id>" and a Meta mid (normalizeMetaMessage.ts). They
+          // are processed below ONLY for the durable canary account. OFF: [].
+          const pagePostbacks =
+            body.object === "page" && multichannelEnabled()
+              ? normalizeMetaMessages({ object: "page", entry: [entry] })
+                  .filter((m) => m.kind === "postback" && m.choiceId !== null &&
+                    m.providerMessageId !== null)
+                  .map((m) => ({
+                    senderId: m.senderId,
+                    recipientId: m.recipientId,
+                    text: m.text,
+                    mid: m.providerMessageId,
+                    choiceId: m.choiceId,
+                    postback: true as const,
+                  }))
+              : [];
+
+          for (const msg of [...msgs, ...pagePostbacks]) {
             const candidates = [
               entryId,
               msg.recipientId,
             ].filter((x) => x && x !== "0");
 
             let account: any = null;
+            // Facebook Page events: a channel='facebook' account ONLY (never
+            // an Instagram one); a page id shared by several accounts (e.g.
+            // several tenants) is never assigned to one of them: ignored.
+            let ambiguousPage = false;
 
             for (const candidate of candidates) {
+              if (body.object === "page") {
+                const { data: pageAccounts } = await sb
+                  .from("channel_accounts")
+                  .select(
+                    "id, tenant_id, channel, external_id, status, agent_enabled, auto_reply, access_token_encrypted"
+                  )
+                  .eq("external_id", candidate)
+                  .eq("channel", "facebook")
+                  .limit(2);
+
+                if (Array.isArray(pageAccounts) && pageAccounts.length > 1) {
+                  ambiguousPage = true;
+                  break;
+                }
+
+                if (Array.isArray(pageAccounts) && pageAccounts.length === 1) {
+                  account = pageAccounts[0];
+                  break;
+                }
+
+                continue;
+              }
+
               const { data } = await sb
                 .from("channel_accounts")
                 .select(
@@ -2544,6 +2650,13 @@ Deno.serve(async (req) => {
               }
             }
 
+            if (ambiguousPage) {
+              console.warn(
+                "[instagram_webhook] page id matches several accounts — event ignored"
+              );
+              continue;
+            }
+
             if (!account) {
               console.warn(
                 `[instagram_webhook] no matching account | entryId=${entryId} recipient=${msg.recipientId}`
@@ -2558,6 +2671,12 @@ Deno.serve(async (req) => {
               continue;
             }
 
+            // Postbacks (flag ON only) reach the durable canary account only.
+            if ("postback" in msg &&
+                String(account.id) !== env("FLOW_DURABLE_CANARY_ACCOUNT_ID")) {
+              continue;
+            }
+
             const channel =
               account.channel === "facebook"
                 ? "facebook"
@@ -2568,6 +2687,10 @@ Deno.serve(async (req) => {
 
             const msgId =
               msg.mid || `ig_${Date.now()}`;
+            // Provenance, never inferred from the id's shape: true only when
+            // Meta itself supplied a non-empty mid (msgId is then that mid).
+            const providerEventIdGenuine =
+              typeof msg.mid === "string" && msg.mid.length > 0;
 
             /**
              * منع التكرار.
@@ -2597,7 +2720,8 @@ Deno.serve(async (req) => {
                 | "instagram"
                 | "facebook",
               undefined,
-              msg.choiceId
+              msg.choiceId,
+              providerEventIdGenuine
             );
 
             /* ── جلب بيانات المرسل (اسم + صورة) وحفظها ──
@@ -2667,6 +2791,15 @@ Deno.serve(async (req) => {
                 `[instagram_webhook] sender profile step skipped: ${e?.message ?? e}`
               );
             }
+          }
+
+          // FLOW_COMMENT_AUTOMATION_ENABLED (default OFF; commentIngress.ts):
+          // signed Instagram "comments" / Page "feed" comment changes start a
+          // comment run (public reply first, then the DM). OFF: never parsed.
+          if (commentAutomationEnabled()) {
+            await ingestSignedComments(sb, body.object, entry, {
+              env, encrypt: encryptField,
+            });
           }
         }
 
@@ -2865,6 +2998,13 @@ Deno.serve(async (req) => {
         );
       }
 
+      // S3 (abuseGuards.ts): per-IP limit BEFORE any lookup, write or LLM call.
+      const widgetIpLimited = await rateGate({
+        rpc: sb, headers: req.headers, salt: env("RATE_LIMIT_IP_SALT"), cors: CORS,
+        rules: widgetIpRules,
+      });
+      if (widgetIpLimited) return widgetIpLimited;
+
       const found =
         await publicWidget(
           sb,
@@ -2892,6 +3032,14 @@ Deno.serve(async (req) => {
           404
         );
       }
+
+      // S3 (abuseGuards.ts): per-session and per-tenant caps BEFORE the
+      // customer message is stored and before any LLM / embedding call.
+      const widgetScopeLimited = await rateGate({
+        rpc: sb, headers: req.headers, salt: env("RATE_LIMIT_IP_SALT"), cors: CORS,
+        rules: () => widgetScopeRules(found.tenant.id, session.id),
+      });
+      if (widgetScopeLimited) return widgetScopeLimited;
 
       /*
        * حفظ رسالة العميل أولًا
@@ -3021,6 +3169,20 @@ Deno.serve(async (req) => {
         });
       }
 
+      // S8 (widgetBilling.ts): reserve ONE credit atomically BEFORE any
+      // embedding / LLM call. Billing is ON unless WIDGET_BILLING_V2_ENABLED
+      // is exactly "false" (operator kill switch). Idempotent per session +
+      // client message id / message hash; released when no answer is delivered.
+      const widgetBill = await reserveWidgetAnswer(sb, {
+        enabled: widgetBillingEnabled(env("WIDGET_BILLING_V2_ENABLED")),
+        tenantId: found.tenant.id, sessionId: session.id, message,
+        clientMessageId: body.clientMessageId,
+      });
+      const widgetEarly = await widgetBillingEarlyReply(sb, widgetBill, {
+        tenantId: found.tenant.id, widgetId: found.widget.id, sessionId: session.id,
+      });
+      if (widgetEarly) return json(widgetEarly);
+
       /*
        * البحث في قاعدة المعرفة + LLM
        */
@@ -3034,6 +3196,7 @@ Deno.serve(async (req) => {
             message
           );
       } catch (e) {
+        await releaseWidgetAnswer(sb, found.tenant.id, widgetBill);
         console.error(
           "[widget_message] AI error",
           e
@@ -3077,6 +3240,7 @@ Deno.serve(async (req) => {
         result.kind ===
           "refusal"
       ) {
+        await releaseWidgetAnswer(sb, found.tenant.id, widgetBill);
         const reply =
           "عذرًا، ما عندي معلومات كافية عن هذا السؤال حاليًا.";
 
@@ -3156,6 +3320,7 @@ Deno.serve(async (req) => {
         }).select("id").single();
 
       if(widgetSaveError||!savedWidgetReply?.id){
+        await releaseWidgetAnswer(sb, found.tenant.id, widgetBill);
         console.error("[widget_message] answer insert failed",{
           tenantId:found.tenant.id,code:widgetSaveError?.code??"unknown",
           message:widgetSaveError?.message??"missing id"
@@ -3163,26 +3328,10 @@ Deno.serve(async (req) => {
         return err("تعذر حفظ رد المساعد",500);
       }
 
-      // Two-phase deployment: additive SQL first, then activate separately.
-      // Disabled by default, preserving old (currently uncharged) Widget path.
-      let billingStatus:"deferred"|"charged"|"already_charged"|"pending"="deferred";
-      if(env("WIDGET_BILLING_V2_ENABLED")==="true"){
-        const charge=await chargeWidgetReply(
-          sb,found.tenant.id,savedWidgetReply.id);
-        billingStatus=charge.status==="charged"||charge.status==="already_charged"
-          ? charge.status:"pending";
-        if(billingStatus==="pending"){
-          console.error("[widget_message] reply saved but credit pending",{
-            tenantId:found.tenant.id,
-            messageId:savedWidgetReply.id,
-            reason:charge.status
-          });
-        }
-      }else{
-        console.info("[widget_message] Widget billing v2 disabled; no charge",{
-          tenantId:found.tenant.id,messageId:savedWidgetReply.id
-        });
-      }
+      // S8 (widgetBilling.ts): the credit was reserved before the LLM call;
+      // bind it to the saved answer ("deferred" only under the kill switch).
+      const billingStatus=await commitWidgetAnswer(
+        sb,found.tenant.id,widgetBill,savedWidgetReply.id);
 
       await sb
         .from(
@@ -3221,6 +3370,7 @@ Deno.serve(async (req) => {
       "qa_save",
       "ingest_text",
       "qa_test",
+      "comment_activity",
     ];
 
     if (
@@ -3242,10 +3392,36 @@ Deno.serve(async (req) => {
         );
       }
 
+      // S3/S4 (abuseGuards.ts): URL fetch / LLM / embedding claim actions are
+      // rate limited per IP and per tenant before any of that work.
+      if (CLAIM_AI_ACTIONS.has(action)) {
+        const aiLimited = await rateGate({
+          rpc: sb, headers: req.headers, salt: env("RATE_LIMIT_IP_SALT"), cors: CORS,
+          rules: (ipHash) => aiActionRules(ipHash, tenant.id),
+        });
+        if (aiLimited) return aiLimited;
+      }
+
       switch (action) {
         /* ─────────────────────────────────────────────────────────────
            ربط الرقم
         ───────────────────────────────────────────────────────────── */
+
+        // Inbox comment activity (commentActivity.ts): read-only, scoped to
+        // the claim-verified tenant, rate limited, at most 100 per page.
+        case "comment_activity": {
+          const caLimited = await rateGate({
+            rpc: sb, headers: req.headers, salt: env("RATE_LIMIT_IP_SALT"), cors: CORS,
+            rules: (ipHash) => commentActivityRules(ipHash, String(tenant.id)),
+          });
+          if (caLimited) return caLimited;
+          const activity = await readCommentActivity(sb, String(tenant.id),
+            { limit: body.limit, cursor: body.cursor }, decryptField);
+          if (!activity.ok) {
+            return json({ ok: false, error: activity.error }, activity.status);
+          }
+          return json(activity);
+        }
 
         case "bind_number": {
           const phoneId =
@@ -3264,35 +3440,31 @@ Deno.serve(async (req) => {
             );
           }
 
-          const {
-            error,
-          } = await sb
-            .from(
-              "wa_bindings"
-            )
-            .upsert(
-              {
-                phone_id:
-                  phoneId,
-
-                tenant_id:
-                  tenant.id,
-              },
-              {
-                onConflict:
-                  "phone_id",
-              }
-            );
-
-          if (error) {
-            return err(
-              error.message,
-              500
-            );
+          // S1 (waBinding.ts): never overwrite another tenant's number.
+          // INSERT .. ON CONFLICT (phone_id) DO NOTHING, then verify owner.
+          const bound = await bindWhatsappNumber(
+            supabaseBindStore(sb), tenant.id, phoneId
+          );
+          if (bound.status === "conflict") {
+            console.warn("[bind_number] refused", { code: "phone_id_owned_by_other_tenant" });
+            return json(BIND_CONFLICT_BODY, 409);
+          }
+          if (bound.status === "error") {
+            console.error("[bind_number] failed", { code: "bind_error" });
+            return err("تعذر ربط الرقم — حاول مرة أخرى", 500);
           }
 
+          // S9 interim control (20261029290000): new bindings start
+          // UNVERIFIED and get no auto-replies until an operator approves them
+          // (SQL in the migration header). Same-tenant re-bind never touches
+          // the flag (INSERT .. ON CONFLICT DO NOTHING).
+          // TODO(security): permanent fix — require the tenant's WhatsApp
+          // Business access token, call GET https://graph.facebook.com/<ver>/{phone_number_id}
+          // with it (fail closed on any error / mismatch) and set
+          // is_verified = true automatically instead of manual approval.
           return json({
             ok: true,
+            verified: await readBindingVerified(sb, phoneId, tenant.id),
           });
         }
 
@@ -3312,6 +3484,9 @@ Deno.serve(async (req) => {
               Boolean(phoneId),
 
             phoneId,
+            // S9: additive; false until an operator verified the binding,
+            // null when the tenant has no binding.
+            verified: phoneId ? await readBindingVerified(sb, phoneId, tenant.id) : null,
           });
         }
 
@@ -5256,6 +5431,13 @@ ${text}`
 
 
       case "knowledge_add": {
+        // S4 (abuseGuards.ts): per-tenant limit before URL fetch / embeddings.
+        const kbLimited = await rateGate({
+          rpc: sb, headers: req.headers, salt: env("RATE_LIMIT_IP_SALT"), cors: CORS,
+          rules: () => knowledgeAddRules(tenant.id),
+        });
+        if (kbLimited) return kbLimited;
+
         const {
           url,
           text,

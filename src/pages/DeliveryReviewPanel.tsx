@@ -6,8 +6,44 @@ type ReviewItem={
  provider_message_id:string|null;attempted_at:string;uncertain_at:string|null;
  review_status:string;review_requested_at:string|null;
 };
-type Inbox={items:ReviewItem[];readOnly:true};
+type FlowAttempt={outbox_id:string;claim_id:string|null;status:"attempting"|"uncertain"|"confirmed";
+ provider_message_id:string|null;attempted_at:string|null;review_status:string};
+type FlowFailure={id:string;effect_kind:string|null;delivery_status:string;attempts:number;
+ created_at:string|null;cancel_reason:string|null;cancelled_at?:string|null;ai_last_error_code?:string|null};
+type FlowRun={id:string;flow_key:string|null;platform:string;run_status:string;
+ wake_at:string|null;updated_at:string|null;ended_reason:string|null};
+type Inbox={items:ReviewItem[];readOnly:true;flowItems?:FlowAttempt[];flowFailures?:FlowFailure[];flowInternal?:FlowFailure[];flowInternalAvailable?:boolean;
+ flowRuns?:FlowRun[];runCounts?:Record<string,number>;flowAvailable?:boolean};
 type Totals={events:Record<string,number>;periodDays:number;truncated:boolean};
+const runStatusNames:Record<string,string>={
+ awaiting_input:"بانتظار رد العميل",sleeping:"مؤجلة (انتظار)",handoff:"محوّلة لموظف",
+ blocked:"متوقفة",completed:"مكتملة",ready:"جاهزة للتنفيذ"
+};
+const failureNames:Record<string,string>={
+ uncertain:"إرسال غير مؤكد",dead_letter:"فشل الإرسال",billing_blocked:"موقوف بسبب الرصيد",
+ pending:"بانتظار التنفيذ",leased:"قيد التنفيذ",retry_wait:"بانتظار إعادة المحاولة",
+ charge_pending:"بانتظار الخصم",settled:"نُفّذ",cancelled:"أُلغي"
+};
+// Effect kinds incl. internal actions (tag/untag/notify/handoff); unknown kinds show a generic label.
+const effectKindNames:Record<string,string>={
+ message:"رسالة",question:"سؤال",delay:"تأخير",tag:"إضافة وسم",untag:"إزالة وسم",
+ staff_notification:"إشعار للموظف",handoff:"تحويل لموظف"
+};
+const INTERNAL_KINDS=["tag","untag","staff_notification","handoff"];
+const effectKindLabel=(k:string|null|undefined)=>k?(Object.prototype.hasOwnProperty.call(effectKindNames,k)?effectKindNames[k]:"إجراء غير معروف"):"";
+const statusTone=(s:string)=>s==="settled"?"bg-emerald-500/15 text-emerald-100":
+ s==="dead_letter"?"bg-red-500/15 text-red-100":s==="cancelled"?"bg-white/10 text-white/80":"bg-amber-500/15 text-amber-100";
+const cancelReasonNames:Record<string,string>={
+ no_knowledge:"لا توجد معرفة كافية للإجابة",ai_unavailable:"خدمة الرد الآلي لم تكن متاحة",
+ ai_retries_exhausted:"تعذّر إنتاج رد آلي بعد عدة محاولات",input_timeout:"انتهت مهلة انتظار رد العميل",
+ stale:"انتظرت الرسالة طويلًا ولم تُرسل",free_text:"كتب العميل نصًا بدل اختيار زر",
+ revision_inactive:"نسخة التدفق لم تعد مفعّلة",superseded:"حلّت محلها رسالة أحدث",
+ ineligible:"الرسالة غير مؤهلة للإرسال",human_takeover:"تولّى موظف المحادثة",
+ lease_exhausted:"انتهت مهلة معالجة الرسالة",duplicate_active:"توجد رسالة مماثلة قيد المعالجة",manual:"أُلغيت يدويًا"
+};
+const UNKNOWN_REASON="سبب غير معروف";
+const cancelReasonLabel=(r:string|null|undefined)=>r?(Object.prototype.hasOwnProperty.call(cancelReasonNames,r)?cancelReasonNames[r]:UNKNOWN_REASON):"";
+const fmt=(v:string|null)=>v?new Date(v).toLocaleString("ar-IQ"):"—";
 const metricNames:Record<string,string>={
  started:"بدأت",transition:"انتقالات",button:"أزرار",
  delivered:"تسليم مؤكد",completed:"اكتملت",handoff:"تحويل بشري",failed:"فشلت"
@@ -16,20 +52,26 @@ const metricNames:Record<string,string>={
 export default function DeliveryReviewPanel({token,tenantId}:{token:string|null;tenantId:string}){
  const [items,setItems]=useState<ReviewItem[]>([]);
  const [totals,setTotals]=useState<Totals|null>(null);
+ const [flow,setFlow]=useState<Inbox|null>(null);
  const [loading,setLoading]=useState(false);
  const [error,setError]=useState("");
+ const [unreachable,setUnreachable]=useState(false);
  const refresh=useCallback(async()=>{
   if(!token){setError("سجّل الدخول للوصول إلى قائمة المراجعة");return;}
-  setLoading(true);setError("");
+  setLoading(true);setError("");setUnreachable(false);
   try{
    const [inbox,metrics]=await Promise.all([
     apiAuthFetch<Inbox>(token,"/api/dashboard/delivery-review",{method:"POST",body:JSON.stringify({tenantId})}),
     apiAuthFetch<Totals>(token,"/api/dashboard/flow-metrics",{method:"POST",body:JSON.stringify({tenantId})})
    ]);
    if(!Array.isArray(inbox.items))throw new Error("صيغة قائمة المراجعة غير صالحة");
-   setItems(inbox.items);setTotals(metrics);
+   setItems(inbox.items);setTotals(metrics);setFlow(inbox);
   }catch(e){
-   setError(e instanceof Error?e.message:"تعذر تحميل البيانات");
+   const msg=e instanceof Error?e.message:"";
+   const name=e instanceof Error?e.name:"";
+   if(e instanceof TypeError||/failed to fetch|networkerror|network request failed|load failed|fetch|relay/i.test(msg+" "+name)||/^HTTP (404|5\d\d)$/.test(msg)){
+    setUnreachable(true);
+   }else setError(msg||"تعذر تحميل البيانات");
   }finally{setLoading(false);}
  },[token,tenantId]);
  useEffect(()=>{void refresh();},[refresh]);
@@ -37,7 +79,7 @@ export default function DeliveryReviewPanel({token,tenantId}:{token:string|null;
  return <section dir="rtl" data-testid="delivery-review-panel" className="min-w-0 space-y-4 text-white">
   <header className="flex flex-wrap items-center justify-between gap-3">
    <div>
-    <h2 className="text-lg font-bold">مراجعة الرسائل غير المؤكدة</h2>
+    <h2 className="sr-only">مراجعة الرسائل غير المؤكدة</h2>
     <p className="mt-1 text-xs text-white/70">عرض فقط — لا إعادة إرسال ولا خصم تلقائي. يتطلب إذن مالك المتجر.</p>
    </div>
    <button type="button" onClick={()=>void refresh()} disabled={loading}
@@ -45,6 +87,7 @@ export default function DeliveryReviewPanel({token,tenantId}:{token:string|null;
     {loading?"جارٍ التحديث…":"تحديث القائمة"}
    </button>
   </header>
+  {unreachable&&<p role="status" data-testid="delivery-review-unreachable" className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-100">تعذر الاتصال بالخادم. يرجى المحاولة لاحقاً</p>}
   {error&&<p role="alert" className="rounded-lg border border-red-500/50 p-3 text-sm text-red-200">{error}</p>}
   {totals&&<section aria-label="إحصائيات التدفقات خلال 30 يومًا" className="grid grid-cols-2 gap-2 sm:grid-cols-4">
    {Object.entries(metricNames).map(([key,label])=><div className={container} key={key}>
@@ -53,7 +96,55 @@ export default function DeliveryReviewPanel({token,tenantId}:{token:string|null;
    </div>)}
    {totals.truncated&&<p className="col-span-full text-xs text-amber-200">الإحصائيات جزئية بسبب حد 1000 حدث.</p>}
   </section>}
-  {items.length===0&&!loading&&!error&&<p className={container}>لا توجد رسائل تحتاج مراجعة الآن.</p>}
+  {flow?.runCounts&&<section aria-label="حالة تشغيلات التدفقات" className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+   {Object.entries(runStatusNames).map(([key,label])=><div className={container} key={key}>
+    <div className="text-xs text-white/70">{label}</div>
+    <p className="mt-2 text-lg font-semibold tabular-nums">{flow.runCounts?.[key]??0}</p>
+   </div>)}
+   {flow.flowAvailable===false&&<p className="col-span-full text-xs text-amber-200">بيانات التدفقات المتقدمة غير متاحة كاملة حاليًا.</p>}
+  </section>}
+  {(flow?.flowFailures?.length??0)>0&&<section aria-label="رسائل التدفقات الفاشلة أو غير المؤكدة" className="space-y-2">
+   <h3 className="text-sm font-bold">رسائل تدفقات فاشلة أو غير مؤكدة</h3>
+   <ul className="space-y-2">{flow!.flowFailures!.map(f=><li key={f.id} className={container}>
+    {f.effect_kind&&<span data-testid="flow-effect-kind" data-effect-kind={f.effect_kind} className={"me-2 rounded-md px-2 py-1 text-xs "+(INTERNAL_KINDS.includes(f.effect_kind)?"bg-sky-500/15 text-sky-100":"bg-white/10 text-white/80")}>{INTERNAL_KINDS.includes(f.effect_kind)?"إجراء داخلي: ":""}{effectKindLabel(f.effect_kind)}</span>}
+    <span data-testid="flow-delivery-status" data-status-code={f.delivery_status} className={"rounded-md px-2 py-1 text-xs "+statusTone(f.delivery_status)}>{f.delivery_status==="billing_blocked"&&f.ai_last_error_code==="ai_answer_missing"?"موقوف: إجابة مفقودة":Object.prototype.hasOwnProperty.call(failureNames,f.delivery_status)?failureNames[f.delivery_status]:"حالة غير معروفة"}</span>
+    <p className="mt-2 break-all text-xs text-white/65">مرجع الرسالة: {f.id}</p>
+    <p className="mt-1 text-xs text-white/65">المحاولات: {f.attempts} — الوقت: {fmt(f.created_at)}</p>
+    {f.delivery_status!=="billing_blocked"&&(f.cancel_reason||f.delivery_status==="dead_letter")&&<p data-testid="flow-cancel-reason" data-reason-code={f.cancel_reason??""} className="mt-1 text-xs text-amber-100">{f.delivery_status==="dead_letter"?"سبب الفشل":"سبب الإلغاء"}: {f.cancel_reason?cancelReasonLabel(f.cancel_reason):"السبب غير محدد"}</p>}
+   </li>)}</ul>
+  </section>}
+  {flow&&<section aria-label="الإجراءات الداخلية" data-testid="flow-internal-section" className="space-y-2">
+   <h3 className="text-sm font-bold">الإجراءات الداخلية</h3>
+   {flow.flowInternalAvailable!==true
+    ?<p data-testid="flow-internal-unavailable" className={container+" text-xs text-white/70"}>حالة الإجراءات الداخلية غير متاحة حاليًا.</p>
+    :(flow.flowInternal?.length??0)===0
+     ?<p data-testid="flow-internal-empty" className={container+" text-xs text-white/70"}>لا توجد إجراءات داخلية حديثة.</p>
+     :<ul className="space-y-2">{flow.flowInternal!.map(f=><li key={f.id} data-testid="flow-internal-row" className={container}>
+      {f.effect_kind&&<span data-testid="flow-internal-kind" data-effect-kind={f.effect_kind} className="me-2 rounded-md bg-sky-500/15 px-2 py-1 text-xs text-sky-100">{INTERNAL_KINDS.includes(f.effect_kind)?"إجراء داخلي: ":""}{effectKindLabel(f.effect_kind)}</span>}
+      <span data-testid="flow-internal-status" data-status-code={f.delivery_status} className={"rounded-md px-2 py-1 text-xs "+statusTone(f.delivery_status)}>{Object.prototype.hasOwnProperty.call(failureNames,f.delivery_status)?failureNames[f.delivery_status]:"حالة غير معروفة"}</span>
+      <p className="mt-2 break-all text-xs text-white/65">مرجع الإجراء: {f.id}</p>
+      <p className="mt-1 text-xs text-white/65">المحاولات: {f.attempts} — الوقت: {fmt(f.created_at??null)}</p>
+      {f.cancel_reason&&<p data-testid="flow-internal-cancel-reason" data-reason-code={f.cancel_reason} className="mt-1 text-xs text-amber-100">سبب الإلغاء: {cancelReasonLabel(f.cancel_reason)}</p>}
+     </li>)}</ul>}
+  </section>}
+  {(flow?.flowItems?.length??0)>0&&<section aria-label="محاولات إرسال التدفقات بانتظار المراجعة" className="space-y-2">
+   <h3 className="text-sm font-bold">محاولات إرسال تدفقات تحتاج مراجعة</h3>
+   <ul className="space-y-2">{flow!.flowItems!.map(a=><li key={a.outbox_id} className={container}>
+    <span className="rounded-md bg-amber-500/15 px-2 py-1 text-xs text-amber-100">{a.status==="uncertain"?"غير مؤكد":"تحتاج مراجعة بشرية"}</span>
+    <p className="mt-2 break-all text-xs text-white/65">مرجع الرسالة: {a.outbox_id}</p>
+    <p className="mt-1 text-xs text-white/65">معرّف المزود: {a.provider_message_id||"لم يصل تأكيد"} — {fmt(a.attempted_at)}</p>
+   </li>)}</ul>
+  </section>}
+  {(flow?.flowRuns?.length??0)>0&&<section aria-label="تشغيلات تدفقات تحتاج متابعة" className="space-y-2">
+   <h3 className="text-sm font-bold">تشغيلات تحتاج متابعة</h3>
+   <ul className="space-y-2">{flow!.flowRuns!.map(r=><li key={r.id} className={container}>
+    <span className="font-semibold">{r.flow_key??"—"}</span>
+    <span className="ms-2 rounded-md bg-white/10 px-2 py-1 text-xs">{runStatusNames[r.run_status]??r.run_status}</span>
+    <p className="mt-1 text-xs text-white/65">آخر تحديث: {fmt(r.updated_at)}{r.wake_at?` — الاستئناف: ${fmt(r.wake_at)}`:""}</p>
+    {r.ended_reason&&<p data-testid="flow-run-ended-reason" data-reason-code={r.ended_reason} className="mt-1 text-xs text-white/65">سبب التوقف: {cancelReasonLabel(r.ended_reason)}</p>}
+   </li>)}</ul>
+  </section>}
+  {items.length===0&&!(flow?.flowItems?.length)&&!(flow?.flowFailures?.length)&&!loading&&!error&&!unreachable&&<p className={container}>لا توجد رسائل تحتاج مراجعة الآن.</p>}
   <ul className="space-y-3">
    {items.map(item=><li key={item.claim_id} className={container}>
     <div className="flex flex-wrap justify-between gap-2">

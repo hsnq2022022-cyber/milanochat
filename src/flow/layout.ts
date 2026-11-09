@@ -53,11 +53,12 @@ export function findOpenPosition(nodes:FlowNode[],candidate:FlowNode,preferred:X
   return {x:preferred.x,y:preferred.y+occupied.length*(size.height+gap)};
 }
 
-export function arrangeFlow(doc:FlowDocument):FlowDocument{
+export type LayoutDirection="TB"|"LR";
+export function arrangeFlow(doc:FlowDocument,direction:LayoutDirection="TB"):FlowDocument{
   if(!doc.nodes.length)return doc;
   const graph=new dagre.graphlib.Graph({multigraph:true});
   graph.setDefaultEdgeLabel(()=>({}));
-  graph.setGraph({rankdir:"TB",nodesep:110,ranksep:140,marginx:65,marginy:65,ranker:"network-simplex"});
+  graph.setGraph({rankdir:direction,nodesep:110,ranksep:140,marginx:65,marginy:65,ranker:"network-simplex"});
   for(const node of doc.nodes)graph.setNode(node.id,cardSize(node));
   for(const edge of doc.edges){
     if(graph.hasNode(edge.source)&&graph.hasNode(edge.target)&&edge.source!==edge.target)
