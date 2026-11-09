@@ -67,12 +67,12 @@ test("125000..190000 (incl. 130000/140000) and all rollbacks set bounded timeout
  // chain) follows; 20261029220000 (media stale sweep; requires 210000)
  // follows; 20261029230000 (multichannel support; requires 220000) is now
  // the newest migration overall.
- for(const s of stamps)if(!["20261029170000","20261029180000","20261029190000","20261029200000","20261029210000","20261029220000","20261029230000","20261029240000","20261029250000","20261029260000","20261029270000","20261029280000","20261029290000","20261029300000","20261029310000","20261029320000"].includes(s))assert.ok(s<"20261029170000",s);
+ for(const s of stamps)if(!["20261029170000","20261029180000","20261029190000","20261029200000","20261029210000","20261029220000","20261029230000","20261029240000","20261029250000","20261029260000","20261029270000","20261029280000","20261029290000","20261029300000","20261029310000","20261029320000","20261029330000"].includes(s))assert.ok(s<"20261029170000",s);
  // 20261029240000 (tenants billing RLS) and 20261029250000 (rate-limit
  // store), 20261029260000..290000 (match_knowledge guard, payments read-only,
  // widget credit reservations, wa_bindings verification) are security
  // migrations independent of the flow chain.
- assert.ok(stamps.every(s=>s<="20261029230000"||["20261029240000","20261029250000","20261029260000","20261029270000","20261029280000","20261029290000","20261029300000","20261029310000","20261029320000"].includes(s)),"230000 is the newest flow migration before 300000 (comment replies; requires 230000)");
+ assert.ok(stamps.every(s=>s<="20261029230000"||["20261029240000","20261029250000","20261029260000","20261029270000","20261029280000","20261029290000","20261029300000","20261029310000","20261029320000","20261029330000"].includes(s)),"230000 is the newest flow migration before 300000 (comment replies; requires 230000)");
  for(const f of [DB,LC,AI,TK,CP,CC,GD,SP,DB_RB,LC_RB,AI_RB,TK_RB,CP_RB,CC_RB,GD_RB,SP_RB]){
   const s=src(f).split("\n").map(l=>l.replace(/--.*$/,"")).join("\n");
   assert.equal((s.match(/^BEGIN;$/gm)??[]).length,1,`${f}: one transaction`);

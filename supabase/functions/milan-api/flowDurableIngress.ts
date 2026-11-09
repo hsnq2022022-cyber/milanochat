@@ -499,8 +499,6 @@ async function priorDelivery(db:Db,event:DurableEvent):Promise<Prior>{
  return "new";
 }
 type CancelReason="free_text"|"revision_inactive";
-const activeRunConflict=(error:unknown)=>record(error)&&error.code==="23505"&&
- typeof error.message==="string"&&error.message.includes("flow_active_run_exists");
 /** Tenant-scoped cancel; true only when the RPC itself succeeded. */
 async function cancelRun(db:Db,tenantId:string,runId:string,reason:CancelReason,
  expect:string):Promise<boolean>{
@@ -666,6 +664,85 @@ async function answerTypedQuestion(db:Db,event:DurableEvent,canary:boolean,runId
  return commit({nodeId:q.nodeId,stepCount:state.stepCount+1,status:"awaiting_input",
   variables:{...variables,[key]:String(count+1)},wakeAt:null},effectsPayload([effect]));
 }
+const UUID_SHAPE=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/**
+ * New durable run: claim (+ canary audit) + supersede + begin in ONE
+ * transaction (20261029330000 flow_claim_begin_durable_run, p_canary picks
+ * flow_claim_inbound_durable or test-mode flow_claim_inbound). The SQL rolls
+ * the claim back whenever the start is refused or raises. A thrown request,
+ * an RPC error or an empty result is AMBIGUOUS from here (the transaction
+ * may have committed before the response was lost), so the SAME call with
+ * the SAME arguments is retried exactly once, without delay or re-planning:
+ * the claim unique entry makes it idempotent. Attempt 2: (false,NULL) means
+ * the first attempt (or another delivery) committed -> "handled"; (true,run)
+ * -> "handled"; empty -> nothing committed, V2 answers ("fallback"); a
+ * second throw/error -> "fallback", logged ambiguous_after_retry for manual
+ * review. A committed start (acquired=true) is "handled" even if its run id
+ * looks malformed: a run exists, so V2 would only duplicate it. An
+ * unexpected shape on attempt 1 falls back without retry. Logs carry only
+ * {attempt,outcome,code?}: no ids, text or arguments.
+ */
+async function claimAndStart(db:Db,event:DurableEvent,canary:boolean,
+ step:RecordValue):Promise<Result>{
+ const warn=(detail:RecordValue)=>console.warn("[flow-durable] atomic start",detail);
+ const args={
+  p_canary:canary,p_tenant:event.tenantId,p_account:event.accountId,
+  p_platform:event.platform,p_event:event.eventId,
+  p_conversation:event.conversationId,p_inbound:event.inboundId,...step
+ };
+ type Outcome={kind:"ambiguous";outcome:"exception"|"rpc_error"|"empty";code?:string}|
+  {kind:"row";acquired:boolean;runOk:boolean}|{kind:"unexpected"};
+ const call=async():Promise<Outcome>=>{
+  let r:{data:unknown;error:unknown};
+  try{
+   r=await db.rpc("flow_claim_begin_durable_run",args);
+  }catch{
+   return {kind:"ambiguous",outcome:"exception"};
+  }
+  try{
+   if(r.error){
+    const code=record(r.error)&&typeof r.error.code==="string"&&
+     /^([0-9A-Z]{5}|PGRST[0-9]{3})$/.test(r.error.code)?r.error.code:"unknown";
+    return {kind:"ambiguous",outcome:"rpc_error",code};
+   }
+   if(!Array.isArray(r.data)||r.data.length===0)return {kind:"ambiguous",outcome:"empty"};
+   const row=r.data.length===1&&record(r.data[0])?r.data[0]:null;
+   if(row?.acquired===false)return {kind:"row",acquired:false,runOk:true};
+   if(row?.acquired===true)return {kind:"row",acquired:true,
+    runOk:typeof row.run_id==="string"&&UUID_SHAPE.test(row.run_id)};
+   return {kind:"unexpected"};
+  }catch{
+   return {kind:"unexpected"};
+  }
+ };
+ const first=await call();
+ if(first.kind==="row"){
+  if(!first.runOk)warn({attempt:1,outcome:"unexpected_result"});
+  return "handled";
+ }
+ if(first.kind==="unexpected"){
+  warn({attempt:1,outcome:"unexpected_result"});
+  return "fallback";
+ }
+ warn(first.code===undefined?{attempt:1,outcome:first.outcome}:
+  {attempt:1,outcome:first.outcome,code:first.code});
+ const second=await call();
+ if(second.kind==="row"){
+  warn({attempt:2,outcome:second.runOk?(second.acquired?"acquired_true":"acquired_false"):"unexpected_result"});
+  return "handled";
+ }
+ if(second.kind==="ambiguous"&&second.outcome==="empty"){
+  warn({attempt:2,outcome:"empty"});
+  return "fallback";
+ }
+ if(second.kind==="unexpected"){
+  warn({attempt:2,outcome:"unexpected_result"});
+  return "fallback";
+ }
+ warn(second.code===undefined?{attempt:2,outcome:"ambiguous_after_retry"}:
+  {attempt:2,outcome:"ambiguous_after_retry",code:second.code});
+ return "fallback";
+}
 /**
  * Returns handled only when this server-owned path has taken responsibility
  * or must fail closed. false/fallback allows the existing text-only engine.
@@ -815,29 +892,14 @@ export async function attemptDurableInstagram(
    eventKey:event.eventId,nowMs:Date.now(),seed:seedFromEventKey(event.eventId)
   });
   if(!safePlan(plan,event.platform))return "handled";
-  const claimed=await claimInbound(db,event,canaryMode);
-  if(claimed!=="acquired")return claimed;
-  // Only after this inbound is exclusively claimed (duplicate deliveries stop
-  // above): ONE transaction (20261029190000) ends every older active run of
-  // this tenant conversation ('superseded', so its delayed reply is never
-  // sent) and starts the new run. If the start is refused (NULL) or fails,
-  // the supersede is rolled back with it: the older run keeps its reply.
-  const begin=await db.rpc("flow_begin_durable_run_superseding",{
-   p_tenant:event.tenantId,p_account:event.accountId,
-   p_conversation:event.conversationId,p_inbound:event.inboundId,
-   p_event:event.eventId,p_flow:selection.flow_key,p_revision:selection.revision,
+  return await claimAndStart(db,event,canaryMode,{
+   p_flow:selection.flow_key,p_revision:selection.revision,
    p_start:state.nodeId,p_next:plan.state.nodeId,
    p_next_step:plan.state.stepCount,p_status:plan.state.status,
    p_variables:plan.state.variables,
    p_wake:plan.state.wakeAt?new Date(plan.state.wakeAt).toISOString():null,
    p_effects:effectsPayload(plan.effects)
   });
-  if(activeRunConflict(begin.error))
-   // A concurrent start owns this conversation; never send a second reply.
-   console.warn("[flow-durable] active run exists; new run skipped");
-  else if(begin.error||typeof begin.data!=="string")
-   console.warn("[flow-durable] initial run pending manual review");
-  return "handled";
  }catch(error){
   console.error("[flow-durable] guarded path failed",error instanceof Error?error.name:"unknown");
   return "handled";

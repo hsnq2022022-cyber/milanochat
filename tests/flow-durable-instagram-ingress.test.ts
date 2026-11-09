@@ -85,7 +85,7 @@ test("opted-in event creates one durable question; later selection resumes SAME 
   rpc:async(name:string,args:any)=>{
    calls.push({name,args});
    if(name==="flow_claim_inbound")return {data:[{acquired:true,route:"flow"}],error:null};
-   if(name==="flow_begin_durable_run_superseding"){waiting=true;return {data:id.run,error:null};}
+   if(name==="flow_claim_begin_durable_run"){waiting=true;return {data:[{acquired:true,run_id:id.run}],error:null};}
    if(name==="flow_resume_button_run"){waiting=false;return {data:true,error:null};}
    throw Error("Unexpected RPC "+name);
   }
@@ -95,8 +95,8 @@ test("opted-in event creates one durable question; later selection resumes SAME 
     conversationId:id.conversation,inboundId:id.inbound,
     eventId:"meta-new",platform:"instagram",providerEventIdGenuine:true};
   assert.equal(await attemptDurableInstagram(db,event),"handled");
-  assert.equal(calls.filter(c=>c.name==="flow_begin_durable_run_superseding").length,1);
-  assert.equal(calls.find(c=>c.name==="flow_begin_durable_run_superseding")?.args.p_status,"awaiting_input");
+  assert.equal(calls.filter(c=>c.name==="flow_claim_begin_durable_run").length,1);
+  assert.equal(calls.find(c=>c.name==="flow_claim_begin_durable_run")?.args.p_status,"awaiting_input");
   assert.equal(await attemptDurableInstagram(db,{
    ...event,eventId:"meta-click",selectedChoiceId:"prices"
   }),"handled");
@@ -105,7 +105,8 @@ test("opted-in event creates one durable question; later selection resumes SAME 
   assert.equal(resume.p_run,id.run);
   assert.equal(resume.p_status,"completed");
   assert.equal(resume.p_effects[0].payload.text,"هذه الأسعار");
-  assert.equal(calls.filter(c=>c.name==="flow_claim_inbound").length,2);
+  // The new start claims inside the atomic RPC; only the tap uses flow_claim_inbound.
+  assert.equal(calls.filter(c=>c.name==="flow_claim_inbound").length,1);
  }finally{(globalThis as any).Deno=old;}
 });
 test("the actual HMAC-verified Instagram extractor passes button identity only to opt-in server",()=>{
@@ -175,7 +176,7 @@ function lifecycleDb(o:Opts){
    if(name==="flow_claim_inbound")return {data:[{acquired:true,route:"flow"}],error:null};
    if(name==="flow_claim_inbound_durable")return {data:[{acquired:true,route:"flow"}],error:null};
    if(name==="flow_cancel_run")return {data:true,error:null};
-   if(name==="flow_begin_durable_run_superseding")return {data:"88888888-8888-4888-8888-888888888888",error:null};
+   if(name==="flow_claim_begin_durable_run")return {data:[{acquired:true,run_id:"88888888-8888-4888-8888-888888888888"}],error:null};
    if(name==="flow_resume_button_run")return {data:true,error:null};
    throw Error("Unexpected RPC "+name);
   }
@@ -260,102 +261,207 @@ test("valid button tap still resumes the same run without any cancel",async()=>{
   assert.deepEqual(names(calls),["flow_claim_inbound","flow_resume_button_run"]);
  });
 });
-// 20261029190000: supersede + start are ONE RPC (one transaction); the
-// client never cancels a run on the start path and never reads active runs.
-const SUPERSEDING_ARGS=["p_tenant","p_account","p_conversation","p_inbound","p_event","p_flow","p_revision",
- "p_start","p_next","p_next_step","p_status","p_variables","p_wake","p_effects"];
-test("new run: supersede and start in one RPC, only after the exclusive claim, tenant-scoped args",async()=>{
- await withCanary(async()=>{
-  const sleeping={id:"99999999-9999-4999-8999-999999999999",tenant_id:id.tenant,
-   conversation_id:id.conversation,run_status:"sleeping"};
-  const {db,calls,reads,writes}=lifecycleDb({active:[sleeping]});
-  assert.equal(await attemptDurableInstagram(db,baseEvent),"handled");
-  assert.deepEqual(names(calls),["flow_claim_inbound","flow_begin_durable_run_superseding"],
-   "claim first, then the single superseding start; no client-side flow_cancel_run");
-  const a=calls[1].args;
-  assert.deepEqual(Object.keys(a),SUPERSEDING_ARGS,"same arguments as flow_begin_durable_run");
-  assert.deepEqual([a.p_tenant,a.p_account,a.p_conversation,a.p_inbound,a.p_event],
-   [id.tenant,id.account,id.conversation,id.inbound,"meta-x"]);
-  assert.deepEqual([a.p_flow,a.p_revision,a.p_start,a.p_next,a.p_next_step,a.p_status],
-   ["flow",1,"start","choose",2,"awaiting_input"]);
-  assert.equal(reads.some(r=>r.table==="automation_flow_runs"&&Array.isArray(r.filters.run_status)),false,
-   "active runs are no longer read (or cancelled) by the client");
-  assert.deepEqual(writes,[]);
- });
-});
-test("superseding start returns NULL (refused): handled, nothing cancelled client-side, no retry",async()=>{
- await withCanary(async()=>{
-  const warn=console.warn;const warned:string[]=[];
-  console.warn=(m:string)=>{warned.push(String(m));};
-  try{
-   const {db,calls}=lifecycleDb({active:[{id:id.run,tenant_id:id.tenant,
-    conversation_id:id.conversation,run_status:"sleeping"}],
-    rpc:{flow_begin_durable_run_superseding:()=>({data:null,error:null})}});
-   assert.equal(await attemptDurableInstagram(db,baseEvent),"handled","same result as a NULL begin before");
-   assert.deepEqual(names(calls),["flow_claim_inbound","flow_begin_durable_run_superseding"]);
-   assert.ok(warned.some(w=>w.includes("initial run pending manual review")));
-  }finally{console.warn=warn;}
- });
-});
-test("superseding start RPC error fails closed (handled) with no client cancel or retry",async()=>{
- await withCanary(async()=>{
-  const warn=console.warn;const warned:string[]=[];
-  console.warn=(m:string)=>{warned.push(String(m));};
-  try{
-   for(const error of [{code:"XX000",message:"db down"},{code:"PGRST202",message:"function not found"},
-     {code:"P0001",message:"First durable step rejected; atomic rollback required"}]){
-    const {db,calls}=lifecycleDb({rpc:{flow_begin_durable_run_superseding:()=>({data:null,error})}});
-    assert.equal(await attemptDurableInstagram(db,baseEvent),"handled",error.code);
-    assert.deepEqual(names(calls),["flow_claim_inbound","flow_begin_durable_run_superseding"],error.code);
-   }
-   // A thrown client error is caught by the guarded path the same way.
-   const thrown=lifecycleDb({rpc:{flow_begin_durable_run_superseding:()=>{throw Error("network");}}});
-   const err=console.error;console.error=()=>{};
-   try{assert.equal(await attemptDurableInstagram(thrown.db,baseEvent),"handled");}finally{console.error=err;}
-   assert.equal(names(thrown.calls).includes("flow_cancel_run"),false);
-   assert.ok(warned.some(w=>w.includes("initial run pending manual review")));
-  }finally{console.warn=warn;}
- });
-});
-test("the start path never calls flow_begin_durable_run directly",()=>{
- const ing=readFileSync("supabase/functions/milan-api/flowDurableIngress.ts","utf8");
- assert.equal((ing.match(/rpc\("flow_begin_durable_run_superseding"/g)??[]).length,1);
- assert.doesNotMatch(ing,/rpc\("flow_begin_durable_run"/);
- assert.doesNotMatch(ing,/"superseded"/,"no client-side supersede");
-});
-test("duplicate delivery (claim not acquired) never supersedes the run it created",async()=>{
- await withCanary(async()=>{
-  const {db,calls}=lifecycleDb({active:[{id:id.run,tenant_id:id.tenant,
-   conversation_id:id.conversation,run_status:"sleeping"}],
-   rpc:{flow_claim_inbound:()=>({data:[{acquired:false,route:"flow"}],error:null})}});
-  assert.equal(await attemptDurableInstagram(db,baseEvent),"handled");
-  assert.deepEqual(names(calls),["flow_claim_inbound"]);
- });
-});
-test("23505 flow_active_run_exists from begin is handled without crash or retry",async()=>{
- await withCanary(async()=>{
-  const warn=console.warn;const warned:string[]=[];
-  console.warn=(m:string)=>{warned.push(String(m));};
-  try{
-   const {db,calls}=lifecycleDb({rpc:{flow_begin_durable_run_superseding:()=>({data:null,
-    error:{code:"23505",message:"flow_active_run_exists",details:"x"}})}});
-   assert.equal(await attemptDurableInstagram(db,baseEvent),"handled");
-   assert.equal(names(calls).filter(n=>n==="flow_begin_durable_run_superseding").length,1);
-   assert.ok(warned.some(w=>w.includes("active run exists")));
-  }finally{console.warn=warn;}
- });
-});
-
-// ---- Production canary mode (20261029170000): separate SQL claim function.
 const PROD={enabled:true,test_only:false,production_approved:true};
+// 20261029330000: claim (+ canary audit) + supersede + start are ONE RPC (one
+// transaction); the client never cancels a run on the start path, never
+// reads active runs, and never makes a separate claim or begin call. Whenever
+// nothing was committed (no row / RPC error / thrown request) V2 answers in
+// the same invocation ("fallback").
+const ATOMIC_ARGS=["p_canary","p_tenant","p_account","p_platform","p_event","p_conversation","p_inbound",
+ "p_flow","p_revision","p_start","p_next","p_next_step","p_status","p_variables","p_wake","p_effects"];
+const sleepingActive=[{id:"99999999-9999-4999-8999-999999999999",tenant_id:id.tenant,
+ conversation_id:id.conversation,run_status:"sleeping"}];
+// Captures console.warn/error; every logged value must be free of ids and text.
+async function captureLogs<T>(fn:()=>Promise<T>):Promise<{result:T;logs:unknown[][]}>{
+ const warn=console.warn,err=console.error;const logs:unknown[][]=[];
+ console.warn=(...a:unknown[])=>{logs.push(a);};console.error=(...a:unknown[])=>{logs.push(a);};
+ try{return {result:await fn(),logs};}finally{console.warn=warn;console.error=err;}
+}
+const SECRET_VALUES=[id.tenant,id.account,id.conversation,id.inbound,id.run,"meta-x",
+ "88888888-8888-4888-8888-888888888888","choose","awaiting_input","اختر"];
+const assertNoIds=(logs:unknown[][])=>{
+ const text=JSON.stringify(logs);
+ for(const v of SECRET_VALUES)assert.equal(text.includes(v),false,`log leaks ${v}: ${text}`);
+};
+test("new run: ONE atomic claim+start RPC with p_canary, tenant-scoped args, no separate claim/begin",async()=>{
+ await withCanary(async()=>{
+  for(const [switches,canary] of [[undefined,false],[PROD,true]] as const){
+   const {db,calls,reads,writes}=lifecycleDb({active:sleepingActive,...(switches?{switches}:{})});
+   assert.equal(await attemptDurableInstagram(db,baseEvent),"handled");
+   assert.deepEqual(names(calls),["flow_claim_begin_durable_run"],
+    "single RPC: no flow_claim_inbound(_durable), no superseding/begin call, no client-side flow_cancel_run");
+   const a=calls[0].args;
+   assert.deepEqual(Object.keys(a),ATOMIC_ARGS);
+   assert.equal(a.p_canary,canary);
+   assert.deepEqual([a.p_tenant,a.p_account,a.p_platform,a.p_event,a.p_conversation,a.p_inbound],
+    [id.tenant,id.account,"instagram","meta-x",id.conversation,id.inbound]);
+   assert.deepEqual([a.p_flow,a.p_revision,a.p_start,a.p_next,a.p_next_step,a.p_status,a.p_wake],
+    ["flow",1,"start","choose",2,"awaiting_input",null]);
+   assert.ok(Array.isArray(a.p_effects)&&a.p_effects.length>0);
+   assert.equal(reads.some(r=>r.table==="automation_flow_runs"&&Array.isArray(r.filters.run_status)),false,
+    "active runs are never read (or cancelled) by the client");
+   assert.deepEqual(writes,[]);
+  }
+ });
+});
+// Scripted atomic-start responses: one entry per call; a function entry may throw.
+// More than two calls is itself a failure (the retry is bounded to ONE).
+type AtomicStep=(()=>unknown)|{data:unknown;error:unknown};
+const THROW:AtomicStep=()=>{throw Error("network "+id.tenant+" "+id.run);};
+const EMPTY:AtomicStep={data:[],error:null};
+const LOST:AtomicStep={data:[{acquired:false,run_id:null}],error:null};
+const WON:AtomicStep={data:[{acquired:true,run_id:id.run}],error:null};
+const ERR=(code?:string):AtomicStep=>({data:null,error:{...(code===undefined?{}:{code}),
+ message:"db down "+id.tenant,details:"Key ("+id.conversation+")"}});
+const scripted=(...steps:AtomicStep[])=>{
+ let n=0;
+ return {flow_claim_begin_durable_run:()=>{
+  assert.ok(n<2,"the atomic start RPC is called at most twice");
+  const s=steps[n++];
+  if(s===undefined)throw Error("unscripted atomic start call");
+  return typeof s==="function"?s():s;
+ }};
+};
+const atomicRun=async(steps:AtomicStep[],switches?:any)=>{
+ const out=await captureLogs(async()=>{
+  const {db,calls,writes}=lifecycleDb({active:sleepingActive,...(switches?{switches}:{}),rpc:scripted(...steps)});
+  const r=await attemptDurableInstagram(db,baseEvent);
+  return {r,calls,writes};
+ });
+ const {r,calls,writes}=out.result;
+ assert.ok(calls.length<=2);
+ assert.ok(calls.every(c=>c.name==="flow_claim_begin_durable_run"),"only the atomic RPC; no cancel/claim/begin");
+ // A retry re-sends the IDENTICAL argument object (no re-planning).
+ if(calls.length===2){
+  assert.deepEqual(calls[1].args,calls[0].args);
+  assert.equal(calls[1].args,calls[0].args,"same args object reused");
+ }
+ assert.deepEqual(writes,[]);
+ assertNoIds(out.logs);
+ // Logs are only the fixed prefix + {attempt,outcome,code?}: never arguments.
+ for(const l of out.logs){
+  assert.equal(l.length,2);assert.equal(l[0],"[flow-durable] atomic start");
+  const d=l[1] as Record<string,unknown>;
+  for(const k of Object.keys(d))assert.ok(["attempt","outcome","code"].includes(k),k);
+  assert.ok(d.attempt===1||d.attempt===2);
+ }
+ // The fixed prefix contains "start"/"flow"; argument values are checked in the detail objects.
+ const text=JSON.stringify(out.logs.map(l=>l[1]));
+ for(const v of Object.values(calls[0]?.args??{}))
+  if(typeof v==="string"&&v.length>3)assert.equal(text.includes(v),false,"log leaks an argument");
+ assert.doesNotMatch(text,/p_[a-z]|db down|network|Key \(/);
+ return {result:r,calls,logs:out.logs};
+};
+const L=(attempt:number,outcome:string,code?:string)=>["[flow-durable] atomic start",
+ code===undefined?{attempt,outcome}:{attempt,outcome,code}];
+test("atomic start retry: attempt 1 thrown -> ONE retry with identical args; mapping of attempt 2",async()=>{
+ await withCanary(async()=>{
+  for(const switches of [undefined,PROD]){
+   let x=await atomicRun([THROW,LOST],switches);
+   assert.equal(x.result,"handled","first attempt had committed");assert.equal(x.calls.length,2);
+   assert.deepEqual(x.logs,[L(1,"exception"),L(2,"acquired_false")]);
+   x=await atomicRun([THROW,WON],switches);
+   assert.equal(x.result,"handled");assert.equal(x.calls.length,2);
+   assert.deepEqual(x.logs,[L(1,"exception"),L(2,"acquired_true")]);
+   x=await atomicRun([THROW,THROW],switches);
+   assert.equal(x.result,"fallback");assert.equal(x.calls.length,2);
+   assert.deepEqual(x.logs,[L(1,"exception"),L(2,"ambiguous_after_retry")]);
+   x=await atomicRun([THROW,EMPTY],switches);
+   assert.equal(x.result,"fallback");assert.deepEqual(x.logs,[L(1,"exception"),L(2,"empty")]);
+   x=await atomicRun([THROW,ERR("57014")],switches);
+   assert.equal(x.result,"fallback");
+   assert.deepEqual(x.logs,[L(1,"exception"),L(2,"ambiguous_after_retry","57014")]);
+  }
+ });
+});
+test("atomic start retry: attempt 1 RPC error -> retry; OK -> handled, second error -> fallback (code sanitized)",async()=>{
+ await withCanary(async()=>{
+  for(const [raw,code] of [["XX000","XX000"],["PGRST202","PGRST202"],["P0001","P0001"],["23505","23505"],
+    ["57014","57014"],["55P03","55P03"],[undefined,"unknown"],["x'; "+id.run,"unknown"]] as const){
+   let x=await atomicRun([ERR(raw),WON]);
+   assert.equal(x.result,"handled",String(raw));assert.equal(x.calls.length,2);
+   assert.deepEqual(x.logs,[L(1,"rpc_error",code),L(2,"acquired_true")]);
+   x=await atomicRun([ERR(raw),LOST]);
+   assert.equal(x.result,"handled");
+   x=await atomicRun([ERR(raw),ERR(raw)]);
+   assert.equal(x.result,"fallback",String(raw));assert.equal(x.calls.length,2);
+   assert.deepEqual(x.logs,[L(1,"rpc_error",code),L(2,"ambiguous_after_retry",code)]);
+  }
+ });
+});
+test("atomic start retry: attempt 1 empty/non-array -> retry; empty again -> fallback, a row -> handled",async()=>{
+ await withCanary(async()=>{
+  for(const first of [EMPTY,{data:null,error:null},{data:{acquired:true},error:null},
+    {data:"88888888-8888-4888-8888-888888888888",error:null}] as AtomicStep[]){
+   let x=await atomicRun([first,EMPTY]);
+   assert.equal(x.result,"fallback","nothing committed: V2 answers");assert.equal(x.calls.length,2);
+   assert.deepEqual(x.logs,[L(1,"empty"),L(2,"empty")]);
+   x=await atomicRun([first,WON]);
+   assert.equal(x.result,"handled");assert.deepEqual(x.logs,[L(1,"empty"),L(2,"acquired_true")]);
+   x=await atomicRun([first,LOST]);
+   assert.equal(x.result,"handled");assert.deepEqual(x.logs,[L(1,"empty"),L(2,"acquired_false")]);
+  }
+  for(const switches of [undefined,PROD]){
+   const x=await atomicRun([EMPTY,EMPTY],switches);
+   assert.equal(x.result,"fallback");assert.equal(x.calls.length,2);
+  }
+ });
+});
+test("atomic start retry: attempt 2 committed with a malformed run id -> handled + unexpected_result; bad shape -> fallback",async()=>{
+ await withCanary(async()=>{
+  for(const run_id of [null,"",42,"not-a-uuid"]){
+   const x=await atomicRun([THROW,{data:[{acquired:true,run_id}],error:null}]);
+   assert.equal(x.result,"handled",String(run_id));
+   assert.deepEqual(x.logs,[L(1,"exception"),L(2,"unexpected_result")]);
+  }
+  const x=await atomicRun([EMPTY,{data:[{acquired:null}],error:null}]);
+  assert.equal(x.result,"fallback");assert.deepEqual(x.logs,[L(1,"empty"),L(2,"unexpected_result")]);
+ });
+});
+test("atomic start: (false,NULL) = another delivery owns the event -> handled, exactly ONE call, no log",async()=>{
+ await withCanary(async()=>{
+  for(const switches of [undefined,PROD]){
+   const x=await atomicRun([LOST],switches);
+   assert.equal(x.result,"handled");assert.equal(x.calls.length,1,"no retry");assert.deepEqual(x.logs,[]);
+  }
+ });
+});
+test("atomic start: (true,run) -> handled, ONE call, no log; malformed run id -> still handled (a run exists)",async()=>{
+ await withCanary(async()=>{
+  const ok=await atomicRun([WON]);
+  assert.equal(ok.result,"handled");assert.equal(ok.calls.length,1);assert.deepEqual(ok.logs,[]);
+  for(const run_id of [null,"",42,"not-a-uuid"]){
+   const odd=await atomicRun([{data:[{acquired:true,run_id}],error:null}]);
+   assert.equal(odd.result,"handled",String(run_id));assert.equal(odd.calls.length,1);
+   assert.deepEqual(odd.logs,[L(1,"unexpected_result")]);
+  }
+  // Anything else (more than one row, no boolean acquired) on attempt 1: fallback, NO retry.
+  for(const data of [[{acquired:true,run_id:id.run},{acquired:true,run_id:id.run}],[{acquired:null,run_id:id.run}],[null],[[]]]){
+   const x=await atomicRun([{data,error:null}]);
+   assert.equal(x.result,"fallback",JSON.stringify(data));assert.equal(x.calls.length,1,"no retry");
+   assert.deepEqual(x.logs,[L(1,"unexpected_result")]);
+  }
+ });
+});
+test("the start path calls only the atomic RPC (never begin / superseding / a claim directly)",()=>{
+ const ing=readFileSync("supabase/functions/milan-api/flowDurableIngress.ts","utf8");
+ assert.equal((ing.match(/rpc\("flow_claim_begin_durable_run"/g)??[]).length,1);
+ assert.doesNotMatch(ing,/rpc\("flow_begin_durable_run"|rpc\("flow_begin_durable_run_superseding"/);
+ assert.doesNotMatch(ing,/"superseded"/,"no client-side supersede");
+ assert.doesNotMatch(ing,/activeRunConflict|initial run pending manual review/,"old start-path handling removed");
+});
+// ---- Production canary mode (20261029170000): separate SQL claim function.
 const canaryClaimArgs={p_tenant_id:id.tenant,p_account_id:id.account,p_platform:"instagram",
  p_provider_event_id:"meta-x",p_conversation_id:id.conversation,p_inbound_message_id:id.inbound};
-test("production canary: new run claims through flow_claim_inbound_durable only (never the V2 function)",async()=>{
+test("production canary: new run claims through the atomic RPC with p_canary=true (never the V2 function)",async()=>{
  await withCanary(async()=>{
   const {db,calls}=lifecycleDb({switches:PROD});
   assert.equal(await attemptDurableInstagram(db,baseEvent),"handled");
-  assert.deepEqual(names(calls),["flow_claim_inbound_durable","flow_begin_durable_run_superseding"]);
-  assert.deepEqual(calls[0].args,canaryClaimArgs,"no caller-asserted canary/engine flag is sent");
+  assert.deepEqual(names(calls),["flow_claim_begin_durable_run"]);
+  const a=calls[0].args;
+  assert.deepEqual([a.p_canary,a.p_tenant,a.p_account,a.p_platform,a.p_event,a.p_conversation,a.p_inbound],
+   [true,id.tenant,id.account,"instagram","meta-x",id.conversation,id.inbound],"no caller-asserted engine flag is sent");
+  assert.equal("p_engine_ready" in a,false);
   assert.equal(names(calls).includes("flow_claim_inbound"),false);
  });
 });
@@ -364,46 +470,71 @@ test("production canary: button tap resumes the same run through the durable cla
   const {db,calls}=lifecycleDb({switches:PROD,awaiting:[waitingRun()]});
   assert.equal(await attemptDurableInstagram(db,{...baseEvent,selectedChoiceId:"prices"}),"handled");
   assert.deepEqual(names(calls),["flow_claim_inbound_durable","flow_resume_button_run"]);
+  assert.deepEqual(calls[0].args,canaryClaimArgs,"no caller-asserted canary/engine flag is sent");
   assert.equal(calls[1].args.p_run,id.run);assert.equal(calls[1].args.p_status,"completed");
  });
 });
 test("production canary: not eligible in SQL (no row) falls back BEFORE any run change",async()=>{
  await withCanary(async()=>{
-  const none={flow_claim_inbound_durable:()=>({data:[],error:null})};
-  const begin=lifecycleDb({switches:PROD,rpc:none,active:[{id:id.run,tenant_id:id.tenant,
-   conversation_id:id.conversation,run_status:"sleeping"}]});
-  assert.equal(await attemptDurableInstagram(begin.db,baseEvent),"fallback");
-  assert.deepEqual(names(begin.calls),["flow_claim_inbound_durable"],"no supersede, no begin");
-  const tap=lifecycleDb({switches:PROD,rpc:none,awaiting:[waitingRun()]});
+  const warn=console.warn;console.warn=()=>{};
+  try{
+   const begin=lifecycleDb({switches:PROD,rpc:{flow_claim_begin_durable_run:()=>({data:[],error:null})},
+    active:[{id:id.run,tenant_id:id.tenant,conversation_id:id.conversation,run_status:"sleeping"}]});
+   assert.equal(await attemptDurableInstagram(begin.db,baseEvent),"fallback");
+   assert.deepEqual(names(begin.calls),["flow_claim_begin_durable_run","flow_claim_begin_durable_run"],
+    "empty is ambiguous: one identical retry, still nothing committed");
+  }finally{console.warn=warn;}
+  const tap=lifecycleDb({switches:PROD,rpc:{flow_claim_inbound_durable:()=>({data:[],error:null})},awaiting:[waitingRun()]});
   assert.equal(await attemptDurableInstagram(tap.db,{...baseEvent,selectedChoiceId:"prices"}),"fallback");
   assert.deepEqual(names(tap.calls),["flow_claim_inbound_durable"],"no resume");
  });
 });
 test("production canary: RPC error writes no claim and falls back; duplicate (acquired=false) is handled",async()=>{
  await withCanary(async()=>{
-  const err=lifecycleDb({switches:PROD,rpc:{flow_claim_inbound_durable:()=>({data:null,
+  const warn=console.warn;console.warn=()=>{};
+  try{
+   const err=lifecycleDb({switches:PROD,rpc:{flow_claim_begin_durable_run:()=>({data:null,
+    error:{code:"PGRST202",message:"function not found"}})}});
+   assert.equal(await attemptDurableInstagram(err.db,baseEvent),"fallback");
+   assert.deepEqual(names(err.calls),["flow_claim_begin_durable_run","flow_claim_begin_durable_run"],
+    "one identical retry, then fallback");
+  }finally{console.warn=warn;}
+  const dup=lifecycleDb({switches:PROD,active:[{id:id.run,tenant_id:id.tenant,
+   conversation_id:id.conversation,run_status:"sleeping"}],
+   rpc:{flow_claim_begin_durable_run:()=>({data:[{acquired:false,run_id:null}],error:null})}});
+  assert.equal(await attemptDurableInstagram(dup.db,baseEvent),"handled");
+  assert.deepEqual(names(dup.calls),["flow_claim_begin_durable_run"],"winner owns it; nothing superseded");
+  // Tap path (unchanged): a claim RPC error falls back, a lost claim is handled.
+  const tapErr=lifecycleDb({switches:PROD,awaiting:[waitingRun()],rpc:{flow_claim_inbound_durable:()=>({data:null,
    error:{code:"PGRST202",message:"function not found"}})}});
-  assert.equal(await attemptDurableInstagram(err.db,baseEvent),"fallback");
-  assert.deepEqual(names(err.calls),["flow_claim_inbound_durable"]);
+  assert.equal(await attemptDurableInstagram(tapErr.db,{...baseEvent,selectedChoiceId:"prices"}),"fallback");
   for(const route of ["flow","legacy_ai"]){
-   const dup=lifecycleDb({switches:PROD,active:[{id:id.run,tenant_id:id.tenant,
-    conversation_id:id.conversation,run_status:"sleeping"}],
+   const tapDup=lifecycleDb({switches:PROD,awaiting:[waitingRun()],
     rpc:{flow_claim_inbound_durable:()=>({data:[{acquired:false,route}],error:null})}});
-   assert.equal(await attemptDurableInstagram(dup.db,baseEvent),"handled",route);
-   assert.deepEqual(names(dup.calls),["flow_claim_inbound_durable"],"winner owns it; nothing superseded");
+   assert.equal(await attemptDurableInstagram(tapDup.db,{...baseEvent,selectedChoiceId:"prices"}),"handled",route);
+   assert.deepEqual(names(tapDup.calls),["flow_claim_inbound_durable"]);
   }
  });
 });
-test("test_only mode keeps flow_claim_inbound; undecided/unapproved switches never claim",async()=>{
+test("test_only mode: new start uses the atomic RPC with p_canary=false; undecided/unapproved switches never claim",async()=>{
  await withCanary(async()=>{
   const t=lifecycleDb({switches:{enabled:true,test_only:true,production_approved:true}});
   assert.equal(await attemptDurableInstagram(t.db,baseEvent),"handled");
-  assert.deepEqual(names(t.calls),["flow_claim_inbound","flow_begin_durable_run_superseding"]);
-  assert.equal(t.calls[0].args.p_engine_ready,true);
-  // Old test-mode semantics unchanged: a non-acquired/legacy claim fails closed.
-  const legacy=lifecycleDb({switches:{enabled:true,test_only:true,production_approved:true},
+  assert.deepEqual(names(t.calls),["flow_claim_begin_durable_run"]);
+  assert.equal(t.calls[0].args.p_canary,false);
+  // A legacy_ai claim is rolled back in SQL (no row): nothing committed -> V2 answers.
+  const warn=console.warn;console.warn=()=>{};
+  try{
+   const legacy=lifecycleDb({switches:{enabled:true,test_only:true,production_approved:true},
+    rpc:{flow_claim_begin_durable_run:()=>({data:[],error:null})}});
+   assert.equal(await attemptDurableInstagram(legacy.db,baseEvent),"fallback");
+  }finally{console.warn=warn;}
+  // Tap path (unchanged): a non-acquired/legacy claim still fails closed.
+  const tap=lifecycleDb({switches:{enabled:true,test_only:true,production_approved:true},awaiting:[waitingRun()],
    rpc:{flow_claim_inbound:()=>({data:[],error:null})}});
-  assert.equal(await attemptDurableInstagram(legacy.db,baseEvent),"handled");
+  assert.equal(await attemptDurableInstagram(tap.db,{...baseEvent,selectedChoiceId:"prices"}),"handled");
+  assert.deepEqual(names(tap.calls),["flow_claim_inbound"]);
+  assert.equal(tap.calls[0].args.p_engine_ready,true);
   for(const sw of [{enabled:true,test_only:null,production_approved:true},
     {enabled:true,test_only:false,production_approved:false},
     {enabled:false,test_only:false,production_approved:true},null]){
@@ -510,8 +641,8 @@ test("B1: provenance is the explicit flag; synthetic events (no Meta mid) never 
   assert.equal(await attemptDurableInstagram(g.db,{...baseEvent,eventId:"ig_1730000000000"}),"handled");
   assert.deepEqual(g.reads.find(r=>r.table==="automation_message_claims")!.filters,
    {tenant_id:id.tenant,channel_account_id:id.account,platform:"instagram",provider_event_id:"ig_1730000000000"});
-  assert.deepEqual(names(g.calls),["flow_claim_inbound","flow_begin_durable_run_superseding"]);
-  assert.equal(g.calls[0].args.p_provider_event_id,"ig_1730000000000");
+  assert.deepEqual(names(g.calls),["flow_claim_begin_durable_run"]);
+  assert.equal(g.calls[0].args.p_event,"ig_1730000000000");
   // ...and B1 duplicate protection still applies to it.
   const dup=lifecycleDb({claims:[{id:"c"}],awaiting:[waitingRun()]});
   assert.equal(await attemptDurableInstagram(dup.db,{...baseEvent,eventId:"ig_1730000000000"}),"handled");
@@ -647,8 +778,8 @@ test("start path plans the whole chain until the first wait, one begin with seq-
  await withCanary(async()=>{
   const {db,calls}=lifecycleDb({document:chainDoc});
   assert.equal(await attemptDurableInstagram(db,baseEvent),"handled");
-  assert.deepEqual(names(calls),["flow_claim_inbound","flow_begin_durable_run_superseding"]);
-  const b=calls[1].args;
+  assert.deepEqual(names(calls),["flow_claim_begin_durable_run"]);
+  const b=calls[0].args;
   assert.equal(b.p_status,"awaiting_input");assert.equal(b.p_next,"menu");assert.equal(b.p_wake,null);
   assert.deepEqual(b.p_effects.map((e:any)=>[e.kind,e.payload.seq,e.payload.text]),
    [["message",0,"أهلاً بك"],["question",1,"اختر"]]);
@@ -689,7 +820,7 @@ test("randomizer seed comes from the event id (deterministic, not constant); no 
   const begin=async(eventId:string)=>{
    const {db,calls}=lifecycleDb({document:logicDoc});
    assert.equal(await attemptDurableInstagram(db,{...baseEvent,eventId}),"handled");
-   return calls.find(c=>c.name==="flow_begin_durable_run_superseding")!.args;
+   return calls.find(c=>c.name==="flow_claim_begin_durable_run")!.args;
   };
   const a=await begin("meta-seed-1"),again=await begin("meta-seed-1");
   assert.deepEqual(again.p_variables,a.p_variables,"same event id -> same branch");
@@ -716,7 +847,7 @@ test("a chain needing a 6th effect fails closed before any claim",async()=>{
   const five={...six,nodes:six.nodes.slice(0,6),edges:six.edges.slice(0,5)};
   const ok=lifecycleDb({document:five});
   assert.equal(await attemptDurableInstagram(ok.db,baseEvent),"handled");
-  const b=ok.calls.find(c=>c.name==="flow_begin_durable_run_superseding")!.args;
+  const b=ok.calls.find(c=>c.name==="flow_claim_begin_durable_run")!.args;
   assert.deepEqual(b.p_effects.map((e:any)=>e.payload.seq),[0,1,2,3,4]);
   assert.equal(b.p_status,"completed");
  });
@@ -1036,7 +1167,7 @@ test("internal actions: start and typed-answer resume commit tag/notify/handoff 
  await withCanary(async()=>{
   const start=lifecycleDb({document:handoffDoc});
   assert.equal(await attemptDurableInstagram(start.db,baseEvent),"handled");
-  const b=start.calls.find(c=>c.name==="flow_begin_durable_run_superseding")!.args;
+  const b=start.calls.find(c=>c.name==="flow_claim_begin_durable_run")!.args;
   assert.equal(b.p_status,"awaiting_input");
   assert.deepEqual(b.p_effects.map((x:any)=>[x.kind,x.payload.seq]),[["message",0],["question",1]]);
   const run=waitingRun({current_node_id:"askEmail",step_count:3});
@@ -1069,11 +1200,11 @@ test("internal actions: a queued handoff keeps the conversation silent; scoped t
    [{id:"r-h",tenant_id:"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",conversation_id:id.conversation}]]){
    const other=lifecycleDb({document:chainDoc,outbox:queued,runsById});
    assert.equal(await attemptDurableInstagram(other.db,baseEvent),"handled");
-   assert.deepEqual(names(other.calls),["flow_claim_inbound","flow_begin_durable_run_superseding"]);
+   assert.deepEqual(names(other.calls),["flow_claim_begin_durable_run"]);
   }
   const foreignOutbox=lifecycleDb({document:chainDoc,outbox:[{run_id:"r-h",tenant_id:"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"}]});
   assert.equal(await attemptDurableInstagram(foreignOutbox.db,baseEvent),"handled");
-  assert.deepEqual(names(foreignOutbox.calls),["flow_claim_inbound","flow_begin_durable_run_superseding"]);
+  assert.deepEqual(names(foreignOutbox.calls),["flow_claim_begin_durable_run"]);
   const broken=lifecycleDb({document:chainDoc,outboxError:true});
   assert.equal(await attemptDurableInstagram(broken.db,baseEvent),"handled");
   assert.deepEqual(broken.calls,[]);
@@ -1106,12 +1237,12 @@ test("pending handoff: older than 24h never silences; fresh blocks; cap counts o
   // An expired pending/leased handoff of this conversation is ignored: the flow runs.
   const expired=lifecycleDb({document:chainDoc,outbox:[{run_id:"r-h",tenant_id:id.tenant,created_at:expiredAt}],runsById:mineRun});
   assert.equal(await attemptDurableInstagram(expired.db,baseEvent),"handled");
-  assert.deepEqual(names(expired.calls),["flow_claim_inbound","flow_begin_durable_run_superseding"]);
+  assert.deepEqual(names(expired.calls),["flow_claim_begin_durable_run"]);
   // 100 expired rows are filtered by the query: no fail-closed page.
   const manyExpired=lifecycleDb({document:chainDoc,outbox:Array.from({length:PENDING_HANDOFF_SCAN},(_,i)=>
    ({run_id:"r"+i,tenant_id:id.tenant,created_at:expiredAt}))});
   assert.equal(await attemptDurableInstagram(manyExpired.db,baseEvent),"handled");
-  assert.deepEqual(names(manyExpired.calls),["flow_claim_inbound","flow_begin_durable_run_superseding"]);
+  assert.deepEqual(names(manyExpired.calls),["flow_claim_begin_durable_run"]);
   // 100 fresh rows still fail closed.
   const manyFresh=lifecycleDb({document:chainDoc,outbox:Array.from({length:PENDING_HANDOFF_SCAN},(_,i)=>
    ({run_id:"r"+i,tenant_id:id.tenant,created_at:freshAt}))});
@@ -1250,8 +1381,8 @@ test("image effects: flag ON, a text+image plan is committed in order with the {
  };
  const on=await run(env);
  assert.equal(on.result,"handled");
- assert.deepEqual(names(on.calls),["flow_claim_inbound","flow_begin_durable_run_superseding"]);
- const effects=on.calls[1].args.p_effects;
+ assert.deepEqual(names(on.calls),["flow_claim_begin_durable_run"]);
+ const effects=on.calls[0].args.p_effects;
  assert.deepEqual(effects.map((e:any)=>[e.kind,e.payload.kind,e.payload.seq]),
   [["message","message",0],["message","message",1],["message_image","message_image",2],["message","message",3]]);
  const img=effects[2];
@@ -1265,12 +1396,12 @@ test("image effects: flag ON, a text+image plan is committed in order with the {
  // Same event with the flag OFF: the image document is not even a durable candidate (V2 path, no begin).
  const offEnv={...env,FLOW_MEDIA_SEND_ENABLED:"false"};
  const off=await run(offEnv);
- assert.equal(names(off.calls).includes("flow_begin_durable_run_superseding"),false,"flag OFF: nothing committed");
+ assert.equal(names(off.calls).includes("flow_claim_begin_durable_run"),false,"flag OFF: nothing committed");
  assert.equal(names(off.calls).includes("flow_resume_button_run"),false);
  // Flag ON but the image URL is outside this project's bucket: refused before any commit
  // (whitelist and safePlan both re-validate it server-side).
  const bad=await run({...env,SUPABASE_URL:"https://other9999.supabase.co"});
- assert.equal(names(bad.calls).includes("flow_begin_durable_run_superseding"),false,"invalid url: nothing committed");
+ assert.equal(names(bad.calls).includes("flow_claim_begin_durable_run"),false,"invalid url: nothing committed");
 });
 
 // ---- Website buttons (Instagram button template, FLOW_RICH_BUTTONS_ENABLED, default OFF).
@@ -1446,7 +1577,7 @@ test("AI step flag ON: a new run commits the knowledge_ai effect through the unc
  };
  const on=await run(AI_ON);
  assert.equal(on.r,"handled");
- const begin=on.calls.find(c=>c.name==="flow_begin_durable_run_superseding")!.args;
+ const begin=on.calls.find(c=>c.name==="flow_claim_begin_durable_run")!.args;
  assert.equal(begin.p_status,"completed");
  assert.deepEqual(begin.p_effects.map((e:any)=>[e.kind,e.payload.source??null,e.payload.seq]),
   [["message",null,0],["message","knowledge_ai",1],["message",null,2]]);
@@ -1455,4 +1586,35 @@ test("AI step flag ON: a new run commits the knowledge_ai effect through the unc
  const off=await run({});
  assert.equal(off.r,"fallback");
  assert.deepEqual(off.calls,[]);
+});
+// REGRESSION: resume failures keep failing closed ("handled", never "fallback");
+// only the new-start path falls back when nothing was committed.
+test("resume regression: tap and typed-answer resume failures stay handled, never fallback",async()=>{
+ await withCanary(async()=>{
+  const fails=[()=>({data:false,error:null}),()=>({data:null,error:{code:"XX000",message:"db down"}})];
+  for(const switches of [undefined,PROD]){
+   const claim=switches?"flow_claim_inbound_durable":"flow_claim_inbound";
+   for(const resume of fails){
+    const {result,logs}=await captureLogs(async()=>{
+     const {db,calls}=lifecycleDb({awaiting:[waitingRun()],...(switches?{switches}:{}),rpc:{flow_resume_button_run:resume}});
+     const r=await attemptDurableInstagram(db,{...baseEvent,selectedChoiceId:"prices"});
+     assert.deepEqual(names(calls),[claim,"flow_resume_button_run"]);
+     return r;
+    });
+    assert.equal(result,"handled");
+    assert.deepEqual(logs,[["[flow-durable] button continuation pending manual review"]]);
+    for(const raw of ["ok@shop.example","not an email"]){
+     const t=await captureLogs(async()=>{
+      const {db,calls}=lifecycleDb({document:collectDoc,awaiting:[atAsk()],...(switches?{switches}:{}),
+       rpc:{flow_resume_button_run:resume}});
+      const r=await attemptDurableInstagram(db,typedEvent(raw));
+      assert.deepEqual(names(calls),[claim,"flow_resume_button_run"],raw);
+      return r;
+     });
+     assert.equal(t.result,"handled",raw);
+     assert.deepEqual(t.logs,[["[flow-durable] typed answer continuation pending manual review"]],raw);
+    }
+   }
+  }
+ });
 });

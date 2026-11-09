@@ -129,12 +129,12 @@ function mcDb(platform:string,o:{switches?:any;waiting?:any;document?:unknown}={
    calls.push({name,args});
    if(name==="flow_claim_inbound_durable"||name==="flow_claim_inbound")
     return {data:[{acquired:true,route:"flow"}],error:null};
-   if(name==="flow_begin_durable_run_superseding"){
+   if(name==="flow_claim_begin_durable_run"){
     waiting={id:"99999999-9999-4999-8999-999999999999",tenant_id:ids.tenantId,channel_account_id:ids.accountId,
      platform,conversation_id:ids.conversationId,provider_event_id:args.p_event,flow_key:"flow",
      publication_revision:1,current_node_id:args.p_next,run_status:"awaiting_input",
      step_count:args.p_next_step,variables:args.p_variables,wake_at:null};
-    return {data:waiting.id,error:null};
+    return {data:[{acquired:true,run_id:waiting.id}],error:null};
    }
    if(name==="flow_resume_button_run"){waiting=null;return {data:true,error:null};}
    if(name==="flow_cancel_run")return {data:true,error:null};
@@ -149,20 +149,22 @@ for(const platform of ["whatsapp","facebook"]){
    const {db,calls,reads}=mcDb(platform);
    const ev={...ids,platform,providerEventIdGenuine:true};
    assert.equal(await attemptDurableInstagram(db,{...ev,eventId:"mid.start"}),"handled");
-   assert.deepEqual(calls.map(c=>c.name),["flow_claim_inbound_durable","flow_begin_durable_run_superseding"]);
-   assert.deepEqual(calls[0].args,{p_tenant_id:ids.tenantId,p_account_id:ids.accountId,p_platform:platform,
-    p_provider_event_id:"mid.start",p_conversation_id:ids.conversationId,p_inbound_message_id:ids.inboundId});
-   const begin=calls[1].args;
+   assert.deepEqual(calls.map(c=>c.name),["flow_claim_begin_durable_run"]);
+   const begin=calls[0].args;
+   assert.deepEqual([begin.p_canary,begin.p_tenant,begin.p_account,begin.p_platform,begin.p_event,
+    begin.p_conversation,begin.p_inbound],
+    [true,ids.tenantId,ids.accountId,platform,"mid.start",ids.conversationId,ids.inboundId]);
    assert.equal(begin.p_tenant,ids.tenantId);assert.equal(begin.p_account,ids.accountId);
    assert.equal(begin.p_status,"awaiting_input");
    assert.equal(begin.p_effects[0].payload.kind,"question");
    // Tap: WhatsApp button_reply id / Facebook quick_reply or postback payload "flow-choice:prices".
    const tap={...ev,eventId:"mid.tap",inboundId:"77777777-7777-4777-8777-777777777772",selectedChoiceId:"prices"};
    assert.equal(await attemptDurableInstagram(db,tap),"handled");
-   assert.deepEqual(calls.map(c=>c.name),["flow_claim_inbound_durable","flow_begin_durable_run_superseding",
+   assert.deepEqual(calls.map(c=>c.name),["flow_claim_begin_durable_run",
     "flow_claim_inbound_durable","flow_resume_button_run"]);
-   assert.equal(calls[2].args.p_platform,platform);
-   const resume=calls[3].args;
+   assert.deepEqual(calls[1].args,{p_tenant_id:ids.tenantId,p_account_id:ids.accountId,p_platform:platform,
+    p_provider_event_id:"mid.tap",p_conversation_id:ids.conversationId,p_inbound_message_id:"77777777-7777-4777-8777-777777777772"});
+   const resume=calls[2].args;
    assert.equal(resume.p_run,"99999999-9999-4999-8999-999999999999");
    assert.equal(resume.p_tenant,ids.tenantId);assert.equal(resume.p_status,"completed");
    assert.equal(resume.p_effects[0].payload.text,"هذه الأسعار");
@@ -446,8 +448,8 @@ for(const [platform,docPlatform] of [["whatsapp","whatsapp"],["facebook","messen
    [webDoc(docPlatform,[webOpt(0)]),"FLOW_RICH_BUTTONS_ENABLED",["message","message"]]] as const){
    const on=mcDb(platform,{document:doc});
    assert.equal(await withEnv(plain(ALL),()=>attemptDurableInstagram(on.db,ev)),"handled");
-   assert.deepEqual(on.calls.map(c=>c.name),["flow_claim_inbound_durable","flow_begin_durable_run_superseding"]);
-   const effects=on.calls[1].args.p_effects;
+   assert.deepEqual(on.calls.map(c=>c.name),["flow_claim_begin_durable_run"]);
+   const effects=on.calls[0].args.p_effects;
    assert.deepEqual(effects.map((e:any)=>e.kind),kinds);
    assert.equal(on.calls[0].args.p_platform,platform);
    if(feature==="FLOW_MEDIA_SEND_ENABLED")assert.equal(effects[1].payload.url,MIMG);
