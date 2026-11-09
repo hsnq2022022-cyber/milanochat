@@ -2,7 +2,7 @@
 -- NOT applied anywhere by this repository.
 --
 -- Drops ONLY the storage.objects policies flow_media_insert_own,
--- flow_media_select_all, flow_media_update_own, flow_media_delete_own, and
+-- flow_media_select_own, flow_media_update_own, flow_media_delete_own, and
 -- only those carrying the marker CREATED_BY_20261029200000_FLOW_MEDIA_STORAGE
 -- (an unmarked policy of the same name is left in place, with a NOTICE).
 -- Deletes the `flow-media` bucket only when it is ours (at least one marked
@@ -30,7 +30,7 @@ SET LOCAL statement_timeout='60s';
 DO $g$
 DECLARE
  v_marker constant text := 'CREATED_BY_20261029200000_FLOW_MEDIA_STORAGE';
- v_names constant text[] := ARRAY['flow_media_insert_own','flow_media_select_all',
+ v_names constant text[] := ARRAY['flow_media_insert_own','flow_media_select_own',
                                   'flow_media_update_own','flow_media_delete_own'];
  v_pol record;
  v_marked integer := 0;

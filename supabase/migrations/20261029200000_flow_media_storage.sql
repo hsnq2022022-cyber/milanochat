@@ -15,18 +15,22 @@
 -- Policies on storage.objects (all scoped bucket_id = 'flow-media'):
 --   flow_media_insert_own  INSERT  authenticated        WITH CHECK first path
 --                          segment = auth.uid()::text (own folder only)
---   flow_media_select_all  SELECT  anon, authenticated  (public read)
+--   flow_media_select_own  SELECT  authenticated        own objects only
+--                          (owner_id/owner = auth.uid() OR first path segment
+--                          = auth.uid()::text)
 --   flow_media_update_own  UPDATE  authenticated        own objects only
 --                          (owner_id/owner = auth.uid() OR first segment =
 --                          auth.uid()::text); WITH CHECK keeps the object in the
 --                          uploader's own folder
 --   flow_media_delete_own  DELETE  authenticated        own objects only (same)
--- TRADEOFF: the SELECT policy also lets ANYONE (anon) LIST object names in
--- this bucket via the Storage API list endpoint, which defeats the
--- unguessable-path protection. A public bucket serves object URLs WITHOUT any
--- SELECT policy, so this policy is only needed for list/download-via-API;
--- consider dropping flow_media_select_all (or restricting it to
--- authenticated) if listing is not required.
+-- anon has NO SELECT policy on this bucket and cannot list objects through
+-- the Storage API. The owner-only SELECT policy is still required because
+-- Postgres applies SELECT policies to rows read by UPDATE/DELETE, so owner
+-- update/delete via the Storage API keeps working.
+-- TRADEOFF: a public bucket serves known object URLs WITHOUT any SELECT
+-- policy, so every object stays readable by anyone who knows its URL; objects
+-- therefore still need unguessable paths. Authenticated users can only see
+-- and list their own objects through the API (no cross-user listing).
 -- TENANT SCOPING IS NOT ENFORCED HERE: isolation is per user folder only
 -- (auth.uid()), not per tenant_id. Tenant-level checks must stay in the app.
 --
@@ -150,8 +154,7 @@ BEGIN
   SELECT * FROM (VALUES
    ('flow_media_insert_own', 'INSERT', 'authenticated', NULL::text,
     format('bucket_id = %L AND %s', 'flow-media', v_folder)),
-   ('flow_media_select_all', 'SELECT', 'anon, authenticated',
-    format('bucket_id = %L', 'flow-media'), NULL::text),
+   ('flow_media_select_own', 'SELECT', 'authenticated', v_own, NULL::text),
    ('flow_media_update_own', 'UPDATE', 'authenticated', v_own,
     format('bucket_id = %L AND %s', 'flow-media', v_folder)),
    ('flow_media_delete_own', 'DELETE', 'authenticated', v_own, NULL::text)
