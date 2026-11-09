@@ -64,8 +64,13 @@ function Editor(){
   const [showPublications,setShowPublications]=useState(false);
   const [showAi,setShowAi]=useState(false);
   // Comment flows may target a Facebook Page account (server decides; UI hint only).
-  const commentPlatform=useMemo(()=>commentTriggerProviderPlatform(doc),[doc]);
-  const {state:activation,toggle:toggleActivation}=useFlowActivation(activeFlowId,showPublications,commentPlatform);
+  // The local document describes the server flow only when serverKey===activeFlowId;
+  // the hook applies this platform to canActivate only in that case.
+  const localCommentPlatform=useMemo(()=>commentTriggerProviderPlatform(doc),[doc]);
+  // activeFlowId is the LOCAL editor id; the hook resolves the real server flow_key.
+  const {state:activation,toggle:toggleActivation,updateToLatest}=useFlowActivation(activeFlowId,showPublications,localCommentPlatform);
+  // Local draft findings only gate activating the draft's own published flow.
+  const editingOwnServerFlow=activation.serverKey===activeFlowId;
   const activeEnabled=activation.phase==="ready"&&activation.active;
   const activationLocked=activation.phase!=="ready"||activation.busy||(!activation.active&&!activation.canActivate);
   const [toolbarCollapsed,setToolbarCollapsed]=useState(false);
@@ -320,12 +325,25 @@ function Editor(){
           title={activation.reason||undefined}
           className={"fs-toggle disabled:cursor-not-allowed disabled:opacity-50"+(activeEnabled?" is-on":"")+(activation.phase==="loading"?" animate-pulse":"")}
           onClick={()=>{
-            if(!activeEnabled&&errors.length>0){setShowIssues(true);setNotice("راجع الأخطاء قبل تفعيل التدفق.");return;}
+            if(!activeEnabled&&editingOwnServerFlow&&errors.length>0){setShowIssues(true);setNotice("راجع الأخطاء قبل تفعيل التدفق.");return;}
             void toggleActivation().then(r=>setNotice(r.message));
           }}>
           <span className="fs-toggle-track"><span className="fs-toggle-thumb"/></span>
           {activation.phase==="loading"?(language==="en"?"Checking…":"جارٍ التحقق…"):activation.busy?(language==="en"?"Working…":"جارٍ التنفيذ…"):activeEnabled?t("enabled"):t("disabled")}
         </button>
+        {activation.phase==="ready"&&(activation.activeRevision!==null||activation.latestRevision!==null)&&
+          <span data-testid="flow-live-revision" data-flow-key={activation.serverKey} title={activation.serverKey} className="shrink-0 whitespace-nowrap text-xs text-[#BED4C9]">
+            {(language==="en"?"Live: ":"الإصدار المباشر: ")+(activation.activeRevision!==null?"v"+activation.activeRevision:"—")+
+             (language==="en"?" · Latest published: ":" · أحدث منشور: ")+(activation.latestRevision!==null?"v"+activation.latestRevision:"—")}
+          </span>}
+        {activation.canUpdate&&<button type="button" data-testid="flow-update-latest" className={btn}
+          disabled={activation.busy||activation.phase!=="ready"||!activation.canActivate}
+          onClick={()=>{
+            if(editingOwnServerFlow&&errors.length>0){setShowIssues(true);setNotice("راجع الأخطاء قبل تفعيل التدفق.");return;}
+            void updateToLatest().then(r=>setNotice(r.message));
+          }}>
+          {language==="en"?"Update to latest":"تحديث إلى أحدث إصدار"}
+        </button>}
         {activation.reason&&<span data-testid="flow-activation-reason" className="text-xs text-[#E5B54B]">{activation.reason}</span>}
         <div className="fs-grp">
           <button className="fs-ibtn" onClick={()=>store().undo()} title={t("undo")}><Undo2 size={17}/></button>

@@ -1,10 +1,10 @@
 import {useCallback,useEffect,useState} from "react";
-import {getSupabase} from "../lib/supabase";
 import type {FlowDocument} from "./model.ts";
 import type {FlowLanguage} from "./uiLocale.ts";
 import { copyText } from "../lib/clipboard.ts";
 import {accountCanActivate,type ActivationAccount} from "./activationAccount.ts";
 import {commentTriggerProviderPlatform} from "./serverPublicationValidation.ts";
+import {activationErrorMessage,invokeService,serviceErrorDetail} from "./useFlowActivation.ts";
 
 type Account=ActivationAccount;
 type Version={revision:number;created_at:string};
@@ -67,6 +67,8 @@ type Reply={ok?:boolean;error?:string;accounts?:Account[];
 type Props={flowKey:string;document:FlowDocument;language:FlowLanguage;onClose:()=>void;
  onImportRevision?:(document:unknown)=>boolean;onPreviewRevision?:(document:unknown)=>boolean};
 
+// Visible server code (support diagnostics); never secrets.
+const codeSuffix=(e:unknown,en:boolean)=>(en?" (code: ":" (رمز: ")+serviceErrorDetail(e)+")";
 const style="min-h-11 rounded-lg border border-[#275443] bg-[#0F2E24] px-3 py-2 text-sm text-white disabled:opacity-40";
 const CANARY_UI=(import.meta as ImportMeta & {env?:Record<string,string|undefined>})
  .env?.VITE_ENABLE_FLOW_CANARY_CONTROLS==="true";
@@ -94,21 +96,16 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
  const showActivationControls=CANARY_UI||productionReady;
 
  const call=useCallback(async(body:Record<string,unknown>):Promise<Reply>=>{
-  const client=getSupabase();
-  if(!client)throw Error("Supabase not configured");
-  const {data,error}=await client.functions.invoke("flow-publication",{body});
-  if(error)throw Error("Publication service unavailable");
-  const result=data as Reply|null;
-  if(!result?.ok)throw Error(result?.error||"Request denied");
-  return result;
+  // Same client as the editor toggle: keeps the server error code and HTTP status.
+  return invokeService<Reply>(body);
  },[]);
 
  useEffect(()=>{
   let cancelled=false;
   void call({action:"accounts"}).then(r=>{
    if(!cancelled)setAccounts(r.accounts??[]);
-  }).catch(()=>{
-   if(!cancelled)setNotice(en?"Publication service unavailable.":"خدمة نشر التدفقات غير متاحة.");
+  }).catch(e=>{
+   if(!cancelled)setNotice((en?"Publication service unavailable.":"خدمة نشر التدفقات غير متاحة.")+codeSuffix(e,en));
   });
   return()=>{cancelled=true;};
  },[call,en]);
@@ -126,8 +123,8 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
     setManagedFlowKey(r.active.flow_key);
     setLoaded(false);setVersions([]);setActivation(null);
    }
-  }).catch(()=>{
-   if(!cancelled)setNotice(en?"Unable to list published flows.":"تعذر عرض التدفقات المنشورة.");
+  }).catch(e=>{
+   if(!cancelled)setNotice((en?"Unable to list published flows.":"تعذر عرض التدفقات المنشورة.")+codeSuffix(e,en));
   });
   return()=>{cancelled=true;};
  },[accountId,flowKey,call,en]);
@@ -154,9 +151,9 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
    if(!r.readiness)throw Error("Missing readiness report");
    setReadiness(r.readiness);
    setCheckedRevision(r.candidateRevision??null);
-  }catch{
-   setNotice(en?"Unable to verify advanced flow configuration.":
-    "تعذر التحقق من إعدادات التدفقات المتقدمة.");
+  }catch(e){
+   setNotice((en?"Unable to verify advanced flow configuration.":
+    "تعذر التحقق من إعدادات التدفقات المتقدمة.")+codeSuffix(e,en));
   }finally{setBusy(false);}
  };
 
@@ -206,7 +203,7 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
   if(!accountId||busy)return;
   setBusy(true);setNotice("");setLoaded(false);
   try{await refresh(accountId,managedFlowKey);}
-  catch{setNotice(en?"Unable to load revisions.":"تعذر تحميل الإصدارات.");}
+  catch(e){setNotice((en?"Unable to load revisions.":"تعذر تحميل الإصدارات.")+codeSuffix(e,en));}
   finally{setBusy(false);}
  };
  const publish=async()=>{
@@ -219,26 +216,29 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
    await refresh(accountId,flowKey);
    setNotice(en?"Published revision "+r.revision+" without activating messages.":
     "تم نشر الإصدار "+r.revision+" دون تفعيل الرسائل.");
-  }catch{setNotice(en?"Publishing failed; your local draft is unchanged.":
-   "فشل النشر؛ لم تتغير المسودة المحلية.");}
+  }catch(e){setNotice((en?"Publishing failed; your local draft is unchanged.":
+   "فشل النشر؛ لم تتغير المسودة المحلية.")+codeSuffix(e,en));}
   finally{setBusy(false);}
  };
  const change=async(action:"activate"|"rollback"|"deactivate",revision?:number)=>{
   if(!loaded||!accountId||busy)return;
-  if(!window.confirm(action==="deactivate"
+  const target=" ("+managedFlowKey+(revision?" · v"+revision:"")+")";
+  if(!window.confirm((action==="deactivate"
    ?(en?"Stop this automation?":"هل تريد إيقاف التدفق؟")
    :(productionReady
      ?(en?"Activate a real incoming-message automation for this account?":
        "تفعيل الأتمتة الفعلية للرسائل الواردة على هذا الحساب؟")
      :(en?"Use a test-only activation? Server approval is required.":
-       "تفعيل إصدار تجريبي؟ يتطلب موافقة الخادم."))))return;
+       "تفعيل إصدار تجريبي؟ يتطلب موافقة الخادم.")))+target))return;
   setBusy(true);setNotice("");
   try{
    await call({action,accountId,flowKey:managedFlowKey,...(revision?{revision}:{})});
    await refresh(accountId,managedFlowKey);
    setNotice(en?"Server confirmed the change.":"أكد الخادم التغيير.");
-  }catch{setNotice(en?"The server rejected the change.":
-   "رفض الخادم التغيير أو حسابك غير معتمد لتفعيل التدفقات.");}
+  }catch(e){
+   // Real server code (authorization, approval, readiness gates) stays visible.
+   setNotice(activationErrorMessage(e,action==="deactivate"?"الإيقاف":action==="rollback"?"التحديث":"التفعيل",en));
+  }
   finally{setBusy(false);}
  };
 
@@ -273,8 +273,10 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
       <option value={flowKey}>{en?"Current local flow":"التدفق المحلي المفتوح"}</option>
       {catalog.filter(item=>item.flowKey!==flowKey).map(item=><option
        key={item.flowKey} value={item.flowKey}>
-       {(activeServerFlow?.flow_key===item.flowKey?(en?"Active · ":"نشط · "):"")+
-        item.flowKey+" · v"+item.latestRevision}
+       {item.flowKey+" · "+(activeServerFlow?.flow_key===item.flowKey
+        ?(en?"Active v"+activeServerFlow.revision+" · Latest v"+item.latestRevision:
+          "نشط v"+activeServerFlow.revision+" · أحدث v"+item.latestRevision)
+        :(en?"Latest v":"أحدث v")+item.latestRevision)}
       </option>)}
      </select>
      {catalogTruncated&&<p className="text-xs text-[#E5B54B]">{en

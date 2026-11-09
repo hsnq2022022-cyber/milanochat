@@ -137,6 +137,8 @@ test("start from scratch opens a separate flow with only a trigger, preserving t
 test("default pricing messages show three nonblocking warnings and can be enabled",async({page})=>{
   test.skip(!MOCK_HOST,"needs mock Supabase host");
   await mockActivation(page,{active:null,calls:[]});
+  // Activation now asks for an explicit confirm naming the flow and revision.
+  page.on("dialog",dialog=>{void dialog.accept();});
   await page.goto("/milanochat/#/flows");
   const toggle=page.getByTestId("flow-enabled-toggle");
   await expect(toggle).toBeEnabled();

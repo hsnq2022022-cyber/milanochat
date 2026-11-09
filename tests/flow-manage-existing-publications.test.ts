@@ -74,3 +74,17 @@ test("published revision preview is read-only and uses isolated simulator state"
  assert(importFlow(example));
  assert.equal(importFlow({version:3,nodes:[],edges:[]}),null);
 });
+
+test("catalog label separates active and latest revisions; rejected changes keep the server code",()=>{
+ assert.match(ui,/"نشط v"\+activeServerFlow\.revision\+" · أحدث v"\+item\.latestRevision/);
+ assert.match(ui,/"Active v"\+activeServerFlow\.revision\+" · Latest v"\+item\.latestRevision/);
+ assert.match(ui,/\(en\?"Latest v":"أحدث v"\)\+item\.latestRevision/);
+ assert.doesNotMatch(ui,/"نشط · "/);
+ assert.match(ui,/setNotice\(activationErrorMessage\(e,/);
+ assert.match(ui,/return invokeService<Reply>\(body\)/);
+ // The editor toggle consumes the resolved server key, not the local editor id.
+ assert.match(editor,/const editingOwnServerFlow=activation\.serverKey===activeFlowId/);
+ assert.match(editor,/if\(!activeEnabled&&editingOwnServerFlow&&errors\.length>0\)/);
+ assert.match(editor,/data-testid="flow-live-revision"/);
+ assert.match(editor,/data-testid="flow-update-latest"/);
+});
