@@ -43,8 +43,15 @@ import * as cheerio from "npm:cheerio@1";
 import { flowShadowMayObserve } from "./flowShadowGate.ts";
 import { persistInboundOnce } from "./persistInboundOnce.ts";
 import { processExclusiveEvent } from "./exclusiveMessageClaim.ts";
+import { recordRoutingFailure, markRoutingResolved, retryableEvent, webhookStatusFor,
+  isRetryableOutcome, retryAttemptCap, runBatchEvent } from "./inboundRoutingRetry.ts";
+// B-3/B-4 opt-in recovery sweeper (default OFF) and its webhook-side lease check.
+import { inboundRecoveryEnabled, runInboundRecovery, recoveryLeaseActive } from "./inboundRecovery.ts";
+import { acceptsFlowWorkerBearer } from "../flowWorkerAuth.ts";
+import { syntheticEventId } from "./syntheticEventId.ts";
 import { prepareSimpleFlowReply } from "./flowPrepareMessage.ts";
-import {attemptDurableInstagram,selectedFlowChoice,multichannelEnabled} from "./flowDurableIngress.ts";
+import {attemptDurableInstagram,selectedFlowChoice,multichannelEnabled,
+  durableIngressConfigured,supportedDurableDocument} from "./flowDurableIngress.ts";
 import { normalizeMetaMessages } from "./normalizeMetaMessage.ts";
 import { chargeWidgetReply } from "./widgetCredit.ts";
 // Comment automation (FLOW_COMMENT_AUTOMATION_ENABLED, default OFF) and its Inbox read contract.
@@ -59,7 +66,7 @@ import { rateGate, widgetIpRules, widgetScopeRules, aiActionRules, knowledgeAddR
 import { bindWhatsappNumber, supabaseBindStore, BIND_CONFLICT_BODY } from "./waBinding.ts";
 // Security hardening (S8 Widget billing / S9 WhatsApp binding verification).
 import { widgetBillingEnabled, reserveWidgetAnswer, commitWidgetAnswer, releaseWidgetAnswer, widgetBillingEarlyReply } from "./widgetBilling.ts";
-import { bindingIsVerified, readBindingVerified } from "./waBinding.ts";
+import { bindingIsVerified, readBindingVerified, provenWhatsappAccount } from "./waBinding.ts";
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
@@ -185,6 +192,34 @@ async function decryptField(
     console.error("[decryptField] Decryption failed for value:", stored.substring(0, 30), (e as Error)?.message);
     return "[رسالة غير قابلة للقراءة]";
   }
+}
+
+/**
+ * STRICT field decryption for the inbound recovery sweeper only: THROWS on a
+ * legacy plaintext value or any decryption failure (decryptField returns a
+ * placeholder instead, which must never be replayed as customer text). Logs
+ * nothing; the result lives in memory only.
+ */
+async function decryptFieldStrict(stored: string): Promise<string> {
+  if (typeof stored !== "string" || !stored.startsWith("enc:v1:")) {
+    throw new Error("not an encrypted field");
+  }
+  const [, , ivH, tagH, dataH] = stored.split(":");
+  const fromHex = (h: string) => {
+    if (typeof h !== "string" || !/^(?:[0-9a-f]{2})+$/i.test(h)) throw new Error("bad hex");
+    return Uint8Array.from(h.match(/../g)!.map((x) => parseInt(x, 16)));
+  };
+  const data = fromHex(dataH);
+  const tag = fromHex(tagH);
+  const buf = new Uint8Array(data.length + 16);
+  buf.set(data, 0);
+  buf.set(tag, data.length);
+  const pt = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: fromHex(ivH) as BufferSource },
+    await aesKey("decrypt"),
+    buf as BufferSource
+  );
+  return dec.decode(pt);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
@@ -1223,6 +1258,7 @@ function extractIgMessages(entry: any): Array<{
   text: string;
   mid: string | null;
   choiceId: string | null;
+  timestamp: number | null;
 }> {
   const out: Array<{
     senderId: string;
@@ -1230,6 +1266,8 @@ function extractIgMessages(entry: any): Array<{
     text: string;
     mid: string | null;
     choiceId: string | null;
+    /** The event's own timestamp (ms), only for a deterministic id when `mid` is missing. */
+    timestamp: number | null;
   }> = [];
 
   // ─── 1) البنية القديمة: entry.messaging[] ───
@@ -1260,6 +1298,7 @@ function extractIgMessages(entry: any): Array<{
           text,
           mid,
           choiceId:selectedFlowChoice(ev.message),
+          timestamp: Number.isSafeInteger(ev.timestamp) ? ev.timestamp : null,
         });
       }
     }
@@ -1310,6 +1349,7 @@ function extractIgMessages(entry: any): Array<{
               text,
               mid,
               choiceId:selectedFlowChoice(ev.message),
+              timestamp: Number.isSafeInteger(ev.timestamp) ? ev.timestamp : null,
             });
           }
         }
@@ -1346,6 +1386,7 @@ function extractIgMessages(entry: any): Array<{
             text,
             mid,
             choiceId:selectedFlowChoice(value.message),
+            timestamp: Number.isSafeInteger(value.timestamp) ? value.timestamp : null,
           });
         }
       }
@@ -1551,9 +1592,10 @@ async function fetchSenderProfile(opts: {
     else if (typeof pj.profile_picture === "string") avatar = pj.profile_picture;
     else if (typeof pj.picture?.data?.url === "string") avatar = pj.picture.data.url;
 
+    // Privacy: the customer's name is never logged (present/missing only).
     console.log("[fetchSenderProfile]", {
       senderId,
-      name,
+      name: name ? "present" : "missing",
       avatar: avatar ? "present" : "missing",
     });
 
@@ -1572,23 +1614,69 @@ async function handleIncomingWebhookMessage(
   channel: "whatsapp" | "instagram" | "facebook",
   phoneId?: string,
   selectedChoiceId?: string | null,
-  providerEventIdGenuine?: boolean
-) {
+  providerEventIdGenuine?: boolean,
+  // Re-drive of an already persisted event whose flow lookup failed before
+  // (inboundRoutingRetry.ts): the SAME inbound row and conversation are used,
+  // nothing is inserted again. Only set by the duplicate pre-check below.
+  redrive?: { conversationId: string; inboundId: string }
+): Promise<"retry" | void> {
   const tenantId: string =
     channel === "whatsapp"
       ? account.tenant_id
       : account.tenant_id;
 
-  const { data: tenant } = await sb
+  // Retry policy (inboundRoutingRetry.ts, migration 20261029340000):
+  //  * UNKNOWN state (read error, unconfirmed claim, flow eligibility unknown)
+  //    -> no flow and no AI; a persisted event is kept 'retrying' (webhook 503,
+  //    provider redelivery re-drives it); an event not yet persisted is simply
+  //    answered 503 (the redelivery is processed as new). Bounded: the last
+  //    attempt marks the row 'exhausted' (terminal, observable).
+  //  * KNOWN TERMINAL outcome -> a re-driven event is marked 'resolved'.
+  //  * Events without a Meta mid (B-5, syntheticEventId.ts) are never
+  //    retried: attempt cap 1 -> immediately 'exhausted' (observable), 200.
+  const syntheticEvent = channel !== "whatsapp" && providerEventIdGenuine !== true;
+  const retryKey = {
+    tenantId: String(tenantId), accountId: String(account?.id ?? ""),
+    platform: channel, eventId: String(externalMsgId ?? ""),
+  };
+  const keepRetryable = async (conversationId: string, inboundId: string): Promise<"retry" | void> => {
+    const decision = await recordRoutingFailure(sb, {
+      ...retryKey, conversationId, inboundId,
+    }, retryAttemptCap(syntheticEvent));
+    if (decision === "retry") {
+      console.warn("[webhook-routing] flow eligibility unknown; event kept for redelivery");
+      return "retry";
+    }
+    if (decision === "exhausted") {
+      console.error("[webhook-routing] flow eligibility unknown; retries exhausted (automation_inbound_routing_retries)");
+    } else if (decision === "unavailable") {
+      console.error("[webhook-routing] flow eligibility unknown; retry state unavailable, event not retried");
+    }
+  };
+  // Unknown state BEFORE the inbound row exists (or in a re-drive).
+  const unknownState = async (): Promise<"retry" | void> =>
+    redrive ? keepRetryable(redrive.conversationId, redrive.inboundId) : "retry";
+  // Known terminal outcome: a re-driven event no longer needs a retry.
+  const resolvedAfterRedrive = async () => {
+    if (redrive) await markRoutingResolved(sb, retryKey);
+  };
+
+  const { data: tenant, error: tenantError } = await sb
     .from("tenants")
     .select("*")
     .eq("id", tenantId)
     .maybeSingle();
 
+  if (tenantError) {
+    console.error(`[${channel}_webhook] tenant read failed`);
+    return await unknownState();
+  }
+
   if (!tenant) {
     console.error(
       `[${channel}_webhook] tenant not found: ${tenantId}`
     );
+    await resolvedAfterRedrive();
     return;
   }
 
@@ -1596,20 +1684,41 @@ async function handleIncomingWebhookMessage(
     console.log(
       `[${channel}_webhook] tenant inactive: ${tenantId}`
     );
+    await resolvedAfterRedrive();
     return;
   }
 
   /**
    * البحث عن conversation موجود أو إنشاؤه.
    */
-  const { data: existingConv } = await sb
-    .from("conversations")
-    .select("*")
-    .eq("tenant_id", tenantId)
-    .eq("wa_chat_id", chatId)
-    .maybeSingle();
+  const { data: existingConv, error: convError } = redrive
+    ? await sb
+        .from("conversations")
+        .select("*")
+        .eq("tenant_id", tenantId)
+        .eq("id", redrive.conversationId)
+        .eq("wa_chat_id", chatId)
+        .maybeSingle()
+    : await sb
+        .from("conversations")
+        .select("*")
+        .eq("tenant_id", tenantId)
+        .eq("wa_chat_id", chatId)
+        .maybeSingle();
 
   let conv: any = existingConv;
+
+  if (convError) {
+    console.error(`[${channel}_webhook] conversation read failed`);
+    return await unknownState();
+  }
+
+  if (redrive && !conv) {
+    // Proven absence (no read error): nothing left to answer.
+    console.error(`[${channel}_webhook] re-drive conversation not found`);
+    await resolvedAfterRedrive();
+    return;
+  }
 
   if (!conv) {
     const { data: newConv } = await sb
@@ -1644,14 +1753,15 @@ async function handleIncomingWebhookMessage(
     console.error(
       `[${channel}_webhook] conversation is null`
     );
-    return;
+    // Not persisted yet: the provider redelivers it as a new event.
+    return "retry";
   }
 
   /**
    * حفظ رسالة العميل الواردة.
    */
-  let inboundMessageId: string | null = null;
-  const incomingResult = await persistInboundOnce(async () => {
+  let inboundMessageId: string | null = redrive ? redrive.inboundId : null;
+  const incomingResult = redrive ? "saved" : await persistInboundOnce(async () => {
     const response = await sb.from("messages").insert({
       conversation_id: conv.id,
       tenant_id: tenantId,
@@ -1672,6 +1782,9 @@ async function handleIncomingWebhookMessage(
       console.log(`[${channel}_webhook] duplicate inbound message skipped`);
     } else {
       console.error(`[${channel}_webhook] inbound insert did not commit`);
+      // Not persisted: the provider redelivers it as a new event (a commit
+      // whose response was lost is skipped as a duplicate, as before).
+      return "retry";
     }
     return;
   }
@@ -1710,6 +1823,7 @@ async function handleIncomingWebhookMessage(
     console.log(
       `[${channel}_webhook] conversation transferred: ${conv.id}`
     );
+    await resolvedAfterRedrive();
     return;
   }
 
@@ -1720,6 +1834,7 @@ async function handleIncomingWebhookMessage(
     console.log(
       `[${channel}_webhook] paused (credits): ${conv.id}`
     );
+    await resolvedAfterRedrive();
     return;
   }
 
@@ -1731,6 +1846,7 @@ async function handleIncomingWebhookMessage(
     console.log(
       `[${channel}_webhook] auto reply disabled for account ${account?.id}`
     );
+    await resolvedAfterRedrive();
     return;
   }
 
@@ -1749,6 +1865,7 @@ async function handleIncomingWebhookMessage(
     console.log(
       `[${channel}_webhook] no credits: ${tenantId}`
     );
+    await resolvedAfterRedrive();
     return;
   }
 
@@ -1787,6 +1904,16 @@ async function handleIncomingWebhookMessage(
     }
   }
 
+  // No PROVEN channel account (e.g. a verified WhatsApp binding whose
+  // channel_accounts row could not be proven, see provenWhatsappAccount):
+  // flow_claim_inbound refuses a NULL account, so no claim and no reply are
+  // possible. Known terminal state, logged with a code (not a retry loop).
+  if (typeof account?.id !== "string" || account.id.length === 0) {
+    console.warn("[webhook-claim] no proven channel account; no auto-send", { code: "account_unproven" });
+    await resolvedAfterRedrive();
+    return;
+  }
+
   // Events without a stable provider ID cannot be deduplicated reliably.
   // Do not send an automated reply to an unclaimable event.
   if (!externalMsgId || externalMsgId.length > 256 || !inboundMessageId) {
@@ -1802,6 +1929,11 @@ async function handleIncomingWebhookMessage(
   // the atomic Outbox and an authenticated worker own actual provider calls.
   // FLOW_MULTICHANNEL_ENABLED (default OFF): WhatsApp / Facebook events may
   // also try the durable path (same canary, claim and SQL re-checks).
+  // Flow eligibility UNKNOWN (switch/activation/publication READ error): no
+  // flow and no AI for this event; keep it retryable (inboundRoutingRetry.ts,
+  // migration 20261029340000) so the webhook answers 503 and the provider's
+  // redelivery re-drives it. Bounded: the last attempt marks it 'exhausted'
+  // (terminal, observable) and the webhook acknowledges.
   if(channel==="instagram"||
      ((channel==="whatsapp"||channel==="facebook")&&multichannelEnabled())){
     const durable=await attemptDurableInstagram(sb,{
@@ -1810,12 +1942,21 @@ async function handleIncomingWebhookMessage(
       text:customerText,
       selectedChoiceId,providerEventIdGenuine:providerEventIdGenuine===true
     });
-    if(durable==="handled")return;
+    if(durable==="retry")return await keepRetryable(String(conv.id),inboundMessageId);
+    if(durable==="handled"){await resolvedAfterRedrive();return;}
   }
   const deliveryTracking=env("DELIVERY_TRACKING_V1_ENABLED")==="true";
+  // Several active flows: prepareSimpleFlowReply answers only the single
+  // deterministic winner (flowInboundSelection.ts) when it is a V2 flow. While
+  // the durable ingress is configured for this account, durable flows are
+  // ranked too, so a durable winner is never replaced by a lower V2 flow.
+  // No match -> null -> legacy AI (unchanged). A routing READ error makes
+  // processExclusiveEvent return "routing_unavailable": no claim, no reply.
+  const durableRanked=durableIngressConfigured(String(account.id),channel);
   const outcome = await processExclusiveEvent({
     prepareFlow: () => prepareSimpleFlowReply(
-      sb, tenantId, String(account.id), channel, customerText
+      sb, tenantId, String(account.id), channel, customerText,
+      durableRanked?{durableDocument:(d)=>supportedDurableDocument(d,channel)}:{}
     ),
     claim: async (engineReady) => {
       const { data, error } = await sb.rpc("flow_claim_inbound", {
@@ -1944,6 +2085,14 @@ async function handleIncomingWebhookMessage(
       return data;
     },
   });
+  // No claim acquired (routing unknown, or the claim RPC failed / its commit
+  // is unknown) -> retryable: a retry re-claims (a committed claim answers
+  // "duplicate"), so it can never send twice. Every other outcome follows an
+  // ACQUIRED claim (the ownership proof: sent_*, send_failed, empty,
+  // delivery_unavailable) or a duplicate -> terminal, never re-sent.
+  if (isRetryableOutcome(outcome))
+    return await keepRetryable(String(conv.id), inboundMessageId);
+  await resolvedAfterRedrive();
   if (outcome !== "sent_and_billed" && outcome !== "duplicate") {
     console.warn("[webhook-claim] auto reply outcome:", outcome);
   }
@@ -2298,6 +2447,9 @@ Deno.serve(async (req) => {
           return json({ error: "Invalid WhatsApp signature" }, 401);
         }
 
+        // Per-event outcomes: any "retry" (flow eligibility unknown) answers 503
+        // so the provider redelivers (inboundRoutingRetry.ts).
+        const waOutcomes: unknown[] = [];
         for (const entry of body.entry ?? []) {
           for (const change of entry?.changes ?? []) {
             if (change?.field !== "messages") {
@@ -2339,11 +2491,23 @@ Deno.serve(async (req) => {
             }
 
             if (binding) {
-              account = {
-                tenant_id: binding.tenant_id,
-                external_id: phoneId,
-                channel: "whatsapp",
-              };
+              // E1 (waBinding.ts provenWhatsappAccount): the binding proves
+              // the tenant only. Its channel_accounts row (and so the account
+              // id the exclusive claim needs) is used ONLY when proven: same
+              // tenant, whatsapp, external_id == this phone number id, active,
+              // exactly one row. Otherwise the event is stored without an
+              // automatic reply (code logged), never assigned to a guess.
+              const proven = await provenWhatsappAccount(sb, String(binding.tenant_id), phoneId);
+              if (proven.status === "proven" && proven.account.tenant_id === binding.tenant_id) {
+                account = proven.account;
+              } else {
+                console.warn("[whatsapp_webhook] binding account unproven", { code: "wa_account_" + proven.status });
+                account = {
+                  tenant_id: binding.tenant_id,
+                  external_id: phoneId,
+                  channel: "whatsapp",
+                };
+              }
             } else {
               const { data: chAcc } = await sb
                 .from("channel_accounts")
@@ -2438,6 +2602,30 @@ Deno.serve(async (req) => {
                   .maybeSingle();
 
                 if (dup) {
+                  // Re-drive ONLY an event kept retryable after an unknown
+                  // flow eligibility; every other duplicate is skipped.
+                  const pending = await retryableEvent(sb, {
+                    tenantId: String(account.tenant_id), accountId: String(account.id ?? ""),
+                    platform: "whatsapp", eventId: msgId,
+                  });
+                  if (pending) {
+                    // The opt-in recovery sweeper holds a lease on this event
+                    // (inboundRecovery.ts): never re-drive it concurrently;
+                    // 503 and let the provider redeliver.
+                    if (await recoveryLeaseActive(sb, { tenantId: String(account.tenant_id), inboundId: pending.inboundId })) {
+                      waOutcomes.push("retry");
+                      continue;
+                    }
+                    waOutcomes.push(await runBatchEvent(() => handleIncomingWebhookMessage(
+                      sb, account, chatId,
+                      durableReply && !text ? durableReply.text : text,
+                      msgId, "whatsapp", phoneId,
+                      durableReplies ? durableReply?.choiceId ?? null : undefined,
+                      durableReplies ? typeof msgId === "string" && msgId.length > 0 : undefined,
+                      pending
+                    )));
+                    continue;
+                  }
                   console.log(
                     `[whatsapp_webhook] duplicate skipped: ${msgId}`
                   );
@@ -2447,7 +2635,9 @@ Deno.serve(async (req) => {
 
               const name = customerNameOf(from);
 
-              await handleIncomingWebhookMessage(
+              // runBatchEvent: an event that throws never aborts the batch;
+              // every event is processed before the status is chosen.
+              waOutcomes.push(await runBatchEvent(() => handleIncomingWebhookMessage(
                 sb,
                 account,
                 chatId,
@@ -2457,7 +2647,7 @@ Deno.serve(async (req) => {
                 phoneId,
                 durableReplies ? durableReply?.choiceId ?? null : undefined,
                 durableReplies ? typeof msgId === "string" && msgId.length > 0 : undefined
-              );
+              )));
 
               if (name) {
                 await sb
@@ -2470,6 +2660,10 @@ Deno.serve(async (req) => {
               }
             }
           }
+        }
+
+        if (webhookStatusFor(waOutcomes) === 503) {
+          return json({ error: "Flow routing temporarily unavailable" }, 503);
         }
 
         return json({
@@ -2573,6 +2767,9 @@ Deno.serve(async (req) => {
           }
         }
 
+        // Per-event outcomes: any "retry" (flow eligibility unknown) answers 503
+        // so the provider redelivers (inboundRoutingRetry.ts).
+        const igOutcomes: unknown[] = [];
         for (const entry of body.entry ?? []) {
           const entryId = String(entry.id ?? "");
 
@@ -2685,8 +2882,18 @@ Deno.serve(async (req) => {
             const chatId =
               `${channel}:${msg.senderId}`;
 
+            // B-5 (syntheticEventId.ts): no Meta mid -> a deterministic id from
+            // signed payload fields (never raw text), so a redelivery maps to the
+            // same inbound row/claim key; without an event timestamp the old
+            // non-deduplicable fallback stays. Never treated as a provider id.
+            const derivedId = msg.mid
+              ? null
+              : await syntheticEventId({
+                  entryId, recipientId: msg.recipientId, senderId: msg.senderId,
+                  timestamp: "timestamp" in msg ? msg.timestamp : null, text: msg.text,
+                });
             const msgId =
-              msg.mid || `ig_${Date.now()}`;
+              msg.mid || derivedId || `ig_${Date.now()}`;
             // Provenance, never inferred from the id's shape: true only when
             // Meta itself supplied a non-empty mid (msgId is then that mid).
             const providerEventIdGenuine =
@@ -2695,7 +2902,7 @@ Deno.serve(async (req) => {
             /**
              * منع التكرار.
              */
-            if (msg.mid) {
+            if (msg.mid || derivedId) {
               const { data: dup } = await sb
                 .from("messages")
                 .select("id")
@@ -2703,6 +2910,25 @@ Deno.serve(async (req) => {
                 .limit(1);
 
               if (dup && dup.length > 0) {
+                // Re-drive ONLY an event kept retryable after an unknown
+                // flow eligibility; every other duplicate is skipped.
+                const pending = await retryableEvent(sb, {
+                  tenantId: String(account.tenant_id), accountId: String(account.id),
+                  platform: channel, eventId: msgId,
+                });
+                if (pending) {
+                  // Never concurrently with the recovery sweeper's lease.
+                  if (await recoveryLeaseActive(sb, { tenantId: String(account.tenant_id), inboundId: pending.inboundId })) {
+                    igOutcomes.push("retry");
+                    continue;
+                  }
+                  igOutcomes.push(await runBatchEvent(() => handleIncomingWebhookMessage(
+                    sb, account, chatId, msg.text, msgId,
+                    channel as "instagram" | "facebook",
+                    undefined, msg.choiceId, providerEventIdGenuine, pending
+                  )));
+                  continue;
+                }
                 console.log(
                   `[instagram_webhook] duplicate skipped: ${msgId}`
                 );
@@ -2710,7 +2936,8 @@ Deno.serve(async (req) => {
               }
             }
 
-            await handleIncomingWebhookMessage(
+            // runBatchEvent: an event that throws never aborts the batch.
+            igOutcomes.push(await runBatchEvent(() => handleIncomingWebhookMessage(
               sb,
               account,
               chatId,
@@ -2722,7 +2949,7 @@ Deno.serve(async (req) => {
               undefined,
               msg.choiceId,
               providerEventIdGenuine
-            );
+            )));
 
             /* ── جلب بيانات المرسل (اسم + صورة) وحفظها ──
                بعد اكتمال معالجة الرسالة حتى لا يمنع الفشل
@@ -2796,16 +3023,62 @@ Deno.serve(async (req) => {
           // FLOW_COMMENT_AUTOMATION_ENABLED (default OFF; commentIngress.ts):
           // signed Instagram "comments" / Page "feed" comment changes start a
           // comment run (public reply first, then the DM). OFF: never parsed.
+          // A comment-ingest exception no longer aborts the remaining entries
+          // (it used to answer 500); it is a transient outcome (503) instead.
           if (commentAutomationEnabled()) {
-            await ingestSignedComments(sb, body.object, entry, {
-              env, encrypt: encryptField,
-            });
+            igOutcomes.push(await runBatchEvent(async () => {
+              await ingestSignedComments(sb, body.object, entry, {
+                env, encrypt: encryptField,
+              });
+            }));
           }
+        }
+
+        if (webhookStatusFor(igOutcomes) === 503) {
+          return json({ error: "Flow routing temporarily unavailable" }, 503);
         }
 
         return json({
           received: true,
         });
+      }
+
+      /* ────────────────────────────────────────────────────────────────
+         B-3/B-4 inbound recovery tick (inboundRecovery.ts, migration
+         20261029360000). Server-to-server only; DEFAULT OFF.
+         POST ?action=inbound_recovery_tick  body {"mode":"tick"}
+         Auth first: the SAME bearer rule as the flow workers
+         (flowWorkerAuth.ts; unchanged). Then FLOW_INBOUND_RECOVERY_ENABLED
+         + the worker release gate (423 while off), then only opted-in
+         tenants (automation_inbound_recovery_tenants, default none).
+         Re-drives through handleIncomingWebhookMessage (same claim/route).
+         Response: counters only (no ids, no text).
+      ──────────────────────────────────────────────────────────────── */
+      case "inbound_recovery_tick": {
+        if (req.method !== "POST") {
+          return json({ error: "Method not allowed" }, 405);
+        }
+        if (!acceptsFlowWorkerBearer(
+          req.headers.get("authorization"),
+          env("SUPABASE_SERVICE_ROLE_KEY"),
+          env("flow_worker_service_role_key")
+        )) {
+          return json({ error: "Unauthorized" }, 401);
+        }
+        if (!inboundRecoveryEnabled((k) => Deno.env.get(k))) {
+          return json({ status: "disabled" }, 423);
+        }
+        if (body?.mode !== "tick") {
+          return json({ error: "Invalid mode" }, 400);
+        }
+        const counters = await runInboundRecovery(sb, {
+          decrypt: decryptFieldStrict,
+          redrive: (e) => handleIncomingWebhookMessage(
+            sb, e.account, e.chatId, e.text, e.eventId, e.channel, e.phoneId,
+            null, true, { conversationId: e.conversationId, inboundId: e.inboundId }
+          ),
+        });
+        return json({ status: "ok", counters });
       }
 
       default:

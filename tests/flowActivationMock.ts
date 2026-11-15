@@ -183,3 +183,76 @@ export async function mockAccounts(page: Page, server: MultiAccountServer, sessi
     }
   });
 }
+
+/* ---------- Several flows active on ONE account (independent per flow_key) ---------- */
+
+/**
+ * Current server semantics: each flow_key has its own activation row (tenant, account,
+ * platform, flow_key); activate/deactivate touch only the requested key; `catalog`
+ * returns `activeFlows` (activation order) plus the legacy single `active` (the first).
+ */
+export type MultiFlowServer = {
+  /** Published revisions per server flow_key (newest first). */
+  flows: Record<string, number[]>;
+  /** Active revision per flow_key: several flows may be active at once. */
+  active: Record<string, number>;
+  /** Revisions any other key asked by the client (a local editor flow) is published with. Default none. */
+  localRevisions?: number[];
+  /** Mimic the currently deployed server: catalog without `activeFlows` (legacy single `active` only). */
+  legacyCatalog?: boolean;
+  calls: Array<Record<string, any>>;
+};
+
+export async function mockMultiFlows(page: Page, server: MultiFlowServer) {
+  const ref = new URL(URL_).hostname.split(".")[0];
+  await page.addInitScript(([key, value]) => localStorage.setItem(key, value), [
+    `sb-${ref}-auth-token`,
+    JSON.stringify({
+      access_token: FAKE_JWT, refresh_token: "r", token_type: "bearer", expires_in: 3600, expires_at: 4102444800,
+      user: { id: "u1", aud: "authenticated", role: "authenticated", email: "t@example.test", app_metadata: {}, user_metadata: {}, created_at: "2024-01-01T00:00:00Z" },
+    }),
+  ]);
+  const order = Object.keys(server.active); // activation order (earliest first)
+  await page.route(`${URL_}/**`, async (route) => {
+    const req = route.request();
+    const cors = { "access-control-allow-origin": "*" };
+    if (req.method() === "OPTIONS") return route.fulfill({ status: 204, headers: { ...cors, "access-control-allow-headers": "*", "access-control-allow-methods": "*" } });
+    const body = req.postDataJSON?.() ?? {};
+    const reply = (status: number, b: unknown) => route.fulfill({ status, contentType: "application/json", headers: cors, body: JSON.stringify(b) });
+    if (!new URL(req.url()).pathname.endsWith("/flow-publication")) return reply(200, {});
+    server.calls.push(body);
+    const key: string = body.flowKey;
+    if (key && !(key in server.flows) && server.localRevisions?.length) server.flows[key] = [...server.localRevisions];
+    const activeFlows = () => order.filter((k) => k in server.active).map((k) => ({ flow_key: k, revision: server.active[k] }));
+    switch (body.action) {
+      case "accounts":
+        return reply(200, { ok: true, accounts: [{ id: ACCOUNT, platform: "instagram", is_active: true, canActivate: true }] });
+      case "catalog": {
+        const flows = Object.entries(server.flows).filter(([, r]) => r.length).map(([flowKey, r]) => ({ flowKey, latestRevision: r[0] }));
+        const all = activeFlows();
+        return reply(200, server.legacyCatalog ? { ok: true, flows, active: all[0] ?? null, truncated: false }
+          : { ok: true, flows, activeFlows: all, active: all[0] ?? null, truncated: false });
+      }
+      case "list":
+        return reply(200, { ok: true, items: (server.flows[key] ?? []).map((revision) => ({ revision, created_at: "2025-01-01" })),
+          activation: key in server.active ? { revision: server.active[key], is_active: true } : null });
+      case "readiness": {
+        const revision = body.revision ?? server.active[key] ?? null;
+        const checks = Object.fromEntries(CHECKS.map((c) => [c, c === "activeRevision" ? key in server.active : true]));
+        return reply(200, { ok: true, candidateRevision: revision, readiness: { checks, candidateKind: "text", needsButtons: false,
+          needsScheduler: false, needsInternalActions: false, needsMedia: false, buttonsConfigured: false, delayConfigured: false, configured: true } });
+      }
+      case "activate":
+        if (!(server.flows[key] ?? []).includes(body.revision)) return reply(404, { ok: false, error: "Publication revision not found" });
+        if (!(key in server.active)) order.push(key);
+        server.active[key] = body.revision;
+        return reply(200, { ok: true, active: true, revision: body.revision });
+      case "deactivate":
+        if (!(key in server.active)) return reply(404, { ok: false, error: "No active publication found" });
+        delete server.active[key];
+        order.splice(order.indexOf(key), 1);
+        return reply(200, { ok: true, active: false });
+      default: return reply(400, { ok: false, error: "Unknown action" });
+    }
+  });
+}

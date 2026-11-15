@@ -12,11 +12,14 @@ import {test} from "node:test";
 import assert from "node:assert/strict";
 import {readFileSync} from "node:fs";
 import {stripTypeScriptTypes} from "node:module";
-import {bindingIsVerified} from "../supabase/functions/milan-api/waBinding.ts";
+import {bindingIsVerified,provenWhatsappAccount} from "../supabase/functions/milan-api/waBinding.ts";
+import {runBatchEvent} from "../supabase/functions/milan-api/inboundRoutingRetry.ts";
 
 const IDX=readFileSync("supabase/functions/milan-api/index.ts","utf8");
 const CASE=IDX.indexOf('case "whatsapp_webhook": {');
-const START=IDX.indexOf("        for (const entry of body.entry ?? []) {",CASE);
+// The loop now starts with its per-event outcome list (inboundRoutingRetry.ts:
+// any "retry" answers 503); the slice includes it and the 503 return.
+const START=IDX.indexOf("        // Per-event outcomes: any \"retry\"",CASE);
 const END_MARK="        return json({\n          received: true,\n        });\n";
 const END=IDX.indexOf(END_MARK,START);
 
@@ -24,7 +27,10 @@ function loadLoop(){
  assert.ok(CASE>0&&START>CASE&&END>START,"whatsapp_webhook batch loop located");
  assert.ok(START<IDX.indexOf('case "instagram_webhook": {'),"slice stays inside whatsapp_webhook");
  const ts="async function __waBatch(body,sb,bindingIsVerified,handleIncomingWebhookMessage,"+
-  "multichannelEnabled,env,normalizeMetaMessages,json,console){\n"+
+  "multichannelEnabled,env,normalizeMetaMessages,json,console,retryableEvent,webhookStatusFor,"+
+  // The loop now also uses the E1 account proof, per-event isolation and the
+  // recovery lease check (real implementations / a no-lease stub below).
+  "runBatchEvent,provenWhatsappAccount,recoveryLeaseActive){\n"+
   IDX.slice(START,END+END_MARK.length)+"}\n";
  const js=stripTypeScriptTypes(ts,{mode:"strip"});
  return new Function(js+"\nreturn __waBatch;")();
@@ -66,7 +72,9 @@ async function runBatch(body,db){
   async(_sb,account,chatId,text,msgId,channel,phoneId)=>{
    handled.push({tenant:account.tenant_id,chatId,text,msgId,channel,phoneId});
   },
-  ()=>false,()=>"",()=>[],(b)=>({json:b}),cons);
+  ()=>false,()=>"",()=>[],(b)=>({json:b}),cons,
+  async()=>null,(o)=>o.some(x=>x==="retry")?503:200,
+  runBatchEvent,provenWhatsappAccount,async()=>false);
  return {res,handled,logs};
 }
 

@@ -6,7 +6,19 @@ export type Claimed={
 export type Result=
  |"duplicate"|"claim_failed"|"empty"|"sent_and_billed"
  |"sent_billing_failed"|"sent_persist_failed"|"send_failed"
- |"delivery_unavailable"|"sent_unconfirmed";
+ |"delivery_unavailable"|"sent_unconfirmed"|"routing_unavailable";
+/**
+ * Thrown by prepareFlow ONLY when the flow routing data (active activations
+ * or their exact publications) could not be READ. It is not "no flow": a flow
+ * may own this message, so no claim is made and nothing is sent (the legacy
+ * AI must not answer it); milan-api then keeps the event retryable
+ * (inboundRoutingRetry.ts), like the durable path's "retry". Any other
+ * prepareFlow failure keeps the existing behaviour (treated as no flow reply
+ * -> legacy AI route).
+ */
+export class FlowRoutingUnavailableError extends Error{
+ constructor(){super("flow routing unavailable");this.name="FlowRoutingUnavailableError";}
+}
 export type DeliveryHooks={
  /** Must be atomically unique by claim_id. No send if it returns false. */
  begin(claimId:string,outgoingMessageId:string,text:string):Promise<boolean>;
@@ -29,7 +41,10 @@ export type Dependencies={
  */
 export async function processExclusiveEvent(d:Dependencies):Promise<Result>{
  let prepared:string|null=null;
- try{prepared=await d.prepareFlow();}catch{prepared=null;}
+ try{prepared=await d.prepareFlow();}catch(e){
+  if(e instanceof FlowRoutingUnavailableError)return "routing_unavailable";
+  prepared=null;
+ }
  let c:Claimed|null;
  try{c=await d.claim(Boolean(prepared));}catch{return "claim_failed";}
  if(!c||!["legacy_ai","flow"].includes(c.route)||typeof c.outgoing_message_id!=="string")

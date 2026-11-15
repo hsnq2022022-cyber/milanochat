@@ -49,14 +49,25 @@ const CONTROL=/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
 
 type Rec=Record<string,unknown>;
 const rec=(v:unknown):v is Rec=>!!v&&typeof v==="object"&&!Array.isArray(v);
+/**
+ * Same set as triggerKeywords.ts HIDDEN_FORMAT_CHARS (kept as a literal so
+ * this module stays import-free; equality is pinned by a test).
+ */
+export const HIDDEN_FORMAT_CHARS=/[\u00AD\u061C\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/g;
 
 /**
- * Identical to src/flow/eventRouting.ts normalizeTriggerText (parity is
- * pinned by tests/flow-comment-automation.test.ts): NFKC, lower case, Arabic
- * diacritics/tatweel removed, alef/yaa variants folded, whitespace collapsed.
+ * Identical to src/flow/eventRouting.ts normalizeTriggerText and
+ * triggerKeywords.ts normalizeTriggerText (parity is pinned by
+ * tests/flow-comment-automation.test.ts): invisible formatting characters
+ * removed (HIDDEN_FORMAT_CHARS: zero-width space/joiners, LRM/RLM, bidi
+ * embeddings/overrides/isolates, soft hyphen, BOM; they can neither hide a
+ * keyword nor fake a boundary), NFKC, lower case, Arabic diacritics/tatweel
+ * removed, alef/yaa variants folded, whitespace collapsed. No stemming and no
+ * Arabic prefix/suffix equivalence. Match semantics (any / keyword
+ * containment / post scope) are unchanged.
  */
 export function normalizeCommentText(raw:string):string{
- return raw.normalize("NFKC").toLocaleLowerCase("en-US")
+ return raw.replace(HIDDEN_FORMAT_CHARS,"").normalize("NFKC").toLocaleLowerCase("en-US")
   .replace(/[ً-ٰٟـ]/g,"")
   .replace(/[أإآٱ]/g,"ا").replace(/ى/g,"ي")
   .replace(/\s+/g," ").trim();

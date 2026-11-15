@@ -1,5 +1,13 @@
 import type { Node, Edge, XYPosition, Connection } from "@xyflow/react";
 import { uuid } from "../lib/uuid.ts";
+import { keywordMatchMode, keywordListProblem } from "./eventRouting.ts";
+/**
+ * Raw keywords string bound for DM keyword triggers: large enough for the
+ * maximum valid list (40 keywords x 120 characters + separators), so a VALID
+ * list is never silently truncated on import/publish; an invalid one is
+ * reported (keywordListProblem) instead. Comment triggers keep 500.
+ */
+const KEYWORD_TRIGGER_RAW_MAX=6000;
 
 export type Kind = "trigger" | "message" | "question" | "condition" | "delay" | "action" | "randomizer" | "goto" | "request" | "end";
 export type Platform = "instagram" | "messenger" | "whatsapp";
@@ -76,7 +84,13 @@ export type FlowData = Record<string, unknown> & {
   inputMode: "buttons" | "text" | "email" | "phone" | "number";
   inputField: string;
   conditionField: string;
-  operator: "contains" | "equals" | "not_equals" | "exists";
+  /**
+   * Condition nodes: contains/equals/not_equals/exists. Keyword TRIGGERS reuse
+   * this field as the match mode: "exact" (whole message) or "contains" (whole
+   * word/phrase); legacy values on a trigger (equals/not_equals/exists) mean
+   * "contains" (eventRouting.ts keywordMatchMode).
+   */
+  operator: "contains" | "equals" | "not_equals" | "exists" | "exact";
   conditionValue: string;
   delayValue: number;
   delayUnit: "seconds" | "minutes" | "hours" | "days";
@@ -218,8 +232,14 @@ export function validateDocument(doc: FlowDocument, library?: readonly Validatio
       error("محتوى الرسالة فارغ");
     if(d.kind==="trigger"&&!TRIGGER_OPTIONS[d.platform]?.some(t=>t.id===d.triggerMode))
       error("حدث البداية غير متاح للقناة المحددة");
-    if(d.kind==="trigger"&&d.triggerMode==="keyword"&&!d.keywords.trim())
-      error("أضف كلمة مفتاحية واحدة على الأقل لتشغيل هذا الحدث");
+    if(d.kind==="trigger"&&d.triggerMode==="keyword"){
+      const problem=keywordListProblem(d.keywords||"");
+      if(problem==="keyword_trigger_requires_keywords")error("أضف كلمة مفتاحية واحدة على الأقل لتشغيل هذا الحدث");
+      else if(problem==="keyword_trigger_too_many_keywords")error("عدد الكلمات المفتاحية أكثر من 40؛ احذف بعضها / More than 40 keywords; remove some");
+      else if(problem==="keyword_trigger_keyword_too_long")error("كلمة مفتاحية أطول من 120 حرفًا / A keyword is longer than 120 characters");
+    }
+    if(d.kind==="trigger"&&d.triggerMode==="keyword"&&keywordMatchMode(d.operator)===null)
+      error("طريقة مطابقة الكلمات غير صالحة؛ اختر «مطابقة تامة» أو «يحتوي الكلمة»");
     if(d.kind==="trigger"&&d.triggerMode==="comment"){
       if(!String(d.publicReplyText||"").trim())error("اكتب الرد العام على التعليق");
       if(d.commentScope==="specific"&&!String(d.commentPostId||"").trim())error("أدخل معرّف المنشور المحدد");
@@ -382,7 +402,7 @@ function cleanImported(raw:unknown): FlowDocument | null {
         text:safeString(b.text).slice(0,2000),url:safeString(b.url).slice(0,1400000),seconds:typeof b.seconds==="number"&&Number.isFinite(b.seconds)?Math.max(1,Math.min(86400,b.seconds)):3,
         field:safeString(b.field,"response").slice(0,100),inputMode:["text","email","phone","number"].includes(String(b.inputMode))?b.inputMode as ContentBlock["inputMode"]:"text"};
     }):[];
-    const clean=makeNode(kind,position,{title:safeString(d.title,LABELS[kind]).slice(0,120),text:safeString(d.text).slice(0,2000),image:safeString(d.image).slice(0,1500000),options,keywords:safeString(d.keywords).slice(0,500),
+    const clean=makeNode(kind,position,{title:safeString(d.title,LABELS[kind]).slice(0,120),text:safeString(d.text).slice(0,2000),image:safeString(d.image).slice(0,1500000),options,keywords:safeString(d.keywords).slice(0,d.triggerMode==="keyword"?KEYWORD_TRIGGER_RAW_MAX:500),
       platform:["instagram","messenger","whatsapp"].includes(String(d.platform))?d.platform as Platform:"instagram",contentBlocks,
       triggerMode:["keyword","message","comment","story","ad","live","referral"].includes(String(d.triggerMode))?d.triggerMode as FlowData["triggerMode"]:"keyword",
       commentScope:d.commentScope==="specific"?"specific":"all",commentPostId:safeString(d.commentPostId).trim().slice(0,100),
@@ -390,7 +410,7 @@ function cleanImported(raw:unknown): FlowDocument | null {
       commentMatchType:d.commentMatchType==="keyword"||d.commentMatchType==="any"?d.commentMatchType as "any"|"keyword":(safeString(d.keywords).trim()?"keyword":"any"),
       inputMode:["buttons","text","email","phone","number"].includes(String(d.inputMode))?d.inputMode as FlowData["inputMode"]:"buttons",
       inputField:safeString(d.inputField,"response").slice(0,100),conditionField:safeString(d.conditionField,"message").slice(0,100),
-      operator:["contains","equals","not_equals","exists"].includes(String(d.operator))?d.operator as FlowData["operator"]:"contains",
+      operator:["contains","equals","not_equals","exists"].includes(String(d.operator))||(kind==="trigger"&&d.operator==="exact")?d.operator as FlowData["operator"]:"contains",
       conditionValue:safeString(d.conditionValue).slice(0,250),delayValue:typeof d.delayValue==="number"?d.delayValue:1,
       delayUnit:["seconds","minutes","hours","days"].includes(String(d.delayUnit))?d.delayUnit as FlowData["delayUnit"]:"minutes",
       actionType:["tag","untag","set_field","handoff","notify","ai"].includes(String(d.actionType))?d.actionType as FlowData["actionType"]:"tag",

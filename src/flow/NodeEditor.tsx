@@ -101,6 +101,18 @@ export default function NodeEditor({node,onClose,language="ar"}:{node:FlowNode|n
         </select>
         {d.triggerMode==="comment"?<CommentTriggerForm d={d} edit={edit} t={t} nodeId={node.id}/>
           :<TriggerKeywordsEditor key={node.id+":"+d.triggerMode} mode={d.triggerMode} value={d.keywords} onChange={keywords=>edit({keywords})}/>}
+        {d.triggerMode==="keyword"&&<>
+          {/* Keyword match mode (stored in the trigger's operator; legacy values = contains). */}
+          <label className={section} htmlFor={"kw-mode-"+node.id}>{language==="en"?"Keyword matching":"طريقة مطابقة الكلمات"}</label>
+          <select id={"kw-mode-"+node.id} data-testid="trigger-keyword-match-mode" className={input}
+            value={d.operator==="exact"?"exact":"contains"} onChange={e=>edit({operator:e.target.value==="exact"?"exact":"contains"})}>
+            <option value="contains">{language==="en"?"Contains the word / يحتوي الكلمة":"يحتوي الكلمة / Contains the word"}</option>
+            <option value="exact">{language==="en"?"Exact match / مطابقة تامة":"مطابقة تامة / Exact"}</option>
+          </select>
+          <p className="mt-1 text-[11px] leading-5 text-[#8B9E96]">{d.operator==="exact"
+            ?(language==="en"?"The whole message must equal one keyword or phrase.":"يجب أن تساوي الرسالة كاملةً إحدى الكلمات أو العبارات.")
+            :(language==="en"?"Matches the whole word or phrase anywhere in the message, never part of a longer word. Add other word forms as extra keywords.":"تطابق الكلمة أو العبارة كاملةً في أي موضع من الرسالة، وليس جزءًا من كلمة أخرى. أضف صيغ الكلمة الأخرى (مثل «ال») ككلمات إضافية.")}</p>
+        </>}
         <p className="mt-2 text-[11px] leading-5 text-[#E5B54B]">هذه إعدادات التدفق فقط. اختيار WhatsApp أو Instagram أو Messenger لا يُنشئ ربط حساب جديدًا، ولا يمنح صلاحيات Meta تلقائيًا. الأحداث المسموح بها فعليًا تعتمد على القناة وحالة ربطها.</p>
         {d.platform!=="instagram"&&<p className="mt-2 text-[11px] leading-5 text-[#E5B54B]">{t("multichannelNote")}</p>}
       </>}

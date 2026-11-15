@@ -1,7 +1,8 @@
 import {test} from "node:test";
 import assert from "node:assert/strict";
-import {accountCanActivate,otherActiveFlowKey,pickActivationAccount,readinessBlockers,readinessTargetKind,resolveServerFlowKey,
+import {accountCanActivate,activeRevisionOf,catalogActiveFlows,pickActivationAccount,readinessBlockers,readinessTargetKind,resolveServerFlowKey,
  type ActivationAccount} from "./activationAccount.ts";
+import * as activationModule from "./activationAccount.ts";
 
 const ig:ActivationAccount={id:"ig",platform:"instagram",is_active:true,canActivate:true,canActivateComments:true};
 const fb:ActivationAccount={id:"fb",platform:"facebook",is_active:true,canActivate:false,canActivateComments:true};
@@ -34,11 +35,23 @@ test("instagram comment flow keeps the instagram account",()=>{
 
 const LIVE="ig_live_welcome_20261029";
 const LOCAL="0b6f1b6e-6a3c-4f63-9d1e-3f1b2c4d5e6f";
-test("resolveServerFlowKey: the catalog active flow wins over the local editor id",()=>{
+test("resolveServerFlowKey: an unpublished local draft manages the account's only active flow",()=>{
  assert.equal(resolveServerFlowKey({localKey:LOCAL,catalog:[{flowKey:LIVE,latestRevision:4}],active:{flow_key:LIVE,revision:2}}),LIVE);
- // Even when the local key is also published, the account's live flow is managed.
- assert.equal(resolveServerFlowKey({localKey:LOCAL,catalog:[{flowKey:LOCAL,latestRevision:1},{flowKey:LIVE,latestRevision:4}],active:{flow_key:LIVE,revision:2}}),LIVE);
  assert.equal(resolveServerFlowKey({localKey:"default",catalog:[],active:{flow_key:LIVE,revision:2}}),LIVE);
+ assert.equal(resolveServerFlowKey({localKey:"default",catalog:[],activeFlows:[{flow_key:LIVE,revision:2}]}),LIVE);
+});
+test("resolveServerFlowKey: a local flow published under its own key manages ITSELF, whatever else is active",()=>{
+ // Several flows may be active independently: the local flow never takes over another one.
+ assert.equal(resolveServerFlowKey({localKey:LOCAL,catalog:[{flowKey:LOCAL,latestRevision:1},{flowKey:LIVE,latestRevision:4}],active:{flow_key:LIVE,revision:2}}),LOCAL);
+ assert.equal(resolveServerFlowKey({localKey:LOCAL,catalog:[{flowKey:LIVE,latestRevision:4}],
+  activeFlows:[{flow_key:LIVE,revision:2},{flow_key:LOCAL,revision:1}]}),LOCAL);
+ // Unpublished local draft + several active flows: never guess which one it is.
+ assert.equal(resolveServerFlowKey({localKey:"default",catalog:[{flowKey:"a",latestRevision:1},{flowKey:"b",latestRevision:2}],
+  activeFlows:[{flow_key:"a",revision:1},{flow_key:"b",revision:2}]}),"default");
+ // activeFlows (current server) takes precedence over the legacy single active.
+ assert.equal(resolveServerFlowKey({localKey:"default",active:{flow_key:"a",revision:1},
+  activeFlows:[{flow_key:"a",revision:1},{flow_key:"b",revision:2}]}),"default");
+ assert.equal(resolveServerFlowKey({localKey:"default",active:{flow_key:"a",revision:1},activeFlows:[]}),"default");
 });
 test("resolveServerFlowKey: local key published under its own key, and fallbacks",()=>{
  assert.equal(resolveServerFlowKey({localKey:LOCAL,catalog:[{flowKey:LIVE,latestRevision:4},{flowKey:LOCAL,latestRevision:3}],active:null}),LOCAL);
@@ -52,12 +65,25 @@ test("resolveServerFlowKey: local key published under its own key, and fallbacks
  assert.equal(resolveServerFlowKey({localKey:"default",active:{} as never}),"default");
  assert.equal(resolveServerFlowKey({localKey:"default",catalog:[null as never]}),"default");
 });
-test("otherActiveFlowKey: only a different, non-empty active key conflicts",()=>{
- assert.equal(otherActiveFlowKey(null,LIVE),null);
- assert.equal(otherActiveFlowKey(undefined,LIVE),null);
- assert.equal(otherActiveFlowKey({flow_key:LIVE,revision:2},LIVE),null);
- assert.equal(otherActiveFlowKey({flow_key:LIVE,revision:2},LOCAL),LIVE);
- assert.equal(otherActiveFlowKey({flow_key:"",revision:2},LOCAL),null);
+test("the single-active-flow guard is gone: no export refuses a different active flow",()=>{
+ assert.equal("otherActiveFlowKey" in activationModule,false);
+});
+test("catalogActiveFlows: activeFlows of the current server, legacy active of an older one",()=>{
+ const two={activeFlows:[{flow_key:"a",revision:3},{flow_key:"b",revision:7}],active:{flow_key:"a",revision:3}};
+ assert.deepEqual(catalogActiveFlows(two),[{flow_key:"a",revision:3},{flow_key:"b",revision:7}]);
+ // Old server (no activeFlows field): its single active, or nothing.
+ assert.deepEqual(catalogActiveFlows({active:{flow_key:"a",revision:3}}),[{flow_key:"a",revision:3}]);
+ assert.deepEqual(catalogActiveFlows({active:null}),[]);
+ assert.deepEqual(catalogActiveFlows({}),[]);
+ assert.deepEqual(catalogActiveFlows(null),[]);
+ // Malformed entries dropped, duplicate keys never produce two revisions.
+ assert.deepEqual(catalogActiveFlows({activeFlows:[null,{flow_key:"",revision:1},{flow_key:"x"},
+  {flow_key:"a",revision:"2"},{flow_key:"b",revision:1},{flow_key:"b",revision:9}]}),[{flow_key:"b",revision:1}]);
+ // Each flow reads ITS OWN revision; absent = OFF.
+ assert.equal(activeRevisionOf(two.activeFlows,"a"),3);
+ assert.equal(activeRevisionOf(two.activeFlows,"b"),7);
+ assert.equal(activeRevisionOf(two.activeFlows,"c"),null);
+ assert.equal(activeRevisionOf(null,"a"),null);
 });
 const allTrue={instagram:true,tenant:true,account:true,globalSwitch:true,tenantSwitch:true,credits:true,
  activeRevision:true,supportedCandidate:true,ingress:true,activation:true,canary:true,operatorRelease:true,
@@ -120,5 +146,4 @@ test("resolveServerFlowKey is cross-account safe: only the selected account's ow
  assert.equal(resolveServerFlowKey({localKey:LOCAL,catalog:[A,B]}),LOCAL);
  // Selecting a different active: only another account's catalog reply (a different call) can yield its key.
  assert.equal(resolveServerFlowKey({localKey:LOCAL,catalog:[A],active:{flow_key:"flow_b",revision:4}}),"flow_b");
- assert.equal(otherActiveFlowKey({flow_key:"flow_b",revision:4},"flow_a"),"flow_b");
 });

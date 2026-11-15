@@ -28,7 +28,10 @@ test("direct message trigger matches all messages, not comments or stories",()=>
 });
 test("keyword trigger matches message text but not a comment, and requires keywords",()=>{
   const flow=makeFlow("keyword","إشتراك، أسعار");
-  assert.equal(matchInboundEvent(event("message","هل لديكم الاشتراك؟"),[flow]).length,1);
+  // Token-aware "contains": the ال-prefixed form is a different word (no morphological folding).
+  assert.equal(matchInboundEvent(event("message","هل لديكم اشتراك؟"),[flow]).length,1);
+  assert.equal(matchInboundEvent(event("message","هل لديكم الاشتراك؟"),[flow]).length,0);
+  assert.equal(matchInboundEvent(event("message","هل لديكم الاشتراك؟"),[makeFlow("keyword","إشتراك، الاشتراك")]).length,1);
   assert.equal(matchInboundEvent(event("keyword","أريد أسعار"),[flow]).length,1);
   assert.equal(matchInboundEvent(event("comment","اشتراك"),[flow]).length,0);
   assert.equal(matchInboundEvent(event("message","مساء الخير"),[flow]).length,0);

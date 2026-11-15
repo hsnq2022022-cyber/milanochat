@@ -18,7 +18,8 @@ export default function TriggerKeywordsEditor({mode,value,onChange}:{
   const add=()=>{
     const next=draft.split(/[,،\n]+/).map(x=>x.trim()).filter(Boolean);
     if(next.length===0)return;
-    update([...new Set([...words,...next])].slice(0,30));
+    // No silent cap: more than 40 keywords is reported by the flow validation (keywordListProblem).
+    update([...new Set([...words,...next])]);
     setDraft("");
   };
   return <section className="mt-4 rounded-xl border border-[#275443] bg-[#061A14]/60 p-3" data-testid="trigger-keyword-settings">

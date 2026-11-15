@@ -31,28 +31,60 @@ export function pickActivationAccount(list:ActivationAccount[],commentPlatform:P
 
 /** One entry of the server `catalog` reply (latest revision per published flow key). */
 export type CatalogFlow={flowKey:string;latestRevision:number};
-/** The account's single active publication as reported by `catalog` (null = none). */
+/** One active publication of the account as reported by `catalog` (flow_key + ITS active revision). */
 export type CatalogActive={flow_key:string;revision:number};
+
+const asActive=(v:unknown):CatalogActive|null=>{
+ if(!v||typeof v!=="object")return null;
+ const a=v as {flow_key?:unknown;revision?:unknown};
+ return typeof a.flow_key==="string"&&a.flow_key.length>0&&typeof a.revision==="number"
+  ?{flow_key:a.flow_key,revision:a.revision}:null;
+};
+/**
+ * ALL active flows of the account from a `catalog` reply. Several flows may be
+ * active at once, each independently with its own revision. Current server:
+ * `activeFlows` (array). Older server without that field: its legacy single
+ * `active` (0 or 1 entry). Malformed entries are dropped; a flow_key appears
+ * at most once (first entry kept).
+ */
+export function catalogActiveFlows(reply:{activeFlows?:unknown;active?:unknown}|null|undefined):CatalogActive[]{
+ if(!reply||typeof reply!=="object")return [];
+ const raw=Array.isArray(reply.activeFlows)?reply.activeFlows:[reply.active];
+ const out:CatalogActive[]=[];
+ for(const item of raw){
+  const a=asActive(item);
+  if(a&&!out.some(x=>x.flow_key===a.flow_key))out.push(a);
+ }
+ return out;
+}
+/** Active revision of exactly `key` among the account's active flows, null = this flow is OFF. */
+export function activeRevisionOf(activeFlows:readonly CatalogActive[]|null|undefined,key:string):number|null{
+ return (activeFlows??[]).find(a=>a?.flow_key===key)?.revision??null;
+}
 
 /**
  * Which server flow_key the editor toggle manages. The editor id is LOCAL
  * (uuid/"default"), while publications live under their own flow_key:
- * the account's active publication (catalog `active.flow_key`) when present,
- * else the local key (published under its own key, not yet published, or
- * catalog unavailable: old behaviour). `catalog` is accepted for call-site
- * compatibility but does not change the result.
+ * 1. the local key when it is a server flow of this account (listed in the
+ *    catalog or active): the toggle manages THAT flow only, whatever other
+ *    flows are active (several flows may be active independently);
+ * 2. else the account's only active flow when exactly one is active (the
+ *    previous behaviour: a local draft of a live flow published under its own
+ *    server key, e.g. ig_live_welcome_20261029);
+ * 3. else the local key (not yet published, catalog unavailable, or several
+ *    active flows: never guess which one this draft is).
+ * `active` (legacy single entry) is used only when `activeFlows` is absent.
  * UI selection only: the server re-checks tenant/account scope on every call.
  */
 export function resolveServerFlowKey(input:{localKey:string;
- catalog?:readonly CatalogFlow[]|null;active?:CatalogActive|null}):string{
- const active=input.active?.flow_key;
- return typeof active==="string"&&active.length>0?active:input.localKey;
-}
-
-/** Another flow_key than `serverKey` is active on the account (runtime allows one). */
-export function otherActiveFlowKey(active:CatalogActive|null|undefined,serverKey:string):string|null{
- const key=active?.flow_key;
- return typeof key==="string"&&key.length>0&&key!==serverKey?key:null;
+ catalog?:readonly CatalogFlow[]|null;active?:CatalogActive|null;
+ activeFlows?:readonly CatalogActive[]|null}):string{
+ const actives=catalogActiveFlows({activeFlows:input.activeFlows??undefined,active:input.active});
+ const local=input.localKey;
+ const published=Array.isArray(input.catalog)&&
+  input.catalog.some(f=>!!f&&typeof f==="object"&&f.flowKey===local);
+ if(published||actives.some(a=>a.flow_key===local))return local;
+ return actives.length===1?actives[0].flow_key:local;
 }
 
 /** Shape of the server `readiness` report fields the client reads. */

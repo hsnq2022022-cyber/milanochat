@@ -1,13 +1,16 @@
 import {useCallback,useEffect,useRef,useState} from "react";
 import {getSupabase} from "../lib/supabase";
-import {accountCanActivate,otherActiveFlowKey,pickActivationAccount,readinessBlockers,resolveServerFlowKey,
- type ActivationAccount,type CatalogActive,type CatalogFlow,type ReadinessReport} from "./activationAccount.ts";
+import {accountCanActivate,activeRevisionOf,catalogActiveFlows,pickActivationAccount,readinessBlockers,resolveServerFlowKey,
+ type ActivationAccount,type CatalogFlow,type ReadinessReport} from "./activationAccount.ts";
 import type {ProviderPlatform} from "./serverPublicationValidation.ts";
 
 /**
  * Real (server) activation state for one flow, via the existing `flow-publication`
  * Edge Function: accounts -> catalog (resolve the server flow_key) -> list (status)
  * -> readiness + activate / deactivate.
+ * Several flows may be active on one account at the same time, each with its own
+ * revision: this hook only ever reads and changes ITS server flow_key, and never
+ * refuses or affects another active flow (the server keeps them independent).
  * Nothing here is local: the toggle only reflects what the server reports, and
  * every server gate (auth, tenant/account scope, approval, readiness) still applies.
  */
@@ -18,7 +21,7 @@ export type ActivationState={
  canActivate:boolean;
  /** Arabic explanation shown when the toggle is unavailable (includes server codes). */
  reason:string;
- /** Server flow_key the toggle manages (catalog active key, else the local editor id). */
+ /** Server flow_key the toggle manages (see resolveServerFlowKey). */
  serverKey:string;
  /** Newest published revision of serverKey (list items[0]), null = none published. */
  latestRevision:number|null;
@@ -32,8 +35,10 @@ export type ToggleResult={ok:boolean;message:string};
 type Account=ActivationAccount;
 type Reply={ok?:boolean;error?:string;accounts?:Account[];
  items?:Array<{revision:number}>;activation?:{revision:number;is_active:boolean}|null;
- /** activate: boolean; catalog: the account's active publication. */
- active?:unknown;revision?:number;flows?:unknown;truncated?:boolean;
+ /** activate: boolean; catalog: legacy single active publication (older servers). */
+ active?:unknown;
+ /** catalog: ALL active flows of the account, each {flow_key,revision} (current server). */
+ activeFlows?:unknown;revision?:number;flows?:unknown;truncated?:boolean;
  readiness?:ReadinessReport;candidateRevision?:number|null};
 
 /** Server error: `message` is the server's error code text, `status` the HTTP status (0 = client side). */
@@ -96,12 +101,6 @@ export function activationErrorMessage(e:unknown,verb:Verb,en=false):string{
 
 const UNAVAILABLE_REASON="حالة التفعيل غير متاحة الآن: خدمة التدفقات السحابية غير متاحة أو غير مفعّلة.";
 
-function asCatalogActive(v:unknown):CatalogActive|null{
- if(!v||typeof v!=="object")return null;
- const a=v as {flow_key?:unknown;revision?:unknown};
- return typeof a.flow_key==="string"&&a.flow_key.length>0&&typeof a.revision==="number"
-  ?{flow_key:a.flow_key,revision:a.revision}:null;
-}
 function asCatalogFlows(v:unknown):CatalogFlow[]{
  if(!Array.isArray(v))return [];
  return v.filter((f):f is CatalogFlow=>!!f&&typeof f==="object"&&
@@ -112,8 +111,9 @@ type Preflight={refusal:string;reload:boolean}|null;
 
 /**
  * Client-side guards before any activate call (never a substitute for the server's):
- * fresh catalog (exactly one active flow per account, unchanged live state, the
- * displayed latest revision is still the latest), then readiness for exactly `target`
+ * fresh catalog (THIS flow's live state unchanged, the displayed latest revision is
+ * still the latest; other active flows of the account are independent and never
+ * block or change), then readiness for exactly `target`
  * (the report must be for that revision). Readiness blocks only ADVANCED targets
  * (buttons/delay/internal actions/media/comment); simple text-only revisions keep
  * the server's legacy activation path (see readinessBlockers). Unclassifiable
@@ -124,11 +124,9 @@ async function preflight(accountId:string,localKey:string,key:string,target:numb
  try{catalog=await invokeService({action:"catalog",accountId,flowKey:localKey});}
  catch(e){return {reload:false,refusal:"تعذر التحقق من التدفق النشط على الحساب؛ لم يتم أي تغيير (رمز: "+serviceErrorDetail(e)+
   "). / Could not verify the account's active flow; nothing was changed (code: "+serviceErrorDetail(e)+")."};}
- const active=asCatalogActive(catalog.active);
- const other=otherActiveFlowKey(active,key);
- if(other)return {reload:false,refusal:"يعمل تدفق آخر «"+other+"» على هذا الحساب؛ يسمح التشغيل بتدفق نشط واحد فقط لكل حساب. أوقفه أولًا. لم يتم أي تغيير."+
-  " / Another flow \""+other+"\" is active on this account; the runtime allows exactly one active flow per account. Stop it first. Nothing was changed."};
- if(live===null?active!==null:active?.revision!==live)
+ // Only THIS flow's own entry matters (null = OFF); other active flows are ignored.
+ const mine=activeRevisionOf(catalogActiveFlows(catalog),key);
+ if(mine!==live)
   return {reload:true,refusal:"تغيّرت حالة التفعيل على الخادم؛ تم تحديث الحالة، راجعها ثم أعد المحاولة. لم يتم أي تغيير."+
    " / The live state changed on the server; status refreshed, review it and retry. Nothing was changed."};
  const listed=asCatalogFlows(catalog.flows).find(f=>f.flowKey===key);
@@ -180,7 +178,7 @@ export function useFlowActivation(flowKey:string,refreshToken:unknown,commentPla
    let serverKey=flowKey,catalogNote="";
    try{
     const c=await invokeService({action:"catalog",accountId:acc.id,flowKey});
-    serverKey=resolveServerFlowKey({localKey:flowKey,catalog:asCatalogFlows(c.flows),active:asCatalogActive(c.active)});
+    serverKey=resolveServerFlowKey({localKey:flowKey,catalog:asCatalogFlows(c.flows),activeFlows:catalogActiveFlows(c)});
    }catch(e){
     catalogNote="تعذر قراءة التدفقات المنشورة للحساب؛ تُعرض حالة التدفق المحلي فقط (رمز: "+serviceErrorDetail(e)+").";
    }

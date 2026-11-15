@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { ADVANCED_ONLY_CHECKS, MOCK_HOST, mockAccounts, mockActivation, type ActivationServer, type MultiAccountServer } from "./flowActivationMock";
+import { ADVANCED_ONLY_CHECKS, MOCK_HOST, mockAccounts, mockActivation, mockMultiFlows, type ActivationServer, type MultiAccountServer, type MultiFlowServer } from "./flowActivationMock";
 
 test.skip(!MOCK_HOST, "needs VITE_SUPABASE_URL=http://mock.supabase.test (fake host)");
 
@@ -205,8 +205,9 @@ test("update to latest: a server rejection leaves state unchanged and shows the 
   await expect(page.getByTestId("flow-enabled-toggle")).toHaveAttribute("aria-pressed", "true");
 });
 
-test("a different flow_key active on the account: activation refused, no activate call", async ({ page }) => {
+test("a different flow_key active on the account: activation is NOT refused and never touches that flow", async ({ page }) => {
   // The local flow was published under its own key (default: r3), nothing active at load.
+  // Currently deployed (legacy) catalog shape: a single `active`, no `activeFlows`.
   const s = fresh({ items: [3, 2, 1], activeKey: "other_live_flow" });
   const dialogs = acceptDialogs(page);
   await mockActivation(page, s);
@@ -217,13 +218,14 @@ test("a different flow_key active on the account: activation refused, no activat
   // Another flow goes live on the same account (e.g. from another tab).
   s.active = 1;
   await toggle.click();
-  const status = page.getByRole("status").filter({ hasText: "other_live_flow" });
-  await expect(status).toContainText("تدفق نشط واحد فقط");
-  await expect(status).toContainText("exactly one active flow per account");
-  expect(mutations(s)).toHaveLength(0);
-  expect(s.calls.filter((c) => c.action === "readiness")).toHaveLength(0);
-  expect(dialogs).toHaveLength(0);
-  await expect(toggle).toHaveAttribute("aria-pressed", "false");
+  await expect(page.getByRole("status").filter({ hasText: "تم تفعيل التدفق (الإصدار 3)" })).toBeVisible();
+  await expect(page.getByText("تدفق نشط واحد فقط")).toHaveCount(0);
+  // Exactly one activate, for THIS flow and revision; nothing sent for the other flow.
+  expect(mutations(s)).toEqual([expect.objectContaining({ action: "activate", flowKey: "default", revision: 3 })]);
+  expect(s.calls.filter((c) => c.flowKey === "other_live_flow")).toHaveLength(0);
+  expect(s.calls.filter((c) => c.action === "readiness")).toEqual([expect.objectContaining({ flowKey: "default", revision: 3 })]);
+  expect(dialogs).toHaveLength(1);
+  await expect(toggle).toHaveAttribute("aria-pressed", "true");
 });
 
 test("deactivate targets the resolved server key after a confirm naming it and the live revision", async ({ page }) => {
@@ -420,4 +422,88 @@ test("isolation: a stale/foreign account id gets the server 403, shown with its 
   for (const c of callsOf(s, "user-a")) expect(["default"]).toContain(c.flowKey);
   expect(JSON.stringify(s.accounts)).toBe(before);
   expect(await page.content()).not.toMatch(/flow_b/);
+});
+
+/* ---------- Several flows active on one account (independent per flow) ---------- */
+const multi = (o: Partial<MultiFlowServer> = {}): MultiFlowServer => ({ flows: {}, active: {}, calls: [], ...o });
+const multiMutations = (s: MultiFlowServer) => s.calls.filter((c) => c.action === "activate" || c.action === "deactivate");
+
+test("two active flows: this toggle manages only its own flow; the other stays ON at its own revision", async ({ page }) => {
+  const s = multi({ flows: { default: [2, 1], other_flow: [5, 4] }, active: { other_flow: 4, default: 2 } });
+  const dialogs = acceptDialogs(page);
+  await mockMultiFlows(page, s);
+  await page.goto("/milanochat/#/flows");
+  const toggle = page.getByTestId("flow-enabled-toggle");
+  const line = page.getByTestId("flow-live-revision");
+  await expect(toggle).toHaveAttribute("aria-pressed", "true");
+  await expect(line).toHaveText("الإصدار المباشر: v2 · أحدث منشور: v2");
+  await expect(line).toHaveAttribute("data-flow-key", "default");
+  // Neutral note: flows never switch the main chatbot off.
+  await expect(page.getByTestId("flow-chatbot-note")).toContainText("المساعد الذكي يواصل الرد");
+  await expect(page.getByTestId("flow-chatbot-note")).toHaveAttribute("title", /The AI chatbot keeps answering/);
+  // OFF: only this flow is deactivated.
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-pressed", "false");
+  expect(multiMutations(s)).toEqual([expect.objectContaining({ action: "deactivate", flowKey: "default" })]);
+  expect(s.active).toEqual({ other_flow: 4 });
+  await expect(line).toHaveText("الإصدار المباشر: — · أحدث منشور: v2");
+  // ON again while other_flow is active: allowed, other_flow unchanged.
+  await toggle.click();
+  await expect(page.getByRole("status").filter({ hasText: "تم تفعيل التدفق (الإصدار 2)" })).toBeVisible();
+  await expect(toggle).toHaveAttribute("aria-pressed", "true");
+  expect(multiMutations(s)).toEqual([
+    expect.objectContaining({ action: "deactivate", flowKey: "default" }),
+    expect.objectContaining({ action: "activate", flowKey: "default", revision: 2 }),
+  ]);
+  expect(s.active).toEqual({ other_flow: 4, default: 2 });
+  expect(s.calls.filter((c) => c.flowKey === "other_flow")).toHaveLength(0);
+  expect(dialogs).toHaveLength(2);
+  // The panel lists every active flow with ITS OWN revision.
+  await page.getByTestId("flow-publications").click();
+  const dialog = page.getByRole("dialog", { name: "الإصدارات المنشورة" });
+  await dialog.getByRole("combobox").first().selectOption("22222222-2222-4222-8222-222222222222");
+  const items = dialog.getByTestId("flow-active-server-item");
+  await expect(items).toHaveText(["other_flow · v4", "default · v2"]);
+  await expect(dialog.getByTestId("flow-active-server-status")).toContainText("كل تدفق يعمل باستقلال");
+  const flowSelect = dialog.getByRole("combobox").nth(1);
+  await expect(flowSelect.locator("option", { hasText: "other_flow" })).toHaveText("other_flow · نشط v4 · أحدث v5");
+  await expect(flowSelect.locator("option").first()).toHaveText("التدفق المحلي المفتوح · نشط v2");
+});
+
+test("a new local flow (own key) activates while two other flows stay active; no single-flow refusal", async ({ page }) => {
+  const s = multi({ flows: { default: [2], other_flow: [5, 4] }, active: { default: 2, other_flow: 4 }, localRevisions: [3] });
+  const dialogs = acceptDialogs(page);
+  await mockMultiFlows(page, s);
+  await page.goto("/milanochat/#/flows");
+  await expect(page.getByTestId("flow-enabled-toggle")).toHaveAttribute("aria-pressed", "true");
+  await page.getByRole("button", { name: "إنشاء تدفق جديد" }).click();
+  const toggle = page.getByTestId("flow-enabled-toggle");
+  const line = page.getByTestId("flow-live-revision");
+  // Its own server key: OFF although two other flows are ON.
+  await expect(toggle).toHaveAttribute("aria-pressed", "false");
+  await expect(line).toHaveText("الإصدار المباشر: — · أحدث منشور: v3");
+  const ownKey = await line.getAttribute("data-flow-key");
+  expect(ownKey).toMatch(/^[0-9a-f-]{36}$/);
+  await toggle.click();
+  await expect(page.getByRole("status").filter({ hasText: "تم تفعيل التدفق (الإصدار 3)" })).toBeVisible();
+  await expect(toggle).toHaveAttribute("aria-pressed", "true");
+  expect(multiMutations(s)).toEqual([expect.objectContaining({ action: "activate", flowKey: ownKey, revision: 3 })]);
+  expect(s.active).toEqual({ default: 2, other_flow: 4, [ownKey!]: 3 });
+  expect(dialogs).toHaveLength(1);
+  await expect(page.getByText("تدفق نشط واحد فقط")).toHaveCount(0);
+});
+
+test("old server compatibility: catalog without activeFlows still resolves, shows and toggles", async ({ page }) => {
+  const s = multi({ flows: { [LIVE]: [4, 3, 2, 1] }, active: { [LIVE]: 2 }, legacyCatalog: true });
+  acceptDialogs(page);
+  await mockMultiFlows(page, s);
+  await page.goto("/milanochat/#/flows");
+  const toggle = page.getByTestId("flow-enabled-toggle");
+  await expect(toggle).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByTestId("flow-live-revision")).toHaveText("الإصدار المباشر: v2 · أحدث منشور: v4");
+  await expect(page.getByTestId("flow-live-revision")).toHaveAttribute("data-flow-key", LIVE);
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-pressed", "false");
+  expect(multiMutations(s)).toEqual([expect.objectContaining({ action: "deactivate", flowKey: LIVE })]);
+  expect(s.calls.every((c) => !("activeFlows" in c))).toBe(true);
 });

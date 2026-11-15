@@ -25,7 +25,9 @@ test("transport failures and empty database responses fail closed",async()=>{
 test("no duplicate ID or PII is logged by the new integration",()=>{
  const source=readFileSync("supabase/functions/milan-api/index.ts","utf8");
  const helper=readFileSync("supabase/functions/milan-api/persistInboundOnce.ts","utf8");
- const idx=source.indexOf("const incomingResult = await persistInboundOnce");
+ // A re-drive of a persisted retryable event (inboundRoutingRetry.ts) reuses the
+ // stored row ("saved") instead of inserting it again; every new event still inserts once.
+ const idx=source.indexOf("const incomingResult = redrive ? \"saved\" : await persistInboundOnce");
  const failed=source.indexOf('if (incomingResult !== "saved")',idx);
  const rag=source.indexOf("await answerFromKnowledge(",failed);
  assert.ok(idx>=0&&failed>idx&&rag>failed);

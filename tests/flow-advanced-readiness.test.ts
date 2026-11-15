@@ -76,7 +76,7 @@ test("real server activation cannot bypass durable worker gates",()=>{
   "FIELD_ENCRYPTION_KEY","FLOW_RICH_BUTTONS_ENABLED",
   "FLOW_DURABLE_SCHEDULER_ENABLED"
  ])assert(guarded.includes(flag),flag);
- assert.match(api.slice(end,end+350),/simpleMessageFromDocument\(publication.document,scope.platform\)===null/);
+ assert.match(api.slice(end,end+350),/!simpleFlowDocumentSupported\(publication.document,scope.platform\)/);
 });
 
 test("mixed and text chains require exactly the operator flags their nodes need",()=>{
@@ -213,8 +213,8 @@ test("activation guard requires message:image and FLOW_MEDIA_SEND_ENABLED exactl
  // Canary (non-durable) capability set: message:image only while the flag is on; default set unchanged.
  const after=api.slice(api.indexOf("if(!durable){",start));
  assert.match(after,/withMediaGate\(parseCapabilities\(env\("FLOW_ACTIVATION_CAPABILITIES"\)\),env\("FLOW_MEDIA_SEND_ENABLED"\)==="true"\)/);
- assert.match(after,/new Set<FlowCapability>\(\["execution-engine","instagram","trigger:message","message:text","condition"\]\)/);
- assert.match(after.slice(0,200),/simpleMessageFromDocument\(publication\.document,scope\.platform\)===null/,"V2 path still refuses image documents first");
+ assert.match(after,/new Set<FlowCapability>\(\["execution-engine","instagram","trigger:message","trigger:keyword","message:text","condition"\]\)/);
+ assert.match(after.slice(0,200),/!simpleFlowDocumentSupported\(publication\.document,scope\.platform\)/,"V2 path still refuses image documents first");
 });
 test("Instagram website-button graphs are a buttons candidate: ready only with FLOW_RICH_BUTTONS_ENABLED",async()=>{
  const {durableCandidateKind}=await import("../supabase/functions/milan-api/flowDurableIngress.ts");

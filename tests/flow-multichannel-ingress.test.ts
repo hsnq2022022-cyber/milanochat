@@ -24,8 +24,14 @@ test("durable whitelist default (Instagram) is unchanged: WhatsApp/Messenger tri
  assert.equal(supportedDurableDocument(docFor("instagram")),true);
  for(const p of ["whatsapp","messenger","facebook"])assert.equal(supportedDurableDocument(docFor(p)),false);
 });
+// Worker readiness gates (flowDurableIngress.ts durableWorkerGatesOpen): a NEW
+// durable run starts only while the operator gates of the workers that produce
+// its reply are open, so the durable start tests run with them open.
+const WORKERS_READY:Record<string,string>={FLOW_WORKERS_OPERATOR_RELEASE:"production-canary-approved",
+ FLOW_OUTBOX_SEND_ENABLED:"true",FLOW_ATOMIC_CONSUME_READY:"true",FLOW_DURABLE_SCHEDULER_ENABLED:"true",
+ FLOW_RICH_BUTTONS_ENABLED:"true",FLOW_INTERNAL_ACTIONS_ENABLED:"true",FIELD_ENCRYPTION_KEY:"test-only-field-key"};
 const ENV=(over:Record<string,string|undefined>={})=>({env:{get:(k:string)=>({
- FLOW_DURABLE_INGRESS_ENABLED:"true",FLOW_DURABLE_CANARY_ACCOUNT_ID:ids.accountId,
+ ...WORKERS_READY,FLOW_DURABLE_INGRESS_ENABLED:"true",FLOW_DURABLE_CANARY_ACCOUNT_ID:ids.accountId,
  FLOW_MULTICHANNEL_ENABLED:"true",...over} as Record<string,string|undefined>)[k]}});
 async function withEnv<T>(e:unknown,fn:()=>T|Promise<T>):Promise<T>{
  const old=(globalThis as any).Deno;(globalThis as any).Deno=e;
@@ -113,7 +119,7 @@ function mcDb(platform:string,o:{switches?:any;waiting?:any;document?:unknown}={
   from:(table:string)=>{
    const filters:Record<string,unknown>={};
    const q:any={select:()=>q,eq:(k:string,v:unknown)=>{filters[k]=v;return q;},
-    in:(k:string,v:unknown)=>{filters[k]=v;return q;},gt:()=>q,
+    in:(k:string,v:unknown)=>{filters[k]=v;return q;},gt:()=>q,lte:()=>q,
     maybeSingle:async()=>{reads.push({table,filters});return {data:
      table==="automation_flow_global_switch"?{enabled:true}:
      table==="automation_flow_tenant_switches"?(o.switches??{enabled:true,test_only:false,production_approved:true}):
@@ -185,7 +191,7 @@ test("flag ON isolation: a waiting run of another platform/account/tenant is nev
    {channel_account_id:"22222222-2222-4222-8222-222222222222"},{conversation_id:"55555555-5555-4555-8555-555555555555"}]){
    const {db,calls}=mcDb("whatsapp",{waiting:{...base,...over}});
    assert.equal(await attemptDurableInstagram(db,{...ids,platform:"whatsapp",eventId:"mid.tap",
-    providerEventIdGenuine:true,selectedChoiceId:"prices"}),"handled",JSON.stringify(over));
+    providerEventIdGenuine:true,selectedChoiceId:"prices"}),"retry",JSON.stringify(over)); // foreign/ambiguous row: unknown state -> retryable, never resumed
    assert.deepEqual(calls,[],JSON.stringify(over));
   }
   // A document of another platform (or one the platform cannot show) never starts a run.
@@ -440,7 +446,7 @@ test("planner + safePlan per platform: same effects as Instagram, committed only
 });
 for(const [platform,docPlatform] of [["whatsapp","whatsapp"],["facebook","messenger"]] as const){
  test(`end-to-end ${platform}: image and URL-button runs commit their effects only with every flag ON`,async()=>{
-  const ALL={...MEDIA,...RICH,FLOW_MULTICHANNEL_ENABLED:"true",FLOW_DURABLE_INGRESS_ENABLED:"true",
+  const ALL={...WORKERS_READY,...MEDIA,...RICH,FLOW_MULTICHANNEL_ENABLED:"true",FLOW_DURABLE_INGRESS_ENABLED:"true",
    FLOW_DURABLE_CANARY_ACCOUNT_ID:ids.accountId};
   const ev={...ids,platform,providerEventIdGenuine:true,eventId:"mid.start"};
   for(const [doc,feature,kinds] of [

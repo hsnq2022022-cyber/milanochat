@@ -2,7 +2,8 @@ import {useCallback,useEffect,useState} from "react";
 import type {FlowDocument} from "./model.ts";
 import type {FlowLanguage} from "./uiLocale.ts";
 import { copyText } from "../lib/clipboard.ts";
-import {accountCanActivate,type ActivationAccount} from "./activationAccount.ts";
+import {accountCanActivate,activeRevisionOf,catalogActiveFlows,resolveServerFlowKey,
+ type ActivationAccount,type CatalogActive} from "./activationAccount.ts";
 import {commentTriggerProviderPlatform} from "./serverPublicationValidation.ts";
 import {activationErrorMessage,invokeService,serviceErrorDetail} from "./useFlowActivation.ts";
 
@@ -10,7 +11,6 @@ type Account=ActivationAccount;
 type Version={revision:number;created_at:string};
 type Activation={revision:number;is_active:boolean}|null;
 type PublishedFlow={flowKey:string;latestRevision:number};
-type ActiveFlow={flow_key:string;revision:number}|null;
 type ReadinessChecks={
  // Comment-trigger reports replace the Instagram channel check with commentTrigger.
  instagram?:boolean;commentTrigger?:boolean;tenant:boolean;account:boolean;globalSwitch:boolean;
@@ -63,7 +63,7 @@ const serverText=(t:unknown,en:boolean):string|null=>{
 };
 type Reply={ok?:boolean;error?:string;accounts?:Account[];
  items?:Version[];activation?:Activation;revision?:number;
- flows?:PublishedFlow[];active?:ActiveFlow;truncated?:boolean;document?:unknown;readiness?:Readiness;candidateRevision?:number|null};
+ flows?:PublishedFlow[];active?:unknown;activeFlows?:unknown;truncated?:boolean;document?:unknown;readiness?:Readiness;candidateRevision?:number|null};
 type Props={flowKey:string;document:FlowDocument;language:FlowLanguage;onClose:()=>void;
  onImportRevision?:(document:unknown)=>boolean;onPreviewRevision?:(document:unknown)=>boolean};
 
@@ -79,7 +79,8 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
  const [accountId,setAccountId]=useState("");
  const [managedFlowKey,setManagedFlowKey]=useState(flowKey);
  const [catalog,setCatalog]=useState<PublishedFlow[]>([]);
- const [activeServerFlow,setActiveServerFlow]=useState<ActiveFlow>(null);
+ // ALL active flows of the account, each with its own active revision (several may be active).
+ const [activeServerFlows,setActiveServerFlows]=useState<CatalogActive[]>([]);
  const [catalogTruncated,setCatalogTruncated]=useState(false);
  const [versions,setVersions]=useState<Version[]>([]);
  const [activation,setActivation]=useState<Activation>(null);
@@ -113,14 +114,18 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
  // The editor ID is local; discover immutable publications for the
  // authenticated account instead of guessing the active server flow key.
  useEffect(()=>{
-  if(!accountId){setCatalog([]);setActiveServerFlow(null);return;}
+  if(!accountId){setCatalog([]);setActiveServerFlows([]);return;}
   let cancelled=false;
   void call({action:"catalog",accountId,flowKey}).then(r=>{
    if(cancelled)return;
-   setCatalog(r.flows??[]);setActiveServerFlow(r.active??null);
+   const actives=catalogActiveFlows(r);
+   setCatalog(r.flows??[]);setActiveServerFlows(actives);
    setCatalogTruncated(r.truncated===true);
-   if(r.active?.flow_key){
-    setManagedFlowKey(r.active.flow_key);
+   // Same rule as the editor toggle: the local flow manages itself when it is a
+   // server flow of this account; else the account's only active flow.
+   const resolved=resolveServerFlowKey({localKey:flowKey,catalog:r.flows??[],activeFlows:actives});
+   if(resolved!==flowKey){
+    setManagedFlowKey(resolved);
     setLoaded(false);setVersions([]);setActivation(null);
    }
   }).catch(e=>{
@@ -258,7 +263,7 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
     <label className="block space-y-1">
      <span>{en?"Channel account":"حساب القناة"}</span>
      <select className={style+" w-full"} value={accountId} disabled={busy}
-      onChange={e=>{setAccountId(e.target.value);setManagedFlowKey(flowKey);setCatalog([]);setActiveServerFlow(null);setCatalogTruncated(false);setLoaded(false);setVersions([]);setActivation(null);setReadiness(null);setCheckedRevision(null);setNotice("");}}>
+      onChange={e=>{setAccountId(e.target.value);setManagedFlowKey(flowKey);setCatalog([]);setActiveServerFlows([]);setCatalogTruncated(false);setLoaded(false);setVersions([]);setActivation(null);setReadiness(null);setCheckedRevision(null);setNotice("");}}>
       <option value="">{en?"Select an account":"اختر الحساب"}</option>
       {accounts.map(a=><option key={a.id} value={a.id}>
        {a.platform+" · "+a.id.slice(0,8)+(a.is_active?"":" (غير نشط)")}
@@ -270,14 +275,17 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
      <select className={style+" w-full"} value={managedFlowKey} disabled={busy}
       onChange={e=>{setManagedFlowKey(e.target.value);setLoaded(false);
        setVersions([]);setActivation(null);setReadiness(null);setCheckedRevision(null);setNotice("");}}>
-      <option value={flowKey}>{en?"Current local flow":"التدفق المحلي المفتوح"}</option>
-      {catalog.filter(item=>item.flowKey!==flowKey).map(item=><option
-       key={item.flowKey} value={item.flowKey}>
-       {item.flowKey+" · "+(activeServerFlow?.flow_key===item.flowKey
-        ?(en?"Active v"+activeServerFlow.revision+" · Latest v"+item.latestRevision:
-          "نشط v"+activeServerFlow.revision+" · أحدث v"+item.latestRevision)
+      <option value={flowKey}>{(en?"Current local flow":"التدفق المحلي المفتوح")+
+       (activeRevisionOf(activeServerFlows,flowKey)!==null?(en?" · Active v":" · نشط v")+activeRevisionOf(activeServerFlows,flowKey):"")}</option>
+      {catalog.filter(item=>item.flowKey!==flowKey).map(item=>{
+       // Each flow shows ITS OWN active revision (independent of the others).
+       const live=activeRevisionOf(activeServerFlows,item.flowKey);
+       return <option key={item.flowKey} value={item.flowKey}>
+       {item.flowKey+" · "+(live!==null
+        ?(en?"Active v"+live+" · Latest v"+item.latestRevision:
+          "نشط v"+live+" · أحدث v"+item.latestRevision)
         :(en?"Latest v":"أحدث v")+item.latestRevision)}
-      </option>)}
+      </option>;})}
      </select>
      {catalogTruncated&&<p className="text-xs text-[#E5B54B]">{en
       ?"Older flows may be omitted after 500 revisions."
@@ -286,15 +294,18 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
       ?"Managing a server flow: view, stop or import a revision. Publishing local edits to another flow is disabled."
       :"إدارة تدفق منشور: يمكنك عرض الإصدارات أو إيقافه أو استيراد نسخة، ولا يمكن نشر مسودة محلية مختلفة عليه مباشرة."}</p>}
     </label>}
-    {accountId&&activeServerFlow&&<div data-testid="flow-active-server-status"
+    {accountId&&activeServerFlows.length>0&&<div data-testid="flow-active-server-status"
      role="status" className="rounded-lg border border-[#3DD189]/50 bg-[#14392C] p-3">
-      <strong>{en?"Active published automation":"التدفق المنشور النشط"}</strong>
-      <p className="mt-1 break-all text-xs text-[#C9E8D9]">
+      <strong>{activeServerFlows.length>1
+       ?(en?"Active published automations (each runs independently)":"التدفقات المنشورة النشطة (كل تدفق يعمل باستقلال)")
+       :(en?"Active published automation":"التدفق المنشور النشط")}</strong>
+      {activeServerFlows.map(activeServerFlow=><p key={activeServerFlow.flow_key}
+       data-testid="flow-active-server-item" className="mt-1 break-all text-xs text-[#C9E8D9]">
        {activeServerFlow.flow_key+" · v"+activeServerFlow.revision}
-      </p>
+      </p>)}
       <p className="mt-1 text-xs text-[#BED4C9]">{en
-       ?"Select Load revisions to inspect or stop this live automation."
-       :"اضغط «عرض الإصدارات» لفحص هذا التدفق أو إيقافه."}</p>
+       ?"Select a flow and Load revisions to inspect or stop it. Other active flows are not affected. The AI chatbot keeps answering messages no active flow handles."
+       :"اختر التدفق واضغط «عرض الإصدارات» لفحصه أو إيقافه، دون التأثير على التدفقات النشطة الأخرى. يستمر المساعد الذكي في الرد على الرسائل التي لا يتولاها تدفق نشط."}</p>
     </div>}
     <div className="flex flex-wrap gap-2">
      <button type="button" data-testid="flow-readiness-check"

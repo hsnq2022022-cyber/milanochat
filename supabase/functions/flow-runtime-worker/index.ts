@@ -14,6 +14,7 @@ import {aiStepEnabled} from "../flow-outbox-worker/aiStep.ts";
 import {canWakeDurableRun,wakeEndReason,type WakeEligibility} from "./eligibility.ts";
 import {wakeMediaSendEnabled,wakeEffectsMediaAllowed,endWakeForDisallowedMedia,
  WAKE_MEDIA_END_REASON} from "./mediaGuard.ts";
+import {wakeMaxOverdueMinutes,wakeOverdue,endOverdueWake} from "./overdueGuard.ts";
 
 const base=Deno.env.get("SUPABASE_URL")??"";
 const service=Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")??"";
@@ -73,6 +74,17 @@ Deno.serve(async(req)=>{
    const {data:run,error:re}=await sb.from("automation_flow_runs").select("*")
     .eq("tenant_id",tenantId).eq("id",runId).single();
    if(re||!run||run.run_status!=="sleeping")throw Error("missing sleeping run");
+   // FLOW_WAKE_MAX_OVERDUE_MINUTES (overdueGuard.ts, default OFF): a run this
+   // worker could not serve in time is ended ('stale'), never sent late.
+   if(wakeOverdue(run.wake_at,Date.now(),
+     wakeMaxOverdueMinutes(()=>Deno.env.get("FLOW_WAKE_MAX_OVERDUE_MINUTES")))){
+    if(await endOverdueWake((fn,args)=>sb.rpc(fn,args),tenantId,runId)){
+     cancelled++;
+     console.warn("[flow-worker] overdue run ended",{tenantId,runId,reason:"wake_overdue"});
+     continue;
+    }
+    throw Error("overdue run not ended");
+   }
    // The lease is not permission to continue an inactive revision. Recheck
    // tenant, exact canary account and human takeover before planning effects.
    const [tenant,flags,account,conversation,activation]=await Promise.all([

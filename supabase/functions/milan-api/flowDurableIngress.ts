@@ -8,7 +8,9 @@ import {createRuntimeState,type RuntimeState} from "../../../src/flow/runtimePla
 import {planUntilWait,seedFromEventKey,MAX_CHAIN_EFFECTS,hash32,collectedFields,
  renderCollectedTemplate,type ChainPlan} from "../../../src/flow/runtimeChain.ts";
 import type {FlowDocument} from "../../../src/flow/model.ts";
-import {simpleMessageFromDocument} from "./flowPrepareMessage.ts";
+import {simpleFlowDocumentSupported,v2EngineAvailable} from "./flowPrepareMessage.ts";
+import {selectActiveFlowForInbound} from "./flowInboundSelection.ts";
+import {keywordTriggerProblem,dmTriggerAcceptsText,documentTriggerData} from "./triggerKeywords.ts";
 import {durableAnswerMode,normalizeDurableAnswer,reaskText,type DurableAnswerMode}
  from "./flowDurableAnswer.ts";
 import {isAllowedFlowImageUrl} from "../flow-outbox-worker/mediaPolicy.ts";
@@ -167,7 +169,11 @@ const stepButtons=(opts:unknown,min:number)=>Array.isArray(opts)&&
 function durablePorts(d:RecordValue,triggerPlatform="instagram"):{ports:string[];required:string[]}|null{
  switch(d.kind){
   case "trigger":
-   return d.platform===triggerPlatform&&d.triggerMode==="message"?
+   // "message" = every DM (unchanged). "keyword" = only DMs matching >= 1
+   // valid keyword: a trigger PROPERTY checked by attemptDurableInstagram
+   // before any claim/start; keyword lists that parse empty are refused.
+   return d.platform===triggerPlatform&&(d.triggerMode==="message"||
+    (d.triggerMode==="keyword"&&keywordTriggerProblem(d)===null))?
     {ports:["next"],required:["next"]}:null;
   case "message":{
    if(!textOk(d.text)||!Array.isArray(d.options))return null;
@@ -266,7 +272,8 @@ function durablePorts(d:RecordValue,triggerPlatform="instagram"):{ports:string[]
 
 /**
  * Whitelist of graphs the live durable engine runs. Accepts the two original
- * shapes and chained graphs built only from: one Instagram message trigger,
+ * shapes and chained graphs built only from: one Instagram message trigger
+ * (or keyword trigger with >= 1 valid keyword; matched before any claim),
  * text messages (optional step buttons), button questions, text/email/phone
  * questions (answer stored under a safe inputField), delay (1..30 units),
  * condition (not on the inbound message), set_field, randomizer, goto, end,
@@ -334,7 +341,9 @@ export function supportedDurableDocument(raw:unknown,platform:string="instagram"
  }
  if(seen.size!==byId.size)return false;
  // V2 keeps its shapes (lone trigger->text, trigger->condition(message)->2 texts).
- if(simpleMessageFromDocument(raw,multichannel?platform as MultichannelPlatform:"instagram","")!==null)return false;
+ // Shape check independent of inbound text (a keyword V2 document must stay
+ // V2's even though it would not match an empty text).
+ if(simpleFlowDocumentSupported(raw,multichannel?platform as MultichannelPlatform:"instagram"))return false;
  // A node the platform cannot represent: V2 answers instead.
  if(multichannel&&multichannelCapabilityProblem(raw,platform as MultichannelPlatform)!==null)return false;
  return true;
@@ -444,8 +453,9 @@ export type DurableEvent={
  eventId:string;platform:string;selectedChoiceId?:string|null;
  /**
   * Inbound text, used ONLY as the answer to a waiting text/email/phone
-  * question. Never logged; above MAX_INBOUND_ANSWER_CHARS it is ignored
-  * (an invalid answer).
+  * question and, for a NEW run of a keyword-trigger flow, for the keyword
+  * match (triggerKeywords.ts). Never logged or stored by this module; above
+  * MAX_INBOUND_ANSWER_CHARS it is ignored (an invalid answer).
   */
  text?:string|null;
  /**
@@ -456,7 +466,28 @@ export type DurableEvent={
  providerEventIdGenuine:boolean;
 };
 type Db=Pick<SupabaseClient,"from"|"rpc">;
-type Result="fallback"|"handled";
+/**
+ * Result taxonomy (milan-api/index.ts acts on it):
+ *  fallback: KNOWN that this path does not own the event (gates off,
+ *            ineligible/no matching durable flow, waiting run ended): the V2/AI
+ *            path decides, exactly as before.
+ *  handled:  KNOWN TERMINAL outcome: a flow owns the event (claim acquired /
+ *            run started or resumed), it was already claimed by a prior
+ *            delivery (duplicate), a replay of the run's own start event, a
+ *            stale button choice, a pending human handoff, or a RESUME plan
+ *            the engine deterministically refuses. Never re-processed.
+ *            (A refused plan of a NEW run, or workers that are not ready,
+ *            is "fallback": nothing was claimed, V2/AI answers once.)
+ *  retry:    UNKNOWN state: a READ error (switches, prior delivery, waiting
+ *            runs, activations, publications, handoff queue), an unconfirmed
+ *            cancel or claim RPC error, ambiguous data (two waiting runs, a
+ *            foreign row) or an exception. No flow ran, no AI answers, nothing
+ *            new is owned; the caller keeps the event retryable
+ *            (inboundRoutingRetry.ts, bounded + observable). A retry is safe:
+ *            every step re-checks the claim first (priorDelivery) and every
+ *            write is a claim-first idempotent RPC.
+ */
+type Result="fallback"|"handled"|"retry";
 /**
  * milan-api/index.ts substitutes `ig_${Date.now()}` when Meta sends no
  * message id. Such an id is new on every delivery, so neither the messages
@@ -515,8 +546,9 @@ async function cancelRun(db:Db,tenantId:string,runId:string,reason:CancelReason,
 async function cancelThenFallback(db:Db,tenantId:string,runId:string,
  reason:"free_text"|"revision_inactive"):Promise<Result>{
  if(await cancelRun(db,tenantId,runId,reason,"awaiting_input"))return "fallback";
+ // Unconfirmed cancel (RPC error): state unknown, nothing claimed -> retry.
  console.warn("[flow-durable] waiting run cancel unconfirmed");
- return "handled";
+ return "retry";
 }
 /** Bound of the tenant-wide queued-handoff read (a full page fails closed). */
 export const PENDING_HANDOFF_SCAN=100;
@@ -576,7 +608,9 @@ async function claimInbound(db:Db,event:DurableEvent,canary:boolean):Promise<Cla
    p_platform:event.platform,p_provider_event_id:event.eventId,
    p_conversation_id:event.conversationId,p_inbound_message_id:event.inboundId
   });
-  if(r.error||!Array.isArray(r.data))return "fallback";
+  // RPC error: unknown whether the canary claim committed -> retry (a retry
+  // re-reads the claim first). No row = KNOWN not eligible -> V2 (unchanged).
+  if(r.error||!Array.isArray(r.data))return "retry";
   if(r.data.length===0)return "fallback";
   return r.data.length===1&&r.data[0].acquired===true&&r.data[0].route==="flow"?
    "acquired":"handled";
@@ -587,8 +621,11 @@ async function claimInbound(db:Db,event:DurableEvent,canary:boolean):Promise<Cla
   p_conversation_id:event.conversationId,p_inbound_message_id:event.inboundId,
   p_engine_ready:true
  });
- if(claim.error||!Array.isArray(claim.data)||claim.data.length!==1||
-    claim.data[0].acquired!==true||claim.data[0].route!=="flow")
+ // RPC error / malformed reply: unknown whether a claim committed. A retry
+ // re-reads the claim first (priorDelivery): committed -> duplicate, else
+ // claims again. Never two owners (unique claim key).
+ if(claim.error||!Array.isArray(claim.data))return "retry";
+ if(claim.data.length!==1||claim.data[0].acquired!==true||claim.data[0].route!=="flow")
   return "handled";
  return "acquired";
 }
@@ -676,8 +713,8 @@ const UUID_SHAPE=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
  * the claim unique entry makes it idempotent. Attempt 2: (false,NULL) means
  * the first attempt (or another delivery) committed -> "handled"; (true,run)
  * -> "handled"; empty -> nothing committed, V2 answers ("fallback"); a
- * second throw/error -> "fallback", logged ambiguous_after_retry for manual
- * review. A committed start (acquired=true) is "handled" even if its run id
+ * second throw/error -> "retry" (unknown: no AI; the event stays retryable),
+ * logged ambiguous_after_retry. A committed start (acquired=true) is "handled" even if its run id
  * looks malformed: a run exists, so V2 would only duplicate it. An
  * unexpected shape on attempt 1 falls back without retry. Logs carry only
  * {attempt,outcome,code?}: no ids, text or arguments.
@@ -741,7 +778,103 @@ async function claimAndStart(db:Db,event:DurableEvent,canary:boolean,
  }
  warn(second.code===undefined?{attempt:2,outcome:"ambiguous_after_retry"}:
   {attempt:2,outcome:"ambiguous_after_retry",code:second.code});
- return "fallback";
+ // The function itself is missing (migration 20261029330000 not applied):
+ // KNOWN that nothing committed -> V2 answers, the documented fail-safe.
+ if(second.code==="PGRST202"||second.code==="42883")return "fallback";
+ // Still unknown whether a start committed: retryable (no AI). A redelivery
+ // re-reads the claim first (committed -> duplicate/handled, else starts once).
+ return "retry";
+}
+/**
+ * READINESS GUARD of a NEW durable run (flow-claim-then-silence fix).
+ *
+ * A durable run never answers from this function: its reply is produced later
+ * by flow-outbox-worker (every plan), flow-runtime-worker (any delay) and
+ * flow-internal-worker (tag/notify/handoff). Once a run is started the event
+ * is "handled" and neither V2 nor the AI answers it, so starting a run the
+ * workers cannot serve leaves the customer with no reply at all. Before
+ * claimAndStart the ingress therefore requires:
+ *  1. (durableWorkerGatesOpen, no IO) the SAME operator gates the workers
+ *     check before doing any work: FLOW_WORKERS_OPERATOR_RELEASE,
+ *     FLOW_OUTBOX_SEND_ENABLED + FLOW_ATOMIC_CONSUME_READY and a field key
+ *     (outbox), FLOW_DURABLE_SCHEDULER_ENABLED when the document has a delay,
+ *     FLOW_RICH_BUTTONS_ENABLED when it has buttons, FLOW_INTERNAL_ACTIONS_ENABLED
+ *     when it has tag/untag/notify/handoff. Edge secrets are project-wide, so
+ *     milan-api reads the values the workers read. Fail-closed: any error or
+ *     missing value = not ready.
+ *  2. (durableWorkersStalled, two bounded tenant-scoped reads) NO evidence
+ *     that the workers are not running: a sleeping run of this account still
+ *     not woken DURABLE_STALL_GRACE_MINUTES after its wake time, or a
+ *     message/question effect of this tenant still pending after the same
+ *     grace (the crons tick every minute).
+ * Not ready -> "fallback" BEFORE any claim: nothing is claimed, started,
+ * cancelled or superseded, and V2 / the legacy AI answers under its own
+ * exclusive claim (one reply at most, as for an ineligible document). A read
+ * error is unknown state -> "retry" (no flow, no AI; event stays retryable).
+ *
+ * LIMIT (what the ingress cannot know): a worker that is configured but
+ * rejected or unreachable (e.g. the cron bearer answering 401) is invisible
+ * here until the first run/effect is overdue, so the events of the first
+ * DURABLE_STALL_GRACE_MINUTES of an outage are still claimed. Closing that
+ * window needs a positive worker heartbeat (schema + an always-on cron tick):
+ * an owner decision, not implemented. Resume paths (button tap, typed
+ * answer) are unchanged: their run already exists.
+ */
+export const DURABLE_STALL_GRACE_MINUTES=3;
+export const DURABLE_STALL_SCAN=20;
+const WORKER_KINDS=["message","question"];
+export function durableWorkerGatesOpen(needs:{scheduler:boolean;buttons:boolean;internal:boolean}):boolean{
+ try{
+  const on=(k:string)=>Deno.env.get(k)==="true";
+  return Deno.env.get("FLOW_WORKERS_OPERATOR_RELEASE")==="production-canary-approved"&&
+   on("FLOW_OUTBOX_SEND_ENABLED")&&on("FLOW_ATOMIC_CONSUME_READY")&&
+   (Deno.env.get("FIELD_ENCRYPTION_KEY")??"").length>0&&
+   (!needs.scheduler||on("FLOW_DURABLE_SCHEDULER_ENABLED"))&&
+   (!needs.buttons||on("FLOW_RICH_BUTTONS_ENABLED"))&&
+   (!needs.internal||on("FLOW_INTERNAL_ACTIONS_ENABLED"));
+ }catch{return false;}
+}
+/**
+ * READ-ONLY stall evidence, scoped to the verified tenant (and account for
+ * runs). Rows that are not exactly this tenant/account are ignored; a full
+ * page of pending effects counts as a backlog (stalled).
+ */
+export async function durableWorkersStalled(db:Db,event:{tenantId:string;accountId:string},
+ nowMs:number):Promise<"ok"|"stalled"|"error">{
+ const cutoffMs=nowMs-DURABLE_STALL_GRACE_MINUTES*60000;
+ const cutoff=new Date(cutoffMs).toISOString();
+ const [runs,effects]=await Promise.all([
+  db.from("automation_flow_runs").select("id,tenant_id,channel_account_id,run_status,wake_at")
+   .eq("tenant_id",event.tenantId).eq("channel_account_id",event.accountId)
+   .eq("run_status","sleeping").lte("wake_at",cutoff).limit(1),
+  db.from("automation_flow_outbox").select("id,tenant_id,delivery_status,effect_kind,created_at")
+   .eq("tenant_id",event.tenantId).eq("delivery_status","pending")
+   .in("effect_kind",WORKER_KINDS).lte("created_at",cutoff).limit(DURABLE_STALL_SCAN)
+ ]);
+ if(runs.error||effects.error||!Array.isArray(runs.data)||!Array.isArray(effects.data))return "error";
+ const at=(v:unknown)=>typeof v==="string"?Date.parse(v):Number.NaN;
+ if((runs.data as unknown[]).some(r=>record(r)&&r.tenant_id===event.tenantId&&
+   r.channel_account_id===event.accountId&&r.run_status==="sleeping"&&at(r.wake_at)<=cutoffMs))
+  return "stalled";
+ if((effects.data as unknown[]).some(e=>record(e)&&e.tenant_id===event.tenantId&&
+   e.delivery_status==="pending"&&WORKER_KINDS.includes(String(e.effect_kind))&&at(e.created_at)<=cutoffMs))
+  return "stalled";
+ return "ok";
+}
+/**
+ * Static part of the durable gate (no IO): FLOW_DURABLE_INGRESS_ENABLED, the
+ * operator canary account and the platform rule of validEvent. True does not
+ * mean a run starts (switches, prior delivery, waiting runs, the SQL
+ * re-checks still apply); it only tells the V2 path that durable documents of
+ * this account are ranked by the same selection (flowPrepareMessage.ts
+ * PrepareOptions.durableDocument). Fail-closed: any error -> false.
+ */
+export function durableIngressConfigured(accountId:string,platform:string):boolean{
+ try{
+  return Deno.env.get("FLOW_DURABLE_INGRESS_ENABLED")==="true"&&
+   Deno.env.get("FLOW_DURABLE_CANARY_ACCOUNT_ID")===accountId&&
+   (platform==="instagram"||(isMultichannel(platform)&&multichannelEnabled()));
+ }catch{return false;}
 }
 /**
  * Returns handled only when this server-owned path has taken responsibility
@@ -760,7 +893,7 @@ export async function attemptDurableInstagram(
    db.from("automation_flow_tenant_switches").select("enabled,test_only,production_approved")
     .eq("tenant_id",event.tenantId).maybeSingle()
   ]);
-  if(g.error||s.error)return "handled";
+  if(g.error||s.error)return "retry";
   // flow_claim_inbound (20261028220000) routes an inbound to 'flow' only for
   // test_only tenants. Without test_only it would be acquired as 'legacy_ai',
   // this path would return "handled" and the existing reply path would then
@@ -778,7 +911,8 @@ export async function attemptDurableInstagram(
   // A duplicate or previously processed event must never cancel, supersede
   // or resume a (newer) run. Checked read-only BEFORE the waiting-run logic.
   const prior=await priorDelivery(db,event);
-  if(prior==="error"||prior==="claimed")return "handled";
+  if(prior==="error")return "retry";
+  if(prior==="claimed")return "handled"; // duplicate of a processed event
   // Repeat delivery not claimed yet (the first copy is still in flight, or
   // was never claimed): leave every run alone; V2's exclusive claim on the
   // same key answers at most once (silent if the first copy claims first).
@@ -788,9 +922,10 @@ export async function attemptDurableInstagram(
    .eq("tenant_id",event.tenantId).eq("channel_account_id",event.accountId)
    .eq("conversation_id",event.conversationId).eq("run_status","awaiting_input")
    .limit(2);
-  if(waiting.error)return "handled";
-  const current=waiting.data??[];
-  if(current.length>1)return "handled";
+  if(waiting.error||!Array.isArray(waiting.data))return "retry";
+  const current=waiting.data;
+  // Two waiting runs cannot exist (one-active-run guard): ambiguous -> retry.
+  if(current.length>1)return "retry";
   const choice=event.selectedChoiceId??null;
   if(current.length===1){
    const run=current[0];
@@ -798,7 +933,7 @@ export async function attemptDurableInstagram(
    if(!record(run)||run.tenant_id!==event.tenantId||
       run.channel_account_id!==event.accountId||
       run.conversation_id!==event.conversationId||
-      typeof run.id!=="string"||run.platform!==event.platform)return "handled";
+      typeof run.id!=="string"||run.platform!==event.platform)return "retry";
    // A replay of the event that started this run is already claimed and
    // answered by it: never let it end the wait as "free text".
    if(run.provider_event_id===event.eventId)return "handled";
@@ -813,7 +948,7 @@ export async function attemptDurableInstagram(
     // takes it as its answer; any other wait ends so the existing reply path
     // answers (unchanged behaviour).
     publication=await readPublication();
-    if(publication.error)return "handled";
+    if(publication.error)return "retry";
     if(!typedQuestionAt(publication.data?.document,run.current_node_id,event.platform))
      return cancelThenFallback(db,event.tenantId,run.id,"free_text");
    }
@@ -822,13 +957,13 @@ export async function attemptDurableInstagram(
     .eq("channel_account_id",event.accountId).eq("platform",event.platform)
     .eq("flow_key",run.flow_key).eq("revision",run.publication_revision)
     .eq("is_active",true).limit(2);
-   if(live.error)return "handled";
+   if(live.error)return "retry";
    if(!Array.isArray(live.data)||!live.data.some(a=>record(a)&&a.is_active===true&&
       a.flow_key===run.flow_key&&Number(a.revision)===Number(run.publication_revision)))
     return cancelThenFallback(db,event.tenantId,run.id,"revision_inactive");
    if(!publication){
     publication=await readPublication();
-    if(publication.error)return "handled";
+    if(publication.error)return "retry";
    }
    if(!supportedDurableDocument(publication.data?.document,event.platform))
     return cancelThenFallback(db,event.tenantId,run.id,"revision_inactive");
@@ -871,27 +1006,52 @@ export async function attemptDurableInstagram(
   // A committed handoff whose conversation switch is still queued: the human
   // takeover is about to start, so neither a new run nor V2/AI may answer.
   const handoff=await pendingHandoff(db,event);
+  if(handoff==="error")return "retry";
   if(handoff!=="none")return "handled";
-  const active=await db.from("automation_flow_activations")
-   .select("flow_key,revision,is_active").eq("tenant_id",event.tenantId)
-   .eq("channel_account_id",event.accountId).eq("platform",event.platform)
-   .eq("is_active",true).limit(2);
-  if(active.error)return "handled";
-  if(!Array.isArray(active.data)||active.data.length!==1)return "fallback";
-  const selection=active.data[0];
-  if(!Number.isSafeInteger(Number(selection.revision)))return "handled";
-  const pub=await db.from("automation_flow_publications").select("document")
-   .eq("tenant_id",event.tenantId).eq("channel_account_id",event.accountId)
-   .eq("platform",event.platform).eq("flow_key",selection.flow_key)
-   .eq("revision",selection.revision).maybeSingle();
-  if(pub.error)return "handled";
-  if(!supportedDurableDocument(pub.data?.document,event.platform))return "fallback";
-  const doc=pub.data.document;
+  // ONE deterministic winner among ALL active flows of this verified
+  // tenant/account/platform (flowInboundSelection.ts), each at its exact
+  // activated revision. A read error is never "no match": "retry" (no flow,
+  // no AI; milan-api keeps the event retryable). No match -> nothing is claimed, started, cancelled or
+  // superseded; V2/legacy AI answers exactly as for an ineligible document.
+  // A V2 winner is left to the V2 path, which re-selects with the same rule.
+  const v2=v2EngineAvailable(event.platform);
+  const picked=await selectActiveFlowForInbound(db,
+   {tenantId:event.tenantId,accountId:event.accountId,platform:event.platform},event.text,
+   d=>supportedDurableDocument(d,event.platform)?"durable":
+    v2&&simpleFlowDocumentSupported(d,event.platform as "instagram"|"facebook"|"whatsapp")?"v2":null);
+  if(picked.status==="error")return "retry";
+  if(picked.status!=="selected"||picked.flow.engine!=="durable")return "fallback";
+  const selection={flow_key:picked.flow.flowKey,revision:picked.flow.revision};
+  const doc=picked.flow.document;
+  // Re-checked on the exact document (selection already required both):
+  // whitelisted durable graph and a trigger accepting this DM text.
+  if(!supportedDurableDocument(doc,event.platform)||
+     !dmTriggerAcceptsText(documentTriggerData(doc),event.text))return "fallback";
   const state=createRuntimeState(doc,selection.flow_key,Number(selection.revision));
   const plan=planUntilWait(doc,state,{
    eventKey:event.eventId,nowMs:Date.now(),seed:seedFromEventKey(event.eventId)
   });
-  if(!safePlan(plan,event.platform))return "handled";
+  // A NEW run whose first plan the engine deterministically refuses can never
+  // answer, and nothing is claimed or started yet: leave the event to V2 / the
+  // legacy AI (one reply under its own exclusive claim) instead of silencing
+  // it. (The resume paths above keep "handled": their run already exists.)
+  if(!safePlan(plan,event.platform)){
+   console.warn("[flow-durable] start plan refused",{code:"unsafe_start_plan"});
+   return "fallback";
+  }
+  // Readiness guard (see durableWorkerGatesOpen): never start a run whose
+  // reply the workers cannot produce. Nothing has been claimed or changed.
+  const needs=durableRuntimeNeeds(doc);
+  if(!durableWorkerGatesOpen({...needs,internal:durableNeedsInternalActions(doc)})){
+   console.warn("[flow-durable] workers not ready",{code:"worker_gates_closed"});
+   return "fallback";
+  }
+  const stall=await durableWorkersStalled(db,event,Date.now());
+  if(stall==="error")return "retry";
+  if(stall==="stalled"){
+   console.warn("[flow-durable] workers not ready",{code:"worker_stalled"});
+   return "fallback";
+  }
   return await claimAndStart(db,event,canaryMode,{
    p_flow:selection.flow_key,p_revision:selection.revision,
    p_start:state.nodeId,p_next:plan.state.nodeId,
@@ -902,6 +1062,8 @@ export async function attemptDurableInstagram(
   });
  }catch(error){
   console.error("[flow-durable] guarded path failed",error instanceof Error?error.name:"unknown");
-  return "handled";
+  // Unknown state. Every write above is a claim-first RPC, so a retry first
+  // sees a committed claim (duplicate) and never executes twice.
+  return "retry";
  }
 }

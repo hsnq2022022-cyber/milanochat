@@ -57,10 +57,16 @@ test("without exact secret canary the signed webhook continues its existing text
   assert.equal(result,"fallback");
  }finally{(globalThis as any).Deno=D;}
 });
+// Worker readiness gates (flowDurableIngress.ts durableWorkerGatesOpen): a NEW
+// durable run starts only while the operator gates of the workers that produce
+// its reply are open, so the durable start tests run with them open.
+const WORKERS_READY:Record<string,string>={FLOW_WORKERS_OPERATOR_RELEASE:"production-canary-approved",
+ FLOW_OUTBOX_SEND_ENABLED:"true",FLOW_ATOMIC_CONSUME_READY:"true",FLOW_DURABLE_SCHEDULER_ENABLED:"true",
+ FLOW_RICH_BUTTONS_ENABLED:"true",FLOW_INTERNAL_ACTIONS_ENABLED:"true",FIELD_ENCRYPTION_KEY:"test-only-field-key"};
 test("opted-in event creates one durable question; later selection resumes SAME run",async()=>{
  const old=(globalThis as any).Deno;
  (globalThis as any).Deno={env:{get:(k:string)=>k==="FLOW_DURABLE_INGRESS_ENABLED"?"true":
-  k==="FLOW_DURABLE_CANARY_ACCOUNT_ID"?id.account:undefined}};
+  k==="FLOW_DURABLE_CANARY_ACCOUNT_ID"?id.account:WORKERS_READY[k]}};
  let waiting=false;
  const calls:Array<{name:string;args:any}>=[];
  const rows:Record<string,any>={
@@ -71,7 +77,7 @@ test("opted-in event creates one durable question; later selection resumes SAME 
  const db={
   from:(table:string)=>{
    const q={
-    select:()=>q,eq:()=>q,in:()=>q,gt:()=>q,
+    select:()=>q,eq:()=>q,in:()=>q,gt:()=>q,lte:()=>q,
     maybeSingle:async()=>({data:rows[table]??null,error:null}),
     limit:async()=>({data:table==="automation_flow_runs"?
       (waiting?[{id:id.run,tenant_id:id.tenant,channel_account_id:id.account,
@@ -115,12 +121,14 @@ test("the actual HMAC-verified Instagram extractor passes button identity only t
  assert.match(server,/choiceId:selectedFlowChoice\(value\.message\)/);
  assert.match(server,/selectedChoiceId/);
  assert.match(server,/attemptDurableInstagram\(sb/);
- assert.match(server,/if\(durable==="handled"\)return/);
+ assert.match(server,/if\(durable==="handled"\)\{await resolvedAfterRedrive\(\);return;\}/);
+ // unknown flow eligibility: kept retryable, never answered (inboundRoutingRetry.ts)
+ assert.match(server,/if\(durable==="retry"\)return await keepRetryable\(String\(conv\.id\),inboundMessageId\);/);
 });
 
 // ---- Lifecycle: waiting runs never silence the conversation; one active run.
 const canaryEnv={env:{get:(k:string)=>k==="FLOW_DURABLE_INGRESS_ENABLED"?"true":
- k==="FLOW_DURABLE_CANARY_ACCOUNT_ID"?id.account:undefined}};
+ k==="FLOW_DURABLE_CANARY_ACCOUNT_ID"?id.account:WORKERS_READY[k]}};
 const waitingRun=(over:Record<string,unknown>={})=>({id:id.run,tenant_id:id.tenant,
  channel_account_id:id.account,platform:"instagram",conversation_id:id.conversation,
  flow_key:"flow",publication_revision:1,current_node_id:"choose",
@@ -142,7 +150,7 @@ function lifecycleDb(o:Opts){
     select:()=>q,
     eq:(k:string,v:unknown)=>{filters[k]=v;return q;},
     in:(k:string,v:unknown)=>{filters[k]=v;return q;},
-    gt:(k:string,v:string)=>{gt[k]=v;return q;},
+    gt:(k:string,v:string)=>{gt[k]=v;return q;},lte:()=>q,
     update:write("update"),insert:write("insert"),upsert:write("upsert"),delete:write("delete"),
     maybeSingle:async()=>{reads.push({table,filters,gt});return {data:
      table==="automation_flow_global_switch"?{enabled:true}:
@@ -237,7 +245,7 @@ test("cancel RPC failure fails closed; already-ended run (false) still falls bac
  await withCanary(async()=>{
   const err=lifecycleDb({awaiting:[waitingRun()],
    rpc:{flow_cancel_run:()=>({data:null,error:{code:"XX000",message:"db down"}})}});
-  assert.equal(await attemptDurableInstagram(err.db,baseEvent),"handled");
+  assert.equal(await attemptDurableInstagram(err.db,baseEvent),"retry"); // unknown state (read error / ambiguous data / unconfirmed RPC): retryable, still no flow and no AI
   const gone=lifecycleDb({awaiting:[waitingRun()],
    rpc:{flow_cancel_run:()=>({data:false,error:null})}});
   assert.equal(await attemptDurableInstagram(gone.db,baseEvent),"fallback");
@@ -249,7 +257,7 @@ test("waiting row from another tenant/account/conversation is never cancelled",a
     {channel_account_id:"22222222-2222-4222-8222-222222222222"},
     {conversation_id:"55555555-5555-4555-8555-555555555555"}]){
    const {db,calls}=lifecycleDb({awaiting:[waitingRun(over)]});
-   assert.equal(await attemptDurableInstagram(db,baseEvent),"handled");
+   assert.equal(await attemptDurableInstagram(db,baseEvent),"retry"); // unknown state (read error / ambiguous data / unconfirmed RPC): retryable, still no flow and no AI
    assert.deepEqual(calls,[]);
   }
  });
@@ -364,12 +372,13 @@ test("atomic start retry: attempt 1 thrown -> ONE retry with identical args; map
    assert.equal(x.result,"handled");assert.equal(x.calls.length,2);
    assert.deepEqual(x.logs,[L(1,"exception"),L(2,"acquired_true")]);
    x=await atomicRun([THROW,THROW],switches);
-   assert.equal(x.result,"fallback");assert.equal(x.calls.length,2);
+   // still ambiguous after the retry: retryable (no AI), not fallback
+   assert.equal(x.result,"retry");assert.equal(x.calls.length,2);
    assert.deepEqual(x.logs,[L(1,"exception"),L(2,"ambiguous_after_retry")]);
    x=await atomicRun([THROW,EMPTY],switches);
    assert.equal(x.result,"fallback");assert.deepEqual(x.logs,[L(1,"exception"),L(2,"empty")]);
    x=await atomicRun([THROW,ERR("57014")],switches);
-   assert.equal(x.result,"fallback");
+   assert.equal(x.result,"retry","statement timeout: commit unknown -> retryable");
    assert.deepEqual(x.logs,[L(1,"exception"),L(2,"ambiguous_after_retry","57014")]);
   }
  });
@@ -384,7 +393,9 @@ test("atomic start retry: attempt 1 RPC error -> retry; OK -> handled, second er
    x=await atomicRun([ERR(raw),LOST]);
    assert.equal(x.result,"handled");
    x=await atomicRun([ERR(raw),ERR(raw)]);
-   assert.equal(x.result,"fallback",String(raw));assert.equal(x.calls.length,2);
+   // A missing function (PGRST202) is KNOWN: nothing committed -> V2 (fail-safe without 330000);
+   // any other error leaves the commit unknown -> retryable, never the AI.
+   assert.equal(x.result,raw==="PGRST202"?"fallback":"retry",String(raw));assert.equal(x.calls.length,2);
    assert.deepEqual(x.logs,[L(1,"rpc_error",code),L(2,"ambiguous_after_retry",code)]);
   }
  });
@@ -507,7 +518,7 @@ test("production canary: RPC error writes no claim and falls back; duplicate (ac
   // Tap path (unchanged): a claim RPC error falls back, a lost claim is handled.
   const tapErr=lifecycleDb({switches:PROD,awaiting:[waitingRun()],rpc:{flow_claim_inbound_durable:()=>({data:null,
    error:{code:"PGRST202",message:"function not found"}})}});
-  assert.equal(await attemptDurableInstagram(tapErr.db,{...baseEvent,selectedChoiceId:"prices"}),"fallback");
+  assert.equal(await attemptDurableInstagram(tapErr.db,{...baseEvent,selectedChoiceId:"prices"}),"retry"); // canary claim RPC error: unknown whether it committed -> retry (re-reads the claim first)
   for(const route of ["flow","legacy_ai"]){
    const tapDup=lifecycleDb({switches:PROD,awaiting:[waitingRun()],
     rpc:{flow_claim_inbound_durable:()=>({data:[{acquired:false,route}],error:null})}});
@@ -612,7 +623,7 @@ test("B1: the duplicate check is scoped (claim key and tenant conversation), rea
   assert.ok(order.indexOf("messages")<order.indexOf("automation_flow_runs"));
   assert.deepEqual(names(calls),["flow_cancel_run"],"the check itself makes no RPC");
   const broken=lifecycleDb({priorError:true,awaiting:[waitingRun()]});
-  assert.equal(await attemptDurableInstagram(broken.db,baseEvent),"handled");
+  assert.equal(await attemptDurableInstagram(broken.db,baseEvent),"retry"); // unknown state (read error / ambiguous data / unconfirmed RPC): retryable, still no flow and no AI
   assert.deepEqual(broken.calls,[]);
  });
 });
@@ -651,9 +662,11 @@ test("B1: provenance is the explicit flag; synthetic events (no Meta mid) never 
  // Pinned to the real derivation in milan-api/index.ts: the same synthetic id
  // string for V2, plus a flag derived only from the presence of Meta's mid.
  const server=readFileSync("supabase/functions/milan-api/index.ts","utf8");
- assert.equal((server.match(/msg\.mid \|\| `ig_\$\{Date\.now\(\)\}`/g)??[]).length,1);
+ // B-5: a missing mid becomes a deterministic derived id (syntheticEventId.ts) when the
+ // event has a timestamp, else the old fallback; provenance stays false either way.
+ assert.equal((server.match(/msg\.mid \|\| derivedId \|\| `ig_\$\{Date\.now\(\)\}`/g)??[]).length,1);
  assert.equal((server.match(/const providerEventIdGenuine =\n\s+typeof msg\.mid === "string" && msg\.mid\.length > 0;/g)??[]).length,1);
- assert.match(server,/msg\.choiceId,\n\s+providerEventIdGenuine\n\s+\);/);
+ assert.match(server,/msg\.choiceId,\n\s+providerEventIdGenuine\n\s+\)\);/);
  assert.match(server,/selectedChoiceId,providerEventIdGenuine:providerEventIdGenuine===true\n/);
  const ing=readFileSync("supabase/functions/milan-api/flowDurableIngress.ts","utf8");
  assert.match(ing,/e\.providerEventIdGenuine===true&&/);
@@ -842,7 +855,11 @@ test("a chain needing a 6th effect fails closed before any claim",async()=>{
  assert.equal(supportedDurableDocument(six),true);
  await withCanary(async()=>{
   const {db,calls}=lifecycleDb({document:six});
-  assert.equal(await attemptDurableInstagram(db,baseEvent),"handled");
+  // CHANGED (flow-claim-then-silence fix): this used to be "handled", which
+  // silenced the customer for good (no run, no claim, and no V2/AI reply).
+  // A deterministically refused plan of a NEW run now leaves the unclaimed
+  // event to V2 / the legacy AI ("fallback"); still no claim, run or effect.
+  assert.equal(await attemptDurableInstagram(db,baseEvent),"fallback");
   assert.deepEqual(calls,[],"no claim, no run, no effect");
   const five={...six,nodes:six.nodes.slice(0,6),edges:six.edges.slice(0,5)};
   const ok=lifecycleDb({document:five});
@@ -1050,7 +1067,7 @@ test("typed answer: duplicates, foreign rows, inactive revision and synthetic id
     {channel_account_id:"22222222-2222-4222-8222-222222222222"},
     {conversation_id:"55555555-5555-4555-8555-555555555555"}]){
    const f=lifecycleDb({document:collectDoc,awaiting:[atAsk(over)]});
-   assert.equal(await attemptDurableInstagram(f.db,typedEvent("ok@shop.example")),"handled");
+   assert.equal(await attemptDurableInstagram(f.db,typedEvent("ok@shop.example")),"retry"); // unknown state (read error / ambiguous data / unconfirmed RPC): retryable, still no flow and no AI
    assert.deepEqual(f.calls,[]);
   }
   const off=lifecycleDb({document:collectDoc,awaiting:[atAsk()],activations:[]});
@@ -1097,7 +1114,10 @@ test("typed answer: the customer's answer is never logged, even when the commit 
 test("index.ts passes the inbound text to the durable path only (V2 call site keeps its own arguments)",()=>{
  const server=readFileSync("supabase/functions/milan-api/index.ts","utf8");
  assert.equal((server.match(/text:customerText,\n\s+selectedChoiceId,providerEventIdGenuine/g)??[]).length,1);
- assert.match(server,/prepareFlow: \(\) => prepareSimpleFlowReply\(\n\s+sb, tenantId, String\(account\.id\), channel, customerText\n\s+\)/);
+ // V2 keeps its own arguments; the only addition is the durable ranking hook,
+ // passed only while the durable ingress is configured for this account.
+ assert.match(server,/prepareFlow: \(\) => prepareSimpleFlowReply\(\n\s+sb, tenantId, String\(account\.id\), channel, customerText,\n\s+durableRanked\?\{durableDocument:\(d\)=>supportedDurableDocument\(d,channel\)\}:\{\}\n\s+\)/);
+ assert.match(server,/const durableRanked=durableIngressConfigured\(String\(account\.id\),channel\);/);
 });
 
 // ---- Internal actions: tag / untag / notify / handoff (Instagram durable only).
@@ -1206,10 +1226,10 @@ test("internal actions: a queued handoff keeps the conversation silent; scoped t
   assert.equal(await attemptDurableInstagram(foreignOutbox.db,baseEvent),"handled");
   assert.deepEqual(names(foreignOutbox.calls),["flow_claim_begin_durable_run"]);
   const broken=lifecycleDb({document:chainDoc,outboxError:true});
-  assert.equal(await attemptDurableInstagram(broken.db,baseEvent),"handled");
+  assert.equal(await attemptDurableInstagram(broken.db,baseEvent),"retry"); // unknown state (read error / ambiguous data / unconfirmed RPC): retryable, still no flow and no AI
   assert.deepEqual(broken.calls,[]);
   const full=lifecycleDb({document:chainDoc,outbox:Array.from({length:100},(_,i)=>({run_id:"r"+i,tenant_id:id.tenant}))});
-  assert.equal(await attemptDurableInstagram(full.db,baseEvent),"handled");
+  assert.equal(await attemptDurableInstagram(full.db,baseEvent),"retry"); // unknown state (handoff queue unreadable / full page): retryable, still no flow and no AI
   assert.deepEqual(full.calls,[],"a full page fails closed");
   // The check precedes the flow lookup: even a V2-shaped active flow stays silent.
   const v2=lifecycleDb({document:v2Lone,outbox:queued,runsById:[{id:"r-h",tenant_id:id.tenant,conversation_id:id.conversation}]});
@@ -1246,11 +1266,11 @@ test("pending handoff: older than 24h never silences; fresh blocks; cap counts o
   // 100 fresh rows still fail closed.
   const manyFresh=lifecycleDb({document:chainDoc,outbox:Array.from({length:PENDING_HANDOFF_SCAN},(_,i)=>
    ({run_id:"r"+i,tenant_id:id.tenant,created_at:freshAt}))});
-  assert.equal(await attemptDurableInstagram(manyFresh.db,baseEvent),"handled");
+  assert.equal(await attemptDurableInstagram(manyFresh.db,baseEvent),"retry"); // unknown state (read error / ambiguous data / unconfirmed RPC): retryable, still no flow and no AI
   assert.deepEqual(manyFresh.calls,[],"a full page of fresh handoffs fails closed");
   // Query error still fails closed.
   const broken=lifecycleDb({document:chainDoc,outboxError:true});
-  assert.equal(await attemptDurableInstagram(broken.db,baseEvent),"handled");
+  assert.equal(await attemptDurableInstagram(broken.db,baseEvent),"retry"); // unknown state (handoff queue unreadable / full page): retryable, still no flow and no AI
   assert.deepEqual(broken.calls,[]);
   // Read-only: no table write (no UPDATE of the outbox or conversations) on any path.
   for(const h of [fresh,expired,manyExpired,manyFresh,broken])assert.deepEqual(h.writes,[]);
@@ -1373,7 +1393,7 @@ test("image effects: flag ON accepts message_image only with a re-validated flow
 }));
 test("image effects: flag ON, a text+image plan is committed in order with the {url} payload; flag OFF commits nothing",async()=>{
  const d=imageDoc(TEXT_IMG);
- const env={...MEDIA_ON,FLOW_DURABLE_INGRESS_ENABLED:"true",FLOW_DURABLE_CANARY_ACCOUNT_ID:id.account};
+ const env={...WORKERS_READY,...MEDIA_ON,FLOW_DURABLE_INGRESS_ENABLED:"true",FLOW_DURABLE_CANARY_ACCOUNT_ID:id.account};
  const run=async(e:Record<string,string>,doc:unknown=d)=>{
   const old=(globalThis as any).Deno;(globalThis as any).Deno={env:{get:(k:string)=>e[k]}};
   try{const h=lifecycleDb({document:doc});return {...h,result:await attemptDurableInstagram(h.db,baseEvent)};}

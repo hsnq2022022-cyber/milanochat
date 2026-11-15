@@ -40,7 +40,9 @@ export type NormalizedInboundMessage={
 
 /** Upper bound of messages returned from one POST (defensive). */
 export const MAX_NORMALIZED_MESSAGES=500;
-const MAX_TEXT_CHARS=4096;
+// Pure module (no imports): the value MUST equal triggerKeywords.ts
+// MAX_INBOUND_TEXT (selection / matching / V2 runtime); parity-tested.
+export const MAX_TEXT_CHARS=4096;
 
 type Rec=Record<string,unknown>;
 const rec=(v:unknown):v is Rec=>!!v&&typeof v==="object"&&!Array.isArray(v);

@@ -101,3 +101,59 @@ export function supabaseBindStore(sb: { from(table: string): Q }): BindStore {
     },
   };
 }
+
+/**
+ * E1: the channel_accounts row of a VERIFIED WhatsApp binding.
+ *
+ * Phone Number ID sources: the signed webhook's metadata.phone_number_id is
+ * the event's own id; wa_bindings.phone_id (primary key) maps it to ONE
+ * tenant; channel_accounts.external_id is the same id on the WhatsApp account
+ * row (the non-binding path already matches on it). A binding alone carries no
+ * account id, and the exclusive claim (flow_claim_inbound) refuses a NULL
+ * account, so a bound number could never get an automatic reply.
+ *
+ * The account is used ONLY when it is proven: same tenant as the verified
+ * binding, channel 'whatsapp', external_id exactly the webhook's phone number
+ * id, status 'active', and exactly ONE such row. No row, several active rows,
+ * a read error or a malformed row -> not proven: the caller keeps today's
+ * fail-closed behaviour (message stored, no automatic reply) and logs the
+ * code. A row of another tenant can never match (tenant filter + re-check).
+ */
+export const WA_ACCOUNT_COLUMNS =
+  "id, tenant_id, channel, external_id, status, agent_enabled, auto_reply, access_token_encrypted";
+export type ProvenWhatsappAccount =
+  | { status: "proven"; account: Record<string, unknown> }
+  | { status: "none" | "ambiguous" | "error" };
+
+export async function provenWhatsappAccount(
+  sb: { from(table: string): Q },
+  tenantId: string,
+  phoneId: string,
+): Promise<ProvenWhatsappAccount> {
+  if (typeof tenantId !== "string" || !tenantId || typeof phoneId !== "string" || !/^[0-9]{5,30}$/.test(phoneId)) {
+    return { status: "none" };
+  }
+  try {
+    const { data, error } = await sb
+      .from("channel_accounts")
+      .select(WA_ACCOUNT_COLUMNS)
+      .eq("tenant_id", tenantId)
+      .eq("channel", "whatsapp")
+      .eq("external_id", phoneId)
+      .limit(5);
+    if (error || !Array.isArray(data)) return { status: "error" };
+    const active = data.filter((r: unknown) =>
+      !!r && typeof r === "object" &&
+      (r as Record<string, unknown>).tenant_id === tenantId &&
+      (r as Record<string, unknown>).channel === "whatsapp" &&
+      (r as Record<string, unknown>).external_id === phoneId &&
+      (r as Record<string, unknown>).status === "active" &&
+      typeof (r as Record<string, unknown>).id === "string" &&
+      ((r as Record<string, unknown>).id as string).length > 0
+    );
+    if (active.length === 1) return { status: "proven", account: active[0] as Record<string, unknown> };
+    return { status: active.length === 0 && data.length < 5 ? "none" : "ambiguous" };
+  } catch {
+    return { status: "error" };
+  }
+}

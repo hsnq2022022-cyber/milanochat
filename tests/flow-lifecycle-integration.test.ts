@@ -15,6 +15,8 @@
 //
 // Run (needs Deno + node_modules with @supabase/supabase-js and PostgreSQL
 // server binaries):  deno test -A tests/flow-lifecycle-integration.test.ts
+// (Type-checks under Deno 2.9.6; the scratch-copy CI recipe used here was
+//  DENO_DIR=<scratch>/deno-cache deno test -A --no-lock --node-modules-dir=none ...)
 import assert from "node:assert/strict";
 import {encryptMessageBody} from "../supabase/functions/flow-outbox-worker/deliveryCore.ts";
 import {verifyMetaWebhookSignature} from "../supabase/functions/milan-api/metaSignature.ts";
@@ -408,7 +410,22 @@ const CHAIN=[
  // Final durable start/button bodies (resume flag re-check, claim conversation check).
  "supabase/migrations/20261029180000_flow_durable_button_run_guards.sql",
  // Atomic supersede + start that milan-api now calls for a new durable run.
- "supabase/migrations/20261029190000_flow_begin_durable_run_superseding.sql"
+ "supabase/migrations/20261029190000_flow_begin_durable_run_superseding.sql",
+ // Everything the CURRENT milan-api build calls, in migration order (same
+ // dependency chain as tests/flow-claim-begin-durable-run.test.mjs; 200000
+ // storage and 240000..290000 billing/security/oauth are independent of the
+ // flow runtime and not needed here):
+ "supabase/migrations/20261029210000_flow_media_effects.sql",
+ "supabase/migrations/20261029220000_flow_media_stale_sweep.sql",
+ "supabase/migrations/20261029230000_flow_multichannel_support.sql",
+ "supabase/migrations/20261029300000_comment_replies.sql",
+ // 20261029330000 pins the PRODUCTION flow_claim_inbound body (md5 cced049e...).
+ "tests/sql/fixtures/production-flow-claim-inbound.sql",
+ // flow_claim_begin_durable_run: the atomic claim + supersede + start milan-api calls.
+ "supabase/migrations/20261029330000_flow_claim_begin_durable_run.sql",
+ // Retryable unknown flow eligibility (inboundRoutingRetry.ts) and durable keyword starts.
+ "supabase/migrations/20261029340000_flow_inbound_routing_retry.sql",
+ "supabase/migrations/20261029350000_flow_durable_keyword_start.sql"
 ];
 const repo=new URL("..",import.meta.url).pathname;
 let dbSeq=0;
@@ -882,7 +899,10 @@ Deno.test({name:"flow V3/V4 lifecycle integration (real handlers + throwaway Pos
    const cB=await conv("6000002",B,ACCB);
    const mB=await inbound(cB,"mid.b.1",B);
    // Tenant A event pointing at tenant B's conversation/inbound: refused, nothing created.
-   assert.equal(await attemptDurableInstagram(sb,ev(cB,mB,"mid.b.1",null)),"handled");
+   // (Changed with 20261029330000: the start is ONE atomic claim+begin RPC that
+   // returns no row for a foreign event -> KNOWN nothing committed -> "fallback";
+   // V2's own ownership-checked claim then refuses it too. Still nothing created.)
+   assert.equal(await attemptDurableInstagram(sb,ev(cB,mB,"mid.b.1",null)),"fallback");
    assert.equal(await val(`SELECT count(*)::int FROM public.automation_flow_runs WHERE conversation_id='${cB}'`),0);
    assert.equal(await val(`SELECT count(*)::int FROM public.automation_message_claims WHERE provider_event_id='mid.b.1'`),0);
    // Tenant B (not the canary account) never enters the durable path.
@@ -1112,7 +1132,11 @@ Deno.test({name:"flow V3/V4 lifecycle integration (real handlers + throwaway Pos
    const c=await conv("9000001");const m1=await inbound(c,"mid.canary.1");
    let mark=restLog.length;
    assert.equal(await attemptDurableInstagram(sb,ev(c,m1,"mid.canary.1",null)),"handled");
-   assert.deepEqual(rpcs(mark),["POST rpc/flow_claim_inbound_durable"],"production canary never calls the V2 claim");
+   // (Changed with 20261029330000: a NEW start claims inside the atomic
+   // flow_claim_begin_durable_run(p_canary=true), which calls
+   // flow_claim_inbound_durable in SQL; the V2 claim is still never called.)
+   assert.deepEqual(rpcs(mark),[],"production canary never calls the V2 claim");
+   assert.deepEqual(restLog.slice(mark).filter(l=>l.startsWith("POST rpc/flow_claim")),["POST rpc/flow_claim_begin_durable_run"]);
    assert.deepEqual(await rows(`SELECT route FROM public.automation_message_claims WHERE provider_event_id='mid.canary.1'`),[{route:"flow"}]);
    assert.equal(await val(`SELECT count(*)::int FROM public.automation_flow_canary_claims WHERE provider_event_id='mid.canary.1'`),1);
    let runs=await runsOf(c);
@@ -1614,7 +1638,8 @@ Deno.test({name:"flow V3/V4 lifecycle integration (real handlers + throwaway Pos
     assert.equal((await runRow(r4.c))[0].run_status,"handoff");
     assert.deepEqual(await tickAt(20000),{},"terminal rows are never retried");
     const review=await loadFlowReview(sb as never,A);
-    const failed=review.flowFailures.filter(f=>[r4.run,r5.run].includes(String(f.run_id)))
+    // Plain string[] (Deno 2.9 infers the run ids as UUID template literals).
+    const failed=review.flowFailures.filter(f=>([r4.run,r5.run] as string[]).includes(String(f.run_id)))
      .map(f=>[f.effect_kind,f.delivery_status,f.attempts]).sort();
     assert.deepEqual(failed,[["handoff","dead_letter",3],["staff_notification","dead_letter",3],["tag","dead_letter",0]]);
     const shown=JSON.stringify(review);

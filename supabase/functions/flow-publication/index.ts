@@ -11,10 +11,12 @@ import {
 import {flowNeedsMedia,parseCapabilities,mediaActivationAllowed,withMediaGate,
  type FlowCapability} from "../../../src/flow/publicationGate.ts";
 import {evaluateFlowReadiness,documentHasCommentTrigger} from "./readiness.ts";
-import {simpleMessageFromDocument} from "../milan-api/flowPrepareMessage.ts";
+import {simpleFlowDocumentSupported} from "../milan-api/flowPrepareMessage.ts";
+import {documentKeywordTriggerProblem} from "../milan-api/triggerKeywords.ts";
 import {supportedDurableDocument,durableCandidateKind,durableRuntimeNeeds,durableNeedsInternalActions,
  type DurableCandidateKind} from "../milan-api/flowDurableIngress.ts";
 import {documentCommentTriggerProblem,commentFlowPlan} from "../milan-api/commentTrigger.ts";
+import {listActiveActivations,compareActivationOrder} from "../milan-api/flowInboundSelection.ts";
 
 const env=(k:string)=>Deno.env.get(k)??"";
 // Only the existing production GitHub Pages origin. Never reflect Origin.
@@ -38,6 +40,20 @@ const commentSwitches=()=>({
  commentAutomationEnabled:env("FLOW_COMMENT_AUTOMATION_ENABLED")==="true",
  multichannelEnabled:env("FLOW_MULTICHANNEL_ENABLED")==="true"
 });
+
+/** Canary capability set: trigger:keyword follows trigger:message (same V2 engine). */
+export function withKeywordTrigger(caps:Set<FlowCapability>):Set<FlowCapability>{
+ if(caps.has("trigger:message"))caps.add("trigger:keyword");
+ return caps;
+}
+
+/** Clear publish errors for DM keyword trigger problems (triggerKeywords.ts). */
+const KEYWORD_PROBLEM_MESSAGES:Record<string,string>={
+ keyword_trigger_requires_keywords:"Keyword trigger needs at least one keyword",
+ keyword_trigger_invalid_match_mode:"Keyword trigger match mode is invalid",
+ keyword_trigger_too_many_keywords:"Keyword trigger has more than 40 keywords",
+ keyword_trigger_keyword_too_long:"Keyword trigger keyword is longer than 120 characters"
+};
 
 const MAX_BODY_BYTES=4*1024*1024+4096;
 const MAX_BEARER_BYTES=8192;
@@ -237,6 +253,12 @@ export async function handleFlowPublication(req:Request,
 
   // Authenticated read-only catalog. Never accepts a tenant ID from the browser.
   // The existing account lookup above already scopes this account to auth.user.
+  // Several flows may be active on one account (each flow_key independently):
+  // `activeFlows` lists ALL of them, each with its own active revision, in
+  // activation order (earliest activated_at, NULL last, then flow_key; see
+  // flowInboundSelection.ts compareActivationOrder). The legacy single
+  // `active` stays populated for the already deployed client: the FIRST of
+  // that order (deterministic), null when none. No 409 for several actives.
   if(action==="catalog"){
    const [pubs,active]=await Promise.all([
     client.from("automation_flow_publications")
@@ -244,21 +266,19 @@ export async function handleFlowPublication(req:Request,
      .eq("tenant_id",scope.tenantId).eq("channel_account_id",scope.accountId)
      .eq("platform",scope.platform)
      .order("revision",{ascending:false}).limit(500),
-    client.from("automation_flow_activations")
-     .select("flow_key,revision")
-     .eq("tenant_id",scope.tenantId).eq("channel_account_id",scope.accountId)
-     .eq("platform",scope.platform).eq("is_active",true).limit(2)
+    listActiveActivations(client,scope)
    ]);
-   if(pubs.error||active.error)return error("Flow catalog unavailable",503);
-   if((active.data??[]).length>1)return error("Conflicting active revisions",409);
+   if(pubs.error||active===null)return error("Flow catalog unavailable",503);
    const unique=new Map<string,number>();
    for(const item of pubs.data??[]){
     if(typeof item.flow_key==="string"&&VALID_FLOW_KEY.test(item.flow_key)&&
        !unique.has(item.flow_key))unique.set(item.flow_key,item.revision);
    }
+   const activeFlows=[...active].sort(compareActivationOrder)
+    .map(a=>({flow_key:a.flowKey,revision:a.revision}));
    return respond({ok:true,flows:[...unique].map(([flowKey,latestRevision])=>({
     flowKey,latestRevision
-   })),active:active.data?.[0]??null,truncated:(pubs.data??[]).length===500});
+   })),activeFlows,active:activeFlows[0]??null,truncated:(pubs.data??[]).length===500});
   }
 
   // Read only an immutable revision owned by the signed-in account.
@@ -280,12 +300,23 @@ export async function handleFlowPublication(req:Request,
   if(action==="publish"){
    if(tenant.is_active!==true||account.is_active!==true)
     return error("Account is disabled",403);
+   // Keyword trigger configuration is checked on the RAW document first:
+   // import sanitizing would otherwise silently turn an unknown mode into
+   // "contains". Explicit 422s, never truncation.
+   const rawKeywordProblem=documentKeywordTriggerProblem(request.document);
+   if(rawKeywordProblem!==null)return error(KEYWORD_PROBLEM_MESSAGES[rawKeywordProblem]??
+    "Keyword trigger configuration is invalid",422);
    const doc=preparePublishedDocument(request.document,scope.platform);
    if(!doc)return error("Flow document is invalid or targets another channel",422);
    // Comment trigger config (scope/post id/match type/keywords/public reply):
    // server-side validation. Other triggers: no new requirement.
    if(documentCommentTriggerProblem(doc)!==null)
     return error("Comment trigger configuration is invalid",422);
+   // DM keyword trigger: at least one keyword must survive server parsing
+   // (triggerKeywords.ts, same rule as the runtime). Message triggers: unchanged.
+   const keywordProblem=documentKeywordTriggerProblem(doc);
+   if(keywordProblem!==null)return error(KEYWORD_PROBLEM_MESSAGES[keywordProblem]??
+    "Keyword trigger configuration is invalid",422);
    const {data,error:dbError}=await client.rpc("flow_publish_revision",{
     p_tenant_id:scope.tenantId,p_account_id:scope.accountId,
     p_platform:scope.platform,p_flow_key:flowKey,p_actor_id:scope.actorId,
@@ -430,13 +461,18 @@ export async function handleFlowPublication(req:Request,
    // flows are never production-authorized; only the test canary remains).
    if(!canary&&!production)
     return error("Publication activation is disabled",423);
+   // V2 shape (text-only / condition): text-independent check, so a keyword
+   // trigger is accepted only with >= 1 valid keyword (matched at reply time).
    if(!durable){
-    if(simpleMessageFromDocument(publication.document,scope.platform)===null)
+    if(!simpleFlowDocumentSupported(publication.document,scope.platform))
      return error("This flow uses unsupported runtime features",422);
     // message:image counts only while FLOW_MEDIA_SEND_ENABLED is on.
+    // trigger:keyword runs in the same V2 engine as trigger:message (keyword
+    // gate before the reply), so a canary set that grants trigger:message
+    // grants trigger:keyword too.
     const caps=canary?
-     withMediaGate(parseCapabilities(env("FLOW_ACTIVATION_CAPABILITIES")),env("FLOW_MEDIA_SEND_ENABLED")==="true"):
-     new Set<FlowCapability>(["execution-engine","instagram","trigger:message","message:text","condition"]);
+     withKeywordTrigger(withMediaGate(parseCapabilities(env("FLOW_ACTIVATION_CAPABILITIES")),env("FLOW_MEDIA_SEND_ENABLED")==="true")):
+     new Set<FlowCapability>(["execution-engine","instagram","trigger:message","trigger:keyword","message:text","condition"]);
     if(!publicationCanActivate(publication.document,scope.platform,caps,true))
      return error("This flow uses unsupported runtime features",422);
    }

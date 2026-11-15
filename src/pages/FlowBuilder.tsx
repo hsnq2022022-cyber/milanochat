@@ -345,6 +345,11 @@ function Editor(){
           {language==="en"?"Update to latest":"تحديث إلى أحدث إصدار"}
         </button>}
         {activation.reason&&<span data-testid="flow-activation-reason" className="text-xs text-[#E5B54B]">{activation.reason}</span>}
+        {/* Each flow is activated independently; the main AI chatbot is never switched off by a flow. */}
+        <span data-testid="flow-chatbot-note" className="shrink-0 whitespace-nowrap text-xs text-[#BED4C9]"
+          title={"يستمر المساعد الذكي في الرد على الرسائل التي لا يتولاها أي تدفق نشط. / The AI chatbot keeps answering messages that no active flow handles."}>
+          {language==="en"?"AI chatbot still answers messages no active flow handles":"المساعد الذكي يواصل الرد على الرسائل التي لا يتولاها تدفق نشط"}
+        </span>
         <div className="fs-grp">
           <button className="fs-ibtn" onClick={()=>store().undo()} title={t("undo")}><Undo2 size={17}/></button>
           <button className="fs-ibtn" onClick={()=>store().redo()} title={t("redo")}><Redo2 size={17}/></button>

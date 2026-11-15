@@ -5,6 +5,7 @@ import {importFlow} from "../src/flow/model.ts";
 const api=readFileSync("supabase/functions/flow-publication/index.ts","utf8");
 const ui=readFileSync("src/flow/FlowPublicationPanel.tsx","utf8");
 const editor=readFileSync("src/pages/FlowBuilder.tsx","utf8");
+const selection=readFileSync("supabase/functions/milan-api/flowInboundSelection.ts","utf8");
 
 test("catalog and immutable read are behind authenticated tenant and account scoping",()=>{
  assert.match(api,/auth\.getUser\(rawBearer\.slice\(7\)\)/);
@@ -16,7 +17,13 @@ test("catalog and immutable read are behind authenticated tenant and account sco
  const catalogBody=api.slice(catalog,read);
  assert.match(catalogBody,/\.eq\("tenant_id",scope\.tenantId\)\.eq\("channel_account_id",scope\.accountId\)/);
  assert.match(catalogBody,/\.eq\("platform",scope\.platform\)/);
- assert.match(catalogBody,/\.eq\("is_active",true\)/);
+ // All active flows of THIS verified account (several may be active): the shared
+ // reader is scoped by tenant + account + platform + is_active, and the reply
+ // keeps the legacy single `active` (first in activation order) next to activeFlows.
+ assert.match(catalogBody,/listActiveActivations\(client,scope\)/);
+ assert.match(selection,/\.eq\("tenant_id",scope\.tenantId\)\.eq\("channel_account_id",scope\.accountId\)\n\s+\.eq\("platform",scope\.platform\)\.eq\("is_active",true\)/);
+ assert.match(catalogBody,/activeFlows,active:activeFlows\[0\]\?\?null/);
+ assert.doesNotMatch(catalogBody,/409/);
  assert.match(catalogBody,/\.limit\(500\)/);
  const readBody=api.slice(read,api.indexOf('if(action==="publish")'));
  assert.match(readBody,/Number\.isSafeInteger\(revision\)/);
@@ -25,7 +32,9 @@ test("catalog and immutable read are behind authenticated tenant and account sco
  assert.match(readBody,/\.eq\("revision",revision\)\.maybeSingle\(\)/);
 });
 test("existing live flow can be stopped even when it has a different local flow key",()=>{
- assert.match(ui,/setManagedFlowKey\(r\.active\.flow_key\)/);
+ // Same resolution as the editor toggle (local flow manages itself; else the only active flow).
+ assert.match(ui,/const resolved=resolveServerFlowKey\(\{localKey:flowKey,catalog:r\.flows\?\?\[\],activeFlows:actives\}\);/);
+ assert.match(ui,/setManagedFlowKey\(resolved\)/);
  assert.match(ui,/call\(\{action,accountId,flowKey:managedFlowKey/);
  assert.match(ui,/\{activation\?\.is_active&&<button/);
  assert.match(ui,/const isEditingLocalFlow=managedFlowKey===flowKey/);
@@ -48,9 +57,11 @@ test("immutable revisions restore only as separate validated local copies",()=>{
 
 test("active server publication is visible and account changes clear stale state",()=>{
  assert.match(ui,/data-testid="flow-active-server-status"/);
- assert.match(ui,/accountId&&activeServerFlow/);
+ assert.match(ui,/accountId&&activeServerFlows\.length>0/);
+ // Every active flow is listed with ITS OWN revision.
+ assert.match(ui,/activeServerFlows\.map\(activeServerFlow=>/);
  assert.match(ui,/activeServerFlow\.flow_key\+" · v"\+activeServerFlow\.revision/);
- assert.match(ui,/setCatalog\(\[\]\);setActiveServerFlow\(null\);setCatalogTruncated\(false\)/);
+ assert.match(ui,/setCatalog\(\[\]\);setActiveServerFlows\(\[\]\);setCatalogTruncated\(false\)/);
 });
 
 test("published revision preview is read-only and uses isolated simulator state",()=>{
@@ -76,8 +87,10 @@ test("published revision preview is read-only and uses isolated simulator state"
 });
 
 test("catalog label separates active and latest revisions; rejected changes keep the server code",()=>{
- assert.match(ui,/"نشط v"\+activeServerFlow\.revision\+" · أحدث v"\+item\.latestRevision/);
- assert.match(ui,/"Active v"\+activeServerFlow\.revision\+" · Latest v"\+item\.latestRevision/);
+ // Per-flow label from that flow's own active revision.
+ assert.match(ui,/const live=activeRevisionOf\(activeServerFlows,item\.flowKey\);/);
+ assert.match(ui,/"نشط v"\+live\+" · أحدث v"\+item\.latestRevision/);
+ assert.match(ui,/"Active v"\+live\+" · Latest v"\+item\.latestRevision/);
  assert.match(ui,/\(en\?"Latest v":"أحدث v"\)\+item\.latestRevision/);
  assert.doesNotMatch(ui,/"نشط · "/);
  assert.match(ui,/setNotice\(activationErrorMessage\(e,/);

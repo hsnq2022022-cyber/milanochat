@@ -9,7 +9,7 @@ test("published advanced buttons and delays require separate, exact-account, rea
  assert.match(p,/const rawDocument:unknown=publication\.document/);
  assert.match(p,/supportedDurableDocument\(rawDocument\)/);
  assert.match(p,/if\(!durable\)\{/);
- assert.match(p,/simpleMessageFromDocument\(publication\.document,scope\.platform\)===null/);
+ assert.match(p,/if\(!simpleFlowDocumentSupported\(publication\.document,scope\.platform\)\)/);
  assert.match(p,/production&&scope\.platform==="instagram"/);
 });
 test("activation guard derives the buttons/scheduler requirement from the same durable whitelist",()=>{
