@@ -199,7 +199,9 @@ test("index.ts wiring: webhook 503 while retryable, re-drive only a 'retrying' d
  // B-6: read errors before/while re-driving are unknown; proven terminal exits resolve
  assert.match(src,/if \(tenantError\) \{\n\s+console\.error\(`\[\$\{channel\}_webhook\] tenant read failed`\);\n\s+return await unknownState\(\);/);
  assert.match(src,/if \(convError\) \{\n\s+console\.error\(`\[\$\{channel\}_webhook\] conversation read failed`\);\n\s+return await unknownState\(\);/);
- assert.equal((src.match(/await resolvedAfterRedrive\(\);\n\s+return;/g)??[]).length,7,"tenant missing/inactive, conversation gone, transferred, credits (2), auto reply off");
+ // 8th exit: account_unproven (no proven channel account -> no auto-send); previously
+ // this path ended as claim_failed. No reply is sent either way.
+ assert.equal((src.match(/await resolvedAfterRedrive\(\);\n\s+return;/g)??[]).length,8,"tenant missing/inactive, conversation gone, transferred, credits (2), auto reply off, account_unproven");
  assert.match(src,/const incomingResult = redrive \? "saved" : await persistInboundOnce/);
  assert.match(src,/\.eq\("id", redrive\.conversationId\)\n\s+\.eq\("wa_chat_id", chatId\)/);
 });
@@ -333,11 +335,12 @@ test("channel text propagation (source): Instagram/Messenger msg.text and WhatsA
  const src=readFileSync("supabase/functions/milan-api/index.ts","utf8");
  // Instagram + Facebook Page: one handler; text from the signed event; account from channel_accounts, never the payload's tenant.
  assert.match(src,/typeof ev\.message\.text === "string"\n\s+\? ev\.message\.text/);
- assert.match(src,/igOutcomes\.push\(await handleIncomingWebhookMessage\(\n\s+sb,\n\s+account,\n\s+chatId,\n\s+msg\.text,/);
- assert.match(src,/\.eq\("channel", "facebook"\)\n\s+\.limit\(2\);/);
+ // IG/WA handler calls are wrapped in runBatchEvent(() => ...) so one throwing event never aborts the batch.
+ assert.match(src,/igOutcomes\.push\(await runBatchEvent\(\(\) => handleIncomingWebhookMessage\(\n\s+sb,\n\s+account,\n\s+chatId,\n\s+msg\.text,/);
+ assert.match(src,/\.eq\("channel", "facebook"\)\n(\s+\/\/[^\n]*\n)*\s+\.or\("status\.is\.null,status\.neq\.disconnected"\)\n\s+\.limit\(2\);/);
  // WhatsApp: text.body (or a canary flow-choice title); account from verified wa_bindings or channel_accounts.
  assert.match(src,/typeof message\?\.text\?\.body === "string"\n\s+\? message\.text\.body/);
- assert.match(src,/waOutcomes\.push\(await handleIncomingWebhookMessage\(\n\s+sb,\n\s+account,\n\s+chatId,\n\s+durableReply && !text \? durableReply\.text : text,/);
+ assert.match(src,/waOutcomes\.push\(await runBatchEvent\(\(\) => handleIncomingWebhookMessage\(\n\s+sb,\n\s+account,\n\s+chatId,\n\s+durableReply && !text \? durableReply\.text : text,/);
  assert.match(src,/const binding = bindingIsVerified\(bindingRow\) \? bindingRow : null;/);
  // the router receives exactly customerText and the verified account scope
  assert.match(src,/inboundId:inboundMessageId,eventId:externalMsgId,platform:channel,\n\s+text:customerText,/);

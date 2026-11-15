@@ -45,6 +45,19 @@
 --    max_attempts) RETURNS text: lease-token-checked completion. 'retry' ->
 --    'waiting' with backoff 1m, 5m, 15m, then 60m, or 'exhausted' when the
 --    attempts or the 48 hour cap are reached.
+--  * public.flow_inbound_recovery_live_resolved(tenant,account,platform,
+--    event,conversation,inbound,reason) RETURNS boolean: called by the LIVE
+--    webhook on a deliberate no-reply exit (human takeover, credits pause,
+--    auto reply off, no credits). Records a terminal 'resolved' row with a
+--    'live_*' reason code so discovery permanently skips that event and the
+--    sweeper can never send a late reply after the condition clears.
+--    Ownership is validated with the same rule as
+--    flow_inbound_routing_failed (message/conversation/account of the
+--    tenant, direction 'in', wa_message_id = event, account platform). It
+--    writes only for tenants that have an opt-in row (enabled or not; others
+--    are never swept: opting in sets enabled_at = now() and history before it
+--    is never discovered), only INSERTs (an existing row, e.g. a sweeper
+--    lease, is never changed) and returns true only when it wrote the row.
 --  * view public.automation_inbound_recovery_status (security_invoker):
 --    counts per tenant/status/reason, metadata only.
 --      SELECT * FROM public.automation_inbound_recovery_status;
@@ -60,7 +73,7 @@
 --
 -- Ownership marker: CREATED_BY_20261029360000_FLOW_INBOUND_RECOVERY
 -- Re-apply only over this migration's own objects (marker AND the pinned
--- normalized body md5 of both functions:
+-- normalized body md5 of all three functions:
 -- md5(btrim(regexp_replace(prosrc,'[[:space:]]+',' ','g')))).
 --
 -- Order: after 20261029340000 (required). Apply BEFORE the milan-api build
@@ -77,6 +90,7 @@ DECLARE
  v_marker constant text := 'CREATED_BY_20261029360000_FLOW_INBOUND_RECOVERY';
  v_lease_md5 constant text := '407b44aceb8afd6c7674d28c1d89cc0b';
  v_finish_md5 constant text := 'cf208534b81d64a7dd0fd7e1768d0142';
+ v_live_md5 constant text := '1eb9748741d9a0bf37736f2c4219c840';
  v_name text;
  r record;
  v_fn regprocedure;
@@ -86,7 +100,7 @@ BEGIN
    RAISE EXCEPTION 'Inbound recovery prerequisite missing: role %', v_name;
   END IF;
  END LOOP;
- FOREACH v_name IN ARRAY ARRAY['tenants','conversations','messages'] LOOP
+ FOREACH v_name IN ARRAY ARRAY['tenants','channel_accounts','conversations','messages'] LOOP
   IF to_regclass('public.'||v_name) IS NULL THEN
    RAISE EXCEPTION 'Inbound recovery prerequisite missing: public.%', v_name;
   END IF;
@@ -110,7 +124,8 @@ BEGIN
  END LOOP;
  FOR r IN SELECT * FROM (VALUES
    ('flow_inbound_recovery_lease','public.flow_inbound_recovery_lease(integer,integer,integer,integer,integer,uuid)',v_lease_md5),
-   ('flow_inbound_recovery_finish','public.flow_inbound_recovery_finish(uuid,uuid,uuid,text,text,integer)',v_finish_md5)) t(name,sig,body_md5)
+   ('flow_inbound_recovery_finish','public.flow_inbound_recovery_finish(uuid,uuid,uuid,text,text,integer)',v_finish_md5),
+   ('flow_inbound_recovery_live_resolved','public.flow_inbound_recovery_live_resolved(uuid,uuid,text,text,uuid,uuid,text)',v_live_md5)) t(name,sig,body_md5)
  LOOP
   v_fn := to_regprocedure(r.sig);
   IF v_fn IS NOT NULL THEN
@@ -309,6 +324,47 @@ COMMENT ON FUNCTION public.flow_inbound_recovery_finish(uuid,uuid,uuid,text,text
 REVOKE ALL ON FUNCTION public.flow_inbound_recovery_finish(uuid,uuid,uuid,text,text,integer)
  FROM PUBLIC,anon,authenticated;
 GRANT EXECUTE ON FUNCTION public.flow_inbound_recovery_finish(uuid,uuid,uuid,text,text,integer)
+ TO service_role;
+
+-- LIVE deliberate no-reply exit -> terminal 'resolved' row (never a reply).
+CREATE OR REPLACE FUNCTION public.flow_inbound_recovery_live_resolved(
+ p_tenant uuid,p_account uuid,p_platform text,p_event text,p_conversation uuid,p_inbound uuid,
+ p_reason text
+) RETURNS boolean LANGUAGE plpgsql SECURITY INVOKER SET search_path=''
+AS $live$
+DECLARE v_created timestamptz;
+BEGIN
+ IF p_tenant IS NULL OR p_account IS NULL OR p_conversation IS NULL OR p_inbound IS NULL OR
+    p_platform IS NULL OR p_platform NOT IN('instagram','facebook','whatsapp') OR
+    p_event IS NULL OR length(p_event) NOT BETWEEN 1 AND 256 OR
+    p_reason IS NULL OR p_reason NOT IN('live_human_takeover','live_credits_paused',
+     'live_auto_reply_off','live_no_credits')
+ THEN RETURN false; END IF;
+ -- Tenants without an opt-in row are never swept: nothing to record.
+ IF NOT EXISTS(SELECT 1 FROM public.automation_inbound_recovery_tenants o
+   WHERE o.tenant_id=p_tenant) THEN RETURN false; END IF;
+ -- Same ownership rule as flow_inbound_routing_failed (20261029340000).
+ SELECT m.created_at INTO v_created
+ FROM public.messages m JOIN public.conversations c
+   ON c.id=m.conversation_id AND c.tenant_id=m.tenant_id
+   JOIN public.channel_accounts a ON a.id=p_account AND a.tenant_id=c.tenant_id
+ WHERE m.id=p_inbound AND m.tenant_id=p_tenant AND m.direction='in'
+   AND m.conversation_id=p_conversation AND m.wa_message_id=p_event
+   AND (c.account_id=p_account OR c.account_id IS NULL) AND a.platform=p_platform;
+ IF NOT FOUND OR v_created IS NULL THEN RETURN false; END IF;
+ -- Insert only: an existing row (waiting/leased/finished) is never changed.
+ INSERT INTO public.automation_inbound_recovery AS x(
+  tenant_id,inbound_message_id,conversation_id,status,reason,message_created_at,finished_at)
+ VALUES(p_tenant,p_inbound,p_conversation,'resolved',p_reason,v_created,pg_catalog.now())
+ ON CONFLICT ON CONSTRAINT automation_inbound_recovery_pkey DO NOTHING;
+ RETURN FOUND;
+END
+$live$;
+COMMENT ON FUNCTION public.flow_inbound_recovery_live_resolved(uuid,uuid,text,text,uuid,uuid,text)
+ IS 'CREATED_BY_20261029360000_FLOW_INBOUND_RECOVERY';
+REVOKE ALL ON FUNCTION public.flow_inbound_recovery_live_resolved(uuid,uuid,text,text,uuid,uuid,text)
+ FROM PUBLIC,anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.flow_inbound_recovery_live_resolved(uuid,uuid,text,text,uuid,uuid,text)
  TO service_role;
 
 -- Owner status view: metadata only (ids, counters, times, reason codes).

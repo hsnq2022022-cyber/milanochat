@@ -109,11 +109,13 @@ test("deactivate payload has no revision; rejected server keeps state and shows 
   const state = { active: 2 as number | null };
   const calls = await setup(page, { publication: server(state, { reject: ["deactivate", "rollback", "activate"] }) });
   const dialog = await openPanel(page);
+  // The panel no longer shows the old "رفض الخادم التغيير" copy; it shows "تعذر <verb>" plus the raw server code.
   await dialog.getByRole("button", { name: "إيقاف التدفق" }).click();
-  await expect(dialog.getByText("رفض الخادم التغيير", { exact: false })).toBeVisible();
+  await expect(dialog.getByText("تعذر الإيقاف", { exact: false })).toBeVisible();
+  await expect(dialog.getByText("not_allowed", { exact: false })).toBeVisible();
   await expect(dialog.getByText("الإصدار النشط: 2")).toBeVisible();
   await dialog.getByRole("button", { name: "الرجوع لهذا الإصدار" }).nth(1).click();
-  await expect(dialog.getByText("رفض الخادم التغيير", { exact: false })).toBeVisible();
+  await expect(dialog.getByText("تعذر التحديث", { exact: false })).toBeVisible();
   await expect(dialog.getByText("الإصدار النشط: 2")).toBeVisible();
   const m = mutations(calls);
   expect(m.map((c) => c.body.action)).toEqual(["deactivate", "rollback"]);
@@ -127,7 +129,8 @@ test("rejected activate leaves activation OFF", async ({ page }) => {
   await setup(page, { publication: server(state, { reject: ["activate"] }) });
   const dialog = await openPanel(page);
   await dialog.getByRole("button", { name: "تفعيل فعلي" }).first().click();
-  await expect(dialog.getByText("رفض الخادم التغيير", { exact: false })).toBeVisible();
+  await expect(dialog.getByText("تعذر التفعيل", { exact: false })).toBeVisible();
+  await expect(dialog.getByText("not_allowed", { exact: false })).toBeVisible();
   await expect(dialog.getByText("التفعيل معطّل")).toBeVisible();
 });
 

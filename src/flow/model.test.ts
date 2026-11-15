@@ -309,3 +309,45 @@ test("legacy pdf block loads unchanged and still blocks publish validation",()=>
  assert.equal(b.type,"pdf");assert.equal(b.url,"https://example.com/a.pdf");
  assert.ok(validateDocument(back).some(i=>i.severity==="error"&&i.message.includes("PDF")));
 });
+
+/* messageScope (optional, message triggers only): kept only when exactly valid, never defaulted. */
+function scopedRaw(scope?:unknown,triggerMode="message"){
+ const data:Record<string,unknown>={kind:"trigger",title:"start",platform:"instagram",triggerMode,keywords:triggerMode==="keyword"?"hi":""};
+ if(arguments.length>0)data.messageScope=scope;
+ return {version:3,name:"s",nodes:[
+  {id:"t1",type:"flowNode",position:{x:0,y:0},data},
+  {id:"m1",type:"flowNode",position:{x:0,y:200},data:{kind:"message",title:"hi",text:"welcome"}}],
+  edges:[{id:"e1",source:"t1",target:"m1",sourceHandle:"next",targetHandle:"in",data:{label:""}}]};
+}
+const triggerData=(raw:unknown)=>importFlow(raw)!.nodes.find(n=>n.data.kind==="trigger")!.data as Record<string,unknown>;
+test("messageScope: valid values survive importFlow exactly",()=>{
+ assert.equal(triggerData(scopedRaw("conversation_start")).messageScope,"conversation_start");
+ assert.equal(triggerData(scopedRaw("every_message")).messageScope,"every_message");
+});
+test("messageScope: missing scope adds no key and matches the unscoped output",()=>{
+ const d=triggerData(scopedRaw());
+ assert.equal(Object.prototype.hasOwnProperty.call(d,"messageScope"),false);
+ assert.ok(!JSON.stringify(importFlow(scopedRaw())).includes("messageScope"));
+});
+test("messageScope: an invalid value is dropped by the sanitizer, never promoted",()=>{
+ for(const bad of ["always","Conversation_Start"," conversation_start","","first_message",null,1,true,{},[]]){
+  const d=triggerData(scopedRaw(bad));
+  assert.equal(Object.prototype.hasOwnProperty.call(d,"messageScope"),false,JSON.stringify(bad));
+ }
+});
+test("messageScope: dropped on non-message triggers and on non-trigger nodes",()=>{
+ assert.equal("messageScope" in triggerData(scopedRaw("conversation_start","keyword")),false);
+ const raw=scopedRaw();
+ (raw.nodes[1].data as Record<string,unknown>).messageScope="conversation_start";
+ const msg=importFlow(raw)!.nodes.find(n=>n.id==="m1")!.data as Record<string,unknown>;
+ assert.equal("messageScope" in msg,false);
+});
+test("messageScope: a scoped trigger keeps every other field identical (no collateral loss)",()=>{
+ const plain=importFlow(scopedRaw())!,scoped=importFlow(scopedRaw("conversation_start"))!;
+ const {messageScope,...rest}=scoped.nodes[0].data as Record<string,unknown>;
+ assert.equal(messageScope,"conversation_start");
+ assert.equal(JSON.stringify(rest),JSON.stringify(plain.nodes[0].data));
+ assert.equal(JSON.stringify(scoped.nodes[1]),JSON.stringify(plain.nodes[1]));
+ assert.equal(JSON.stringify(scoped.edges),JSON.stringify(plain.edges));
+ assert.equal(Object.keys(scoped.nodes[0].data).at(-1),"messageScope");
+});

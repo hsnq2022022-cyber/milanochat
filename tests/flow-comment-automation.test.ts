@@ -518,7 +518,9 @@ test("worker source: comment wiring only behind FLOW_COMMENT_AUTOMATION_ENABLED;
   assert.match(w, /if\(cr\.reply_status!=="sent"\)\{report\("held_comment_reply"\);continue;\}/);
   assert.ok(w.includes('...(commentRecipientId!==undefined?{recipientCommentId:commentRecipientId}:{})'));
   const idx = readFileSync("supabase/functions/milan-api/index.ts", "utf8");
-  assert.match(idx, /if \(commentAutomationEnabled\(\)\) \{\n\s+await ingestSignedComments\(sb, body\.object, entry, \{/);
+  // Comment ingest now runs inside runBatchEvent (one throwing event never aborts the
+  // Meta batch); it must still be gated by commentAutomationEnabled().
+  assert.match(idx, /if \(commentAutomationEnabled\(\)\) \{\n\s+igOutcomes\.push\(await runBatchEvent\(async \(\) => \{\n\s+await ingestSignedComments\(sb, body\.object, entry, \{/);
   const sig = idx.indexOf("const sigOk = await verifyMetaSignature(");
   assert.ok(sig > 0 && idx.indexOf("await ingestSignedComments(") > sig, "comments only after signature verification");
 });

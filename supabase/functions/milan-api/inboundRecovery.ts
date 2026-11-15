@@ -125,6 +125,39 @@ export async function recoveryLeaseActive(db:Db,k:{tenantId:string;inboundId:str
  }catch{return false;}
 }
 
+/**
+ * LIVE deliberate no-reply exits (milan-api/index.ts handleIncomingWebhookMessage,
+ * NOT a re-drive): the persisted event is recorded as a terminal 'resolved'
+ * recovery row (flow_inbound_recovery_live_resolved, migration 20261029360000)
+ * so the sweeper's discovery permanently skips it and can never send a late
+ * reply once the condition (takeover, credits, auto reply) clears.
+ * Best effort: never throws, bounded wait, logs nothing, and its result never
+ * changes the webhook outcome (the caller ignores it).
+ */
+export const LIVE_NO_REPLY_REASONS=["live_human_takeover","live_credits_paused",
+ "live_auto_reply_off","live_no_credits"] as const;
+export type LiveNoReplyReason=typeof LIVE_NO_REPLY_REASONS[number];
+export const LIVE_NO_REPLY_TIMEOUT_MS=3000;
+export async function markLiveNoReply(db:Db,e:{tenantId:string;accountId:string;platform:string;
+ eventId:string;conversationId:string;inboundId:string},reason:LiveNoReplyReason,
+ timeoutMs=LIVE_NO_REPLY_TIMEOUT_MS):Promise<boolean>{
+ let timer:ReturnType<typeof setTimeout>|undefined;
+ try{
+  if(!rec(e)||!UUID.test(e.tenantId)||!UUID.test(e.accountId)||!UUID.test(e.conversationId)||
+     !UUID.test(e.inboundId)||!["instagram","facebook","whatsapp"].includes(e.platform)||
+     typeof e.eventId!=="string"||e.eventId.length<1||e.eventId.length>256||
+     !(LIVE_NO_REPLY_REASONS as readonly string[]).includes(reason))return false;
+  const call=Promise.resolve().then(()=>db.rpc("flow_inbound_recovery_live_resolved",{
+   p_tenant:e.tenantId,p_account:e.accountId,p_platform:e.platform,p_event:e.eventId,
+   p_conversation:e.conversationId,p_inbound:e.inboundId,p_reason:reason}));
+  call.catch(()=>{});
+  const late=new Promise<null>(res=>{timer=setTimeout(()=>res(null),timeoutMs);});
+  const r=await Promise.race([call,late]);
+  return !!r&&!r.error&&r.data===true;
+ }catch{return false;}
+ finally{if(timer!==undefined)clearTimeout(timer);}
+}
+
 type Lease={tenantId:string;inboundId:string;conversationId:string;token:string};
 
 /** One leased event -> decision. Every read is scoped to lease.tenantId. */

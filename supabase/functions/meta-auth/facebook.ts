@@ -61,10 +61,38 @@ export type FbPageRow = {
   updated_at: string;
 };
 
+/** Name of the global unique index (migration 20261115120000). */
+export const ACCOUNT_GLOBAL_UNIQUE_INDEX = "channel_accounts_channel_external_id_global_uq";
+
+/**
+ * true ONLY for the Postgres unique violation (23505) of the global
+ * (channel, external_id) channel_accounts index, identified by its NAME in the
+ * error message or details: the id is held by ANOTHER tenant's
+ * non-disconnected row. The upserts conflict on tenant_id,channel,external_id,
+ * so a same-tenant re-link is an UPDATE of the same row and never raises this
+ * unless another tenant holds the id. Any other 23505 (e.g. the per-tenant
+ * unique constraints) is NOT matched and keeps its previous handling
+ * (db_save_failed). Callers map a match to the existing
+ * "account_already_linked" result; the error text (which carries the id) is
+ * never logged.
+ */
+export function isAccountTakenViolation(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const e = err as { code?: unknown; message?: unknown; details?: unknown };
+  if (e.code !== "23505") return false;
+  const text = `${typeof e.message === "string" ? e.message : ""} ${typeof e.details === "string" ? e.details : ""}`;
+  return text.includes(ACCOUNT_GLOBAL_UNIQUE_INDEX);
+}
+
 export type FbDb = {
-  /** true when the page is ACTIVE for another tenant; "error" fails closed. */
+  /**
+   * true when another tenant holds the page in a row that is NOT
+   * 'disconnected' (active, needs_reauth, ... — the same rows the global
+   * unique index counts); "error" fails closed.
+   */
   pageOwnedElsewhere: (pageId: string) => Promise<boolean | "error">;
-  upsertPage: (row: FbPageRow) => Promise<boolean>;
+  /** "owned": the unique index refused the row (linked to another tenant). */
+  upsertPage: (row: FbPageRow) => Promise<boolean | "owned">;
 };
 
 /** Supabase wiring; every query is scoped by the verified state's tenant. */
@@ -77,7 +105,8 @@ export function facebookDb(sb: any, tenantId: string): FbDb {
         .eq("channel", "facebook")
         .eq("external_id", pageId)
         .neq("tenant_id", tenantId)
-        .eq("status", "active")
+        // status IS DISTINCT FROM 'disconnected' (NULL counts), like the index.
+        .or("status.is.null,status.neq.disconnected")
         .limit(1);
       if (error) return "error";
       return Array.isArray(data) && data.length > 0;
@@ -87,6 +116,7 @@ export function facebookDb(sb: any, tenantId: string): FbDb {
       const { error } = await sb
         .from("channel_accounts")
         .upsert(row, { onConflict: "tenant_id,channel,external_id" });
+      if (error && isAccountTakenViolation(error)) return "owned";
       if (error) console.error("[meta-auth] facebook upsert failed", { code: error.code ?? "unknown" });
       return !error;
     },
@@ -199,6 +229,7 @@ export async function linkFacebookPages(code: string, deps: FbLinkDeps): Promise
       connected_at: now,
       updated_at: now,
     });
+    if (ok === "owned") { skippedOwned++; continue; }
     if (!ok) { dbFailed++; continue; }
     saved++;
     if (!name && typeof p?.name === "string") name = p.name;

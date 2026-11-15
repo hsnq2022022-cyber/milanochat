@@ -31,8 +31,11 @@ const WA_PARAMS="body,sb,bindingIsVerified,handleIncomingWebhookMessage,multicha
  "normalizeMetaMessages,json,console,retryableEvent,webhookStatusFor,runBatchEvent,provenWhatsappAccount,recoveryLeaseActive";
 const waLoop=new Function(stripTypeScriptTypes("async function __wa("+WA_PARAMS+"){\n"+
  slice('case "whatsapp_webhook": {',"        // Per-event outcomes: any \"retry\"")+"}\n",{mode:"strip"})+"\nreturn __wa;")();
+// The profile-fetch token in the instagram_webhook loop is now decrypted with
+// the STRICT decryptAccessTokenStrict (tests/milan-token-decrypt-strict.test.ts),
+// no longer the lenient decryptField; same position, same fake.
 const IG_PARAMS="body,sb,extractIgMessages,multichannelEnabled,normalizeMetaMessages,env,syntheticEventId,"+
- "retryableEvent,recoveryLeaseActive,runBatchEvent,handleIncomingWebhookMessage,decryptField,fetchSenderProfile,"+
+ "retryableEvent,recoveryLeaseActive,runBatchEvent,handleIncomingWebhookMessage,decryptAccessTokenStrict,fetchSenderProfile,"+
  "commentAutomationEnabled,ingestSignedComments,encryptField,webhookStatusFor,json,console";
 const igLoop=new Function(stripTypeScriptTypes("async function __ig("+IG_PARAMS+"){\n"+
  slice('case "instagram_webhook": {',"        // Per-event outcomes: any \"retry\"")+"}\n",{mode:"strip"})+"\nreturn __ig;")();
@@ -58,7 +61,7 @@ function fakeDb({tables={},leaky=false,errorTables=[]}={}){
    return {rows};
   };
   const q={
-   select:()=>q,update:()=>q,in:()=>q,
+   select:()=>q,update:()=>q,in:()=>q,or:()=>q,
    eq:(k,v)=>{f.push([k,v]);return q;},
    maybeSingle:async()=>{const r=run();return r.error?r:{data:r.rows[0]??null,error:null};},
    limit:async(n)=>{const r=run();return r.error?r:{data:r.rows.slice(0,n),error:null};},
@@ -184,8 +187,9 @@ test("E4 Instagram/Facebook mixed batch: throwing event and throwing comment ing
 });
 test("E4 Instagram: the recovery sweeper's lease on a retrying event -> no concurrent re-drive, 503",async()=>{
  const handled=[];const {c}=cons();
- const db={from(table){const q={select:()=>q,eq:()=>q,in:()=>q,update:()=>q,
-  limit:async()=>({data:table==="messages"?[{id:"in-1"}]:[],error:null}),
+ // channel_accounts: SEC account resolution reads limit(2) rows (exactly one -> routed).
+ const db={from(table){const q={select:()=>q,eq:()=>q,in:()=>q,or:()=>q,update:()=>q,
+  limit:async()=>({data:table==="messages"?[{id:"in-1"}]:table==="channel_accounts"?[{id:ACC1,tenant_id:T1,channel:"instagram",external_id:"E1",status:"active"}]:[],error:null}),
   maybeSingle:async()=>({data:table==="channel_accounts"?{id:ACC1,tenant_id:T1,channel:"instagram",external_id:"E1",status:"active"}:null,error:null}),
   then:(ok,ko)=>Promise.resolve({data:null,error:null}).then(ok,ko)};return q;}};
  const res=await igLoop({object:"instagram",entry:[{id:"E1"}]},db,

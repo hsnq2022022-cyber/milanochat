@@ -145,7 +145,7 @@ test("pagination follows only Graph-host next URLs (no SSRF), bounded", async ()
   assert.deepEqual(await linkFacebookPages("C", deps(g2, m.db)), {ok: true, saved: 2, name: ""});
 });
 
-test("facebookDb: ownership check excludes own tenant and only counts ACTIVE rows; upsert key and tenant guard", async () => {
+test("facebookDb: ownership check excludes own tenant and counts every NON-disconnected row; upsert key and tenant guard", async () => {
   const ops: unknown[][] = [];
   const chain: any = new Proxy({}, {get: (_t, k) => k === "then" ? undefined : (...a: unknown[]) => {
     ops.push([k, ...a]);
@@ -156,7 +156,7 @@ test("facebookDb: ownership check excludes own tenant and only counts ACTIVE row
   const db = facebookDb(chain, TA);
   assert.equal(await db.pageOwnedElsewhere("111"), true);
   assert.deepEqual(ops, [["from", "channel_accounts"], ["select", "tenant_id"], ["eq", "channel", "facebook"],
-    ["eq", "external_id", "111"], ["neq", "tenant_id", TA], ["eq", "status", "active"], ["limit", 1]]);
+    ["eq", "external_id", "111"], ["neq", "tenant_id", TA], ["or", "status.is.null,status.neq.disconnected"], ["limit", 1]]);
   ops.length = 0;
   const row = {tenant_id: TA, external_id: "111"} as FbPageRow;
   assert.equal(await db.upsertPage(row), true);

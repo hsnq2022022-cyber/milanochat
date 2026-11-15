@@ -1,6 +1,6 @@
 import {test} from "node:test";
 import assert from "node:assert/strict";
-import {makeNode,edgeFor} from "./model.ts";
+import {makeNode,edgeFor,importFlow} from "./model.ts";
 import type {FlowDocument} from "./model.ts";
 import {
  providerPlatform,preparePublishedDocument,publicationCanActivate,testCanaryArmed,productionActivationAuthorized,
@@ -115,4 +115,63 @@ test("commentTriggerProviderPlatform: comment triggers only, messenger -> facebo
  assert.equal(commentTriggerProviderPlatform(withTrigger("messenger","message")),null);
  assert.equal(commentTriggerProviderPlatform(null),null);
  assert.equal(commentTriggerProviderPlatform({nodes:"x"}),null);
+});
+
+/* messageScope on the publish path. */
+function scoped(scope?:unknown):Record<string,unknown>{
+ const d=JSON.parse(JSON.stringify(doc())) as {nodes:Array<{data:Record<string,unknown>}>};
+ if(arguments.length>0)d.nodes[0].data.messageScope=scope;
+ return d as unknown as Record<string,unknown>;
+}
+test("publish keeps a valid messageScope unchanged",()=>{
+ for(const s of ["conversation_start","every_message"]){
+  const out=preparePublishedDocument(scoped(s),"instagram");
+  assert.ok(out,s);
+  assert.equal(out!.nodes.find(n=>n.data.kind==="trigger")!.data.messageScope,s);
+ }
+});
+test("publish without messageScope adds no key",()=>{
+ const out=preparePublishedDocument(scoped(),"instagram")!;
+ assert.ok(out);
+ assert.ok(!JSON.stringify(out).includes("messageScope"));
+});
+test("publish rejects an explicit invalid messageScope instead of dropping it",()=>{
+ for(const bad of ["always","Conversation_Start"," conversation_start","conversation_start ","","first_message",null,1,true,{},[]])
+  assert.equal(preparePublishedDocument(scoped(bad),"instagram"),null,JSON.stringify(bad));
+ // undefined cannot be carried by JSON: treated as absent.
+ assert.ok(preparePublishedDocument(scoped(undefined),"instagram"));
+});
+test("publish ignores (drops) messageScope on non-trigger nodes and keeps hostile nodes bounded",()=>{
+ const d=scoped() as {nodes:Array<{data:Record<string,unknown>}>};
+ d.nodes[1].data.messageScope="nonsense";
+ const out=preparePublishedDocument(d,"instagram")!;
+ assert.ok(out);
+ assert.ok(!JSON.stringify(out).includes("messageScope"));
+ assert.equal(preparePublishedDocument({version:3,nodes:[null,1,"x"],edges:[]},"instagram"),null);
+ assert.equal(preparePublishedDocument({version:3,nodes:Array(101).fill({data:{kind:"trigger",messageScope:1}}),edges:[]},"instagram"),null);
+});
+/* Regression pin: r4-shaped legacy document (trigger message → delay 1 minute → text).
+   EXPECTED was produced by the pre-messageScope sanitizer (commit 2af0e3f); it must never change. */
+const D=(kind:string,title:string,text:string,triggerMode:string)=>({kind,title,text,image:"",options:[],contentBlocks:[],platform:"instagram",keywords:"",triggerMode,
+ commentScope:"all",commentPostId:"",commentMatchType:"any",publicReplyText:"",inputMode:"buttons",inputField:"response",conditionField:"message",
+ operator:"contains",conditionValue:"",delayValue:1,delayUnit:"minutes",actionType:"tag",actionValue:"",gotoNode:"",requestMethod:"GET",requestUrl:""});
+const R4_INPUT={version:3,name:"r4",nodes:[
+ {id:"t1",type:"flowNode",position:{x:0,y:0},data:D("trigger","t-trigger","","message")},
+ {id:"d1",type:"flowNode",position:{x:0,y:200},data:D("delay","t-delay","","keyword")},
+ {id:"m1",type:"flowNode",position:{x:0,y:400},data:D("message","t-message","hello","keyword")}],
+ edges:[{id:"e1",type:"flowEdge",source:"t1",target:"d1",sourceHandle:"next",targetHandle:"in",data:{label:"التالي"}},
+  {id:"e2",type:"flowEdge",source:"d1",target:"m1",sourceHandle:"next",targetHandle:"in",data:{label:"التالي"}}]};
+const R4_DATA=(kind:string,title:string,text:string,mode:string)=>
+ '{"kind":"'+kind+'","title":"'+title+'","text":"'+text+'","image":"","options":[],"contentBlocks":[],"platform":"instagram","keywords":"","triggerMode":"'+mode+'",'+
+ '"commentScope":"all","commentPostId":"","commentMatchType":"any","publicReplyText":"","inputMode":"buttons","inputField":"response","conditionField":"message",'+
+ '"operator":"contains","conditionValue":"","delayValue":1,"delayUnit":"minutes","actionType":"tag","actionValue":"","gotoNode":"","requestMethod":"GET","requestUrl":""}';
+const R4_EXPECTED='{"version":3,"name":"r4","nodes":['+
+ '{"id":"t1","position":{"x":0,"y":0},"type":"flowNode","data":'+R4_DATA("trigger","t-trigger","","message")+'},'+
+ '{"id":"d1","position":{"x":0,"y":200},"type":"flowNode","data":'+R4_DATA("delay","t-delay","","keyword")+'},'+
+ '{"id":"m1","position":{"x":0,"y":400},"type":"flowNode","data":'+R4_DATA("message","t-message","hello","keyword")+'}],'+
+ '"edges":[{"id":"e1","source":"t1","target":"d1","sourceHandle":"next","targetHandle":"in","type":"flowEdge","data":{"label":"التالي"}},'+
+ '{"id":"e2","source":"d1","target":"m1","sourceHandle":"next","targetHandle":"in","type":"flowEdge","data":{"label":"التالي"}}]}';
+test("r4-shaped legacy document publishes byte-identical to the pre-messageScope sanitizer",()=>{
+ assert.equal(JSON.stringify(preparePublishedDocument(JSON.parse(JSON.stringify(R4_INPUT)),"instagram")),R4_EXPECTED);
+ assert.equal(JSON.stringify(importFlow(JSON.parse(JSON.stringify(R4_INPUT)))),R4_EXPECTED);
 });

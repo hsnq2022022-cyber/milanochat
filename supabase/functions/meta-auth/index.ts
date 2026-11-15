@@ -15,6 +15,7 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { consumeOAuthState, oauthStateSecret } from "../_shared/oauthState.ts";
 import { facebookDb, linkFacebookPages } from "./facebook.ts";
+import { isAccountTakenViolation } from "./facebook.ts";
 
 const IG_TOKEN_URL = "https://api.instagram.com/oauth/access_token";
 const IG_GRAPH_HOST = "https://graph.instagram.com";
@@ -197,15 +198,21 @@ Deno.serve(async (req: Request) => {
     }
 
     // الحساب غير مربوط بعميل آخر
-    const { data: taken } = await sb
+    // SEC (fail closed): limit(2) so 2+ rows of other tenants still count as
+    // taken (maybeSingle() turned them into an ignored error), and a lookup
+    // error refuses the link (same code as facebook.ts). Every row that is
+    // NOT 'disconnected' (active, needs_reauth, NULL) blocks — the same rows
+    // the global unique index counts; a disconnected row never blocks.
+    const { data: taken, error: takenErr } = await sb
       .from("channel_accounts")
       .select("tenant_id")
       .eq("channel", "instagram")
       .eq("external_id", igId)
       .neq("tenant_id", tenantId)
-      .eq("status", "active")
-      .maybeSingle();
-    if (taken) return fail("account_already_linked");
+      .or("status.is.null,status.neq.disconnected")
+      .limit(2);
+    if (takenErr || !Array.isArray(taken)) return fail("db_save_failed");
+    if (taken.length > 0) return fail("account_already_linked");
 
     // 4) الحفظ
     const username = prof?.username ? `@${prof.username}` : (prof?.name ?? null);
@@ -231,6 +238,9 @@ Deno.serve(async (req: Request) => {
       { onConflict: "tenant_id,channel,external_id" },
     );
     if (upErr) {
+      // SEC: the global (channel, external_id) unique index refused an id
+      // linked to another tenant -> the existing "already linked" result.
+      if (isAccountTakenViolation(upErr)) return fail("account_already_linked");
       console.error("[meta-auth] channel_accounts upsert failed:", upErr.message);
       return fail("db_save_failed");
     }

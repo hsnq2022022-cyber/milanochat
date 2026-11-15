@@ -1,5 +1,7 @@
 import { test, expect } from "@playwright/test";
 
+// The button exists only in builds with VITE_ENABLE_CLOUD_FLOW_DRAFTS=true; playwright.config.ts sets it for the dev server (as CI and deploy do).
+
 test("cloud draft preview requires explicit action and never overwrites local flows", async ({ page }) => {
   await page.goto("/milanochat/#/flows");
   const button = page.getByTestId("flow-cloud-drafts");
@@ -16,7 +18,9 @@ test("cloud draft preview requires explicit action and never overwrites local fl
   await expect(dialog.getByRole("button", { name: "حفظ التدفق الحالي سحابيًا" })).toBeDisabled();
 
   await dialog.getByRole("button", { name: "عرض المسودات السحابية" }).click();
-  await expect(dialog.getByRole("status")).toContainText("لم يتم إعداد Supabase");
+  // Without VITE_SUPABASE_URL the panel says "not configured"; with a (mock/unreachable)
+  // Supabase URL it reports cloud storage unavailable. Either way nothing is loaded or replaced.
+  await expect(dialog.getByRole("status")).toContainText(/لم يتم إعداد Supabase|التخزين السحابي غير متاح/);
   await expect(dialog.getByRole("button", { name: "حفظ التدفق الحالي سحابيًا" })).toBeDisabled();
   const savedAfter = await page.evaluate(() => localStorage.getItem("social_flow_library_v1"));
   expect(savedAfter).toBe(savedBefore);

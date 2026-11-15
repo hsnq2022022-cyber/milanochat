@@ -99,7 +99,19 @@ export type FlowData = Record<string, unknown> & {
   gotoNode: string;
   requestMethod: "GET" | "POST";
   requestUrl: string;
+  /**
+   * Optional, message triggers only (triggerMode "message"). Absent means the
+   * legacy behaviour (every message). Never defaulted: old documents keep no key.
+   */
+  messageScope?: MessageScope;
 };
+/** Allowed values for a message trigger's optional `messageScope`. */
+export const MESSAGE_SCOPES = ["conversation_start", "every_message"] as const;
+export type MessageScope = typeof MESSAGE_SCOPES[number];
+/** Exact match only: no trimming, no case folding, no coercion. */
+export function isMessageScope(v: unknown): v is MessageScope {
+  return typeof v === "string" && (MESSAGE_SCOPES as readonly string[]).includes(v);
+}
 export type FlowNode = Node<FlowData, "flowNode">;
 export type FlowEdge = Edge<Record<string, unknown> & { label?: string }, "flowEdge">;
 export type FlowDocument = { version: 3; name: string; nodes: FlowNode[]; edges: FlowEdge[] };
@@ -415,6 +427,12 @@ function cleanImported(raw:unknown): FlowDocument | null {
       delayUnit:["seconds","minutes","hours","days"].includes(String(d.delayUnit))?d.delayUnit as FlowData["delayUnit"]:"minutes",
       actionType:["tag","untag","set_field","handoff","notify","ai"].includes(String(d.actionType))?d.actionType as FlowData["actionType"]:"tag",
       actionValue:safeString(d.actionValue).slice(0,500),gotoNode:safeString(d.gotoNode),requestMethod:d.requestMethod==="POST"?"POST":"GET",requestUrl:safeString(d.requestUrl).slice(0,2048)});
+    // messageScope: kept ONLY when it is an own, exactly valid value on a message-mode trigger.
+    // Missing/invalid values are dropped (never defaulted, never promoted); the key is appended
+    // last so documents without a valid scope serialize exactly as before.
+    if(kind==="trigger"&&clean.data.triggerMode==="message"&&
+       Object.prototype.hasOwnProperty.call(d,"messageScope")&&isMessageScope(d.messageScope))
+      clean.data.messageScope=d.messageScope;
     clean.id=n.id;nodes.push(clean);
   }
   const ids=new Set(nodes.map(n=>n.id));if(ids.size!==nodes.length)return null;

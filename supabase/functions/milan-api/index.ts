@@ -46,7 +46,7 @@ import { processExclusiveEvent } from "./exclusiveMessageClaim.ts";
 import { recordRoutingFailure, markRoutingResolved, retryableEvent, webhookStatusFor,
   isRetryableOutcome, retryAttemptCap, runBatchEvent } from "./inboundRoutingRetry.ts";
 // B-3/B-4 opt-in recovery sweeper (default OFF) and its webhook-side lease check.
-import { inboundRecoveryEnabled, runInboundRecovery, recoveryLeaseActive } from "./inboundRecovery.ts";
+import { inboundRecoveryEnabled, runInboundRecovery, recoveryLeaseActive, markLiveNoReply, type LiveNoReplyReason } from "./inboundRecovery.ts";
 import { acceptsFlowWorkerBearer } from "../flowWorkerAuth.ts";
 import { syntheticEventId } from "./syntheticEventId.ts";
 import { prepareSimpleFlowReply } from "./flowPrepareMessage.ts";
@@ -188,8 +188,11 @@ async function decryptField(
     );
 
     return dec.decode(pt);
-  } catch (e) {
-    console.error("[decryptField] Decryption failed for value:", stored.substring(0, 30), (e as Error)?.message);
+  } catch {
+    // Fixed reason code only: never any part of the ciphertext, ids or names.
+    // Lenient by design (display fields keep the placeholder); channel access
+    // tokens use decryptAccessTokenStrict instead.
+    console.error("[decryptField] decryption_failed");
     return "[رسالة غير قابلة للقراءة]";
   }
 }
@@ -220,6 +223,46 @@ async function decryptFieldStrict(stored: string): Promise<string> {
     buf as BufferSource
   );
   return dec.decode(pt);
+}
+
+/**
+ * Typed failure of decryptAccessTokenStrict: the channel ACCESS TOKEN is
+ * missing, undecryptable or empty. Callers make NO provider request.
+ */
+class AccountTokenUnavailableError extends Error {
+  readonly code = "token_unavailable";
+  constructor() {
+    super("token_unavailable");
+    this.name = "AccountTokenUnavailableError";
+  }
+}
+
+/**
+ * STRICT decryption for channel ACCESS TOKENS sent to Meta (DM send, profile
+ * fetch). decryptField is lenient (returns a display placeholder on failure),
+ * which must never be sent to Meta as a token. Any decrypt failure or empty
+ * result THROWS AccountTokenUnavailableError. A legacy value without the
+ * "enc:v1:" prefix is returned unchanged, exactly as decryptField did.
+ * Logs nothing (callers log the fixed code "token_unavailable" only).
+ */
+async function decryptAccessTokenStrict(
+  stored: string | null | undefined
+): Promise<string> {
+  if (typeof stored !== "string" || stored.length === 0) {
+    throw new AccountTokenUnavailableError();
+  }
+  let token: string;
+  if (!stored.startsWith("enc:v1:")) {
+    token = stored;
+  } else {
+    try {
+      token = await decryptFieldStrict(stored);
+    } catch {
+      throw new AccountTokenUnavailableError();
+    }
+  }
+  if (!token.trim()) throw new AccountTokenUnavailableError();
+  return token;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
@@ -308,6 +351,132 @@ function aiKey(kind: "embed" | "llm" = "llm"): string {
   return "";
 }
 
+/* ── Stage 6 hardening: provider/network errors safe for logs and clients ──
+ * Provider response bodies (they can echo API keys, tokens or customer text)
+ * and fetch error messages (they embed the request URL) never reach a log
+ * line, a thrown message or a client response. Only the provider name, the
+ * numeric HTTP status and a validated provider error code are kept. */
+
+/** A provider error code: a finite number or a short [A-Za-z0-9_.-] token. */
+function safeProviderCode(x: unknown): number | string | undefined {
+  if (typeof x === "number" && Number.isFinite(x)) return x;
+  if (typeof x === "string" && /^[A-Za-z0-9_.-]{1,40}$/.test(x)) return x;
+  return undefined;
+}
+
+/** Same pattern the reply/unresolved callers used on the old message text. */
+const LEGACY_AUTH_HINT = /توكن|token|auth|190/i;
+
+/** Non-2xx provider response. Message is FIXED: provider + status + code. */
+class ProviderHttpError extends Error {
+  readonly provider: string;
+  readonly status: number;
+  readonly code: number | string | undefined;
+  /** LEGACY_AUTH_HINT on the old `${provider} ${status}: ${body}` message. */
+  readonly authHint: boolean;
+  constructor(provider: string, status: number, code?: unknown, authHint = false) {
+    const p = /^[A-Za-z0-9 _.-]{1,40}$/.test(provider) ? provider : "provider";
+    const s = Number.isFinite(status) ? Math.trunc(status) : 0;
+    const c = safeProviderCode(code);
+    super(`${p} ${s}` + (c === undefined ? "" : ` (code ${c})`));
+    this.name = "ProviderHttpError";
+    this.provider = p;
+    this.status = s;
+    this.code = c;
+    this.authHint = authHint;
+  }
+}
+
+/** Builds a ProviderHttpError from a raw body; the body is then discarded. */
+function providerErrorFromBody(provider: string, status: number, raw: string): ProviderHttpError {
+  let code: unknown;
+  try {
+    const j: any = JSON.parse(raw);
+    code = j?.error?.code ?? j?.code ?? j?.error?.type ?? j?.type;
+  } catch {
+    /* not JSON: no code */
+  }
+  return new ProviderHttpError(
+    provider, status, code, LEGACY_AUTH_HINT.test(`${provider} ${status}: ${raw}`)
+  );
+}
+
+async function providerHttpError(provider: string, res: Response): Promise<ProviderHttpError> {
+  let raw = "";
+  try {
+    raw = await res.text();
+  } catch {
+    /* unreadable body: status only */
+  }
+  return providerErrorFromBody(provider, res.status, raw);
+}
+
+/** Fixed category of a thrown fetch/runtime error; never its text. */
+function fetchErrorCategory(e: unknown): "timeout" | "network" | "bad_response" | "unknown" {
+  try {
+    const n = typeof e === "object" && e !== null ? (e as { name?: unknown }).name : undefined;
+    const c = typeof e === "object" && e !== null ? (e as { code?: unknown }).code : undefined;
+    if (n === "AbortError" || n === "TimeoutError" || (typeof c === "string" && /TIMEOUT/i.test(c))) {
+      return "timeout";
+    }
+    if (n === "SyntaxError") return "bad_response";
+    if (n === "TypeError" || (typeof c === "string" && /^E[A-Z]+$/.test(c))) return "network";
+  } catch {
+    /* hostile error object */
+  }
+  return "unknown";
+}
+
+/** fetch threw (no response). Message is FIXED: provider + category. */
+class ProviderNetworkError extends Error {
+  readonly provider: string;
+  readonly category: string;
+  constructor(provider: string, category: string) {
+    super(`${provider} network error (${category})`);
+    this.name = "ProviderNetworkError";
+    this.provider = provider;
+    this.category = category;
+  }
+}
+
+const SAFE_ERROR_NAMES = new Set([
+  "Error", "TypeError", "SyntaxError", "RangeError", "ReferenceError",
+  "AbortError", "TimeoutError", "WaAuthError", "AccountTokenUnavailableError",
+  "SafeFetchError", "FlowRoutingUnavailableError",
+]);
+
+/** Log fields for any caught error: never e.message, stack, cause or the object. */
+function safeErrorLog(e: unknown): Record<string, unknown> {
+  if (e instanceof ProviderHttpError) {
+    return { provider: e.provider, status: e.status, code: e.code };
+  }
+  if (e instanceof ProviderNetworkError) {
+    return { provider: e.provider, category: e.category };
+  }
+  let name: string | undefined;
+  try {
+    const n = typeof e === "object" && e !== null ? (e as { name?: unknown }).name : undefined;
+    if (typeof n === "string" && SAFE_ERROR_NAMES.has(n)) name = n;
+  } catch {
+    /* hostile error object */
+  }
+  return { category: fetchErrorCategory(e), name: name ?? "unknown" };
+}
+
+/** Client-facing text: fixed provider messages; our own plain Error texts
+ * (Arabic user messages) unchanged; fetch/runtime errors -> fallback. */
+function clientErrorMessage(e: unknown, fallback: string): string {
+  if (e instanceof ProviderHttpError || e instanceof ProviderNetworkError) return e.message;
+  if (e instanceof WaAuthError || e instanceof AccountTokenUnavailableError) return e.message;
+  // safeFetch.ts SafeFetchError (URL import): fixed Arabic text + [code] by
+  // construction; matched by name (its import line is pinned unchanged).
+  if (e instanceof Error && e.name === "SafeFetchError") return e.message;
+  if (e instanceof Error && Object.getPrototypeOf(e) === Error.prototype && e.name === "Error") {
+    return e.message;
+  }
+  return fallback;
+}
+
 /**
  * fetch مع إعادة محاولة للأخطاء المؤقتة (ازدحام النموذج 503، تحديد المعدل 429، ...).
  * 3 محاولات بانتظار قصير بينها، بدون تجاوز زمن معقول لرد الـ webhook.
@@ -333,12 +502,14 @@ async function fetchRetry(
         `[ai] transient ${res.status}, attempt ${i + 1}/${attempts}`
       );
     } catch (e) {
+      // Stage 6: fixed category only; the error text embeds the request URL.
+      const category = fetchErrorCategory(e);
       console.warn(
         `[ai] network error, attempt ${i + 1}/${attempts}`,
-        e
+        { category }
       );
 
-      if (i === attempts - 1) throw e;
+      if (i === attempts - 1) throw new ProviderNetworkError("ai", category);
     }
 
     if (i < attempts - 1) {
@@ -357,11 +528,12 @@ async function embed(
 
   // إذا كان المفتاح يخص Google (يبدأ بـ AIza)
   if (key.startsWith("AIza")) {
+    // Stage 6: the key travels in the x-goog-api-key header, never in the URL.
     const res = await fetchRetry(
-      `https://generativelanguage.googleapis.com/v1/models/text-embedding-004:batchEmbedContents?key=${key}`,
+      "https://generativelanguage.googleapis.com/v1/models/text-embedding-004:batchEmbedContents",
       {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", "x-goog-api-key": key },
         body: JSON.stringify({
           requests: texts.map(text => ({
             model: "models/text-embedding-004",
@@ -370,7 +542,7 @@ async function embed(
         }),
       }
     );
-    if (!res.ok) throw new Error(`Gemini embedding ${res.status}: ${await res.text()}`);
+    if (!res.ok) throw await providerHttpError("Gemini embedding", res);
     const j = await res.json();
     return j.embeddings.map((e: any) => e.values);
   }
@@ -390,7 +562,7 @@ async function embed(
       }),
     }
   );
-  if (!res.ok) throw new Error(`OpenAI embedding ${res.status}: ${await res.text()}`);
+  if (!res.ok) throw await providerHttpError("OpenAI embedding", res);
   const j = await res.json();
   return j.data.map((d: { embedding: number[] }) => d.embedding);
 }
@@ -458,9 +630,7 @@ async function chatJSON(
   }
 
   if (!res.ok) {
-    throw new Error(
-      `llm ${res.status}: ${await res.text()}`
-    );
+    throw await providerHttpError("llm", res);
   }
 
   const j = await res.json();
@@ -687,12 +857,10 @@ async function sendWa(
     const raw = await res.text();
 
     let code: number | undefined;
-    let fbMessage = "";
 
     try {
       const parsed = JSON.parse(raw);
       code = parsed?.error?.code;
-      fbMessage = parsed?.error?.message ?? "";
     } catch {
       /* ليس JSON */
     }
@@ -704,9 +872,11 @@ async function sendWa(
       code === 102 ||
       code === 104
     ) {
-      console.error(
-        `[wa] auth failure (code ${code}): ${fbMessage}`
-      );
+      // Stage 6: status + validated code only, never Meta's free text.
+      console.error("[wa] auth failure", {
+        status: res.status,
+        code: safeProviderCode(code),
+      });
 
       throw new WaAuthError(
         "توكن واتساب منتهي أو غير صالح (Meta code 190). " +
@@ -715,20 +885,27 @@ async function sendWa(
       );
     }
 
-    throw new Error(`wa send ${res.status}: ${raw}`);
+    throw providerErrorFromBody("wa send", res.status, raw);
   }
   return providerIdFromResponse(res,"whatsapp");
 }
 
 async function boundPhone(
   sb: SupabaseClient,
-  tenantId: string
+  tenantId: string,
+  // SEC (account resolution): true for SENDS — only an operator-VERIFIED
+  // binding may pick the sending phone_number_id. Display reads (wa_status,
+  // me) stay unfiltered so a pending binding still shows.
+  verifiedOnly = false
 ): Promise<string | null> {
-  const { data } = await sb
+  const query = sb
     .from("wa_bindings")
     .select("phone_id")
-    .eq("tenant_id", tenantId)
-    .maybeSingle();
+    .eq("tenant_id", tenantId);
+  const { data } = await (verifiedOnly
+    ? query.eq("is_verified", true)
+    : query
+  ).maybeSingle();
 
   return data?.phone_id ?? null;
 }
@@ -759,7 +936,7 @@ async function fetchAccountWithToken(
  *   أولوية تحديد phone_id: conv.phone_id ← conversation ← wa_bindings ←
  *   channel_accounts(watsapp).external_id
  * - instagram / facebook → sendMetaDirectMessage
- *   (توكن الحساب المشفّر في channel_accounts عبر fetchAccountWithToken + decryptField)
+ *   (توكن الحساب المشفّر في channel_accounts عبر fetchAccountWithToken + decryptAccessTokenStrict)
  */
 async function sendToConversation(
   sb: SupabaseClient,
@@ -781,10 +958,11 @@ async function sendToConversation(
 
     try {
       if (account.access_token_encrypted) {
-        token = await decryptField(account.access_token_encrypted);
+        // Strict: an undecryptable token is never sent to Meta.
+        token = await decryptAccessTokenStrict(account.access_token_encrypted);
       }
-    } catch (e) {
-      console.warn("[sendToConversation] token decrypt failed", e);
+    } catch {
+      console.warn("[sendToConversation] token_unavailable");
     }
 
     if (!token) {
@@ -826,9 +1004,18 @@ async function sendToConversation(
       );
     }
 
-    const token = await decryptField(
-      account.access_token_encrypted
-    );
+    // Strict: an undecryptable/empty token fails clearly (no request to Meta).
+    let token: string;
+    try {
+      token = await decryptAccessTokenStrict(
+        account.access_token_encrypted
+      );
+    } catch {
+      console.warn("[sendToConversation] token_unavailable");
+      throw new Error(
+        `لا يوجد توكن محفوظ لحساب ${channel} — أعد ربط الحساب`
+      );
+    }
 
     await sendMetaDirectMessage({
       channel: channel as "instagram" | "facebook",
@@ -862,7 +1049,7 @@ async function sendToConversation(
   }
 
   if (!phoneId) {
-    phoneId = await boundPhone(sb, tenantId);
+    phoneId = await boundPhone(sb, tenantId, true);
   }
 
   if (!phoneId) {
@@ -1472,9 +1659,7 @@ async function sendMetaDirectMessage(opts: {
   });
 
   if (!res.ok) {
-    throw new Error(
-      `${channel} send ${res.status}: ${await res.text()}`
-    );
+    throw await providerHttpError(`${channel} send`, res);
   }
   return providerIdFromResponse(res,channel);
 }
@@ -1560,21 +1745,25 @@ async function fetchSenderProfile(opts: {
     const res = await fetch(url);
 
     if (!res.ok) {
-      // سجل آمن: HTTP status + error code + error message فقط.
-      // لا نطبع التوكن (موجود في URL الطلب وليس في الاستجابة).
+      // سجل آمن: HTTP status + sanitized Meta error code فقط.
+      // No free-text error message (Meta can echo the access token, e.g.
+      // "Malformed access token ..."), no senderId (customer identifier),
+      // no URL (it carries access_token=). The code is kept only if it is a
+      // number or a short [A-Za-z0-9_.-] string; anything else is omitted.
       let errCode: unknown;
-      let errMsg: string | undefined;
       try {
         const ej: any = await res.json();
         errCode = ej?.error?.code ?? ej?.code ?? ej?.error_type;
-        errMsg = ej?.error?.message ?? ej?.error_message ?? ej?.message;
       } catch {
         /* استجابة غير JSON — نتجاهل الجسم بأمان */
       }
-      console.warn(
-        `[fetchSenderProfile] HTTP ${res.status} for ${senderId}`,
-        { code: errCode, message: errMsg }
-      );
+      const code =
+        typeof errCode === "number" && Number.isFinite(errCode)
+          ? errCode
+          : typeof errCode === "string" && /^[A-Za-z0-9_.-]{1,40}$/.test(errCode)
+          ? errCode
+          : undefined;
+      console.warn("[fetchSenderProfile] http_error", { status: res.status, code });
       return { name: null, avatar: null };
     }
 
@@ -1600,8 +1789,24 @@ async function fetchSenderProfile(opts: {
     });
 
     return { name, avatar };
-  } catch (e: any) {
-    console.warn("[fetchSenderProfile] error:", e?.message ?? e);
+  } catch (e: unknown) {
+    // Fixed category only. Never the error text, stack, cause or object: a
+    // fetch network error embeds the request URL, which carries access_token=.
+    let category = "unknown";
+    try {
+      const n = typeof e === "object" && e !== null ? (e as { name?: unknown }).name : undefined;
+      const c = typeof e === "object" && e !== null ? (e as { code?: unknown }).code : undefined;
+      if (n === "AbortError" || n === "TimeoutError" || (typeof c === "string" && /TIMEOUT/i.test(c))) {
+        category = "timeout";
+      } else if (n === "SyntaxError") {
+        category = "bad_response";
+      } else if (n === "TypeError" || (typeof c === "string" && /^E[A-Z]+$/.test(c))) {
+        category = "network";
+      }
+    } catch {
+      /* hostile error object: keep "unknown" */
+    }
+    console.warn("[fetchSenderProfile] failed", { category });
     return { name: null, avatar: null };
   }
 }
@@ -1659,6 +1864,15 @@ async function handleIncomingWebhookMessage(
   // Known terminal outcome: a re-driven event no longer needs a retry.
   const resolvedAfterRedrive = async () => {
     if (redrive) await markRoutingResolved(sb, retryKey);
+  };
+  // Deliberate no-reply exit of a LIVE delivery (never a re-drive: those are
+  // resolved above / by the sweeper itself): mark the persisted event
+  // terminal so the opt-in recovery sweeper never answers it late
+  // (inboundRecovery.ts markLiveNoReply). Best effort; the result is ignored
+  // and never changes this exit.
+  const liveNoReply = async (reason: LiveNoReplyReason, conversationId: string, inboundId: string | null) => {
+    if (redrive || !inboundId) return;
+    await markLiveNoReply(sb, { ...retryKey, conversationId: String(conversationId), inboundId }, reason);
   };
 
   const { data: tenant, error: tenantError } = await sb
@@ -1823,6 +2037,7 @@ async function handleIncomingWebhookMessage(
     console.log(
       `[${channel}_webhook] conversation transferred: ${conv.id}`
     );
+    await liveNoReply("live_human_takeover", conv.id, inboundMessageId);
     await resolvedAfterRedrive();
     return;
   }
@@ -1834,6 +2049,7 @@ async function handleIncomingWebhookMessage(
     console.log(
       `[${channel}_webhook] paused (credits): ${conv.id}`
     );
+    await liveNoReply("live_credits_paused", conv.id, inboundMessageId);
     await resolvedAfterRedrive();
     return;
   }
@@ -1846,6 +2062,7 @@ async function handleIncomingWebhookMessage(
     console.log(
       `[${channel}_webhook] auto reply disabled for account ${account?.id}`
     );
+    await liveNoReply("live_auto_reply_off", conv.id, inboundMessageId);
     await resolvedAfterRedrive();
     return;
   }
@@ -1865,6 +2082,7 @@ async function handleIncomingWebhookMessage(
     console.log(
       `[${channel}_webhook] no credits: ${tenantId}`
     );
+    await liveNoReply("live_no_credits", conv.id, inboundMessageId);
     await resolvedAfterRedrive();
     return;
   }
@@ -1999,7 +2217,16 @@ async function handleIncomingWebhookMessage(
         return {providerMessageId};
       }
       if (!account.access_token_encrypted) throw new Error("missing account token");
-      const token = await decryptField(account.access_token_encrypted);
+      // Strict: an undecryptable/empty token throws BEFORE any request to
+      // Meta (never a placeholder token). Outcome stays "send_failed"
+      // (claim semantics unchanged) with the fixed reason code below.
+      let token: string;
+      try {
+        token = await decryptAccessTokenStrict(account.access_token_encrypted);
+      } catch (e) {
+        console.warn("[webhook-claim] account token unavailable; no provider request", { code: "token_unavailable" });
+        throw e;
+      }
       if (!token) throw new Error("empty account token");
       const providerMessageId=await sendMetaDirectMessage({
         channel,
@@ -2509,16 +2736,33 @@ Deno.serve(async (req) => {
                 };
               }
             } else {
-              const { data: chAcc } = await sb
+              // SEC (account resolution): the channel_accounts fallback routes
+              // only when EXACTLY ONE active row claims this phone id. A lookup
+              // error or several rows (e.g. several tenants) fail closed, and a
+              // wa_bindings row (verified or not) of ANOTHER tenant blocks it.
+              const { data: chAccs, error: chAccErr } = await sb
                 .from("channel_accounts")
                 .select(
                   "id, tenant_id, channel, external_id, status, agent_enabled, auto_reply, access_token_encrypted"
                 )
                 .eq("external_id", phoneId)
                 .eq("channel", "whatsapp")
-                .maybeSingle();
+                .eq("status", "active")
+                .limit(2);
+              const chAcc =
+                !chAccErr && Array.isArray(chAccs) && chAccs.length === 1
+                  ? chAccs[0]
+                  : null;
 
-              if (chAcc) {
+              if (chAccErr || !Array.isArray(chAccs) || chAccs.length > 1) {
+                console.warn("[whatsapp_webhook] fallback account ignored", { code: "wa_account_lookup_failed_or_ambiguous" });
+              } else if (
+                chAcc &&
+                bindingRow &&
+                String(bindingRow.tenant_id) !== String(chAcc.tenant_id)
+              ) {
+                console.warn("[whatsapp_webhook] fallback account ignored", { code: "wa_binding_tenant_mismatch" });
+              } else if (chAcc) {
                 account = chAcc;
               }
             }
@@ -2804,17 +3048,32 @@ Deno.serve(async (req) => {
             // an Instagram one); a page id shared by several accounts (e.g.
             // several tenants) is never assigned to one of them: ignored.
             let ambiguousPage = false;
+            // SEC (account resolution): a lookup error or an ambiguous
+            // Instagram id (2+ rows) stops resolution entirely — the next
+            // candidate is never tried (fail closed; same idea as
+            // commentIngress.ts: exactly one row or nothing). Rows with
+            // status 'disconnected' are not candidates at all; a needs_reauth
+            // (non-active) match still stops at the "not active" skip below.
+            let lookupFailed = false;
 
             for (const candidate of candidates) {
               if (body.object === "page") {
-                const { data: pageAccounts } = await sb
+                const { data: pageAccounts, error: pageLookupError } = await sb
                   .from("channel_accounts")
                   .select(
                     "id, tenant_id, channel, external_id, status, agent_enabled, auto_reply, access_token_encrypted"
                   )
                   .eq("external_id", candidate)
                   .eq("channel", "facebook")
+                  // A disconnected row neither receives nor blocks (it is
+                  // outside the global unique index, 20261115120000).
+                  .or("status.is.null,status.neq.disconnected")
                   .limit(2);
+
+                if (pageLookupError) {
+                  lookupFailed = true;
+                  break;
+                }
 
                 if (Array.isArray(pageAccounts) && pageAccounts.length > 1) {
                   ambiguousPage = true;
@@ -2829,7 +3088,7 @@ Deno.serve(async (req) => {
                 continue;
               }
 
-              const { data } = await sb
+              const { data: igAccounts, error: igLookupError } = await sb
                 .from("channel_accounts")
                 .select(
                   "id, tenant_id, channel, external_id, status, agent_enabled, auto_reply, access_token_encrypted"
@@ -2839,12 +3098,27 @@ Deno.serve(async (req) => {
                   "instagram",
                   "facebook",
                 ])
-                .maybeSingle();
+                // A disconnected row neither receives nor blocks (it is
+                // outside the global unique index, 20261115120000).
+                .or("status.is.null,status.neq.disconnected")
+                .limit(2);
 
-              if (data) {
-                account = data;
+              if (igLookupError || (Array.isArray(igAccounts) && igAccounts.length > 1)) {
+                lookupFailed = true;
                 break;
               }
+
+              if (Array.isArray(igAccounts) && igAccounts.length === 1) {
+                account = igAccounts[0];
+                break;
+              }
+            }
+
+            if (lookupFailed) {
+              console.warn(
+                "[instagram_webhook] account lookup failed or ambiguous — event ignored"
+              );
+              continue;
             }
 
             if (ambiguousPage) {
@@ -2959,13 +3233,15 @@ Deno.serve(async (req) => {
               let senderToken: string | null = null;
 
               if (account.access_token_encrypted) {
+                // Strict: an undecryptable token skips the profile fetch
+                // (senderToken stays null -> no request to Meta).
                 try {
-                  senderToken = await decryptField(
+                  senderToken = await decryptAccessTokenStrict(
                     account.access_token_encrypted
                   );
-                } catch (e: any) {
+                } catch {
                   console.warn(
-                    `[instagram_webhook] token decrypt failed | account=${account.id}`
+                    "[instagram_webhook] token_unavailable; profile fetch skipped"
                   );
                 }
               }
@@ -3013,9 +3289,11 @@ Deno.serve(async (req) => {
                   }
                 }
               }
-            } catch (e: any) {
+            } catch (e: unknown) {
+              // Stage 6: fixed category only (no error text / object).
               console.warn(
-                `[instagram_webhook] sender profile step skipped: ${e?.message ?? e}`
+                "[instagram_webhook] sender profile step skipped",
+                { category: fetchErrorCategory(e) }
               );
             }
           }
@@ -5140,14 +5418,21 @@ ${text}`
             return err(e.message, 502);
           }
 
+          // Stage 6: same 502/400 branch as before (provider errors carry the
+          // old body-based hint); the client only sees a safe message.
           const msg =
             e instanceof Error ? e.message : "فشل الإرسال";
+          const safeMsg = clientErrorMessage(e, "فشل الإرسال");
 
-          if (/توكن|token|auth|190/i.test(msg)) {
-            return err(msg, 502);
+          if (
+            e instanceof ProviderHttpError
+              ? e.authHint
+              : /توكن|token|auth|190/i.test(msg)
+          ) {
+            return err(safeMsg, 502);
           }
 
-          return err(msg, 400);
+          return err(safeMsg, 400);
         }
 
         await sb
@@ -5533,7 +5818,7 @@ ${text}`
             } catch (e) {
               console.error(
                 "[unresolved] send failed",
-                e
+                safeErrorLog(e)
               );
 
               /* فشل الإرسال إلى العميل → خطأ واضح بـ 502/400 */
@@ -5541,14 +5826,20 @@ ${text}`
                 return err(e.message, 502);
               }
 
+              // Stage 6: same 502/400 branch as before; safe client message.
               const msg =
                 e instanceof Error ? e.message : "فشل الإرسال";
+              const safeMsg = clientErrorMessage(e, "فشل الإرسال");
 
-              if (/توكن|token|auth|190/i.test(msg)) {
-                return err(msg, 502);
+              if (
+                e instanceof ProviderHttpError
+                  ? e.authHint
+                  : /توكن|token|auth|190/i.test(msg)
+              ) {
+                return err(safeMsg, 502);
               }
 
-              return err(msg, 400);
+              return err(safeMsg, 400);
             }
           }
         }
@@ -6072,8 +6363,9 @@ ${text}`
           );
 
         if (!res.ok) {
+          // Stage 6: status + validated code only, never Moyasar's body.
           return err(
-            `Moyasar ${res.status}: ${await res.text()}`,
+            (await providerHttpError("Moyasar", res)).message,
             502
           );
         }
@@ -6135,9 +6427,10 @@ ${text}`
       404
     );
   } catch (e) {
+    // Stage 6: safe fields only (provider/status/code or a fixed category).
     console.error(
       `[milan-api:${action}]`,
-      e
+      safeErrorLog(e)
     );
 
     if (e instanceof WaAuthError) {
@@ -6145,9 +6438,7 @@ ${text}`
     }
 
     return err(
-      e instanceof Error
-        ? e.message
-        : "خطأ داخلي",
+      clientErrorMessage(e, "خطأ داخلي"),
       500
     );
   }

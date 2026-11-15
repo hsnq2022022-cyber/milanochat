@@ -47,8 +47,12 @@ async function resolve(db: ReturnType<typeof table>, phoneId: string, channelAcc
   const {data: bindingRow} = await db.from("wa_bindings").select("tenant_id, phone_id, is_verified").eq("phone_id", phoneId).maybeSingle();
   const binding = bindingIsVerified(bindingRow) ? bindingRow : null;
   if (binding) return {tenant_id: binding.tenant_id, via: "binding"};
-  const acc = channelAccounts.find((a) => a.external_id === phoneId);
-  return acc ? {tenant_id: acc.tenant_id, via: "channel_accounts"} : null;
+  // SEC (account resolution): exactly one matching row, and a binding row of
+  // ANOTHER tenant (verified or not) blocks the fallback.
+  const accs = channelAccounts.filter((a) => a.external_id === phoneId);
+  if (accs.length !== 1) return null;
+  if (bindingRow && bindingRow.tenant_id !== accs[0].tenant_id) return null;
+  return {tenant_id: accs[0].tenant_id, via: "channel_accounts"};
 }
 
 test("OLD resolution answered for any binding row (proof): a fresh squatted row routed traffic", async () => {
@@ -61,8 +65,12 @@ test("webhook: unverified binding ignored (not answered), verified works, OAuth 
   const db = table([{phone_id: "1000001", tenant_id: A, is_verified: true}, {phone_id: "2000002", tenant_id: B, is_verified: false}]);
   assert.deepEqual(await resolve(db, "1000001"), {tenant_id: A, via: "binding"});
   assert.equal(await resolve(db, "2000002"), null, "unverified -> no account -> no auto-reply");
-  // a squatted unverified row no longer shadows the real owner's OAuth account
-  assert.deepEqual(await resolve(db, "2000002", [{external_id: "2000002", tenant_id: A}]), {tenant_id: A, via: "channel_accounts"});
+  // SEC (account resolution): a squatted unverified row of ANOTHER tenant no
+  // longer lets either claim answer (fail closed until an operator decides);
+  // the same tenant's unverified row still falls back to its OAuth account.
+  assert.equal(await resolve(db, "2000002", [{external_id: "2000002", tenant_id: A}]), null);
+  assert.deepEqual(await resolve(db, "2000002", [{external_id: "2000002", tenant_id: B}]), {tenant_id: B, via: "channel_accounts"});
+  assert.equal(await resolve(db, "2000002", [{external_id: "2000002", tenant_id: B}, {external_id: "2000002", tenant_id: A}]), null, "ambiguous");
 });
 
 test("bind_number: new binding returns verified:false; same-tenant re-bind is idempotent and keeps the flag", async () => {
@@ -87,6 +95,12 @@ test("index.ts: webhook gates wa_bindings on is_verified; bind_number / wa_statu
   assert.match(w, /console\.warn\("\[whatsapp_webhook\] binding ignored", \{ code: "wa_binding_unverified" \}\);/);
   assert.match(w, /UPDATE public\.wa_bindings SET is_verified = true,/);
   assert.match(w, /\.from\("channel_accounts"\)/, "channel_accounts fallback kept");
+  // SEC (account resolution): exactly one ACTIVE row, error/ambiguity and a
+  // foreign-tenant binding fail closed (behaviour: security-account-resolution.test.ts).
+  assert.match(w, /\.eq\("channel", "whatsapp"\)\n\s+\.eq\("status", "active"\)\n\s+\.limit\(2\);/);
+  assert.match(w, /!chAccErr && Array\.isArray\(chAccs\) && chAccs\.length === 1/);
+  assert.match(w, /String\(bindingRow\.tenant_id\) !== String\(chAcc\.tenant_id\)/);
+  assert.doesNotMatch(w, /\.maybeSingle\(\);\n\n\s+if \(chAcc\) \{/);
   const b = IDX.slice(IDX.indexOf('case "bind_number": {'), IDX.indexOf('case "qa_extract": {'));
   assert.match(b, /TODO\(security\): permanent fix/);
   assert.match(b, /GET https:\/\/graph\.facebook\.com\/<ver>\/\{phone_number_id\}/);

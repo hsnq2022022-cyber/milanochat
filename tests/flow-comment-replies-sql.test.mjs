@@ -51,7 +51,8 @@ test("300000 is the newest migration; rollback exists",()=>{
  assert.equal(stamps.filter(s=>s==="20261029300000").length,1);
  // 20261029310000_flow_ai_generations (AI flow builder credits) and 20261029320000_oauth_tables
  // (MCP server OAuth storage) are independent of the comment chain.
- for(const s of stamps)assert.ok(s<="20261029300000"||s==="20261029310000"||s==="20261029320000"||s==="20261029330000"||s==="20261029340000"||s==="20261029350000",/* 360000 inbound recovery: additive, new objects only, requires 340000 */"20261029360000",s);
+ // 20261115120000_channel_accounts_hardening: independent security migration (channel_accounts grants/policies/index; no flow object).
+ for(const s of stamps)assert.ok(s<="20261029300000"||s==="20261029310000"||s==="20261029320000"||s==="20261029330000"||s==="20261029340000"||s==="20261029350000"||s==="20261029360000"||s==="20261115120000",s);
  assert.ok(existsSync(RB));
 });
 test("migration and rollback: one bounded transaction, no SECURITY DEFINER, no billing, service_role-only RPCs",()=>{

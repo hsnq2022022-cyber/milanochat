@@ -45,7 +45,7 @@ Examples: designing a new system architecture; complete professional UI/UX redes
 1. Determine actual difficulty before selecting a model, using: technical difficulty; reasoning depth required; programming expertise required; number and complexity of implementation steps; architectural and design decisions; cross-system dependencies; risk and impact of mistakes; required quality and professional standards.
 2. Never classify by keywords, task names, or file count alone. "Add a feature" or "fix a bug" does not fix the tier: simple goes to Haiku, ordinary or moderate to Sonnet, complex or professional or interconnected to Opus.
 3. Do not use Opus for routine work. Never downgrade a genuinely difficult task to Haiku or Sonnet merely to save usage.
-4. If a request has several distinct subtasks that can be safely separated (disjoint files, no shared dependency; see Concurrency in section 10), classify each by its own difficulty. Otherwise use the tier able to handle the complete task.
+4. If a request has several distinct subtasks that can be safely separated (disjoint files, no shared dependency), classify each by its own difficulty and run them ONE AFTER ANOTHER (section 11), never in parallel. Otherwise use the tier able to handle the complete task.
 5. Security-sensitive work and protected project areas always go to Opus regardless of apparent simplicity, size, or number of files (definition in section 10). Opus executes PLAN -> IMPLEMENT autonomously, with no user approval gate.
 6. If Haiku or Sonnet finds the task exceeds its level, it stops and escalates to the router.
 
@@ -157,7 +157,7 @@ Agents live in `.claude/agents/`: `task-haiku` (model: haiku), `task-sonnet` (mo
 
 **Brief each agent with:** goal, exact files in scope, confirmed findings (not re-investigation), forbidden areas, and the report format. Do not paste the conversation or the whole skill.
 
-**Concurrency:** one writing agent per file set. Parallel agents only for read-only work or disjoint files. Track which files each running agent owns, and do not start a writer on a file another running agent owns; wait for it to finish.
+**Concurrency:** independent project tasks are never run in parallel (section 11). Within one task, agents run sequentially, one at a time; there is exactly one writer per file set, and a new agent starts only after the previous one has reported. Track which files each agent owns and do not start a writer on a file another agent still owns.
 
 **Duplicate work:** keep a short ledger of confirmed findings (question, files examined, answer) and of dispatched tasks (agent, files, status). Before any dispatch, check it: reuse an existing finding instead of re-reading the same files, and never send the same task to a second agent. Pass agents the relevant findings, not the investigation again. Do not send two agents the same question in parallel.
 
@@ -166,3 +166,15 @@ Agents live in `.claude/agents/`: `task-haiku` (model: haiku), `task-sonnet` (mo
 **Model availability:** if a required model is unavailable or the call is rejected, stop and tell the user. Never silently substitute another model.
 
 **Review and verification:** the router reviews each report and the resulting diff. Record per task: agent, requested model, model confirmed (or "unverified"), status. Check running agents with `/tasks`. Report tests as passed only if actually run.
+
+
+## 11. Execution protocol (permanent, mandatory)
+
+This protocol applies to every project task in every session. It is part of this Skill, so it persists without being repeated.
+
+1. **Classify before acting.** For each task, assess complexity, scope, technical difficulty and risk (section 2 and the sensitive definition in section 10).
+2. **Select by the router rules.** Choose the agent/tier the rules prescribe. Prefer the lowest-cost option that is adequate for the task; reserve the strongest tier for work whose difficulty or risk genuinely requires it (never for routine work). The router selects among the configured agents; it does not force a model, hardcode model identifiers, bypass the platform's native model selection, or change the agent definitions' model settings. Agent frontmatter remains the only place a model is named.
+3. **Report before executing**, briefly: Task ID and name; difficulty classification; selected agent/model (when identifiable); reason for the selection.
+4. **One task at a time.** Never run multiple independent project tasks in parallel: no concurrent agents working on different tasks, and no overlapping writers. Finish, verify and report one task before starting the next. If an agent fails (for example a usage limit), do not start other tasks in its place; record the partial state and resume sequentially.
+5. **Verify, report, stop.** Run the relevant verification, report what was done and what remains unverified, then stop and wait for the user's next instruction. Do not chain into the next task unless the user's instruction for that task explicitly says to continue.
+6. All protection rules (sections 1, 8 and 10: no commit/push/stage/deploy/production change without explicit user authorization, protected paths, never modify `.router/HANDOFF.md`) always apply.

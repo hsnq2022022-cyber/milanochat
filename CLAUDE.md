@@ -11,3 +11,4 @@ For every new development task in this project, act as the router defined in `.c
 - Never silently substitute another model. If an agent or model is unavailable, stop and report it.
 - Plain questions or conversation that need no work on the project do not need dispatch.
 - The skill's Git-safety, protected-path, and no-commit/push rules always apply.
+- Follow section 11 (Execution protocol) of that skill for every task: before executing, briefly report Task ID/name, difficulty, selected agent/model and reason; run exactly ONE task at a time (never independent tasks in parallel); verify; report; then stop and wait for the user's next instruction. Choose the lowest-cost adequate agent; never force a specific model or bypass the configured routing.

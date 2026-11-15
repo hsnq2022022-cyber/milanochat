@@ -128,7 +128,11 @@ test("no plaintext: decrypted text never in logs, finish args, counters or error
  for(const r of runs){
   const flat=JSON.stringify([r.logs,r.finishes,r.out]);
   assert.ok(!flat.includes(SECRET),flat);
-  assert.ok(!flat.includes(MSG)&&!flat.includes(CONV),"no ids in logs/counters either");
+  // flow_inbound_recovery_finish legitimately receives the inbound id as p_inbound
+  // (it is how the RPC locates the recovery row), so ids are checked in logs and
+  // counters, and in finish args with ONLY that key removed.
+  const ids=JSON.stringify([r.logs,r.out,r.finishes.map(({p_inbound,...rest}:any)=>rest)]);
+  assert.ok(!ids.includes(MSG)&&!ids.includes(CONV),"no ids in logs/counters/other finish args");
  }
 });
 

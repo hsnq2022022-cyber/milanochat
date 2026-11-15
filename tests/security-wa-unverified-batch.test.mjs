@@ -54,6 +54,13 @@ function fakeDb({bindings=[],channelAccounts=[],bindingError=false}={}){
     const rows=(tables[table]??[]).filter(r=>f.every(([k,v])=>r[k]===v));
     return {data:rows[0]??null,error:null};
    },
+   // SEC (account resolution): the channel_accounts fallback reads with
+   // .limit(2) and routes only on exactly one active row.
+   limit:async(n)=>{
+    calls.push({table,op,filters:f.map(x=>x[0])});
+    const rows=(tables[table]??[]).filter(r=>f.every(([k,v])=>r[k]===v));
+    return {data:rows.slice(0,n),error:null};
+   },
    then:(ok,ko)=>{calls.push({table,op,filters:f.map(x=>x[0])});
     return Promise.resolve({data:null,error:null}).then(ok,ko);}
   };
@@ -114,16 +121,32 @@ test("unverified binding LAST / interleaved in one change list: earlier events u
 });
 
 test("unverified binding still falls back to the real owner's channel_accounts row (S9 kept)",async()=>{
- const db=fakeDb({bindings:[{phone_id:"2000002",tenant_id:T_SQUAT,is_verified:false}],
-  channelAccounts:[{id:"acc-1",tenant_id:T_VERIFIED,channel:"whatsapp",external_id:"2000002"}]});
+ // SEC (account resolution): the fallback is kept when the unverified
+ // binding belongs to the SAME tenant as the single active account row.
+ const db=fakeDb({bindings:[{phone_id:"2000002",tenant_id:T_VERIFIED,is_verified:false}],
+  channelAccounts:[{id:"acc-1",tenant_id:T_VERIFIED,channel:"whatsapp",external_id:"2000002",status:"active"}]});
  const {handled}=await runBatch({object:"whatsapp_business_account",entry:[{changes:[
   waChange("2000002",[textMsg("wamid.O","9647000000008","owner")])]}]},db);
  assert.deepEqual(handled.map(h=>[h.msgId,h.tenant]),[["wamid.O",T_VERIFIED]]);
 });
 
+test("SEC: an unverified binding of ANOTHER tenant blocks the fallback (fail closed, generic log)",async()=>{
+ // Before: the squatter's unverified row was ignored and the other tenant's
+ // channel_accounts row answered. Two unproven claims for one phone id now
+ // drop the event until an operator verifies the right binding.
+ const db=fakeDb({bindings:[{phone_id:"2000002",tenant_id:T_SQUAT,is_verified:false}],
+  channelAccounts:[{id:"acc-1",tenant_id:T_VERIFIED,channel:"whatsapp",external_id:"2000002",status:"active"}]});
+ const {res,handled,logs}=await runBatch({object:"whatsapp_business_account",entry:[{changes:[
+  waChange("2000002",[textMsg("wamid.O","9647000000008","owner")])]}]},db);
+ assert.deepEqual(res,{json:{received:true}});
+ assert.deepEqual(handled,[]);
+ assert.ok(logs.some(([l,a])=>l==="warn"&&a[0]==="[whatsapp_webhook] fallback account ignored"&&
+  a[1]?.code==="wa_binding_tenant_mismatch"));
+});
+
 test("binding lookup error (e.g. column missing) is treated as unverified, batch continues",async()=>{
  const db=fakeDb({bindingError:true,
-  channelAccounts:[{id:"acc-2",tenant_id:T_VERIFIED,channel:"whatsapp",external_id:"1000001"}]});
+  channelAccounts:[{id:"acc-2",tenant_id:T_VERIFIED,channel:"whatsapp",external_id:"1000001",status:"active"}]});
  const {res,handled}=await runBatch({object:"whatsapp_business_account",entry:[{changes:[
   waChange("3000003",[textMsg("wamid.N","9647000000009","nobody")]),
   waChange("1000001",[textMsg("wamid.C","9647000000010","c")])]}]},db);

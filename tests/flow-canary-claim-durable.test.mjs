@@ -48,7 +48,8 @@ test("170000 is the newest migration and follows 130000/140000/150000/160000",()
  // 20261029210000_flow_media_effects (requires 190000) and
  // 20261029220000_flow_media_stale_sweep (requires 210000) and
  // 20261029230000_flow_multichannel_support (requires 220000) are newer.
- for(const s of stamps)if(!["20261029170000","20261029180000","20261029190000","20261029200000","20261029210000","20261029220000","20261029230000","20261029240000","20261029250000","20261029260000","20261029270000","20261029280000","20261029290000","20261029300000","20261029310000","20261029320000","20261029330000","20261029340000","20261029350000",/* 360000 inbound recovery: additive, new objects only, requires 340000 */"20261029360000"].includes(s))assert.ok(s<"20261029170000",s);
+ // 20261115120000_channel_accounts_hardening: independent security migration (channel_accounts grants/policies/index; no flow object).
+ for(const s of stamps)if(!["20261029170000","20261029180000","20261029190000","20261029200000","20261029210000","20261029220000","20261029230000","20261029240000","20261029250000","20261029260000","20261029270000","20261029280000","20261029290000","20261029300000","20261029310000","20261029320000","20261029330000","20261029340000","20261029350000",/* 360000 inbound recovery: additive, new objects only, requires 340000 */"20261029360000","20261115120000"].includes(s))assert.ok(s<"20261029170000",s);
  for(const f of [CLAIM,LC,AI,TK,CP])assert.ok(existsSync(f),f);
 });
 test("migration: bounded, additive, service_role only, never touches flow_claim_inbound or billing",()=>{
@@ -103,6 +104,157 @@ test("TypeScript: only the durable ingress calls the new function; V2 call site 
   const head=spawnSync("git",["show","HEAD:"+IDX],{encoding:"utf8",maxBuffer:64<<20});
   assert.equal(head.status,0);
   const allowed=[
+   // SEC account-resolution hardening (branch sec/channel-accounts-hardening,
+   // merged into rc/launch; tests/security-account-resolution.test.ts) plus the
+   // review fix that excludes status 'disconnected' rows from the IG / Page
+   // lookups (migration 20261115120000 index predicate): exactly these hunks,
+   // undone FIRST so every older (flow-part2) entry below matches unchanged.
+   // SEC: boundPhone: optional verifiedOnly filter (is_verified = true) for sends
+   ["  sb: SupabaseClient,\n  tenantId: string,\n  // SEC (account resolution): true for SENDS — only an operator-VERIFIED\n  // binding may pick the sending phone_number_id. Display reads (wa_status,\n  // me) stay unfiltered so a pending binding still shows.\n  verifiedOnly = false\n): Promise<string | null> {\n  const query = sb\n    .from(\"wa_bindings\")\n    .select(\"phone_id\")\n    .eq(\"tenant_id\", tenantId);\n  const { data } = await (verifiedOnly\n    ? query.eq(\"is_verified\", true)\n    : query\n  ).maybeSingle();\n\n",
+    "  sb: SupabaseClient,\n  tenantId: string\n): Promise<string | null> {\n  const { data } = await sb\n    .from(\"wa_bindings\")\n    .select(\"phone_id\")\n    .eq(\"tenant_id\", tenantId)\n    .maybeSingle();\n\n"],
+   // SEC: sendToConversation: the wa_bindings phone id fallback must be VERIFIED
+   ["  if (!phoneId) {\n    phoneId = await boundPhone(sb, tenantId, true);\n  }\n",
+    "  if (!phoneId) {\n    phoneId = await boundPhone(sb, tenantId);\n  }\n"],
+   // SEC: whatsapp_webhook fallback: read every candidate row (limit 2) + error
+   ["            } else {\n              // SEC (account resolution): the channel_accounts fallback routes\n              // only when EXACTLY ONE active row claims this phone id. A lookup\n              // error or several rows (e.g. several tenants) fail closed, and a\n              // wa_bindings row (verified or not) of ANOTHER tenant blocks it.\n              const { data: chAccs, error: chAccErr } = await sb\n                .from(\"channel_accounts\")\n",
+    "            } else {\n              const { data: chAcc } = await sb\n                .from(\"channel_accounts\")\n"],
+   // SEC: whatsapp_webhook fallback: exactly one ACTIVE row, no foreign-tenant binding
+   ["                .eq(\"channel\", \"whatsapp\")\n                .eq(\"status\", \"active\")\n                .limit(2);\n              const chAcc =\n                !chAccErr && Array.isArray(chAccs) && chAccs.length === 1\n                  ? chAccs[0]\n                  : null;\n\n              if (chAccErr || !Array.isArray(chAccs) || chAccs.length > 1) {\n                console.warn(\"[whatsapp_webhook] fallback account ignored\", { code: \"wa_account_lookup_failed_or_ambiguous\" });\n              } else if (\n                chAcc &&\n                bindingRow &&\n                String(bindingRow.tenant_id) !== String(chAcc.tenant_id)\n              ) {\n                console.warn(\"[whatsapp_webhook] fallback account ignored\", { code: \"wa_binding_tenant_mismatch\" });\n              } else if (chAcc) {\n                account = chAcc;\n",
+    "                .eq(\"channel\", \"whatsapp\")\n                .maybeSingle();\n\n              if (chAcc) {\n                account = chAcc;\n"],
+   // SEC: instagram_webhook: lookupFailed flag (error / ambiguity stop resolution; disconnected rows are no candidates)
+   ["            let ambiguousPage = false;\n            // SEC (account resolution): a lookup error or an ambiguous\n            // Instagram id (2+ rows) stops resolution entirely — the next\n            // candidate is never tried (fail closed; same idea as\n            // commentIngress.ts: exactly one row or nothing). Rows with\n            // status 'disconnected' are not candidates at all; a needs_reauth\n            // (non-active) match still stops at the \"not active\" skip below.\n            let lookupFailed = false;\n\n",
+    "            let ambiguousPage = false;\n\n"],
+   // SEC: object=page lookup: the query error is read
+   ["              if (body.object === \"page\") {\n                const { data: pageAccounts, error: pageLookupError } = await sb\n                  .from(\"channel_accounts\")\n",
+    "              if (body.object === \"page\") {\n                const { data: pageAccounts } = await sb\n                  .from(\"channel_accounts\")\n"],
+   // SEC: object=page lookup: status IS DISTINCT FROM 'disconnected'; error fails closed (no next candidate)
+   ["                  .eq(\"channel\", \"facebook\")\n                  // A disconnected row neither receives nor blocks (it is\n                  // outside the global unique index, 20261115120000).\n                  .or(\"status.is.null,status.neq.disconnected\")\n                  .limit(2);\n\n                if (pageLookupError) {\n                  lookupFailed = true;\n                  break;\n                }\n\n                if (Array.isArray(pageAccounts) && pageAccounts.length > 1) {\n",
+    "                  .eq(\"channel\", \"facebook\")\n                  .limit(2);\n\n                if (Array.isArray(pageAccounts) && pageAccounts.length > 1) {\n"],
+   // SEC: Instagram lookup: rows + error instead of maybeSingle()
+   ["\n              const { data: igAccounts, error: igLookupError } = await sb\n                .from(\"channel_accounts\")\n",
+    "\n              const { data } = await sb\n                .from(\"channel_accounts\")\n"],
+   // SEC: Instagram lookup: status IS DISTINCT FROM 'disconnected', limit(2), error/2+ rows fail closed, generic log
+   ["                ])\n                // A disconnected row neither receives nor blocks (it is\n                // outside the global unique index, 20261115120000).\n                .or(\"status.is.null,status.neq.disconnected\")\n                .limit(2);\n\n              if (igLookupError || (Array.isArray(igAccounts) && igAccounts.length > 1)) {\n                lookupFailed = true;\n                break;\n              }\n\n              if (Array.isArray(igAccounts) && igAccounts.length === 1) {\n                account = igAccounts[0];\n                break;\n              }\n            }\n\n            if (lookupFailed) {\n              console.warn(\n                \"[instagram_webhook] account lookup failed or ambiguous — event ignored\"\n              );\n              continue;\n            }\n",
+    "                ])\n                .maybeSingle();\n\n              if (data) {\n                account = data;\n                break;\n              }\n            }\n"],
+   // Flow-part2 stage 6 (provider error leak hardening; Gemini key header,
+   // no provider bodies / error objects in logs, errors or client text):
+   // exactly these hunks, undone FIRST so every older entry below matches
+   // unchanged. Covered by tests/milan-provider-error-leak.test.ts.
+   // Stage 6 hardening: safeProviderCode / ProviderHttpError / ProviderNetworkError / safeErrorLog / clientErrorMessage helpers (new, additive).
+   ["\n/* ── Stage 6 hardening: provider/network errors safe for logs and clients ──\n * Provider response bodies (they can echo API keys, tokens or customer text)\n * and fetch error messages (they embed the request URL) never reach a log\n * line, a thrown message or a client response. Only the provider name, the\n * numeric HTTP status and a validated provider error code are kept. */\n\n/** A provider error code: a finite number or a short [A-Za-z0-9_.-] token. */\nfunction safeProviderCode(x: unknown): number | string | undefined {\n  if (typeof x === \"number\" && Number.isFinite(x)) return x;\n  if (typeof x === \"string\" && /^[A-Za-z0-9_.-]{1,40}$/.test(x)) return x;\n  return undefined;\n}\n\n/** Same pattern the reply/unresolved callers used on the old message text. */\nconst LEGACY_AUTH_HINT = /توكن|token|auth|190/i;\n\n/** Non-2xx provider response. Message is FIXED: provider + status + code. */\nclass ProviderHttpError extends Error {\n  readonly provider: string;\n  readonly status: number;\n  readonly code: number | string | undefined;\n  /** LEGACY_AUTH_HINT on the old `${provider} ${status}: ${body}` message. */\n  readonly authHint: boolean;\n  constructor(provider: string, status: number, code?: unknown, authHint = false) {\n    const p = /^[A-Za-z0-9 _.-]{1,40}$/.test(provider) ? provider : \"provider\";\n    const s = Number.isFinite(status) ? Math.trunc(status) : 0;\n    const c = safeProviderCode(code);\n    super(`${p} ${s}` + (c === undefined ? \"\" : ` (code ${c})`));\n    this.name = \"ProviderHttpError\";\n    this.provider = p;\n    this.status = s;\n    this.code = c;\n    this.authHint = authHint;\n  }\n}\n\n/** Builds a ProviderHttpError from a raw body; the body is then discarded. */\nfunction providerErrorFromBody(provider: string, status: number, raw: string): ProviderHttpError {\n  let code: unknown;\n  try {\n    const j: any = JSON.parse(raw);\n    code = j?.error?.code ?? j?.code ?? j?.error?.type ?? j?.type;\n  } catch {\n    /* not JSON: no code */\n  }\n  return new ProviderHttpError(\n    provider, status, code, LEGACY_AUTH_HINT.test(`${provider} ${status}: ${raw}`)\n  );\n}\n\nasync function providerHttpError(provider: string, res: Response): Promise<ProviderHttpError> {\n  let raw = \"\";\n  try {\n    raw = await res.text();\n  } catch {\n    /* unreadable body: status only */\n  }\n  return providerErrorFromBody(provider, res.status, raw);\n}\n\n/** Fixed category of a thrown fetch/runtime error; never its text. */\nfunction fetchErrorCategory(e: unknown): \"timeout\" | \"network\" | \"bad_response\" | \"unknown\" {\n  try {\n    const n = typeof e === \"object\" && e !== null ? (e as { name?: unknown }).name : undefined;\n    const c = typeof e === \"object\" && e !== null ? (e as { code?: unknown }).code : undefined;\n    if (n === \"AbortError\" || n === \"TimeoutError\" || (typeof c === \"string\" && /TIMEOUT/i.test(c))) {\n      return \"timeout\";\n    }\n    if (n === \"SyntaxError\") return \"bad_response\";\n    if (n === \"TypeError\" || (typeof c === \"string\" && /^E[A-Z]+$/.test(c))) return \"network\";\n  } catch {\n    /* hostile error object */\n  }\n  return \"unknown\";\n}\n\n/** fetch threw (no response). Message is FIXED: provider + category. */\nclass ProviderNetworkError extends Error {\n  readonly provider: string;\n  readonly category: string;\n  constructor(provider: string, category: string) {\n    super(`${provider} network error (${category})`);\n    this.name = \"ProviderNetworkError\";\n    this.provider = provider;\n    this.category = category;\n  }\n}\n\nconst SAFE_ERROR_NAMES = new Set([\n  \"Error\", \"TypeError\", \"SyntaxError\", \"RangeError\", \"ReferenceError\",\n  \"AbortError\", \"TimeoutError\", \"WaAuthError\", \"AccountTokenUnavailableError\",\n  \"SafeFetchError\", \"FlowRoutingUnavailableError\",\n]);\n\n/** Log fields for any caught error: never e.message, stack, cause or the object. */\nfunction safeErrorLog(e: unknown): Record<string, unknown> {\n  if (e instanceof ProviderHttpError) {\n    return { provider: e.provider, status: e.status, code: e.code };\n  }\n  if (e instanceof ProviderNetworkError) {\n    return { provider: e.provider, category: e.category };\n  }\n  let name: string | undefined;\n  try {\n    const n = typeof e === \"object\" && e !== null ? (e as { name?: unknown }).name : undefined;\n    if (typeof n === \"string\" && SAFE_ERROR_NAMES.has(n)) name = n;\n  } catch {\n    /* hostile error object */\n  }\n  return { category: fetchErrorCategory(e), name: name ?? \"unknown\" };\n}\n\n/** Client-facing text: fixed provider messages; our own plain Error texts\n * (Arabic user messages) unchanged; fetch/runtime errors -> fallback. */\nfunction clientErrorMessage(e: unknown, fallback: string): string {\n  if (e instanceof ProviderHttpError || e instanceof ProviderNetworkError) return e.message;\n  if (e instanceof WaAuthError || e instanceof AccountTokenUnavailableError) return e.message;\n  // safeFetch.ts SafeFetchError (URL import): fixed Arabic text + [code] by\n  // construction; matched by name (its import line is pinned unchanged).\n  if (e instanceof Error && e.name === \"SafeFetchError\") return e.message;\n  if (e instanceof Error && Object.getPrototypeOf(e) === Error.prototype && e.name === \"Error\") {\n    return e.message;\n  }\n  return fallback;\n}\n\n/**\n",
+    "\n/**\n"],
+   // Stage 6 hardening: fetchRetry logs a fixed category, throws a fixed-message ProviderNetworkError (never the error object; it embeds the URL).
+   ["    } catch (e) {\n      // Stage 6: fixed category only; the error text embeds the request URL.\n      const category = fetchErrorCategory(e);\n      console.warn(\n        `[ai] network error, attempt ${i + 1}/${attempts}`,\n        { category }\n      );\n\n      if (i === attempts - 1) throw new ProviderNetworkError(\"ai\", category);\n    }\n",
+    "    } catch (e) {\n      console.warn(\n        `[ai] network error, attempt ${i + 1}/${attempts}`,\n        e\n      );\n\n      if (i === attempts - 1) throw e;\n    }\n"],
+   // Stage 6 hardening: Gemini key in the x-goog-api-key header, URL without ?key=.
+   ["  if (key.startsWith(\"AIza\")) {\n    // Stage 6: the key travels in the x-goog-api-key header, never in the URL.\n    const res = await fetchRetry(\n      \"https://generativelanguage.googleapis.com/v1/models/text-embedding-004:batchEmbedContents\",\n      {\n        method: \"POST\",\n        headers: { \"content-type\": \"application/json\", \"x-goog-api-key\": key },\n        body: JSON.stringify({\n",
+    "  if (key.startsWith(\"AIza\")) {\n    const res = await fetchRetry(\n      `https://generativelanguage.googleapis.com/v1/models/text-embedding-004:batchEmbedContents?key=${key}`,\n      {\n        method: \"POST\",\n        headers: { \"content-type\": \"application/json\" },\n        body: JSON.stringify({\n"],
+   // Stage 6 hardening: Gemini embedding error = provider/status/code, no body.
+   ["    );\n    if (!res.ok) throw await providerHttpError(\"Gemini embedding\", res);\n    const j = await res.json();\n",
+    "    );\n    if (!res.ok) throw new Error(`Gemini embedding ${res.status}: ${await res.text()}`);\n    const j = await res.json();\n"],
+   // Stage 6 hardening: OpenAI embedding error = provider/status/code, no body.
+   ["  );\n  if (!res.ok) throw await providerHttpError(\"OpenAI embedding\", res);\n  const j = await res.json();\n",
+    "  );\n  if (!res.ok) throw new Error(`OpenAI embedding ${res.status}: ${await res.text()}`);\n  const j = await res.json();\n"],
+   // Stage 6 hardening: chat (llm) error = provider/status/code, no body.
+   ["  if (!res.ok) {\n    throw await providerHttpError(\"llm\", res);\n  }\n",
+    "  if (!res.ok) {\n    throw new Error(\n      `llm ${res.status}: ${await res.text()}`\n    );\n  }\n"],
+   // Stage 6 hardening: sendWa no longer keeps Meta's free-text message.
+   ["    let code: number | undefined;\n\n",
+    "    let code: number | undefined;\n    let fbMessage = \"\";\n\n"],
+   // Stage 6 hardening: sendWa no longer reads error.message.
+   ["      code = parsed?.error?.code;\n    } catch {\n",
+    "      code = parsed?.error?.code;\n      fbMessage = parsed?.error?.message ?? \"\";\n    } catch {\n"],
+   // Stage 6 hardening: [wa] auth failure log = status + validated code only.
+   ["    ) {\n      // Stage 6: status + validated code only, never Meta's free text.\n      console.error(\"[wa] auth failure\", {\n        status: res.status,\n        code: safeProviderCode(code),\n      });\n\n",
+    "    ) {\n      console.error(\n        `[wa] auth failure (code ${code}): ${fbMessage}`\n      );\n\n"],
+   // Stage 6 hardening: wa send error = provider/status/code, no body.
+   ["\n    throw providerErrorFromBody(\"wa send\", res.status, raw);\n  }\n",
+    "\n    throw new Error(`wa send ${res.status}: ${raw}`);\n  }\n"],
+   // Stage 6 hardening: Meta send error = provider/status/code, no body.
+   ["  if (!res.ok) {\n    throw await providerHttpError(`${channel} send`, res);\n  }\n",
+    "  if (!res.ok) {\n    throw new Error(\n      `${channel} send ${res.status}: ${await res.text()}`\n    );\n  }\n"],
+   // Stage 6 hardening: sender-profile step log = fixed category only.
+   ["              }\n            } catch (e: unknown) {\n              // Stage 6: fixed category only (no error text / object).\n              console.warn(\n                \"[instagram_webhook] sender profile step skipped\",\n                { category: fetchErrorCategory(e) }\n              );\n",
+    "              }\n            } catch (e: any) {\n              console.warn(\n                `[instagram_webhook] sender profile step skipped: ${e?.message ?? e}`\n              );\n"],
+   // Stage 6 hardening: reply caller keeps the 502/400 branch (authHint), safe client text.
+   ["\n          // Stage 6: same 502/400 branch as before (provider errors carry the\n          // old body-based hint); the client only sees a safe message.\n          const msg =\n            e instanceof Error ? e.message : \"فشل الإرسال\";\n          const safeMsg = clientErrorMessage(e, \"فشل الإرسال\");\n\n          if (\n            e instanceof ProviderHttpError\n              ? e.authHint\n              : /توكن|token|auth|190/i.test(msg)\n          ) {\n            return err(safeMsg, 502);\n          }\n\n          return err(safeMsg, 400);\n        }\n",
+    "\n          const msg =\n            e instanceof Error ? e.message : \"فشل الإرسال\";\n\n          if (/توكن|token|auth|190/i.test(msg)) {\n            return err(msg, 502);\n          }\n\n          return err(msg, 400);\n        }\n"],
+   // Stage 6 hardening: [unresolved] send failed logs safe fields, not the error object.
+   ["                \"[unresolved] send failed\",\n                safeErrorLog(e)\n              );\n",
+    "                \"[unresolved] send failed\",\n                e\n              );\n"],
+   // Stage 6 hardening: unresolved caller keeps the 502/400 branch (authHint), safe client text.
+   ["\n              // Stage 6: same 502/400 branch as before; safe client message.\n              const msg =\n                e instanceof Error ? e.message : \"فشل الإرسال\";\n              const safeMsg = clientErrorMessage(e, \"فشل الإرسال\");\n\n              if (\n                e instanceof ProviderHttpError\n                  ? e.authHint\n                  : /توكن|token|auth|190/i.test(msg)\n              ) {\n                return err(safeMsg, 502);\n              }\n\n              return err(safeMsg, 400);\n            }\n",
+    "\n              const msg =\n                e instanceof Error ? e.message : \"فشل الإرسال\";\n\n              if (/توكن|token|auth|190/i.test(msg)) {\n                return err(msg, 502);\n              }\n\n              return err(msg, 400);\n            }\n"],
+   // Stage 6 hardening: Moyasar 502 = provider/status/code, no body.
+   ["        if (!res.ok) {\n          // Stage 6: status + validated code only, never Moyasar's body.\n          return err(\n            (await providerHttpError(\"Moyasar\", res)).message,\n            502\n",
+    "        if (!res.ok) {\n          return err(\n            `Moyasar ${res.status}: ${await res.text()}`,\n            502\n"],
+   // Stage 6 hardening: top-level handler logs safe fields, not the error object.
+   ["  } catch (e) {\n    // Stage 6: safe fields only (provider/status/code or a fixed category).\n    console.error(\n      `[milan-api:${action}]`,\n      safeErrorLog(e)\n    );\n",
+    "  } catch (e) {\n    console.error(\n      `[milan-api:${action}]`,\n      e\n    );\n"],
+   // Stage 6 hardening: top-level 500 text via clientErrorMessage (own Error texts kept; fetch/runtime errors generic).
+   ["    return err(\n      clientErrorMessage(e, \"خطأ داخلي\"),\n      500\n",
+    "    return err(\n      e instanceof Error\n        ? e.message\n        : \"خطأ داخلي\",\n      500\n"],
+   // Flow-part2 stage 5 (fetchSenderProfile log safety; the request URL carries
+   // access_token=): exactly these hunks, undone FIRST so every older entry
+   // below matches unchanged. Covered by tests/milan-profile-fetch-log-safety.test.ts.
+   // Stage 5: !res.ok comment names what is (not) logged; errMsg dropped.
+   ["    if (!res.ok) {\n      // سجل آمن: HTTP status + sanitized Meta error code فقط.\n      // No free-text error message (Meta can echo the access token, e.g.\n      // \"Malformed access token ...\"), no senderId (customer identifier),\n      // no URL (it carries access_token=). The code is kept only if it is a\n      // number or a short [A-Za-z0-9_.-] string; anything else is omitted.\n      let errCode: unknown;\n      try {\n",
+    "    if (!res.ok) {\n      // سجل آمن: HTTP status + error code + error message فقط.\n      // لا نطبع التوكن (موجود في URL الطلب وليس في الاستجابة).\n      let errCode: unknown;\n      let errMsg: string | undefined;\n      try {\n"],
+   // Stage 5: no free-text Meta error message is read any more.
+   ["        errCode = ej?.error?.code ?? ej?.code ?? ej?.error_type;\n      } catch {\n",
+    "        errCode = ej?.error?.code ?? ej?.code ?? ej?.error_type;\n        errMsg = ej?.error?.message ?? ej?.error_message ?? ej?.message;\n      } catch {\n"],
+   // Stage 5: !res.ok log = status + sanitized code only (no senderId/message).
+   ["      }\n      const code =\n        typeof errCode === \"number\" && Number.isFinite(errCode)\n          ? errCode\n          : typeof errCode === \"string\" && /^[A-Za-z0-9_.-]{1,40}$/.test(errCode)\n          ? errCode\n          : undefined;\n      console.warn(\"[fetchSenderProfile] http_error\", { status: res.status, code });\n      return { name: null, avatar: null };\n",
+    "      }\n      console.warn(\n        `[fetchSenderProfile] HTTP ${res.status} for ${senderId}`,\n        { code: errCode, message: errMsg }\n      );\n      return { name: null, avatar: null };\n"],
+   // Stage 5: catch logs a fixed category only (never e.message / the error object).
+   ["    return { name, avatar };\n  } catch (e: unknown) {\n    // Fixed category only. Never the error text, stack, cause or object: a\n    // fetch network error embeds the request URL, which carries access_token=.\n    let category = \"unknown\";\n    try {\n      const n = typeof e === \"object\" && e !== null ? (e as { name?: unknown }).name : undefined;\n      const c = typeof e === \"object\" && e !== null ? (e as { code?: unknown }).code : undefined;\n      if (n === \"AbortError\" || n === \"TimeoutError\" || (typeof c === \"string\" && /TIMEOUT/i.test(c))) {\n        category = \"timeout\";\n      } else if (n === \"SyntaxError\") {\n        category = \"bad_response\";\n      } else if (n === \"TypeError\" || (typeof c === \"string\" && /^E[A-Z]+$/.test(c))) {\n        category = \"network\";\n      }\n    } catch {\n      /* hostile error object: keep \"unknown\" */\n    }\n    console.warn(\"[fetchSenderProfile] failed\", { category });\n    return { name: null, avatar: null };\n",
+    "    return { name, avatar };\n  } catch (e: any) {\n    console.warn(\"[fetchSenderProfile] error:\", e?.message ?? e);\n    return { name: null, avatar: null };\n"],
+   // Flow-part2 stages 3-4 (inbound recovery terminal markers + strict channel
+   // token decrypt): exactly these hunks, undone FIRST so every older entry
+   // below matches unchanged. Covered by tests/flow-inbound-recovery-terminal.test.ts,
+   // tests/flow-inbound-recovery-terminal-sql.test.mjs, tests/milan-token-decrypt-strict.test.ts.
+   // Stage 3 (live no-reply markers, inboundRecovery.ts markLiveNoReply): import.
+   ["// B-3/B-4 opt-in recovery sweeper (default OFF) and its webhook-side lease check.\nimport { inboundRecoveryEnabled, runInboundRecovery, recoveryLeaseActive, markLiveNoReply, type LiveNoReplyReason } from \"./inboundRecovery.ts\";\nimport { acceptsFlowWorkerBearer } from \"../flowWorkerAuth.ts\";\n",
+    "// B-3/B-4 opt-in recovery sweeper (default OFF) and its webhook-side lease check.\nimport { inboundRecoveryEnabled, runInboundRecovery, recoveryLeaseActive } from \"./inboundRecovery.ts\";\nimport { acceptsFlowWorkerBearer } from \"../flowWorkerAuth.ts\";\n"],
+   // Stage 4 (token decrypt hardening): decryptField logs a fixed code only
+   // (no ciphertext prefix, no error text); still lenient for display fields.
+   ["    return dec.decode(pt);\n  } catch {\n    // Fixed reason code only: never any part of the ciphertext, ids or names.\n    // Lenient by design (display fields keep the placeholder); channel access\n    // tokens use decryptAccessTokenStrict instead.\n    console.error(\"[decryptField] decryption_failed\");\n    return \"[رسالة غير قابلة للقراءة]\";\n",
+    "    return dec.decode(pt);\n  } catch (e) {\n    console.error(\"[decryptField] Decryption failed for value:\", stored.substring(0, 30), (e as Error)?.message);\n    return \"[رسالة غير قابلة للقراءة]\";\n"],
+   // Stage 4: AccountTokenUnavailableError + decryptAccessTokenStrict (new,
+   // additive; built on decryptFieldStrict).
+   ["\n/**\n * Typed failure of decryptAccessTokenStrict: the channel ACCESS TOKEN is\n * missing, undecryptable or empty. Callers make NO provider request.\n */\nclass AccountTokenUnavailableError extends Error {\n  readonly code = \"token_unavailable\";\n  constructor() {\n    super(\"token_unavailable\");\n    this.name = \"AccountTokenUnavailableError\";\n  }\n}\n\n/**\n * STRICT decryption for channel ACCESS TOKENS sent to Meta (DM send, profile\n * fetch). decryptField is lenient (returns a display placeholder on failure),\n * which must never be sent to Meta as a token. Any decrypt failure or empty\n * result THROWS AccountTokenUnavailableError. A legacy value without the\n * \"enc:v1:\" prefix is returned unchanged, exactly as decryptField did.\n * Logs nothing (callers log the fixed code \"token_unavailable\" only).\n */\nasync function decryptAccessTokenStrict(\n  stored: string | null | undefined\n): Promise<string> {\n  if (typeof stored !== \"string\" || stored.length === 0) {\n    throw new AccountTokenUnavailableError();\n  }\n  let token: string;\n  if (!stored.startsWith(\"enc:v1:\")) {\n    token = stored;\n  } else {\n    try {\n      token = await decryptFieldStrict(stored);\n    } catch {\n      throw new AccountTokenUnavailableError();\n    }\n  }\n  if (!token.trim()) throw new AccountTokenUnavailableError();\n  return token;\n}\n\n/* ═══════════════════════════════════════════════════════════════════════\n",
+    "\n/* ═══════════════════════════════════════════════════════════════════════\n"],
+   // Stage 4: sendToConversation docstring names the strict token decrypt.
+   [" * - instagram / facebook → sendMetaDirectMessage\n *   (توكن الحساب المشفّر في channel_accounts عبر fetchAccountWithToken + decryptAccessTokenStrict)\n */\n",
+    " * - instagram / facebook → sendMetaDirectMessage\n *   (توكن الحساب المشفّر في channel_accounts عبر fetchAccountWithToken + decryptField)\n */\n"],
+   // Stage 4: sendToConversation WhatsApp-fallback token -> strict decrypt.
+   ["      if (account.access_token_encrypted) {\n        // Strict: an undecryptable token is never sent to Meta.\n        token = await decryptAccessTokenStrict(account.access_token_encrypted);\n      }\n    } catch {\n      console.warn(\"[sendToConversation] token_unavailable\");\n    }\n",
+    "      if (account.access_token_encrypted) {\n        token = await decryptField(account.access_token_encrypted);\n      }\n    } catch (e) {\n      console.warn(\"[sendToConversation] token decrypt failed\", e);\n    }\n"],
+   // Stage 4: sendToConversation Meta DM token -> strict decrypt, clear error.
+   ["\n    // Strict: an undecryptable/empty token fails clearly (no request to Meta).\n    let token: string;\n    try {\n      token = await decryptAccessTokenStrict(\n        account.access_token_encrypted\n      );\n    } catch {\n      console.warn(\"[sendToConversation] token_unavailable\");\n      throw new Error(\n        `لا يوجد توكن محفوظ لحساب ${channel} — أعد ربط الحساب`\n      );\n    }\n\n",
+    "\n    const token = await decryptField(\n      account.access_token_encrypted\n    );\n\n"],
+   // Stage 3: liveNoReply closure (live deliveries only; never a re-drive).
+   ["  };\n  // Deliberate no-reply exit of a LIVE delivery (never a re-drive: those are\n  // resolved above / by the sweeper itself): mark the persisted event\n  // terminal so the opt-in recovery sweeper never answers it late\n  // (inboundRecovery.ts markLiveNoReply). Best effort; the result is ignored\n  // and never changes this exit.\n  const liveNoReply = async (reason: LiveNoReplyReason, conversationId: string, inboundId: string | null) => {\n    if (redrive || !inboundId) return;\n    await markLiveNoReply(sb, { ...retryKey, conversationId: String(conversationId), inboundId }, reason);\n  };\n\n",
+    "  };\n\n"],
+   // Stage 3: marker before the transferred (human takeover) exit.
+   ["      `[${channel}_webhook] conversation transferred: ${conv.id}`\n    );\n    await liveNoReply(\"live_human_takeover\", conv.id, inboundMessageId);\n    await resolvedAfterRedrive();\n",
+    "      `[${channel}_webhook] conversation transferred: ${conv.id}`\n    );\n    await resolvedAfterRedrive();\n"],
+   // Stage 3: marker before the paused (credits) exit.
+   ["      `[${channel}_webhook] paused (credits): ${conv.id}`\n    );\n    await liveNoReply(\"live_credits_paused\", conv.id, inboundMessageId);\n    await resolvedAfterRedrive();\n",
+    "      `[${channel}_webhook] paused (credits): ${conv.id}`\n    );\n    await resolvedAfterRedrive();\n"],
+   // Stage 3: marker before the auto-reply-disabled exit.
+   ["      `[${channel}_webhook] auto reply disabled for account ${account?.id}`\n    );\n    await liveNoReply(\"live_auto_reply_off\", conv.id, inboundMessageId);\n    await resolvedAfterRedrive();\n",
+    "      `[${channel}_webhook] auto reply disabled for account ${account?.id}`\n    );\n    await resolvedAfterRedrive();\n"],
+   // Stage 3: marker before the no-credits exit.
+   ["      `[${channel}_webhook] no credits: ${tenantId}`\n    );\n    await liveNoReply(\"live_no_credits\", conv.id, inboundMessageId);\n    await resolvedAfterRedrive();\n",
+    "      `[${channel}_webhook] no credits: ${tenantId}`\n    );\n    await resolvedAfterRedrive();\n"],
+   // Stage 4: V2 claimed-send token -> strict decrypt BEFORE sendMetaDirectMessage
+   // (the send call itself, its arguments and the claim outcome are unchanged).
+   ["      if (!account.access_token_encrypted) throw new Error(\"missing account token\");\n      // Strict: an undecryptable/empty token throws BEFORE any request to\n      // Meta (never a placeholder token). Outcome stays \"send_failed\"\n      // (claim semantics unchanged) with the fixed reason code below.\n      let token: string;\n      try {\n        token = await decryptAccessTokenStrict(account.access_token_encrypted);\n      } catch (e) {\n        console.warn(\"[webhook-claim] account token unavailable; no provider request\", { code: \"token_unavailable\" });\n        throw e;\n      }\n      if (!token) throw new Error(\"empty account token\");\n",
+    "      if (!account.access_token_encrypted) throw new Error(\"missing account token\");\n      const token = await decryptField(account.access_token_encrypted);\n      if (!token) throw new Error(\"empty account token\");\n"],
+   // Stage 4: Instagram profile fetch token -> strict decrypt; log has no account id.
+   ["              if (account.access_token_encrypted) {\n                // Strict: an undecryptable token skips the profile fetch\n                // (senderToken stays null -> no request to Meta).\n                try {\n                  senderToken = await decryptAccessTokenStrict(\n                    account.access_token_encrypted\n                  );\n                } catch {\n                  console.warn(\n                    \"[instagram_webhook] token_unavailable; profile fetch skipped\"\n                  );\n",
+    "              if (account.access_token_encrypted) {\n                try {\n                  senderToken = await decryptField(\n                    account.access_token_encrypted\n                  );\n                } catch (e: any) {\n                  console.warn(\n                    `[instagram_webhook] token decrypt failed | account=${account.id}`\n                  );\n"],
    // Flow-claim-then-silence / recovery round: E1 proven WhatsApp account
    // (waBinding.ts provenWhatsappAccount + the account_unproven guard), E4
    // per-event batch isolation (runBatchEvent), E5 no plaintext customer name
@@ -323,15 +475,20 @@ test("TypeScript: only the durable ingress calls the new function; V2 call site 
    ["        // Inbox comment activity (commentActivity.ts): read-only, scoped to\n        // the claim-verified tenant, rate limited, at most 100 per page.\n        case \"comment_activity\": {\n          const caLimited = await rateGate({\n            rpc: sb, headers: req.headers, salt: env(\"RATE_LIMIT_IP_SALT\"), cors: CORS,\n            rules: (ipHash) => commentActivityRules(ipHash, String(tenant.id)),\n          });\n          if (caLimited) return caLimited;\n          const activity = await readCommentActivity(sb, String(tenant.id),\n            { limit: body.limit, cursor: body.cursor }, decryptField);\n          if (!activity.ok) {\n            return json({ ok: false, error: activity.error }, activity.status);\n          }\n          return json(activity);\n        }\n\n        case \"bind_number\": {\n",
     "        case \"bind_number\": {\n"]
   ];
-  let cur=src(IDX);
-  if(cur!==head.stdout)for(const [now,was] of allowed){
+  let cur=src(IDX),base=head.stdout;
+  if(cur!==base)for(const [now,was] of allowed){
    assert.equal(cur.split(now).length,2,"allowed hunk present exactly once: "+now.trim().slice(0,60));
    // A hunk already committed in HEAD is baseline: it must stay byte-identical
-   // (checked above) and is not undone.
-   if(head.stdout.includes(now))continue;
+   // (checked above) and is undone in BOTH texts in lockstep, so older entries
+   // that a later (committed) entry supersedes still match exactly. Skipping
+   // it instead made every older superseded entry unmatched once HEAD
+   // contained the newer hunks (any diff at all then failed).
+   const inHead=base.split(now).length-1;
+   assert.ok(inHead<=1,"allowed hunk at most once in HEAD: "+now.trim().slice(0,60));
    cur=cur.replace(now,()=>was);
+   if(inHead===1)base=base.replace(now,()=>was);
   }
-  assert.equal(cur,head.stdout,"milan-api/index.ts differs from HEAD only by the authorized multichannel / page-hardening / security / comment-automation hunks");
+  assert.equal(cur,base,"milan-api/index.ts differs from HEAD only by the authorized multichannel / page-hardening / security / comment-automation hunks");
  }
  assert.match(src(CHECKS),new RegExp(`cf\\.h IS DISTINCT FROM '${md5(body(MIG,"claim"))}'`),"170000 body hash embedded in checks");
  assert.match(src(CHECKS),new RegExp(`v2\\.h='${md5(body(CLAIM,"claim"))}'`),"220000 body hash embedded in checks");

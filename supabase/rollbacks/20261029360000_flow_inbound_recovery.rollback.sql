@@ -44,7 +44,8 @@ BEGIN
  END LOOP;
  FOR r IN SELECT * FROM (VALUES
    ('flow_inbound_recovery_lease','public.flow_inbound_recovery_lease(integer,integer,integer,integer,integer,uuid)','407b44aceb8afd6c7674d28c1d89cc0b'),
-   ('flow_inbound_recovery_finish','public.flow_inbound_recovery_finish(uuid,uuid,uuid,text,text,integer)','cf208534b81d64a7dd0fd7e1768d0142')) t(name,sig,body_md5)
+   ('flow_inbound_recovery_finish','public.flow_inbound_recovery_finish(uuid,uuid,uuid,text,text,integer)','cf208534b81d64a7dd0fd7e1768d0142'),
+   ('flow_inbound_recovery_live_resolved','public.flow_inbound_recovery_live_resolved(uuid,uuid,text,text,uuid,uuid,text)','1eb9748741d9a0bf37736f2c4219c840')) t(name,sig,body_md5)
  LOOP
   v_fn := to_regprocedure(r.sig);
   IF v_fn IS NULL THEN
@@ -73,6 +74,7 @@ $g$;
 DROP VIEW public.automation_inbound_recovery_status;
 DROP FUNCTION public.flow_inbound_recovery_lease(integer,integer,integer,integer,integer,uuid);
 DROP FUNCTION public.flow_inbound_recovery_finish(uuid,uuid,uuid,text,text,integer);
+DROP FUNCTION public.flow_inbound_recovery_live_resolved(uuid,uuid,text,text,uuid,uuid,text);
 DROP TABLE public.automation_inbound_recovery;
 DROP TABLE public.automation_inbound_recovery_tenants;
 COMMIT;

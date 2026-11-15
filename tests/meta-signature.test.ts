@@ -75,18 +75,28 @@ test("object=instagram keeps its behaviour: a bad signature is still ignored wit
  assert.ok(ignored>page401);
  assert.match(ig.slice(ignored),/^"\[instagram_webhook\] invalid signature — ignored"\n\s+\);\n\n\s+return json\(\{\n\s+received: true,\n\s+\}\);\n\s+\}/);
  assert.ok(ignored<ig.indexOf('.from("channel_accounts")'));
- // The Instagram account lookup is unchanged (instagram or facebook channel, maybeSingle).
- assert.match(ig,/\.eq\("external_id", candidate\)\n\s+\.in\("channel", \[\n\s+"instagram",\n\s+"facebook",\n\s+\]\)\n\s+\.maybeSingle\(\);/);
+ // The Instagram account lookup keeps its filters (instagram or facebook
+ // channel). SEC (account resolution): .limit(2) instead of maybeSingle() —
+ // a lookup error or 2+ rows stop resolution (no next candidate), exactly one
+ // row is the account (tests/security-account-resolution.test.ts).
+ assert.match(ig,/\.eq\("external_id", candidate\)\n\s+\.in\("channel", \[\n\s+"instagram",\n\s+"facebook",\n\s+\]\)\n(\s+\/\/[^\n]*\n)*\s+\.or\("status\.is\.null,status\.neq\.disconnected"\)\n\s+\.limit\(2\);\n\n\s+if \(igLookupError \|\| \(Array\.isArray\(igAccounts\) && igAccounts\.length > 1\)\) \{\n\s+lookupFailed = true;\n\s+break;\n\s+\}\n\n\s+if \(Array\.isArray\(igAccounts\) && igAccounts\.length === 1\) \{\n\s+account = igAccounts\[0\];\n\s+break;\n\s+\}/);
+ assert.doesNotMatch(ig,/\.maybeSingle\(\);\n\n\s+if \(data\) \{\n\s+account = data;/,"no maybeSingle fall-through");
 });
 test("object=page account: facebook channel only; several accounts for one page id -> event ignored (never assigned)",()=>{
  const ig=route();
- const page=ig.slice(ig.indexOf('if (body.object === "page") {\n                const { data: pageAccounts }'));
- assert.match(page,/^if \(body\.object === "page"\) \{\n\s+const \{ data: pageAccounts \} = await sb\n\s+\.from\("channel_accounts"\)\n\s+\.select\(\n[^\n]*\n\s+\)\n\s+\.eq\("external_id", candidate\)\n\s+\.eq\("channel", "facebook"\)\n\s+\.limit\(2\);/);
+ const page=ig.slice(ig.indexOf('if (body.object === "page") {\n                const { data: pageAccounts, error: pageLookupError }'));
+ // SEC (account resolution): the page lookup error is read and fails closed
+ // (lookupFailed, no next candidate) before the 2-row / 1-row checks.
+ assert.match(page,/^if \(body\.object === "page"\) \{\n\s+const \{ data: pageAccounts, error: pageLookupError \} = await sb\n\s+\.from\("channel_accounts"\)\n\s+\.select\(\n[^\n]*\n\s+\)\n\s+\.eq\("external_id", candidate\)\n\s+\.eq\("channel", "facebook"\)\n(\s+\/\/[^\n]*\n)*\s+\.or\("status\.is\.null,status\.neq\.disconnected"\)\n\s+\.limit\(2\);\n\n\s+if \(pageLookupError\) \{\n\s+lookupFailed = true;\n\s+break;\n\s+\}\n\n\s+if \(Array\.isArray\(pageAccounts\) && pageAccounts\.length > 1\)/);
  assert.match(page,/if \(Array\.isArray\(pageAccounts\) && pageAccounts\.length > 1\) \{\n\s+ambiguousPage = true;\n\s+break;\n\s+\}/);
  assert.match(page,/if \(Array\.isArray\(pageAccounts\) && pageAccounts\.length === 1\) \{\n\s+account = pageAccounts\[0\];\n\s+break;\n\s+\}\n\n\s+continue;/);
  // Ignored before the account is used; the warning names no id (non-PII).
  const amb=ig.indexOf("if (ambiguousPage) {");
  assert.ok(amb>0&&amb<ig.indexOf("if (!account) {")&&amb<ig.indexOf("handleIncomingWebhookMessage("));
+ // SEC: lookup error / ambiguous Instagram id -> ignored before the account is used; no id logged.
+ const failed=ig.indexOf("if (lookupFailed) {");
+ assert.ok(failed>0&&failed<amb);
+ assert.match(ig.slice(failed),/^if \(lookupFailed\) \{\n\s+console\.warn\(\n\s+"\[instagram_webhook\] account lookup failed or ambiguous — event ignored"\n\s+\);\n\s+continue;\n\s+\}/);
  assert.match(ig.slice(amb),/^if \(ambiguousPage\) \{\n\s+console\.warn\(\n\s+"\[instagram_webhook\] page id matches several accounts — event ignored"\n\s+\);\n\s+continue;\n\s+\}/);
  // The tenant comes from the single matched account; writes are keyed by it.
  assert.match(ig,/\.eq\("tenant_id", account\.tenant_id\)\n\s+\.eq\("wa_chat_id", chatId\);/);

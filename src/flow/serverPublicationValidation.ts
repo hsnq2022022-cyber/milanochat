@@ -2,7 +2,7 @@
  * Shared browser-independent checks for the authenticated flow publication API.
  * A valid publication is NOT an authorization to execute a flow.
  */
-import {importFlow,validateDocument} from "./model.ts";
+import {importFlow,isMessageScope,validateDocument} from "./model.ts";
 import type {FlowDocument,Platform} from "./model.ts";
 import {auditFlowPublication} from "./publicationGate.ts";
 import type {FlowCapability} from "./publicationGate.ts";
@@ -16,6 +16,27 @@ export function providerPlatform(platform:Platform):ProviderPlatform {
  return platform==="messenger"?"facebook":platform;
 }
 
+/**
+ * Runs on the JSON round-tripped RAW document, before importFlow: the sanitizer
+ * drops an invalid messageScope, which would silently make the trigger a
+ * catch-all. A trigger node carrying the key with anything other than an exact
+ * allowed string (null, "", wrong case/padding, number, object...) is rejected.
+ * Undefined-valued keys cannot survive JSON and count as absent. Oversized or
+ * malformed node lists are left to importFlow, which rejects them.
+ */
+function hasInvalidMessageScope(raw:unknown):boolean{
+ const nodes=(raw as {nodes?:unknown}).nodes;
+ if(!Array.isArray(nodes)||nodes.length>100)return false;
+ for(const item of nodes){
+  if(!item||typeof item!=="object")continue;
+  const data=(item as {data?:unknown}).data;
+  if(!data||typeof data!=="object"||(data as {kind?:unknown}).kind!=="trigger")continue;
+  if(Object.prototype.hasOwnProperty.call(data,"messageScope")&&
+     !isMessageScope((data as {messageScope?:unknown}).messageScope))return true;
+ }
+ return false;
+}
+
 export function preparePublishedDocument(raw:unknown,accountPlatform:ProviderPlatform):FlowDocument|null {
  try {
   if(raw===null||typeof raw!=="object"||Array.isArray(raw)||
@@ -23,7 +44,9 @@ export function preparePublishedDocument(raw:unknown,accountPlatform:ProviderPla
   const serialized=JSON.stringify(raw);
   if(!serialized||new TextEncoder().encode(serialized).byteLength>MAX_FLOW_PUBLICATION_BYTES)
    return null;
-  const doc=importFlow(JSON.parse(serialized));
+  const parsed=JSON.parse(serialized) as unknown;
+  if(hasInvalidMessageScope(parsed))return null;
+  const doc=importFlow(parsed);
   if(!doc||doc.version!==3||validateDocument(doc).some(x=>x.severity==="error"))
    return null;
   const starts=doc.nodes.filter(n=>n.data.kind==="trigger");
