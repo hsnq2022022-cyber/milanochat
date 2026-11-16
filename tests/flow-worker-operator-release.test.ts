@@ -22,8 +22,10 @@ test("outbox Cron requires same distinct operator release before any DB or provi
  const gate=code.indexOf('env("FLOW_WORKERS_OPERATOR_RELEASE")!=="production-canary-approved"');
  const existing=code.indexOf('env("FLOW_OUTBOX_SEND_ENABLED")!=="true"');
  const db=code.indexOf("const sb=createClient(base,secret");
- // Text and image sends share one executeOnce `send` (image-send commit).
- const send=code.indexOf("send:()=>imageUrl===undefined?sendProviderMessage(");
+ // Text and image sends share one executeOnce `send` (image-send commit),
+ // wrapped by the T6-S4 captureFailure (a pure promise wrapper that only
+ // records the failure and rethrows; it issues no DB or provider call).
+ const send=code.indexOf("send:()=>captureFailure(failure,imageUrl!==undefined,imageUrl===undefined?sendProviderMessage({");
  assert(auth>0 && gate>auth && existing>gate && db>existing && send>db);
  // EVERY provider call and EVERY DB client/query comes after the gate: no
  // sendProviderMessage( call, createClient( or sb. use precedes it.
