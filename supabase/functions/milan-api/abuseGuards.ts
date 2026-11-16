@@ -176,3 +176,74 @@ export async function rateGate(opts: {
   console.warn("[rate_limit] blocked", { code: blocked.code, source: blocked.source });
   return tooManyRequests(blocked.retryAfter, opts.cors);
 }
+
+/* ─────────────────── create_tenant (FAIL-CLOSED, DB only) ─────────────────── */
+
+/**
+ * Public create_tenant: 5 per 10 minutes AND 20 per 24 hours per client.
+ * Fixed windows of milan_rate_limit_hit (the 24 h window is aligned to UTC
+ * midnight). The two windows MUST use distinct keys: both windows share the
+ * same window_start at every UTC midnight, so one key would merge counters.
+ */
+export const CREATE_TENANT_LIMITS = { per10Min: 5, per24h: 20 };
+
+export const createTenantRules = (ipHash: string): LimitRule[] => [
+  { key: `ct:ip:${ipHash}`, limit: CREATE_TENANT_LIMITS.per10Min, windowSec: 600, code: "create_tenant_ip_10m" },
+  { key: `ct:ipd:${ipHash}`, limit: CREATE_TENANT_LIMITS.per24h, windowSec: 86400, code: "create_tenant_ip_24h" },
+];
+
+export function serviceUnavailable(headers: Record<string, string>): Response {
+  return new Response(
+    JSON.stringify({
+      error: "الخدمة غير متاحة مؤقتًا، حاول لاحقًا / Service temporarily unavailable, please retry later",
+      code: "SERVICE_UNAVAILABLE",
+    }),
+    { status: 503, headers: { ...headers, "content-type": "application/json; charset=utf-8" } },
+  );
+}
+
+/**
+ * Fail-closed variant of rateGate for create_tenant. No in-memory fallback:
+ * an RPC error, a thrown exception or an unexpected result returns 503 and
+ * the caller must not proceed. Every rule is hit on every attempt (no short
+ * circuit), so each attempt, allowed or rejected, counts in both windows.
+ * A missing salt or an unknown/malformed IP never bypasses: all such callers
+ * share ONE strict "unknown" bucket (same convention as clientIp()).
+ * Returns null only when every rule allowed the request.
+ */
+export async function rateGateStrict(opts: {
+  rpc: RpcClient;
+  headers: Headers;
+  salt: string;
+  cors: Record<string, string>;
+  rules: (ipHash: string) => LimitRule[];
+}): Promise<Response | null> {
+  let blocked: { code: string; retryAfter: number } | null = null;
+  try {
+    const salt = typeof opts.salt === "string" ? opts.salt : "";
+    const ip = salt ? clientIp(opts.headers) : "unknown";
+    const ipHash = await hashIp(ip, salt);
+    const rules = opts.rules(ipHash);
+    if (!Array.isArray(rules) || rules.length === 0) throw new Error("limiter_rules");
+    for (const r of rules) {
+      const { data, error } = await opts.rpc.rpc(RATE_LIMIT_RPC, {
+        p_key: r.key,
+        p_limit: r.limit,
+        p_window_seconds: r.windowSec,
+      });
+      const d = data as { allowed?: unknown; retry_after?: unknown } | null;
+      if (error || !d || typeof d !== "object" || typeof d.allowed !== "boolean") throw new Error("limiter_rpc");
+      if (!d.allowed) {
+        const ra = Number(d.retry_after);
+        const retryAfter = Number.isFinite(ra) && ra > 0 ? Math.ceil(ra) : 1;
+        if (!blocked || retryAfter > blocked.retryAfter) blocked = { code: r.code, retryAfter };
+      }
+    }
+  } catch {
+    console.warn("[rate_limit] db limiter unavailable; failing closed", { code: "limiter_fail_closed" });
+    return serviceUnavailable(opts.cors);
+  }
+  if (!blocked) return null;
+  console.warn("[rate_limit] blocked", { code: blocked.code, source: "db" });
+  return tooManyRequests(blocked.retryAfter, opts.cors);
+}

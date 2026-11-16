@@ -148,14 +148,14 @@ export async function sendCommentReply(r:CommentReplyRequest,perform:typeof fetc
  */
 export async function findExistingReply(r:CommentReplyRequest,perform:typeof fetch=fetch):Promise<string|null>{
  if(commentReplyProblem(r))throw new CommentReplyError("permanent");
- const {url,igLogin}=endpoint(r);
+ const {url}=endpoint(r);
  const fields=r.platform==="instagram"?"id,text,from":"id,message,from";
  const q=new URLSearchParams({fields,limit:"100"});
- if(!igLogin)q.set("access_token",r.token);
  let res:Response;
  try{
+  // T5-S5: token in the Authorization header on both hosts, never in the URL.
   res=await perform(url+"?"+q.toString(),{method:"GET",
-   headers:igLogin?{authorization:"Bearer "+r.token}:{},signal:AbortSignal.timeout(15000)});
+   headers:{authorization:"Bearer "+r.token},signal:AbortSignal.timeout(15000)});
  }catch{throw new CommentReplyError("uncertain");}
  if(!res.ok)throw new CommentReplyError("uncertain",res.status);
  const data:unknown=await res.json().catch(()=>null);

@@ -9,6 +9,10 @@
 //   forward-only state machine: every status write is a single conditional
 //   UPDATE ... WHERE status IN (<allowed previous states>). A paid row can never
 //   regress (pending/cancelled/failed); duplicates and replays are no-ops.
+// - Top-up 'paid' is applied ONLY by rpc wayl_grant_topup_once (one transaction:
+//   lock row, re-verify, mark paid, credit the row's tenant). If that RPC is
+//   missing or fails, the handler answers 500 (Wayl retries); there is no
+//   fallback to a separate claim + grant_credits. Deploy the migration first.
 // - Credits and amounts come only from the server-stored row, never the body.
 // - Payment is accepted only when total (and currency, IQD) is present and equal
 //   to the stored row; otherwise nothing is granted/activated (fail closed).
@@ -88,10 +92,10 @@ const CREDITS_BY_AMOUNT: Record<number, number> = {
 };
 
 // ─── Allowed previous states (forward-only state machines) ───
-/** payments (top-up): states from which a verified 'paid' may be claimed. */
-export const PAYMENT_PAYABLE = [
-  "created", "creating", "pending", "pending_payment", "creation_uncertain", "cancelled", "failed",
-];
+/** payments (top-up): states from which a verified 'paid' may be granted. Must equal
+ *  the pre-payment list in wayl_grant_topup_once (migration 20261115130000); failed /
+ *  cancelled / refunded rows are never granted automatically (manual review). */
+export const PAYMENT_PAYABLE = ["created", "creating", "pending", "pending_payment", "creation_uncertain"];
 /** payments: states that a cancel/failure event may overwrite. */
 export const PAYMENT_CANCELLABLE = ["created", "creating", "pending", "pending_payment", "creation_uncertain"];
 
@@ -177,7 +181,7 @@ const errCode = (e: unknown) =>
 
 /** Top-up payment (payments table): grants credits at most once. */
 async function handleTopup(
-  sb: Db, pay: Record<string, unknown>, ev: WaylEvent, now: Date, log: Log,
+  sb: Db, pay: Record<string, unknown>, ev: WaylEvent, log: Log,
 ): Promise<Response> {
   const mapped = mapStatus(ev.paymentStatus);
   const prev = (pay.webhook_event && typeof pay.webhook_event === "object" && !Array.isArray(pay.webhook_event))
@@ -254,8 +258,11 @@ async function handleTopup(
 
   if (mapped === "cancelled" || mapped === "failed") {
     // Never overwrites paid (or any terminal) state; a replay after payment is a no-op.
+    // payments.status CHECK allows only created|paid|failed|refunded, so a Wayl
+    // cancel is stored as 'failed'; the original Wayl status stays in
+    // webhook_event.wayl (e.g. paymentStatus "Cancelled").
     const { error } = await sb.from("payments")
-      .update({ status: mapped, webhook_event: event })
+      .update({ status: "failed", webhook_event: event })
       .eq("id", payId).in("status", PAYMENT_CANCELLABLE);
     if (error) {
       log.error("[wayl-webhook] topup status update failed", errCode(error));
@@ -382,7 +389,7 @@ export async function handleWaylWebhook(req: Request, deps: WebhookDeps): Promis
       return text("db error", 500);
     }
 
-    if (pay) return await handleTopup(sb, pay, ev, now, log);
+    if (pay) return await handleTopup(sb, pay, ev, log);
 
     const { data: order, error: orderErr } = await sb
       .from("orders")

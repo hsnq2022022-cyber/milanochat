@@ -112,6 +112,58 @@ export type MessageScope = typeof MESSAGE_SCOPES[number];
 export function isMessageScope(v: unknown): v is MessageScope {
   return typeof v === "string" && (MESSAGE_SCOPES as readonly string[]).includes(v);
 }
+/** Publication/activation error code of conversationStartScopeProblem. */
+export const FLOW_MESSAGE_SCOPE_NOT_IMMEDIATE = "FLOW_MESSAGE_SCOPE_NOT_IMMEDIATE";
+export const MESSAGE_SCOPE_NOT_IMMEDIATE_MSG =
+  "خيار «بداية المحادثة» متاح فقط لحدث «العميل يرسل رسالة»، ويجب أن تكون أول خطوة بعده رسالة فورية بدون انتظار";
+/**
+ * Pure, raw-safe (works on a stored/unsanitized JSON document and on a
+ * FlowDocument). True when the single trigger has its OWN messageScope
+ * "conversation_start" and either
+ *  (a) its triggerMode is not "message", or
+ *  (b) the trigger's IMMEDIATE next step (its "next" edge(s), following goto
+ *      jumps) is a delay node, or a message/question whose FIRST content
+ *      block is a delay.
+ * A delay later in the flow is allowed. Documents without that scope (or
+ * without exactly one trigger) -> false: other validation owns them.
+ * A hostile document that throws -> true (fail closed).
+ */
+export function conversationStartScopeProblem(raw: unknown): boolean {
+  try {
+    const rec = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+    if (!rec(raw) || !Array.isArray(raw.nodes)) return false;
+    const nodes = raw.nodes.filter(n => rec(n) && rec(n.data)) as Array<{ id?: unknown; data: Record<string, unknown> }>;
+    const triggers = nodes.filter(n => n.data.kind === "trigger");
+    if (triggers.length !== 1) return false;
+    const trigger = triggers[0];
+    if (!Object.prototype.hasOwnProperty.call(trigger.data, "messageScope") ||
+        trigger.data.messageScope !== "conversation_start") return false;
+    if (trigger.data.triggerMode !== "message") return true;
+    const byId = new Map<unknown, Record<string, unknown>>();
+    for (const n of nodes) if (typeof n.id === "string" && !byId.has(n.id)) byId.set(n.id, n.data);
+    const edges = (Array.isArray(raw.edges) ? raw.edges : []).filter(rec) as Array<Record<string, unknown>>;
+    const delayed = (d: Record<string, unknown>) => d.kind === "delay" ||
+      ((d.kind === "message" || d.kind === "question") && Array.isArray(d.contentBlocks) &&
+        d.contentBlocks.length > 0 && rec(d.contentBlocks[0]) && d.contentBlocks[0].type === "delay");
+    const firstTargets = edges.filter(e => e.source === trigger.id && (e.sourceHandle ?? "next") === "next")
+      .map(e => e.target);
+    for (const first of firstTargets) {
+      let id: unknown = first;
+      const seen = new Set<unknown>();
+      while (true) {
+        const d = byId.get(id);
+        if (!d) break;
+        if (delayed(d)) return true;
+        if (d.kind !== "goto" || seen.has(id) || seen.size > 100) break;
+        seen.add(id);
+        id = d.gotoNode;
+      }
+    }
+    return false;
+  } catch {
+    return true;
+  }
+}
 export type FlowNode = Node<FlowData, "flowNode">;
 export type FlowEdge = Edge<Record<string, unknown> & { label?: string }, "flowEdge">;
 export type FlowDocument = { version: 3; name: string; nodes: FlowNode[]; edges: FlowEdge[] };
@@ -220,7 +272,7 @@ export function isAllowedImageUrl(raw:unknown,supabaseUrl?:string):boolean{
   return true;
 }
 const IMAGE_PUBLISH_MSG="رابط الصورة يجب أن يكون https وبعنوان مشروعنا قبل النشر";
-export type ValidationIssue = { message: string; nodeId?: string; severity: "error" | "warning" };
+export type ValidationIssue = { message: string; nodeId?: string; severity: "error" | "warning"; code?: string };
 export type ValidationLibraryItem = { id: string; doc?: FlowDocument };
 /** One issue per affected node/port. Existing v3 document fields remain unchanged. */
 export function validateDocument(doc: FlowDocument, library?: readonly ValidationLibraryItem[]): ValidationIssue[] {
@@ -342,6 +394,10 @@ export function validateDocument(doc: FlowDocument, library?: readonly Validatio
         :"العقدة بلا مخرج — "+(n.data.title||n.id),n.id,terminal?"warning":"error");
     }
   }
+  if(conversationStartScopeProblem(doc))
+    issues.push(starts.length===1
+      ?{message:MESSAGE_SCOPE_NOT_IMMEDIATE_MSG,nodeId:starts[0].id,severity:"error",code:FLOW_MESSAGE_SCOPE_NOT_IMMEDIATE}
+      :{message:MESSAGE_SCOPE_NOT_IMMEDIATE_MSG,severity:"error",code:FLOW_MESSAGE_SCOPE_NOT_IMMEDIATE});
   if(starts.length===1){
     const seen=new Set<string>();
     const visit=(id:string)=>{

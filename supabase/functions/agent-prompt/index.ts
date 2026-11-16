@@ -6,9 +6,11 @@
 // ═══════════════════════════════════════════════════════════════════
 
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { withCors, trustedCorsPolicy } from "../_shared/cors.ts";
 
+// T5-D2: Access-Control-Allow-Origin only for the trusted application origins
+// (exact match, Vary: Origin, never credentials): ../_shared/cors.ts.
 const cors: Record<string, string> = {
-  "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers":
     "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
@@ -22,7 +24,22 @@ const json = (body: unknown, status = 200) =>
     headers: { ...cors, "Content-Type": "application/json; charset=utf-8" },
   });
 
-Deno.serve(async (req: Request) => {
+// أخطاء آمنة: لا يصل نص خطأ قاعدة البيانات / الاستثناء إلى العميل أو السجلات
+const DB_ERROR_MESSAGE = "تعذر إتمام العملية — حاول مرة أخرى";
+const INTERNAL_ERROR_MESSAGE = "خطأ داخلي";
+
+/** Coarse, value-free code: SQLSTATE (5 chars) or PGRSTnnn, else "unknown". */
+function safeErrCode(error: unknown): string {
+  try {
+    const c = typeof error === "object" && error !== null ? (error as { code?: unknown }).code : undefined;
+    if (typeof c === "string" && /^(?:[0-9A-Z]{5}|PGRST\d{3})$/.test(c)) return c;
+  } catch {
+    /* hostile error object */
+  }
+  return "unknown";
+}
+
+Deno.serve(withCors(() => trustedCorsPolicy((k) => Deno.env.get(k)), async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { status: 200, headers: cors });
   }
@@ -73,13 +90,16 @@ Deno.serve(async (req: Request) => {
         .update({ agent_system_prompt: prompt.trim() || null })
         .eq("id", tenant.id);
 
-      if (error) return json({ error: error.message }, 500);
+      if (error) {
+        console.error("[agent-prompt] db error", { tag: "prompt_update", code: safeErrCode(error) });
+        return json({ error: DB_ERROR_MESSAGE }, 500);
+      }
       return json({ ok: true });
     }
 
     return json({ error: "Method not allowed" }, 405);
   } catch (e) {
-    console.error("[agent-prompt]", e);
-    return json({ error: e instanceof Error ? e.message : "خطأ داخلي" }, 500);
+    console.error("[agent-prompt] fatal", { code: safeErrCode(e) });
+    return json({ error: INTERNAL_ERROR_MESSAGE }, 500);
   }
-});
+}));

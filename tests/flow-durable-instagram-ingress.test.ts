@@ -1116,9 +1116,10 @@ test("typed answer: the customer's answer is never logged, even when the commit 
 test("index.ts passes the inbound text to the durable path only (V2 call site keeps its own arguments)",()=>{
  const server=readFileSync("supabase/functions/milan-api/index.ts","utf8");
  assert.equal((server.match(/text:customerText,\n\s+selectedChoiceId,providerEventIdGenuine/g)??[]).length,1);
- // V2 keeps its own arguments; the only addition is the durable ranking hook,
- // passed only while the durable ingress is configured for this account.
- assert.match(server,/prepareFlow: \(\) => prepareSimpleFlowReply\(\n\s+sb, tenantId, String\(account\.id\), channel, customerText,\n\s+durableRanked\?\{durableDocument:\(d\)=>supportedDurableDocument\(d,channel\)\}:\{\}\n\s+\)/);
+ // V2 keeps its own arguments; the only additions are the durable ranking hook,
+ // passed only while the durable ingress is configured for this account, and
+ // the conversation-start signal (T4, conversationStart.ts) in both branches.
+ assert.match(server,/prepareFlow: \(\) => prepareSimpleFlowReply\(\n\s+sb, tenantId, String\(account\.id\), channel, customerText,\n\s+durableRanked\?\{durableDocument:\(d\)=>supportedDurableDocument\(d,channel\),conversationStart\}:\{conversationStart\}\n\s+\)/);
  assert.match(server,/const durableRanked=durableIngressConfigured\(String\(account\.id\),channel\);/);
 });
 

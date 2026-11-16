@@ -2,7 +2,8 @@
  * Shared browser-independent checks for the authenticated flow publication API.
  * A valid publication is NOT an authorization to execute a flow.
  */
-import {importFlow,isMessageScope,validateDocument} from "./model.ts";
+import {importFlow,isMessageScope,validateDocument,conversationStartScopeProblem,
+ FLOW_MESSAGE_SCOPE_NOT_IMMEDIATE,MESSAGE_SCOPE_NOT_IMMEDIATE_MSG} from "./model.ts";
 import type {FlowDocument,Platform} from "./model.ts";
 import {auditFlowPublication} from "./publicationGate.ts";
 import type {FlowCapability} from "./publicationGate.ts";
@@ -37,6 +38,41 @@ function hasInvalidMessageScope(raw:unknown):boolean{
  return false;
 }
 
+export const FLOW_MESSAGE_SCOPE_REQUIRED="FLOW_MESSAGE_SCOPE_REQUIRED";
+export type MessageScopeProblem=typeof FLOW_MESSAGE_SCOPE_REQUIRED|typeof FLOW_MESSAGE_SCOPE_NOT_IMMEDIATE;
+export {FLOW_MESSAGE_SCOPE_NOT_IMMEDIATE};
+/** Arabic customer-facing text per problem code (flow-publication 422 body). */
+export const MESSAGE_SCOPE_PROBLEM_MESSAGES:Record<MessageScopeProblem,string>={
+ FLOW_MESSAGE_SCOPE_REQUIRED:"حدد نطاق الرسائل لحدث «العميل يرسل رسالة» (بداية المحادثة أو كل رسالة) ثم أعد النشر قبل التفعيل",
+ FLOW_MESSAGE_SCOPE_NOT_IMMEDIATE:MESSAGE_SCOPE_NOT_IMMEDIATE_MSG
+};
+/**
+ * PURE. messageScope problem of a (raw or stored) document, or null.
+ *  - FLOW_MESSAGE_SCOPE_NOT_IMMEDIATE: "conversation_start" on a non-message
+ *    trigger, or a trigger whose immediate next step (via goto) waits
+ *    (model.ts conversationStartScopeProblem). Always enforced.
+ *  - FLOW_MESSAGE_SCOPE_REQUIRED: only when `required` (server flag
+ *    FLOW_MESSAGE_SCOPE_REQUIRED, default OFF): the single trigger is a
+ *    "message" trigger without its OWN messageScope key.
+ * Malformed documents -> null (other validation rejects them).
+ */
+export function messageScopeActivationProblem(doc:unknown,required:boolean):MessageScopeProblem|null{
+ if(conversationStartScopeProblem(doc))return FLOW_MESSAGE_SCOPE_NOT_IMMEDIATE;
+ if(required!==true)return null;
+ try{
+  const nodes=(doc as {nodes?:unknown})?.nodes;
+  if(!Array.isArray(nodes))return null;
+  const triggers=nodes.filter(n=>!!n&&typeof n==="object"&&
+   !!(n as {data?:unknown}).data&&typeof (n as {data?:unknown}).data==="object"&&
+   ((n as {data:{kind?:unknown}}).data.kind==="trigger")) as Array<{data:Record<string,unknown>}>;
+  if(triggers.length!==1)return null;
+  const t=triggers[0].data;
+  if(t.triggerMode==="message"&&!Object.prototype.hasOwnProperty.call(t,"messageScope"))
+   return FLOW_MESSAGE_SCOPE_REQUIRED;
+  return null;
+ }catch{return FLOW_MESSAGE_SCOPE_REQUIRED;}
+}
+
 export function preparePublishedDocument(raw:unknown,accountPlatform:ProviderPlatform):FlowDocument|null {
  try {
   if(raw===null||typeof raw!=="object"||Array.isArray(raw)||
@@ -46,6 +82,9 @@ export function preparePublishedDocument(raw:unknown,accountPlatform:ProviderPla
    return null;
   const parsed=JSON.parse(serialized) as unknown;
   if(hasInvalidMessageScope(parsed))return null;
+  // Checked on the RAW document: importFlow drops a scope on a non-message
+  // trigger, which would silently turn it into a catch-all.
+  if(conversationStartScopeProblem(parsed))return null;
   const doc=importFlow(parsed);
   if(!doc||doc.version!==3||validateDocument(doc).some(x=>x.severity==="error"))
    return null;

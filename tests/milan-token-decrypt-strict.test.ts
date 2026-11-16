@@ -257,7 +257,8 @@ test("(b) instagram_webhook profile fetch: undecryptable token -> fetch never ca
  const ok=await block({id:ACC,tenant_id:TEN,access_token_encrypted:good},msg,"instagram",k.decryptAccessTokenStrict,fsp,c,k.decryptField);
  assert.equal(ok.name,CUSTOMER);
  assert.equal(ff.calls.length,1);
- assert.ok(ff.calls[0].url.startsWith("https://graph.instagram.com/v21.0/555?fields=name,username,profile_pic&access_token="));
+ // T5-S5: the token is in the Authorization header, not the URL.
+ assert.equal(ff.calls[0].url,"https://graph.instagram.com/v21.0/555?fields=name,username,profile_pic");
  assertCleanLogs(logs,[good,bad,IG_TOKEN,ACC,TEN,CUSTOMER]);
 });
 

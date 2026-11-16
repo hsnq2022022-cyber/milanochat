@@ -33,6 +33,13 @@ export const OUTBOX_BASE_COLUMNS = "id,run_id,effect_kind,delivery_status,attemp
 export const OUTBOX_LIFECYCLE_COLUMNS = OUTBOX_BASE_COLUMNS + ",cancel_reason,cancelled_at";
 // Failure rows also carry the short AI error code (never message bodies / answers).
 export const OUTBOX_FAILURE_COLUMNS = OUTBOX_LIFECYCLE_COLUMNS + ",ai_last_error_code";
+// T6-S4 (20261115150000): validated provider-failure metadata of finished attempts
+// (class, HTTP status, Meta code/subcode/type). Never message text, tokens, URLs or bodies.
+export const PROVIDER_FAILURE_COLUMNS =
+  "outbox_id,status,attempted_at,failure_class,provider_http_status,provider_error_code,provider_error_subcode,provider_error_type";
+export const PROVIDER_FAILURE_CLASSES = ["outside_window", "auth", "throttled", "rejected_invalid",
+  "permanent_other", "ambiguous", "media_rejected"] as const;
+const PROVIDER_FAILURE_ATTEMPT_STATUSES = ["uncertain", "rejected"];
 export const RUN_BASE_COLUMNS = "id,flow_key,platform,run_status,wake_at,updated_at";
 export const RUN_LIFECYCLE_COLUMNS = RUN_BASE_COLUMNS + ",ended_reason,ended_at";
 
@@ -41,6 +48,9 @@ const oneOf = (v: unknown, allowed: readonly string[]) => typeof v === "string" 
 // Short machine codes only (e.g. "ai_answer_missing"); anything else is dropped to null.
 const code = (v: unknown) => typeof v === "string" && /^[a-z0-9_]{1,64}$/.test(v) ? v : null;
 const num = (v: unknown) => typeof v === "number" && Number.isFinite(v) ? v : 0;
+const int = (v: unknown, min: number, max: number) =>
+  typeof v === "number" && Number.isInteger(v) && v >= min && v <= max ? v : null;
+const metaType = (v: unknown) => typeof v === "string" && /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(v) ? v : null;
 const rowsOf = (v: unknown) => Array.isArray(v) ? v.filter(r => r && typeof r === "object") as Record<string, unknown>[] : [];
 
 export function mapAttempt(r: Record<string, unknown>) {
@@ -51,6 +61,19 @@ export function mapAttempt(r: Record<string, unknown>) {
     provider_message_id: str(r.provider_message_id), attempted_at: str(r.attempted_at, 64),
     uncertain_at: str(r.uncertain_at, 64), review_status: oneOf(r.review_status, REVIEW_STATUSES) ?? "none",
     review_requested_at: str(r.review_requested_at, 64),
+  };
+}
+/** Provider-failure rows (T6-S4): whitelisted, re-validated fields only. */
+export function mapProviderFailure(r: Record<string, unknown>) {
+  const outbox_id = str(r.outbox_id, 64), status = oneOf(r.status, PROVIDER_FAILURE_ATTEMPT_STATUSES);
+  const failure_class = oneOf(r.failure_class, PROVIDER_FAILURE_CLASSES);
+  if (!outbox_id || !status || !failure_class) return null;
+  return {
+    outbox_id, status, attempted_at: str(r.attempted_at, 64), failure_class,
+    provider_http_status: int(r.provider_http_status, 100, 599),
+    provider_error_code: int(r.provider_error_code, 0, 999999999),
+    provider_error_subcode: int(r.provider_error_subcode, 0, 999999999),
+    provider_error_type: metaType(r.provider_error_type),
   };
 }
 export function mapOutbox(r: Record<string, unknown>) {
@@ -114,10 +137,15 @@ export async function loadFlowReview(sb: ReviewClient, tenantId: string) {
   const runsQ = selectDefensive(sb, "automation_flow_runs", [RUN_LIFECYCLE_COLUMNS, RUN_BASE_COLUMNS],
     q => q.eq("tenant_id", tenantId).in("run_status", [...ATTENTION_RUN_STATUSES])
       .order("updated_at", { ascending: false }).limit(50));
+  // Additive (T6-S4). Missing columns (20261115150000 not applied) only empty this list.
+  const failureQ = sb.from("automation_flow_delivery_attempts").select(PROVIDER_FAILURE_COLUMNS)
+    .eq("tenant_id", tenantId).in("status", PROVIDER_FAILURE_ATTEMPT_STATUSES)
+    .or("failure_class.not.is.null")
+    .order("attempted_at", { ascending: false }).limit(100);
   const countQs = RUN_STATUSES.map(s => sb.from("automation_flow_runs")
     .select("id", { count: "exact", head: true }).eq("tenant_id", tenantId).eq("run_status", s));
-  const [attempts, outbox, runs, internal, ...counts] =
-    await Promise.all([attemptsQ, outboxQ, runsQ, internalQ, ...countQs]) as Result[];
+  const [attempts, outbox, runs, internal, failures, ...counts] =
+    await Promise.all([attemptsQ, outboxQ, runsQ, internalQ, failureQ, ...countQs]) as Result[];
   const runCounts: Record<string, number> = {};
   let countsOk = true;
   RUN_STATUSES.forEach((s, i) => {
@@ -135,5 +163,9 @@ export async function loadFlowReview(sb: ReviewClient, tenantId: string) {
     // flowFailures so existing consumers keep their "failures only" semantics.
     flowInternal: internal.error ? [] : mapAll(internal.data, mapInternal).slice(0, INTERNAL_VIEW_LIMIT),
     flowInternalAvailable: !internal.error,
+    // Additive (T6-S4): provider failure class/status/code per finished attempt (uncertain or
+    // rejected). Separate list so flowItems / flowFailures keep their exact shapes.
+    flowProviderFailures: failures.error ? [] : mapAll(failures.data, mapProviderFailure),
+    flowProviderFailuresAvailable: !failures.error,
   };
 }

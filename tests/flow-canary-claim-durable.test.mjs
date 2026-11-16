@@ -104,6 +104,145 @@ test("TypeScript: only the durable ingress calls the new function; V2 call site 
   const head=spawnSync("git",["show","HEAD:"+IDX],{encoding:"utf8",maxBuffer:64<<20});
   assert.equal(head.status,0);
   const allowed=[
+   // T5-S5 Meta credentials out of request URLs (fetchSenderProfile: token in
+   // the Authorization header, URL without access_token=): exactly this hunk,
+   // undone FIRST; covered by tests/meta-graph-credentials.test.ts and
+   // tests/milan-profile-fetch-log-safety.test.ts.
+   ["      url = `https://graph.instagram.com/v21.0/${senderId}?fields=name,username,profile_pic`;\n    } else if (channel === \"instagram\") {\n      // Facebook Login → Instagram API\n      url = `https://graph.facebook.com/v21.0/${senderId}?fields=name,profile_picture`;\n    } else {\n      // Facebook Messenger\n      url = `https://graph.facebook.com/v21.0/${senderId}?fields=name,picture`;\n    }\n\n    // T5-S5: the token travels in the Authorization header, never in the URL\n    // (same Bearer form as sendMeta / ../_shared/metaGraph.ts).\n    const res = await fetch(url, { headers: { authorization: `Bearer ${token}` } });\n",
+    "      url = `https://graph.instagram.com/v21.0/${senderId}?fields=name,username,profile_pic&access_token=${encodeURIComponent(token)}`;\n    } else if (channel === \"instagram\") {\n      // Facebook Login → Instagram API\n      url = `https://graph.facebook.com/v21.0/${senderId}?fields=name,profile_picture&access_token=${encodeURIComponent(token)}`;\n    } else {\n      // Facebook Messenger\n      url = `https://graph.facebook.com/v21.0/${senderId}?fields=name,picture&access_token=${encodeURIComponent(token)}`;\n    }\n\n    const res = await fetch(url);\n"],
+   // T5-D2 CORS hardening (corsPolicy.ts + ../_shared/cors.ts: public `*`
+   // only for the website Widget actions, exact trusted-origin echo + Vary:
+   // Origin elsewhere, never credentials): exactly these hunks; covered by
+   // tests/edge-cors-policy.test.ts.
+   ["// T5-D2: CORS by action and request Origin (corsPolicy.ts, ../_shared/cors.ts).\nimport { withMilanCors } from \"./corsPolicy.ts\";\n\nconst enc = new TextEncoder();\n",
+    "\nconst enc = new TextEncoder();\n"],
+   ["// T5-D2: no Access-Control-Allow-Origin here; every response gets it from\n// withMilanCors (corsPolicy.ts) at the Deno.serve entry point.\nconst CORS = {\n  \"Access-Control-Allow-Headers\":",
+    "const CORS = {\n  \"Access-Control-Allow-Origin\": \"*\",\n  \"Access-Control-Allow-Headers\":"],
+   ["Deno.serve(async (req) => {\n  // T5-D2: the handler below is unchanged; only the CORS origin headers of its\n  // response (preflight included) are set per action and request Origin.\n  return withMilanCors(req, await milanApiHandler(req), env);\n});\n\n// T5-D2: the former Deno.serve handler, byte-identical from here to its\n// closing \"});\" (only this declaration line is new).\nconst milanApiHandler = (async (req: Request) => {\n",
+    "Deno.serve(async (req) => {\n"],
+   // Newest first: these hunks are undone BEFORE the older entries below
+   // (two of which contain the lines they edit).
+   // T5-S4 request body size limits / input boundaries (bodyLimits.ts:
+   // per-class raw-body byte limit before JSON.parse and signature checks;
+   // ingest_text / knowledge_add / qa_save / sourceUrl field limits):
+   // exactly these hunks; covered by tests/milan-body-limits.test.ts.
+   ["import { verifyMetaWebhookSignature } from \"./metaSignature.ts\";\n// T5-S4: request body size limits and input boundaries (bodyLimits.ts).\nimport {\n  bodyClassFor, bodyLimitFor, readBodyLimited, BODY_TOO_LARGE_MESSAGE, BODY_TOO_LARGE_LOG_TAG,\n  INGEST_TEXT_MAX_CHARS, TEXT_TOO_LONG_MESSAGE, textWithinLimit, qaPairsWithinLimits,\n  QA_PAIRS_LIMIT_MESSAGE, optionalSourceUrlValid, SOURCE_URL_INVALID_MESSAGE,\n} from \"./bodyLimits.ts\";\n",
+    "import { verifyMetaWebhookSignature } from \"./metaSignature.ts\";\n"],
+   ["  // T5-S4 (bodyLimits.ts): per-class byte limit on the raw body, enforced on\n  // the declared Content-Length AND the bytes actually received, BEFORE\n  // JSON.parse and BEFORE any signature check. Same text as req.text().\n  const bodyClass = bodyClassFor(action);\n  const limitedBody = await readBodyLimited(req, bodyLimitFor(bodyClass));\n  if (!limitedBody.ok) {\n    console.warn(BODY_TOO_LARGE_LOG_TAG, { class: bodyClass });\n    return err(BODY_TOO_LARGE_MESSAGE, 413);\n  }\n  const raw = limitedBody.text;\n",
+    "  const raw = await req.text();\n"],
+   ["        if (ctLimited) return ctLimited;\n        // T5-S4 (bodyLimits.ts): optional sourceUrl must be a string <= 2,048 chars.\n        if (!optionalSourceUrlValid(body.sourceUrl)) return err(SOURCE_URL_INVALID_MESSAGE);\n",
+    "        if (ctLimited) return ctLimited;\n"],
+   ["        case \"qa_save\": {\n          // T5-S4 (bodyLimits.ts): <= 50 pairs, bounded question / answer length,\n          // optional sourceUrl string <= 2,048 chars; before any DB write / embedding.\n          if (!qaPairsWithinLimits(body.pairs)) return err(QA_PAIRS_LIMIT_MESSAGE);\n          if (!optionalSourceUrlValid(body.sourceUrl)) return err(SOURCE_URL_INVALID_MESSAGE);\n",
+    "        case \"qa_save\": {\n"],
+   ["          // T5-S4 (bodyLimits.ts): bounded text before chunking / embedding.\n          if (!textWithinLimit(text, INGEST_TEXT_MAX_CHARS)) return err(TEXT_TOO_LONG_MESSAGE);\n\n          const chunks =\n            chunkText(text);\n",
+    "          const chunks =\n            chunkText(text);\n"],
+   ["        // T5-S4 (bodyLimits.ts): bounded text before chunking / embedding.\n        if (!textWithinLimit(t, INGEST_TEXT_MAX_CHARS)) return err(TEXT_TOO_LONG_MESSAGE);\n\n        const chunks =\n          chunkText(t);\n",
+    "        const chunks =\n          chunkText(t);\n"],
+   // T5-D1 claim-token hardening (claimToken.ts: well-formed + constant-time
+   // match + tenant still unclaimed; one conditional, token-rotating claim
+   // UPDATE): exactly these hunks; covered by tests/milan-claim-token.test.ts.
+   ["import { bindingIsVerified, readBindingVerified, provenWhatsappAccount } from \"./waBinding.ts\";\n// T5-D1: claim token authority ends when the tenant is claimed (claimToken.ts).\nimport { tenantByClaimToken, claimTenantByToken, isClaimTokenFormat } from \"./claimToken.ts\";\n",
+    "import { bindingIsVerified, readBindingVerified, provenWhatsappAccount } from \"./waBinding.ts\";\n"],
+   ["  tenantId: string\n) {\n  // T5-D1: null (=> the same \"invalid token\" 403) unless the token is\n  // well-formed, matches in constant time AND the tenant is still unclaimed.\n  return await tenantByClaimToken(sb, tenantId, claimOf(req));\n}\n",
+    "  tenantId: string\n) {\n  const { data } = await sb\n    .from(\"tenants\")\n    .select(\"*\")\n    .eq(\"id\", tenantId)\n    .maybeSingle();\n\n  if (!data) return null;\n\n  if (data.claim_token !== claimOf(req)) {\n    return null;\n  }\n\n  return data;\n}\n"],
+   ["        // T5-D1 (claimToken.ts): a non-string / malformed token is \"invalid or\n        // used\" (404 below) with no DB call; otherwise ONE conditional UPDATE\n        // (claim_token match AND user_id IS NULL, token rotated) so exactly one\n        // concurrent claim wins and user_id is never overwritten.\n        const {\n          data,\n          error,\n        } = isClaimTokenFormat(claimToken)\n          ? await claimTenantByToken(sb, u.id, claimToken)\n          : { data: null, error: null };\n",
+    "        const {\n          data,\n          error,\n        } = await sb\n          .from(\"tenants\")\n          .update({\n            user_id:\n              u.id,\n          })\n          .eq(\n            \"claim_token\",\n            claimToken\n          )\n          .is(\n            \"user_id\",\n            null\n          )\n          .select(\"id\")\n          .maybeSingle();\n"],
+   // T5-S2 DB/internal error-detail hardening (dbFail / safeDbCode,
+   // clientErrorMessage forwards only Arabic plain-Error text): exactly these
+   // hunks; covered by tests/milan-db-error-leak.test.ts.
+   ["/** Client-facing text: fixed provider messages; our own plain Error texts\n * (Arabic user messages) unchanged; fetch/runtime errors -> fallback.\n * T5-S2: a plain Error without Arabic text (internal English diagnostics,\n * raw Postgres/PostgREST text) is never forwarded -> fallback. */\n",
+    "/** Client-facing text: fixed provider messages; our own plain Error texts\n * (Arabic user messages) unchanged; fetch/runtime errors -> fallback. */\n"],
+   ["  if (e instanceof Error && e.name === \"SafeFetchError\") return e.message;\n  if (e instanceof Error && Object.getPrototypeOf(e) === Error.prototype && e.name === \"Error\" &&\n      /[\\u0600-\\u06FF]/.test(e.message)) {\n",
+    "  if (e instanceof Error && e.name === \"SafeFetchError\") return e.message;\n  if (e instanceof Error && Object.getPrototypeOf(e) === Error.prototype && e.name === \"Error\") {\n"],
+   ["\n/* ── T5-S2: database errors safe for logs and clients ──\n * Postgres/PostgREST message, details and hint can carry SQL, table /\n * column / constraint names and row values (tokens, phone numbers, customer\n * text): they never reach a client or a log line. Clients get a fixed Arabic\n * message (same status and body keys); logs get a fixed tag + coarse code. */\nconst DB_ERROR_MESSAGE = \"تعذر إتمام العملية — حاول مرة أخرى\";\n\n/** Coarse, value-free code: SQLSTATE (5 chars) or PGRSTnnn, else \"unknown\". */\nfunction safeDbCode(error: unknown): string {\n  try {\n    const c = typeof error === \"object\" && error !== null ? (error as { code?: unknown }).code : undefined;\n    if (typeof c === \"string\" && /^(?:[0-9A-Z]{5}|PGRST\\d{3})$/.test(c)) return c;\n  } catch {\n    /* hostile error object */\n  }\n  return \"unknown\";\n}\n\n/** Logs `error` (if any) as tag + code only and returns the fixed client text. */\nfunction dbFail(error: unknown, tag: string, message: string = DB_ERROR_MESSAGE): string {\n  if (error) console.error(\"[milan-api] db error\", { tag, code: safeDbCode(error) });\n  return message;\n}\n\n",
+    "\n"],
+   ["\n  // T5-S2: fixed text; keeps \"توكن\" so the reply / unresolved 502 branch\n  // (/توكن|token|auth|190/) is unchanged for a failed account read.\n  if (error) throw new Error(dbFail(error, \"account_read\", \"تعذر قراءة توكن حساب القناة — حاول مرة أخرى\"));\n",
+    "\n  if (error) throw new Error(`fetchAccountWithToken: ${error.message}`);\n"],
+   ["    throw new Error(\n      dbFail(error, \"widget_session_insert\",\n        \"تعذر إنشاء جلسة Widget\")\n",
+    "    throw new Error(\n      error?.message ||\n        \"تعذر إنشاء جلسة Widget\"\n"],
+   ["    throw new Error(\n      dbFail(error, \"widget_messages_read\", \"تعذر جلب رسائل الجلسة\")\n",
+    "    throw new Error(\n      error.message\n"],
+   ["    throw new Error(\n      dbFail(error, \"match_knowledge\", \"فشل البحث في قاعدة المعرفة\")\n",
+    "    throw new Error(\n      `فشل البحث في قاعدة المعرفة: ${error.message}`\n"],
+   ["        console.error(\"[webhook_billing] consume_reply PostgREST error\",{\n          tenantId,messageId:outgoingId,code:safeDbCode(error)\n",
+    "        console.error(\"[webhook_billing] consume_reply PostgREST error\",{\n          tenantId,messageId:outgoingId,code:error.code??\"unknown\",\n          message:error.message??\"unknown\"\n"],
+   ["        } catch (error) {\n          console.error(\"[widget.js] Error fetching script:\", safeErrorLog(error));\n",
+    "        } catch (error) {\n          console.error(\"[widget.js] Error fetching script:\", error);\n"],
+   ["          return err(\n            error\n              ? dbFail(error, \"create_tenant\", \"تعذر إنشاء الحساب — حاول مرة أخرى\")\n              : \"خطأ\",\n",
+    "          return err(\n            error?.message ??\n              \"خطأ\",\n"],
+   ["                      `[instagram_webhook] sender profile update failed | chatId=${chatId}`,\n                      { code: safeDbCode(profUpdErr) }\n",
+    "                      `[instagram_webhook] sender profile update failed | chatId=${chatId}`,\n                      profUpdErr.message\n"],
+   ["        throw new Error(\n          dbFail(insertInError, \"widget_message_insert\", \"تعذر حفظ الرسالة — حاول مرة أخرى\")\n",
+    "        throw new Error(\n          insertInError.message\n"],
+   ["          \"[widget_message] AI error\",\n          safeErrorLog(e)\n",
+    "          \"[widget_message] AI error\",\n          e\n"],
+   ["        console.error(\"[widget_message] answer insert failed\",{\n          tenantId:found.tenant.id,code:widgetSaveError?safeDbCode(widgetSaveError):\"missing_id\"\n",
+    "        console.error(\"[widget_message] answer insert failed\",{\n          tenantId:found.tenant.id,code:widgetSaveError?.code??\"unknown\",\n          message:widgetSaveError?.message??\"missing id\"\n"],
+   ["            return err(\n              dbFail(srcError, \"qa_save_source_insert\", \"تعذر إنشاء مصدر المعرفة\"),\n",
+    "            return err(\n              srcError?.message ??\n                \"تعذر إنشاء مصدر المعرفة\",\n"],
+   ["            return err(\n              dbFail(chunksError, \"qa_save_chunks_insert\", \"تعذر حفظ المحتوى في قاعدة المعرفة\"),\n",
+    "            return err(\n              chunksError.message,\n"],
+   ["            return err(\n              dbFail(srcError, \"ingest_text_source_insert\", \"تعذر إنشاء المصدر\"),\n",
+    "            return err(\n              srcError?.message ??\n                \"تعذر إنشاء المصدر\",\n"],
+   ["            return err(\n              dbFail(chunksError, \"ingest_text_chunks_insert\", \"تعذر حفظ المحتوى في قاعدة المعرفة\"),\n",
+    "            return err(\n              chunksError.message,\n"],
+   ["            return err(\n              dbFail(error, \"qa_test\", \"فشل البحث في قاعدة المعرفة\"),\n",
+    "            return err(\n              error.message,\n"],
+   ["          return err(\n            error\n              ? dbFail(error, \"claim_account\")\n              : \"رمز غير صالح أو مستخدم\",\n",
+    "          return err(\n            error?.message ??\n              \"رمز غير صالح أو مستخدم\",\n"],
+   ["          return err(\n            dbFail(error, \"widget_dashboard_list\", \"تعذر جلب البيانات — حاول مرة أخرى\"),\n",
+    "          return err(\n            error.message,\n"],
+   ["          return err(\n            dbFail(error, \"widget_dashboard_create\", \"تعذر إنشاء Widget\"),\n",
+    "          return err(\n            error?.message ??\n              \"تعذر إنشاء Widget\",\n"],
+   ["          return err(\n            dbFail(error, \"widget_dashboard_update\", \"تعذر تحديث Widget\"),\n",
+    "          return err(\n            error?.message ??\n              \"تعذر تحديث Widget\",\n"],
+   ["          return err(\n            dbFail(error, \"widget_dashboard_delete\", \"تعذر الحذف — حاول مرة أخرى\"),\n",
+    "          return err(\n            error.message,\n"],
+   ["          return err(\n            dbFail(error, \"conversations\", \"تعذر جلب البيانات — حاول مرة أخرى\"),\n",
+    "          return err(\n            error.message,\n"],
+   ["          return err(\n            dbFail(error, \"messages\", \"تعذر جلب البيانات — حاول مرة أخرى\"),\n",
+    "          return err(\n            error.message,\n"],
+   ["\n        if (upErr) return err(dbFail(upErr, \"agent_prompt_set\", \"تعذر حفظ التغييرات — حاول مرة أخرى\"), 500);\n",
+    "\n        if (upErr) return err(upErr.message, 500);\n"],
+   ["\n        if (upErr) return err(dbFail(upErr, \"takeover\", \"تعذر حفظ التغييرات — حاول مرة أخرى\"), 500);\n",
+    "\n        if (upErr) return err(upErr.message, 500);\n"],
+   ["\n        if (upErr) return err(dbFail(upErr, \"release\", \"تعذر حفظ التغييرات — حاول مرة أخرى\"), 500);\n",
+    "\n        if (upErr) return err(upErr.message, 500);\n"],
+   ["          return err(\n            dbFail(error, \"unresolved\", \"تعذر جلب البيانات — حاول مرة أخرى\"),\n",
+    "          return err(\n            error.message,\n"],
+   ["          return err(\n            dbFail(error, \"knowledge\", \"تعذر جلب البيانات — حاول مرة أخرى\"),\n",
+    "          return err(\n            error.message,\n"],
+   ["            return err(\n              dbFail(srcError, \"knowledge_add_url_source_insert\", \"تعذر إنشاء المصدر\"),\n",
+    "            return err(\n              srcError?.message ??\n                \"تعذر إنشاء المصدر\",\n"],
+   ["            return err(\n              dbFail(chunksError, \"knowledge_add_url_chunks_insert\", \"تعذر حفظ المحتوى في قاعدة المعرفة\"),\n",
+    "            return err(\n              chunksError.message,\n"],
+   ["          return err(\n            dbFail(srcError, \"knowledge_add_text_source_insert\", \"تعذر إنشاء المصدر\"),\n",
+    "          return err(\n            srcError?.message ??\n              \"تعذر إنشاء المصدر\",\n"],
+   ["          return err(\n            dbFail(chunksError, \"knowledge_add_text_chunks_insert\", \"تعذر حفظ المحتوى في قاعدة المعرفة\"),\n",
+    "          return err(\n            chunksError.message,\n"],
+   ["          return err(\n            dbFail(error, \"knowledge_delete\", \"تعذر الحذف — حاول مرة أخرى\"),\n",
+    "          return err(\n            error.message,\n"],
+   ["          return err(\n            dbFail(error, \"pay_create\", \"تعذر إنشاء الفاتورة — حاول مرة أخرى\"),\n",
+    "          return err(\n            error.message,\n"],
+   // T5-S1 create_tenant fail-closed DB rate limit (abuseGuards.ts
+   // rateGateStrict / createTenantRules): exactly these two hunks; covered by
+   // tests/milan-create-tenant-limit.test.ts.
+   ["import { rateGate, widgetIpRules, widgetScopeRules, aiActionRules, knowledgeAddRules, CLAIM_AI_ACTIONS, rateGateStrict, createTenantRules } from \"./abuseGuards.ts\";\n",
+    "import { rateGate, widgetIpRules, widgetScopeRules, aiActionRules, knowledgeAddRules, CLAIM_AI_ACTIONS } from \"./abuseGuards.ts\";\n"],
+   ["      case \"create_tenant\": {\n        // T5-S1 (abuseGuards.ts): DB-backed, FAIL-CLOSED per-IP limit\n        // (5 / 10 min AND 20 / 24 h) BEFORE any body use or tenant insert.\n        // Limiter unavailable => 503, never an in-memory fallback.\n        const ctLimited = await rateGateStrict({\n          rpc: sb, headers: req.headers, salt: env(\"RATE_LIMIT_IP_SALT\"), cors: CORS,\n          rules: createTenantRules,\n        });\n        if (ctLimited) return ctLimited;\n\n        const {\n",
+    "      case \"create_tenant\": {\n        const {\n"],
+   // T4 S1/S2 messageScope "conversation_start" (conversationStart.ts): the
+   // first-DM history read before the inbound row is stored, passed to both
+   // engines' NEW-run selection. Exactly these hunks; covered by
+   // tests/flow-conversation-start.test.ts.
+   ["import { prepareSimpleFlowReply } from \"./flowPrepareMessage.ts\";\nimport { readConversationStart } from \"./conversationStart.ts\";\n",
+    "import { prepareSimpleFlowReply } from \"./flowPrepareMessage.ts\";\n"],
+   ["    return \"retry\";\n  }\n\n  // messageScope \"conversation_start\" (conversationStart.ts): is this the\n  // conversation's first customer DM? Read BEFORE the inbound row is stored\n  // (a re-drive excludes its own row), only where a flow can be selected:\n  // a proven channel account on Instagram (durable / V2), or any channel\n  // while FLOW_MULTICHANNEL_ENABLED (durable) or FLOW_RUNTIME_MODE\n  // \"message_only\" (V2) is on. Read failure = unknown state: nothing is\n  // persisted, no flow and no AI; the event stays retryable.\n  let conversationStart: boolean | null = null;\n  if (typeof account?.id === \"string\" && account.id.length > 0 &&\n      (channel === \"instagram\" || multichannelEnabled() || env(\"FLOW_RUNTIME_MODE\") === \"message_only\")) {\n    try {\n      conversationStart = await readConversationStart(sb, {\n        tenantId: String(tenantId), accountId: account.id, conversation: conv,\n        excludeInboundId: redrive ? redrive.inboundId : null,\n      });\n    } catch {\n      // ConversationStartUnavailableError (or any unexpected failure): unknown.\n      console.warn(\"[webhook-routing] conversation start unknown\", { code: \"conversation_start_unavailable\" });\n      return await unknownState();\n    }\n  }\n\n  /**\n   * حفظ رسالة العميل الواردة.",
+    "    return \"retry\";\n  }\n\n  /**\n   * حفظ رسالة العميل الواردة."],
+   ["    const durable=await attemptDurableInstagram(sb,{\n      conversationStart,\n      tenantId,",
+    "    const durable=await attemptDurableInstagram(sb,{\n      tenantId,"],
+   ["      durableRanked?{durableDocument:(d)=>supportedDurableDocument(d,channel),conversationStart}:{conversationStart}\n",
+    "      durableRanked?{durableDocument:(d)=>supportedDurableDocument(d,channel)}:{}\n"],
    // SEC account-resolution hardening (branch sec/channel-accounts-hardening,
    // merged into rc/launch; tests/security-account-resolution.test.ts) plus the
    // review fix that excludes status 'disconnected' rows from the IG / Page

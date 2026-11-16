@@ -1,5 +1,6 @@
-// fetchSenderProfile (supabase/functions/milan-api/index.ts) builds a Meta
-// Graph URL that carries `access_token=<token>`. Its FAILURE logs must never
+// fetchSenderProfile (supabase/functions/milan-api/index.ts) calls the Meta
+// Graph API; since T5-S5 the token is in the Authorization header (the URL no
+// longer carries `access_token=`). Its FAILURE logs must never
 // contain the token, the URL, Meta's free-text error message or the senderId:
 //  - catch: a fixed category only (network / timeout / bad_response / unknown),
 //    never e.message / stack / cause / the error object;
@@ -38,11 +39,11 @@ const META_MSG="Malformed access token";
 
 const PATHS=[
  {channel:"instagram",token:IG_TOKEN,host:"graph.instagram.com",
-  url:`https://graph.instagram.com/v21.0/${SENDER}?fields=name,username,profile_pic&access_token=${encodeURIComponent(IG_TOKEN)}`},
+  url:`https://graph.instagram.com/v21.0/${SENDER}?fields=name,username,profile_pic`},
  {channel:"instagram",token:EAA_TOKEN,host:"graph.facebook.com",
-  url:`https://graph.facebook.com/v21.0/${SENDER}?fields=name,profile_picture&access_token=${encodeURIComponent(EAA_TOKEN)}`},
+  url:`https://graph.facebook.com/v21.0/${SENDER}?fields=name,profile_picture`},
  {channel:"facebook",token:EAA_TOKEN,host:"graph.facebook.com",
-  url:`https://graph.facebook.com/v21.0/${SENDER}?fields=name,picture&access_token=${encodeURIComponent(EAA_TOKEN)}`},
+  url:`https://graph.facebook.com/v21.0/${SENDER}?fields=name,picture`},
 ];
 
 /** Every representation a log sink could render (JSON + full inspect incl. stack/cause/hidden). */
@@ -169,11 +170,13 @@ test("(f) success path unchanged: same URLs, parsed name/avatar, success log pre
   {body:{},want:{name:null,avatar:null}},
  ];
  for(const p of PATHS)for(const b of bodies){
-  const {logs,c}=cons();const calls:string[]=[];
-  const r=await load(async(url:string)=>{calls.push(url);return {ok:true,status:200,json:async()=>b.body};},c)(
+  const {logs,c}=cons();const calls:string[]=[];const inits:any[]=[];
+  const r=await load(async(url:string,init:any)=>{calls.push(url);inits.push(init);return {ok:true,status:200,json:async()=>b.body};},c)(
    {channel:p.channel,senderId:SENDER,token:p.token});
   assert.deepEqual(r,b.want);
   assert.deepEqual(calls,[p.url]);
+  // T5-S5: GET (no method/body), token only in the Authorization header.
+  assert.deepEqual(inits,[{headers:{authorization:`Bearer ${p.token}`}}]);
   assert.deepEqual(logs,[["log",["[fetchSenderProfile]",{senderId:SENDER,
    name:b.want.name?"present":"missing",avatar:b.want.avatar?"present":"missing"}]]]);
   const flat=rendered(logs);

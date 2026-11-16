@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { CSSProperties } from "react";
 import { Plus, Trash2, Check, Copy, AlertTriangle, Sparkles, ChevronDown, ChevronUp } from "lucide-react";
-import { LABELS, PUBLIC_REPLY_MAX, makeNode, outputs, canConnect, edgeFor, PLATFORM_LABELS, TRIGGER_OPTIONS } from "./model";
+import { LABELS, PUBLIC_REPLY_MAX, makeNode, outputs, canConnect, edgeFor, PLATFORM_LABELS, TRIGGER_OPTIONS, conversationStartScopeProblem, isMessageScope } from "./model";
 import ButtonActionEditor from "./ButtonActionEditor";
 import MessageBlocksEditor from "./MessageBlocksEditor";
 import TriggerKeywordsEditor from "./TriggerKeywordsEditor";
@@ -39,6 +39,19 @@ export default function NodeEditor({node,onClose,language="ar"}:{node:FlowNode|n
   if(!node)return <aside dir={language==="ar"?"rtl":"ltr"} className="flex w-[min(40vw,370px)] min-w-[210px] shrink-0 flex-col border-r border-[#173D30] bg-[#0B241C] p-5 text-[#8B9E96]"><h2 className="font-semibold text-white">{t("panel")}</h2><p className="mt-3 text-sm">{t("noNode")}</p></aside>;
   const d=node.data;
   const edit=(part:Partial<FlowData>)=>store.changeNode(node.id,part);
+  // Trigger edit that also drops `messageScope` (key removed, never undefined/"") unless the
+  // resulting mode is "message" or the caller explicitly sets/removes it.
+  const editTrigger=(part:Partial<FlowData>,scope?:"keep"|"remove"|string)=>{
+    const current=useFlowStore.getState().doc;
+    const mode=(part.triggerMode??d.triggerMode) as FlowData["triggerMode"];
+    store.replace({...current,nodes:current.nodes.map(n=>{
+      if(n.id!==node.id)return n;
+      const data={...n.data,...part};
+      if(scope==="remove"||mode!=="message")delete data.messageScope;
+      else if(isMessageScope(scope))data.messageScope=scope;
+      return {...n,data};
+    })});
+  };
   const saveOptions=(options:Choice[])=>{
     const validIds=new Set(options.map(c=>c.id));
     store.replace({...store.doc,nodes:store.doc.nodes.map(n=>n.id===node.id?{...n,data:{...n.data,options}}:n),
@@ -91,16 +104,32 @@ export default function NodeEditor({node,onClose,language="ar"}:{node:FlowNode|n
         <select className={input} aria-label="قناة بدء الأتمتة" value={d.platform} onChange={e=>{
           const platform=e.target.value as Platform;
           const first=TRIGGER_OPTIONS[platform][0].id;
-          edit({platform,triggerMode:first});
+          editTrigger({platform,triggerMode:first});
         }}>
           {Object.entries(PLATFORM_LABELS).map(([key,label])=><option key={key} value={key}>{label}</option>)}
         </select>
         <label className={section}>{t("event")}</label>
-        <select className={input} aria-label={t("event")} value={d.triggerMode} onChange={e=>edit({triggerMode:e.target.value as FlowData["triggerMode"]})}>
+        <select className={input} aria-label={t("event")} value={d.triggerMode} onChange={e=>editTrigger({triggerMode:e.target.value as FlowData["triggerMode"]})}>
           {TRIGGER_OPTIONS[d.platform].map(event=><option key={event.id} value={event.id}>{event.label}</option>)}
         </select>
         {d.triggerMode==="comment"?<CommentTriggerForm d={d} edit={edit} t={t} nodeId={node.id}/>
           :<TriggerKeywordsEditor key={node.id+":"+d.triggerMode} mode={d.triggerMode} value={d.keywords} onChange={keywords=>edit({keywords})}/>}
+        {d.triggerMode==="message"&&<>
+          <label className={section} htmlFor={"msg-scope-"+node.id}>متى يعمل هذا المشغّل؟</label>
+          <select id={"msg-scope-"+node.id} data-testid="trigger-message-scope" dir="rtl" className={input+" transition-colors"}
+            value={isMessageScope(d.messageScope)?d.messageScope:""} onChange={e=>editTrigger({},e.target.value||"remove")}>
+            <option value="">غير محدد (يُعامل ككل رسالة)</option>
+            <option value="every_message">كل رسالة</option>
+            <option value="conversation_start">بداية المحادثة فقط</option>
+          </select>
+          {d.messageScope==="conversation_start"&&<div data-testid="trigger-message-scope-note" role="note" className="mt-2 flex gap-2 rounded-xl border border-[#E5B54B]/40 bg-[#E5B54B]/10 p-3 text-xs leading-5 text-[#E5B54B]">
+            <AlertTriangle size={16} className="mt-0.5 shrink-0" aria-hidden="true"/>
+            <div className="min-w-0">
+              <p>يعمل مع أول رسالة خاصة فقط؛ التعليقات لا تُحتسب، ولا يبدأ بانتظار</p>
+              {conversationStartScopeProblem(store.doc)&&<p data-testid="trigger-message-scope-delay-warning" className="mt-1 font-semibold">أول خطوة بعد البداية هي انتظار، وسيرفض الخادم نشر هذا التدفق. ضع رسالة فورية أولًا، ثم أضف الانتظار بعدها.</p>}
+            </div>
+          </div>}
+        </>}
         {d.triggerMode==="keyword"&&<>
           {/* Keyword match mode (stored in the trigger's operator; legacy values = contains). */}
           <label className={section} htmlFor={"kw-mode-"+node.id}>{language==="en"?"Keyword matching":"طريقة مطابقة الكلمات"}</label>

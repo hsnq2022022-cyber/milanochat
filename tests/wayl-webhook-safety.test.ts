@@ -1,5 +1,6 @@
 // wayl-webhook: signature, size cap, strict validation, amount/currency fail-closed,
-// idempotent single grant and forward-only (replay-safe) state transitions.
+// idempotent single grant through the atomic RPC wayl_grant_topup_once (fail closed,
+// no non-atomic fallback) and forward-only (replay-safe) state transitions.
 // Fakes only: no network, no real DB, no real payments.
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -21,7 +22,7 @@ const envOf = (over: Record<string, string | undefined> = {}) => {
   return (k: string) => e[k];
 };
 
-function world(payStatus = "pending_payment", extraPay: Record<string, unknown> = {}) {
+function world(payStatus = "created", extraPay: Record<string, unknown> = {}) {
   return makeFakeDb({
     payments: [{
       id: PAY_ID, tenant_id: TENANT, provider: "wayl", amount: 35000, currency: "IQD",
@@ -53,37 +54,71 @@ const pay = (db: FakeDb) => db.tables.payments[0];
 const order = (db: FakeDb) => db.tables.orders[0];
 const credits = (db: FakeDb) => db.tables.tenants[0].credits_remaining;
 
-test("valid signature + completed grants server-stored credits exactly once to the row's tenant", async () => {
+const topupRpcs = (db: FakeDb) => db.rpcCalls.filter((c) => c.name === "wayl_grant_topup_once");
+const paymentWrites = (db: FakeDb) => db.updates.filter((u) => u.table === "payments");
+/** The old non-atomic path (claim UPDATE, then grant_credits) must never run. */
+function assertNoLegacyPath(db: FakeDb) {
+  assert.equal(db.rpcCalls.filter((c) => c.name !== "wayl_grant_topup_once").length, 0, "only the atomic RPC");
+  assert.deepEqual(paymentWrites(db), [], "no direct payments write on a completed event");
+}
+
+test("valid signature + completed grants server-stored credits exactly once via ONE atomic RPC", async () => {
   const db = world();
-  const r = await call(db, completed());
+  const body = completed();
+  const r = await call(db, body);
   assert.equal(r.status, 200);
+  assert.equal(r.text, "ok");
   assert.equal(credits(db), 1005);
   assert.equal(pay(db).status, "paid");
   assert.equal(pay(db).credits_granted, 1000);
-  assert.deepEqual(db.rpcCalls, [{ name: "grant_credits", args: { p_tenant_id: TENANT, p_credits: 1000 } }]);
+  assert.deepEqual(db.rpcCalls, [{
+    name: "wayl_grant_topup_once",
+    args: { p_payment_id: PAY_ID, p_expected_amount: 35000, p_currency: "IQD", p_event: body },
+  }]);
+  assertNoLegacyPath(db);
 });
 
 test("sequential duplicate callbacks grant once", async () => {
   const db = world();
   for (let i = 0; i < 3; i++) assert.equal((await call(db, completed())).status, 200);
-  assert.equal(db.rpcCalls.length, 1);
+  assert.equal(topupRpcs(db).length, 1); // later callbacks see 'paid' and stop before the RPC
   assert.equal(credits(db), 1005);
+  assertNoLegacyPath(db);
 });
 
-test("concurrent duplicate callbacks grant exactly once", async () => {
+test("pre-payment states written by topup-create (creating / pending_payment / creation_uncertain) are payable", async () => {
+  for (const st of ["creating", "pending_payment", "creation_uncertain"]) {
+    const db = world(st);
+    assert.equal((await call(db, completed())).status, 200, st);
+    assert.equal(credits(db), 1005, st);
+    assert.equal(pay(db).status, "paid", st);
+    assertNoLegacyPath(db);
+  }
+});
+
+test("concurrent duplicate callbacks grant exactly once (the RPC serialises them)", async () => {
   const db = world();
-  db.barrier = { table: "payments", count: 5 }; // all 5 read 'pending_payment' before any claim
+  db.barrier = { table: "payments", count: 5 }; // all 5 read 'created' before any RPC
   const rs = await Promise.all(Array.from({ length: 5 }, () => call(db, completed())));
   for (const r of rs) assert.equal(r.status, 200);
-  assert.equal(db.rpcCalls.length, 1);
-  assert.equal(credits(db), 1005);
+  assert.equal(topupRpcs(db).length, 5, "every racer reached the RPC");
+  assert.equal(credits(db), 1005, "exactly one grant");
+  assert.equal(pay(db).credits_granted, 1000);
+  assert.equal(rs.filter((r) => r.lines.some((l) => l.includes("granted 1000 credits"))).length, 1);
+  assertNoLegacyPath(db);
 });
 
 test("client-supplied credits/tenant in the signed body are ignored", async () => {
   const db = world();
-  await call(db, completed({ credits: 999999, tenant_id: "attacker", p_credits: 5, webhook_event: { credits: 7 } }));
-  assert.deepEqual(db.rpcCalls[0].args, { p_tenant_id: TENANT, p_credits: 1000 });
+  const body = completed({ credits: 999999, tenant_id: "attacker", p_credits: 5, webhook_event: { credits: 7 } });
+  await call(db, body);
+  assert.deepEqual(Object.keys(topupRpcs(db)[0].args).sort(),
+    ["p_currency", "p_event", "p_expected_amount", "p_payment_id"], "no tenant / credits argument");
+  assert.equal(topupRpcs(db)[0].args.p_expected_amount, 35000);
+  assert.equal(credits(db), 1005);
+  assert.equal(pay(db).credits_granted, 1000);
   assert.equal((pay(db).webhook_event as Record<string, unknown>).credits, 1000);
+  assertNoLegacyPath(db);
 });
 
 test("replayed cancelled after paid does not change payment state", async () => {
@@ -95,10 +130,62 @@ test("replayed cancelled after paid does not change payment state", async () => 
   assert.deepEqual(pay(db), before);
   // and a re-sent completed after that still does not re-grant
   await call(db, completed());
-  assert.equal(db.rpcCalls.length, 1);
+  assert.equal(topupRpcs(db).length, 1);
+  assert.equal(credits(db), 1005);
 });
 
-test("missing total, amount mismatch, currency mismatch: no grant, safe 200", async () => {
+test("fake payments table enforces the live status CHECK (23514)", async () => {
+  type Q = PromiseLike<{ error: { code: string } | null }> & {
+    update(p: Record<string, unknown>): Q;
+    insert(r: Record<string, unknown>): Q;
+    eq(col: string, val: unknown): Q;
+  };
+  const db = world();
+  const up = await (db.from("payments") as Q).update({ status: "cancelled" }).eq("id", PAY_ID);
+  assert.equal(up.error?.code, "23514");
+  assert.equal(pay(db).status, "created", "rejected statement changes nothing");
+  const ins = await (db.from("payments") as Q).insert({ id: "x", status: "pending" });
+  assert.equal(ins.error?.code, "23514");
+  assert.equal(db.tables.payments.length, 1);
+});
+
+for (const wayl of ["Cancelled", "Rejected"]) {
+  test(`${wayl} on a 'created' payment: 200, stored as 'failed', Wayl status kept, no credits; replay idempotent`, async () => {
+    const db = world();
+    const body = { referenceId: PAY_ID, paymentStatus: wayl };
+    const r = await call(db, body);
+    assert.equal(r.status, 200);
+    assert.equal(r.text, "ok");
+    assert.equal(pay(db).status, "failed");
+    const ev = pay(db).webhook_event as Record<string, unknown>;
+    assert.deepEqual(ev.wayl, body, "original Wayl status recorded");
+    assert.equal(ev.credits, 1000, "server keys preserved");
+    assert.equal(pay(db).credits_granted, 0);
+    assert.equal(pay(db).paid_at, null);
+    assert.equal(credits(db), 5);
+    assert.equal(db.rpcCalls.length, 0, "never grants");
+    const snap = structuredClone(db.tables);
+    const r2 = await call(db, body); // replay of the same event
+    assert.equal(r2.status, 200);
+    assert.deepEqual(db.tables, snap, "replay is a no-op");
+    assert.equal(db.rpcCalls.length, 0);
+    // a later Complete on the failed row is not granted automatically
+    await call(db, completed());
+    assert.equal(db.rpcCalls.length, 0);
+    assert.equal(credits(db), 5);
+  });
+
+  test(`${wayl} on a 'paid' payment: 200, no downgrade, no grant`, async () => {
+    const db = world("paid", { credits_granted: 1000, paid_at: "db-now" });
+    const snap = structuredClone(db.tables);
+    const r = await call(db, { referenceId: PAY_ID, paymentStatus: wayl });
+    assert.equal(r.status, 200);
+    assert.deepEqual(db.tables, snap, "paid row and tenant credits unchanged");
+    assert.equal(db.rpcCalls.length, 0);
+  });
+}
+
+test("missing total, amount/currency mismatch, non-payable or non-Wayl rows: no grant, row unchanged, safe 200", async () => {
   for (const ev of [
     completed({ total: undefined }),
     completed({ total: 34999 }),
@@ -106,36 +193,101 @@ test("missing total, amount mismatch, currency mismatch: no grant, safe 200", as
     completed({ currency: "USD" }),
   ]) {
     const db = world();
+    const snap = structuredClone(db.tables);
     const r = await call(db, ev);
     assert.equal(r.status, 200);
     assert.equal(r.text, "ok");
     assert.equal(db.rpcCalls.length, 0);
-    assert.equal(credits(db), 5);
-    assert.equal(pay(db).status, "amount_mismatch");
+    assert.deepEqual(db.tables, snap, "nothing written");
   }
   // stored row currency not IQD (e.g. foreign provider row) → no grant
-  const db2 = world("pending_payment", { currency: "SAR" });
+  const db2 = world("created", { currency: "SAR" });
   await call(db2, completed());
   assert.equal(db2.rpcCalls.length, 0);
+  assert.equal(credits(db2), 5);
   // non-Wayl payment row is never touched
   const db3 = world("created", { provider: "moyasar" });
   await call(db3, completed());
   assert.equal(db3.rpcCalls.length, 0);
   assert.equal(pay(db3).status, "created");
+  // failed / refunded / cancelled rows are never granted automatically
+  for (const st of ["failed", "refunded", "cancelled"]) {
+    const db4 = world(st);
+    const snap = structuredClone(db4.tables);
+    const r = await call(db4, completed());
+    assert.equal(r.status, 200, st);
+    assert.equal(db4.rpcCalls.length, 0, st);
+    assert.deepEqual(db4.tables, snap, st);
+  }
+  // inconsistent row (credits already recorded while unpaid) → manual review, no grant
+  const db5 = world("created", { credits_granted: 1000 });
+  await call(db5, completed());
+  assert.equal(db5.rpcCalls.length, 0);
+  assert.equal(credits(db5), 5);
 });
 
-test("grant failure releases the claim so a retry grants once", async () => {
+test("the RPC is the authority: a non-granted RPC result never grants and never falls back", async () => {
+  // The pre-read passes, but the locked row says otherwise (e.g. amount changed concurrently).
   const db = world();
-  db.failRpc = true;
+  const realRpc = db.rpc;
+  db.rpc = async (name, args) => {
+    pay(db).amount = 85000; // changed between the handler's read and the RPC's row lock
+    return await realRpc(name, args);
+  };
+  const r = await call(db, completed());
+  assert.equal(r.status, 200);
+  assert.equal(credits(db), 5);
+  assert.equal(pay(db).status, "created");
+  assert.ok(r.lines.some((l) => l.includes("not granted (amount_mismatch)")), r.lines.join("\n"));
+  assertNoLegacyPath(db);
+});
+
+test("RPC error / missing RPC / malformed result → 500 (fail closed), nothing changed, no fallback; retry grants once", async () => {
+  for (const mode of ["error", "missing", "bad"] as const) {
+    const db = world();
+    if (mode === "error") db.failRpc = true;
+    else db.topupRpcMode = mode;
+    const snap = structuredClone(db.tables);
+    const r1 = await call(db, completed());
+    assert.equal(r1.status, 500, mode);
+    assert.equal(r1.text, "db error", mode);
+    assert.deepEqual(db.tables, snap, `${mode}: payment and balance unchanged`);
+    assertNoLegacyPath(db);
+    if (mode === "missing") assert.ok(r1.lines.some((l) => l.includes("RPC unavailable")), mode);
+    assert.ok(!r1.lines.join("\n").includes("rpc failure"), "no internal detail logged");
+    // Wayl retries once the fault is gone: exactly one grant.
+    db.failRpc = false;
+    db.topupRpcMode = "ok";
+    assert.equal((await call(db, completed())).status, 200);
+    assert.equal((await call(db, completed())).status, 200);
+    assert.equal(credits(db), 1005, mode);
+    assert.equal(topupRpcs(db).length, 2, mode); // 1 failed + 1 ok; the 3rd sees 'paid'
+    assertNoLegacyPath(db);
+  }
+});
+
+test("lost RPC response after commit → 500, and Wayl's retry does not grant again", async () => {
+  const db = world();
+  db.topupRpcMode = "lost";
   const r1 = await call(db, completed());
   assert.equal(r1.status, 500);
-  assert.equal(pay(db).status, "pending_payment");
-  assert.equal(pay(db).credits_granted, 0);
-  db.failRpc = false;
-  await call(db, completed());
-  await call(db, completed());
-  assert.equal(credits(db), 1005);
-  assert.equal(db.rpcCalls.filter((c) => c.args.p_credits === 1000).length, 2); // 1 failed + 1 ok
+  assert.equal(credits(db), 1005); // committed in the DB
+  db.topupRpcMode = "ok";
+  const r2 = await call(db, completed());
+  assert.equal(r2.status, 200);
+  assert.equal(credits(db), 1005, "no double grant");
+  assert.equal(pay(db).status, "paid");
+  assertNoLegacyPath(db);
+});
+
+test("handler source: the only top-up grant path is the atomic RPC (no claim + grant_credits fallback)", async () => {
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new URL("../supabase/functions/wayl-webhook/handler.ts", import.meta.url), "utf8")
+    .split("\n").filter((l) => !l.trim().startsWith("//") && !l.trim().startsWith("*")).join("\n");
+  assert.doesNotMatch(src, /grant_credits/);
+  assert.doesNotMatch(src, /status:\s*["']paid["']/, "handler never writes payments.status='paid' itself");
+  assert.equal((src.match(/\.rpc\(/g) ?? []).length, 1);
+  assert.match(src, /\.rpc\("wayl_grant_topup_once"/);
 });
 
 test("orders: paid only with verified amount; replayed cancel cannot flip paid", async () => {

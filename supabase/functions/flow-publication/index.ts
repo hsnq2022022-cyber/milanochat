@@ -6,7 +6,8 @@
 import {createClient} from "npm:@supabase/supabase-js@2";
 import {
  preparePublishedDocument,publicationCanActivate,testCanaryArmed,productionActivationAuthorized,
- UUID_REGEX,VALID_FLOW_KEY,type ProviderPlatform
+ UUID_REGEX,VALID_FLOW_KEY,type ProviderPlatform,
+ messageScopeActivationProblem,MESSAGE_SCOPE_PROBLEM_MESSAGES
 } from "../../../src/flow/serverPublicationValidation.ts";
 import {flowNeedsMedia,parseCapabilities,mediaActivationAllowed,withMediaGate,
  type FlowCapability} from "../../../src/flow/publicationGate.ts";
@@ -303,6 +304,11 @@ export async function handleFlowPublication(req:Request,
    // Keyword trigger configuration is checked on the RAW document first:
    // import sanitizing would otherwise silently turn an unknown mode into
    // "contains". Explicit 422s, never truncation.
+   // messageScope "conversation_start" needs a message trigger whose first
+   // step answers immediately (explicit code; checked on the RAW document).
+   const rawScopeProblem=messageScopeActivationProblem(request.document,false);
+   if(rawScopeProblem!==null)return respond({ok:false,
+    error:MESSAGE_SCOPE_PROBLEM_MESSAGES[rawScopeProblem],code:rawScopeProblem},422);
    const rawKeywordProblem=documentKeywordTriggerProblem(request.document);
    if(rawKeywordProblem!==null)return error(KEYWORD_PROBLEM_MESSAGES[rawKeywordProblem]??
     "Keyword trigger configuration is invalid",422);
@@ -402,6 +408,15 @@ export async function handleFlowPublication(req:Request,
     .eq("revision",rev).maybeSingle();
    if(publicationError)return error("Publication lookup unavailable",503);
    if(!publication)return error("Publication revision not found",404);
+   // messageScope rules on the STORED document. "conversation_start" must be
+   // a message trigger answering immediately (both actions). With
+   // FLOW_MESSAGE_SCOPE_REQUIRED==="true" (default OFF) a message trigger must
+   // carry its own messageScope to be ACTIVATED; a rollback is exempt so an
+   // operator can always restore an older revision published before the rule.
+   const scopeProblem=messageScopeActivationProblem(publication.document,
+    action==="activate"&&env("FLOW_MESSAGE_SCOPE_REQUIRED")==="true");
+   if(scopeProblem!==null)return respond({ok:false,
+    error:MESSAGE_SCOPE_PROBLEM_MESSAGES[scopeProblem],code:scopeProblem},422);
    // Advanced activation is independently gated by the operator AFTER the
    // durable ingress and sender have passed real provider integration.
    // This prevents a customer from activating a graph that would fall back

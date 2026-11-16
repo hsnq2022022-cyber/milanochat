@@ -4,9 +4,11 @@
 // Decryption matches decryptField in milan-api (AES-GCM / FIELD_ENCRYPTION_KEY)
 
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { withCors, trustedCorsPolicy } from "../_shared/cors.ts";
 
+// T5-D2: Access-Control-Allow-Origin only for the trusted application origins
+// (exact match, Vary: Origin, never credentials): ../_shared/cors.ts.
 const cors: Record<string, string> = {
-  "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers":
     "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
@@ -17,6 +19,20 @@ const json = (body: unknown, status = 200) =>
     status,
     headers: { ...cors, "Content-Type": "application/json; charset=utf-8" },
   });
+
+// Safe errors: DB / exception text never reaches the response or a log line.
+const INTERNAL_ERROR_MESSAGE = "internal error";
+
+/** Coarse, value-free code: SQLSTATE (5 chars) or PGRSTnnn, else "unknown". */
+function safeErrCode(error: unknown): string {
+  try {
+    const c = typeof error === "object" && error !== null ? (error as { code?: unknown }).code : undefined;
+    if (typeof c === "string" && /^(?:[0-9A-Z]{5}|PGRST\d{3})$/.test(c)) return c;
+  } catch {
+    /* hostile error object */
+  }
+  return "unknown";
+}
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
@@ -60,7 +76,7 @@ async function decryptField(stored: string | null | undefined): Promise<string> 
   return dec.decode(pt);
 }
 
-Deno.serve(async (req: Request) => {
+Deno.serve(withCors(() => trustedCorsPolicy((k) => Deno.env.get(k)), async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { status: 200, headers: cors });
   }
@@ -98,7 +114,10 @@ Deno.serve(async (req: Request) => {
       .order("last_message_at", { ascending: false })
       .limit(50);
 
-    if (convErr) return json({ error: convErr.message }, 500);
+    if (convErr) {
+      console.error("[conversation-previews] db error", { tag: "conversations_select", code: safeErrCode(convErr) });
+      return json({ error: INTERNAL_ERROR_MESSAGE }, 500);
+    }
 
     const entries = await Promise.all(
       (convs ?? []).map(async (c: { id: string }): Promise<[string, string | null]> => {
@@ -126,7 +145,7 @@ Deno.serve(async (req: Request) => {
 
     return json({ previews });
   } catch (e) {
-    console.error("[conversation-previews]", e);
-    return json({ error: e instanceof Error ? e.message : "internal error" }, 500);
+    console.error("[conversation-previews] fatal", { code: safeErrCode(e) });
+    return json({ error: INTERNAL_ERROR_MESSAGE }, 500);
   }
-});
+}));

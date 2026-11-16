@@ -20,10 +20,19 @@
  * injected so node tests can exercise it.
  */
 
+import { graphUrlWithoutToken, metaAuthHeaders } from "../_shared/metaGraph.ts";
+
 export const FB_GRAPH_HOST = "https://graph.facebook.com";
 export const FB_GRAPH_V = `${FB_GRAPH_HOST}/v21.0`;
-/** Fields this app's webhook processes for object "page". */
-export const FB_PAGE_SUBSCRIBED_FIELDS = "messages,messaging_postbacks";
+/**
+ * Fields this app's webhook processes for object "page": messages and
+ * messaging_postbacks (milan-api DM path) + feed (Page post comments,
+ * milan-api/commentIngress.ts: changes[].field "feed", item "comment",
+ * verb "add"; other feed items are dropped before any DB access).
+ */
+export const FB_PAGE_SUBSCRIBED_FIELDS = "messages,messaging_postbacks,feed";
+/** The pre-comment-automation list: fallback when Meta refuses `feed`. */
+export const FB_PAGE_DM_SUBSCRIBED_FIELDS = "messages,messaging_postbacks";
 /** Required Meta permissions (Facebook Login dialog scope). */
 export const FB_REQUIRED_SCOPES = [
   "pages_show_list",
@@ -140,6 +149,13 @@ export type FbLinkResult =
 
 const errCode = (j: any) => ({ code: j?.error?.code ?? null, type: j?.error?.type ?? null });
 
+/** `url` with this token's appsecret_proof (kept on every /me/accounts page). */
+function withProof(url: string, proof: string): string {
+  const u = new URL(url);
+  u.searchParams.set("appsecret_proof", proof);
+  return u.toString();
+}
+
 async function getJson(deps: FbLinkDeps, url: string, init?: RequestInit): Promise<any> {
   const r = await deps.fetch(url, init);
   return await r.json().catch(() => ({}));
@@ -147,6 +163,11 @@ async function getJson(deps: FbLinkDeps, url: string, init?: RequestInit): Promi
 
 export async function linkFacebookPages(code: string, deps: FbLinkDeps): Promise<FbLinkResult> {
   // 1) code -> short-lived user token (same redirect_uri as the dialog)
+  // T5-S5 documented exception: Meta documents this exchange (and the
+  // fb_exchange_token one below) only as GET with client_id / client_secret /
+  // code query params; left unchanged rather than guessing a POST/header form.
+  // Errors from these calls are never logged with the URL (codes only here;
+  // index.ts logs e.name only).
   const t = await getJson(
     deps,
     `${FB_GRAPH_V}/oauth/access_token?client_id=${encodeURIComponent(deps.appId)}` +
@@ -177,14 +198,16 @@ export async function linkFacebookPages(code: string, deps: FbLinkDeps): Promise
     console.warn("[meta-auth] facebook long-lived exchange failed", errCode(l));
   }
 
-  // 3) Pages + Page Access Tokens (bounded, fixed host only)
+  // 3) Pages + Page Access Tokens (bounded, fixed host only). T5-S5: the user
+  // token goes in the Authorization header, never in the URL; a paging.next
+  // link (Meta echoes access_token= into it) is followed without its token.
   const pages: any[] = [];
+  const proof = await appSecretProof(deps.appSecret, userToken);
   let next: string | null =
     `${FB_GRAPH_V}/me/accounts?fields=id,name,access_token,tasks,picture%7Burl%7D&limit=100` +
-    `&access_token=${encodeURIComponent(userToken)}` +
-    `&appsecret_proof=${await appSecretProof(deps.appSecret, userToken)}`;
+    `&appsecret_proof=${proof}`;
   for (let i = 0; next && i < MAX_ACCOUNT_PAGES && pages.length < MAX_LINKED_PAGES; i++) {
-    const j = await getJson(deps, next);
+    const j = await getJson(deps, next, { headers: metaAuthHeaders(userToken) });
     if (j?.error) {
       console.error("[meta-auth] facebook /me/accounts failed", errCode(j));
       if (pages.length === 0) return { ok: false, code: "graph_error" };
@@ -192,7 +215,8 @@ export async function linkFacebookPages(code: string, deps: FbLinkDeps): Promise
     }
     if (Array.isArray(j?.data)) pages.push(...j.data);
     const n = j?.paging?.next;
-    next = typeof n === "string" && n.startsWith(`${FB_GRAPH_HOST}/`) ? n : null;
+    const nextUrl = typeof n === "string" && n.startsWith(`${FB_GRAPH_HOST}/`) ? graphUrlWithoutToken(n) : null;
+    next = nextUrl ? withProof(nextUrl, proof) : null;
   }
 
   let saved = 0;
@@ -235,19 +259,31 @@ export async function linkFacebookPages(code: string, deps: FbLinkDeps): Promise
     if (!name && typeof p?.name === "string") name = p.name;
 
     // 4) Page webhooks (object "page"). Failure does not undo the link.
-    try {
-      const s = await getJson(deps, `${FB_GRAPH_V}/${pageId}/subscribed_apps`, {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({
-          subscribed_fields: FB_PAGE_SUBSCRIBED_FIELDS,
-          access_token: pageToken,
-          appsecret_proof: await appSecretProof(deps.appSecret, pageToken),
-        }).toString(),
-      });
-      if (s?.success !== true) console.error("[meta-auth] facebook subscribed_apps failed", errCode(s));
-    } catch (e) {
-      console.error("[meta-auth] facebook subscribed_apps error", e instanceof Error ? e.name : "unknown");
+    // An explicit Graph error for the list with `feed` (e.g. the app has no
+    // feed webhook / permission yet) falls back to the DM-only list so DM
+    // webhooks are never lost; a network error does not (outcome unknown).
+    const subscribe = async (fields: string): Promise<"ok" | "refused" | "error"> => {
+      try {
+        const s = await getJson(deps, `${FB_GRAPH_V}/${pageId}/subscribed_apps`, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({
+            subscribed_fields: fields,
+            access_token: pageToken,
+            appsecret_proof: await appSecretProof(deps.appSecret, pageToken),
+          }).toString(),
+        });
+        if (s?.success === true) return "ok";
+        console.error("[meta-auth] facebook subscribed_apps failed", errCode(s));
+        return s?.error && typeof s.error === "object" ? "refused" : "error";
+      } catch (e) {
+        console.error("[meta-auth] facebook subscribed_apps error", e instanceof Error ? e.name : "unknown");
+        return "error";
+      }
+    };
+    if (await subscribe(FB_PAGE_SUBSCRIBED_FIELDS) === "refused") {
+      console.warn("[meta-auth] facebook subscribed_apps with feed refused — DM-only fallback");
+      await subscribe(FB_PAGE_DM_SUBSCRIBED_FIELDS);
     }
   }
 

@@ -5,13 +5,15 @@
 
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { issueOAuthState, oauthStateSecret, type IssueResult } from "../_shared/oauthState.ts";
+import { withCors, trustedCorsPolicy } from "../_shared/cors.ts";
 
 // ─── CORS ───
+// T5-D2: Access-Control-Allow-Origin only for the trusted application origins
+// (exact match, Vary: Origin, never credentials): ../_shared/cors.ts.
 const corsHeaders: Record<string, string> = {
-  "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers":
-    "authorization, x-client-info, apikey, content-type, x-hub-signature-256",
-  "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+    "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
 };
 
 // ─── Supabase Admin Client ───
@@ -66,6 +68,26 @@ function jsonResponse(body: unknown, status = 200): Response {
     status,
     headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
+}
+
+// ─── Safe errors: DB / internal error text never reaches a response or a log ───
+const DB_ERROR_MESSAGE = "تعذر إتمام العملية — حاول مرة أخرى";
+const INTERNAL_ERROR_MESSAGE = "خطأ داخلي";
+
+/** Coarse, value-free code: SQLSTATE (5 chars) or PGRSTnnn, else "unknown". */
+function safeErrCode(error: unknown): string {
+  try {
+    const c = typeof error === "object" && error !== null ? (error as { code?: unknown }).code : undefined;
+    if (typeof c === "string" && /^(?:[0-9A-Z]{5}|PGRST\d{3})$/.test(c)) return c;
+  } catch {
+    /* hostile error object */
+  }
+  return "unknown";
+}
+
+function dbFail(error: unknown, tag: string): Response {
+  console.error("[channels] db error", { tag, code: safeErrCode(error) });
+  return jsonResponse({ error: DB_ERROR_MESSAGE }, 500);
 }
 
 async function requireAuth(req: Request): Promise<{ userId: string } | Response> {
@@ -126,7 +148,7 @@ function normalizeAccount(row: any) {
 }
 
 // ─── Main Handler ───
-Deno.serve(async (req: Request) => {
+Deno.serve(withCors(() => trustedCorsPolicy((k) => Deno.env.get(k)), async (req: Request) => {
   // CORS preflight
   if (req.method === "OPTIONS") {
     return new Response("ok", { status: 200, headers: corsHeaders });
@@ -263,7 +285,7 @@ Deno.serve(async (req: Request) => {
         .order("created_at", { ascending: false });
 
       if (error) {
-        console.error("[Channels] accounts select error:", error);
+        console.error("[channels] db error", { tag: "accounts_select", code: safeErrCode(error) });
         return jsonResponse([]);
       }
 
@@ -333,7 +355,7 @@ Deno.serve(async (req: Request) => {
         .select("*")
         .maybeSingle();
 
-      if (error) return jsonResponse({ error: error.message }, 500);
+      if (error) return dbFail(error, "account_update");
       if (!data) return jsonResponse({ error: "الحساب غير موجود" }, 404);
       return jsonResponse(normalizeAccount(data));
     }
@@ -354,15 +376,15 @@ Deno.serve(async (req: Request) => {
         .eq("id", accountId)
         .eq("tenant_id", tenant.id);
 
-      if (error) return jsonResponse({ error: error.message }, 500);
+      if (error) return dbFail(error, "account_delete");
       return jsonResponse({ ok: true });
     }
 
     // ─── 404 ───
     return jsonResponse({ error: "Not found", path: parts }, 404);
 
-  } catch (e: any) {
-    console.error("[channels] fatal:", e);
-    return jsonResponse({ error: e?.message ?? "خطأ داخلي" }, 500);
+  } catch (e: unknown) {
+    console.error("[channels] fatal", { code: safeErrCode(e) });
+    return jsonResponse({ error: INTERNAL_ERROR_MESSAGE }, 500);
   }
-});
+}));

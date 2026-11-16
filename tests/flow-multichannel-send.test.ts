@@ -222,7 +222,9 @@ test("worker: multichannel path is flag-gated, pre-validated before reserve, Ins
  // The Instagram/legacy executeOnce still calls sendProviderMessage unchanged.
  // Unchanged Instagram request; the only addition is the comment private-reply
  // recipient, present ONLY for a comment run (20261029300000, flag-gated).
- assert.match(code,/send:\(\)=>imageUrl===undefined\?sendProviderMessage\(\{\n\s+platform:account\.platform,externalId:String\(account\.external_id\?\?""\),\n\s+token,recipient,text:messageText,quickReplies,websiteButtons,\n\s+\.\.\.\(commentRecipientId!==undefined\?\{recipientCommentId:commentRecipientId\}:\{\}\)\n\s+\}\)/);
+ // T6-S4: the whole send promise is wrapped by captureFailure (records the
+ // validated failure and rethrows the same error); the request is unchanged.
+ assert.match(code,/send:\(\)=>captureFailure\(failure,imageUrl!==undefined,imageUrl===undefined\?sendProviderMessage\(\{\n\s+platform:account\.platform,externalId:String\(account\.external_id\?\?""\),\n\s+token,recipient,text:messageText,quickReplies,websiteButtons,\n\s+\.\.\.\(commentRecipientId!==undefined\?\{recipientCommentId:commentRecipientId\}:\{\}\)\n\s+\}\)/);
  assert.equal((code.match(/sb\.rpc\("consume_flow_reply"/g)??[]).length,1,"billing path shared, not duplicated");
 });
 

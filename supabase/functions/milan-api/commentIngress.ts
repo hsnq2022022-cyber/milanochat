@@ -15,23 +15,44 @@
  * additionally need FLOW_MULTICHANNEL_ENABLED. The SQL side re-verifies the
  * canary registration, switches, activation, trigger mode and reply text.
  * Logs carry codes only (never comment text, names or tokens).
+ *
+ * Event rules (Task 1 comment automation):
+ *  - account: exactly ONE channel_accounts row of the platform whose status is
+ *    not 'disconnected' (same filter as the IG/FB DM lookups, limit 2); a
+ *    lookup error or 2+ rows (e.g. two tenants) drop the entry, no fallback
+ *    candidate; a non-'active' match (needs_reauth, NULL) is ignored.
+ *  - self/loop: comments by entry.id / the account's external id are dropped
+ *    (normalizeMetaComments); defense in depth, a comment whose normalized
+ *    text equals an active comment flow's public reply text is ignored too
+ *    (our own reply echoed back under an id we do not recognize).
+ *  - edits/removals never start (Facebook verb must be "add"); replies to
+ *    comments (parent_id) are treated like top-level comments (unchanged).
+ *  - private reply window: a comment whose created_time is older than
+ *    COMMENT_START_MAX_AGE_MS starts NOTHING (a reply-only run would need a
+ *    schema change: flow_begin_comment_run requires the DM effect).
+ *  - dedupe: automation_comment_replies UNIQUE (tenant, account, comment id)
+ *    inside flow_begin_comment_run + the inbound wa_message_id
+ *    "comment:<id>" (23505 -> duplicate).
  */
 import type {SupabaseClient} from "npm:@supabase/supabase-js@2";
-import {normalizeMetaComments,commentFlowPlan,commentMatches,type NormalizedComment,type CommentFlowPlan}
- from "./commentTrigger.ts";
+import {normalizeMetaComments,commentFlowPlan,commentMatches,commentStartAgeOk,normalizeCommentText,
+ type NormalizedComment,type CommentFlowPlan} from "./commentTrigger.ts";
 import {persistInboundOnce} from "./persistInboundOnce.ts";
 
 type Db=Pick<SupabaseClient,"from"|"rpc">;
 type Rec=Record<string,unknown>;
 const rec=(v:unknown):v is Rec=>!!v&&typeof v==="object"&&!Array.isArray(v);
-export type CommentIngressDeps={env:(k:string)=>string;encrypt:(plain:string)=>Promise<string>};
+export type CommentIngressDeps={env:(k:string)=>string;encrypt:(plain:string)=>Promise<string>;
+ /** Clock for the private reply age rule (tests); default Date.now. */
+ nowMs?:()=>number};
 /** Fail closed: no Deno runtime or any error = OFF. */
 export const commentAutomationEnabled=()=>{
  try{return Deno.env.get("FLOW_COMMENT_AUTOMATION_ENABLED")==="true";}catch{return false;}
 };
 /** Max active activations read per account (a comment must match exactly one flow). */
 export const COMMENT_FLOW_SCAN=10;
-export type CommentOutcome="started"|"duplicate"|"no_match"|"ambiguous"|"ineligible"|"refused"|"error";
+export type CommentOutcome="started"|"duplicate"|"no_match"|"ambiguous"|"ineligible"|"refused"|"error"|
+ "too_old"|"self";
 
 /** Effects in the shape flowDurableIngress.ts commits (kind, idempotencyKey, payload). */
 export function commentEffects(flowKey:string,revision:number,c:NormalizedComment,plan:CommentFlowPlan){
@@ -50,12 +71,24 @@ async function accountFor(db:Db,object:string,entryId:string):Promise<Account|nu
  const platform=object==="page"?"facebook":"instagram";
  const {data,error}=await db.from("channel_accounts")
   .select("id,tenant_id,platform,external_id,status")
-  .eq("external_id",entryId).eq("platform",platform).limit(2);
+  .eq("external_id",entryId).eq("platform",platform)
+  // A disconnected row neither receives nor blocks (it is outside the global
+  // unique index, 20261115120000); same rule as the IG/FB DM lookups.
+  .or("status.is.null,status.neq.disconnected")
+  .limit(2);
  // A shared or unknown id is never assigned to one tenant.
- if(error||!Array.isArray(data)||data.length!==1)return null;
+ if(error||!Array.isArray(data)||data.length>1){
+  console.warn("[comment-ingress] account lookup failed or ambiguous — comments ignored");
+  return null;
+ }
+ if(data.length===0)return null;
  const a=data[0] as Rec;
- if(a.status!==undefined&&a.status!=="active")return null;
- return typeof a.id==="string"&&typeof a.tenant_id==="string"&&a.platform===platform?
+ if(a.status!==undefined&&a.status!=="active"){
+  console.warn("[comment-ingress] account not active — comments ignored");
+  return null;
+ }
+ return typeof a.id==="string"&&typeof a.tenant_id==="string"&&a.platform===platform&&
+  String(a.external_id??"")===entryId?
   {id:a.id,tenant_id:a.tenant_id,platform,external_id:String(a.external_id??"")}:null;
 }
 type Candidate={flowKey:string;revision:number;plan:CommentFlowPlan};
@@ -147,16 +180,30 @@ export async function ingestSignedComments(db:Db,object:unknown,entry:unknown,de
      !entry.changes.some(ch=>rec(ch)&&(ch.field==="comments"||ch.field==="feed")))return out;
   const entryId=typeof entry.id==="string"||typeof entry.id==="number"?String(entry.id):"";
   if(!/^[0-9]{1,32}$/.test(entryId))return out;
+  // Pure parse first: a Page "feed" also carries posts/reactions/edits; those
+  // (and the account's own comments, entry.id) never reach the database.
+  const parsed=normalizeMetaComments({object,entry:[entry]},[entryId]);
+  if(parsed.length===0)return out;
+  const now=(deps.nowMs??Date.now)();
+  const fresh=parsed.filter(c=>commentStartAgeOk(c.createdTimeMs,now));
+  if(fresh.length<parsed.length){
+   for(let i=fresh.length;i<parsed.length;i++)count("too_old");
+   console.warn("[comment-ingress] comment older than the private reply window — not started");
+  }
+  if(fresh.length===0)return out;
   const account=await accountFor(db,object,entryId);
   if(!account){count("ineligible");return out;}
   // Same operator-selected canary as the durable DM path.
   if(account.id!==deps.env("FLOW_DURABLE_CANARY_ACCOUNT_ID")){count("ineligible");return out;}
-  const own=[entryId,...(account.external_id?[account.external_id]:[])];
-  const comments=normalizeMetaComments({object,entry:[entry]},own);
+  const own=new Set([entryId,account.external_id].filter(Boolean));
+  const comments=fresh.filter(c=>!own.has(c.fromId));
   if(comments.length===0)return out;
   const flows=await activeCommentFlows(db,account);
   if(!flows){count("error");return out;}
+  // Loop breaker (defense in depth): our own public reply echoed back.
+  const replyTexts=new Set(flows.map(f=>normalizeCommentText(f.plan.config.public_reply_text)));
   for(const c of comments){
+   if(replyTexts.has(normalizeCommentText(c.text))){count("self");continue;}
    try{count(await startOne(db,account,c,flows,deps));}
    catch(e){
     count("error");

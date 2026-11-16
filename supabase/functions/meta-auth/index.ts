@@ -16,6 +16,8 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 import { consumeOAuthState, oauthStateSecret } from "../_shared/oauthState.ts";
 import { facebookDb, linkFacebookPages } from "./facebook.ts";
 import { isAccountTakenViolation } from "./facebook.ts";
+import { metaAuthHeaders } from "../_shared/metaGraph.ts";
+import { subscribeInstagramWebhooks } from "./instagramSubscription.ts";
 
 const IG_TOKEN_URL = "https://api.instagram.com/oauth/access_token";
 const IG_GRAPH_HOST = "https://graph.instagram.com";
@@ -56,6 +58,19 @@ function back(params: Record<string, string>): Response {
     headers: { Location: `${frontBase()}?${q}#/dashboard`, "Cache-Control": "no-store" },
   });
 }
+
+/** Meta error code/type only (T5-S5: never Meta's free text); a value that is
+ * not a number or a short [A-Za-z0-9_.-] string is dropped. */
+const safeMetaValue = (v: unknown) =>
+  typeof v === "number" && Number.isFinite(v)
+    ? v
+    : typeof v === "string" && /^[A-Za-z0-9_.-]{1,40}$/.test(v)
+    ? v
+    : null;
+const metaErrCode = (j: any) => ({
+  code: safeMetaValue(j?.error?.code ?? j?.code),
+  type: safeMetaValue(j?.error?.type ?? j?.error_type),
+});
 
 const fail = (code: string) => {
   console.warn("[meta-auth] FAILED →", code);
@@ -163,11 +178,17 @@ Deno.serve(async (req: Request) => {
     const first = Array.isArray(tJson?.data) ? tJson.data[0] : tJson;
     const shortToken: string | undefined = first?.access_token;
     if (!shortToken) {
-      console.error("[meta-auth] token exchange failed:", tJson?.error_message ?? tJson?.error?.message ?? "unknown");
+      // T5-S5: codes only, never Meta's free text (it can echo a token/code).
+      console.error("[meta-auth] token exchange failed", metaErrCode(tJson));
       return fail("oauth_token_exchange");
     }
 
     // 2) → long-lived (60 يوماً)
+    // T5-S5 documented exception: Meta documents ig_exchange_token only as
+    // GET with client_secret + access_token query params; left unchanged
+    // rather than guessing a POST/header form. A fetch error (its message
+    // embeds this URL) is never logged or returned: the outer catch keeps
+    // e.name only.
     let token = shortToken;
     let expiresIn = 3600;
     const lRes = await fetch(
@@ -179,18 +200,18 @@ Deno.serve(async (req: Request) => {
       token = lJson.access_token;
       expiresIn = Number(lJson.expires_in ?? 5184000);
     } else {
-      console.warn("[meta-auth] long-lived exchange failed:", lJson?.error?.message ?? "unknown");
+      console.warn("[meta-auth] long-lived exchange failed", metaErrCode(lJson));
     }
 
-    // 3) بيانات الحساب
+    // 3) بيانات الحساب (T5-S5: token in the Authorization header, not the URL)
     const pRes = await fetch(
-      `${IG_GRAPH_V}/me?fields=user_id,username,name,profile_picture_url,account_type` +
-        `&access_token=${encodeURIComponent(token)}`,
+      `${IG_GRAPH_V}/me?fields=user_id,username,name,profile_picture_url,account_type`,
+      { headers: metaAuthHeaders(token) },
     );
     const prof: any = await pRes.json().catch(() => ({}));
     const igId = String(prof?.user_id ?? prof?.id ?? first?.user_id ?? "");
     if (!igId || igId === "undefined") {
-      console.error("[meta-auth] /me failed:", prof?.error?.message ?? "no id");
+      console.error("[meta-auth] /me failed", metaErrCode(prof));
       return fail("no_eligible_instagram");
     }
     if (prof?.account_type && !["BUSINESS", "MEDIA_CREATOR"].includes(prof.account_type)) {
@@ -245,26 +266,18 @@ Deno.serve(async (req: Request) => {
       return fail("db_save_failed");
     }
 
-    // 5) اشتراك webhooks
-    try {
-      const sRes = await fetch(
-        `${IG_GRAPH_V}/me/subscribed_apps?subscribed_fields=messages,messaging_postbacks,messaging_seen` +
-          `&access_token=${encodeURIComponent(token)}`,
-        { method: "POST" },
-      );
-      const sJson: any = await sRes.json().catch(() => ({}));
-      if (!sJson?.success) {
-        console.error("[meta-auth] subscribed_apps failed:", sJson?.error?.message ?? JSON.stringify(sJson));
-      }
-    } catch (e) {
-      console.error("[meta-auth] subscribed_apps error:", e instanceof Error ? e.message : e);
-    }
+    // 5) اشتراك webhooks (instagramSubscription.ts: DM fields + comments,
+    // Bearer header; Meta refusal -> DM-only fallback; never fails the link).
+    // Reconnecting an already linked account re-runs this (new fields applied).
+    await subscribeInstagramWebhooks(IG_GRAPH_V, token, { fetch, errCode: metaErrCode });
 
     console.log("[meta-auth] instagram linked:", igId);
     return back({ channel_connected: "instagram", name: username ?? "" });
   } catch (e) {
-    console.error("[meta-auth]", e);
-    return fail(e instanceof Error ? e.message.slice(0, 120) : "unknown");
+    // T5-S5: never the error text/object: a fetch error message embeds the
+    // request URL (the ig_exchange_token URL carries client_secret + token).
+    console.error("[meta-auth]", e instanceof Error ? e.name : "unknown");
+    return fail("unknown");
   }
 });
 

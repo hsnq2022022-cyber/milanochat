@@ -42,6 +42,36 @@
 - Never let the flow runner and existing AI responder both send replies to the same event.
 - Add opt-in test-account traffic only, followed by rollback testing.
 
+### Comment automation: Meta configuration checklist (REQUIRES META DASHBOARD VERIFICATION)
+
+The repository cannot set app-level webhook subscriptions. Everything below is
+documented knowledge that was NOT verified against Meta in the session that
+wrote it; verify each item in the Meta App Dashboard before enabling.
+
+1. Callback URL (both objects): `<SUPABASE_URL>/functions/v1/milan-api?action=instagram_webhook`
+   (the `instagram_webhook` action handles object `instagram` and `page`).
+   Verify token: the value of `INSTAGRAM_VERIFY_TOKEN` (fallback `META_WEBHOOK_VERIFY_TOKEN`).
+   Signature secret: `INSTAGRAM_APP_SECRET` and/or `META_APP_SECRET` (X-Hub-Signature-256).
+2. Instagram product -> Webhooks, object `instagram`: subscribe `messages`, `messaging_postbacks`,
+   `messaging_seen`, `comments`. Do not add `live_comments` / `mentions` (no consumer).
+3. Page object (Messenger / Webhooks), object `page`: subscribe `messages`, `messaging_postbacks`, `feed`.
+4. Permissions (app review / access level for non-test users): Instagram `instagram_business_basic`,
+   `instagram_business_manage_messages` (private reply DM), `instagram_business_manage_comments`
+   (comment webhooks + public reply); Facebook `pages_show_list`, `pages_messaging` (private reply),
+   `pages_manage_metadata` + `pages_read_engagement` (Page subscription / feed), `pages_manage_engagement`
+   (public reply). App mode: Live for real customers; in Development only app roles/testers trigger webhooks.
+5. Per-account subscription is done at connect time (meta-auth): Instagram
+   `messages,messaging_postbacks,messaging_seen,comments`, Page `messages,messaging_postbacks,feed`;
+   if Meta refuses the list with `comments` / `feed`, the DM-only list is subscribed instead (logged as
+   `DM-only fallback`). Accounts linked before this change keep the old list: the owner must
+   reconnect the account (Instagram / Facebook connect again) to receive comment events.
+6. Server gates (all default OFF, exact value `true`): `FLOW_COMMENT_AUTOMATION_ENABLED` (milan-api,
+   flow-outbox-worker, flow-publication), `FLOW_DURABLE_INGRESS_ENABLED`, `FLOW_MULTICHANNEL_ENABLED`
+   (Facebook Page comments), `FLOW_DURABLE_CANARY_ACCOUNT_ID` (the ONE account id that may run),
+   worker `FLOW_WORKERS_OPERATOR_RELEASE`, `FLOW_OUTBOX_SEND_ENABLED`, `FLOW_ATOMIC_CONSUME_READY`; SQL:
+   migration 20261029300000 applied, global switch on, tenant switch enabled + production_approved,
+   the account registered in `automation_flow_canary_accounts`, a published + activated comment flow.
+
 ## Stage 10: persistent execution engine
 
 - Interpreter for message + media + quick replies, data collection, condition, randomizer, goto and end.

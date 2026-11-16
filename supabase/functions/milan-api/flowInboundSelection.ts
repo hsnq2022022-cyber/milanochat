@@ -24,6 +24,12 @@
  *     "keyword" = at least one valid keyword contained in the text). Comment
  *     and any other trigger modes are never DM candidates (comment flows keep
  *     their own commentIngress.ts routing, untouched).
+ *  3. its trigger's optional messageScope allows this message
+ *     (flowMessageScope.ts): absent / "every_message" = every message
+ *     (legacy, unchanged); "conversation_start" only when the caller proved
+ *     this is the conversation's first customer DM (conversationStart ===
+ *     true, conversationStart.ts); an invalid value never runs. A skipped
+ *     flow simply is not a candidate: the next-ranked flow or the AI answers.
  *
  * Precedence (deterministic, total order; src/flow/eventRouting.ts has no
  * priority semantics, only an "ambiguous -> no reply" proposal that no
@@ -48,6 +54,7 @@
  * falls through to the main AI chatbot exactly as before.
  */
 import {documentTriggerData,dmTriggerAcceptsText,matchedKeywordLength,isExactKeywordTrigger} from "./triggerKeywords.ts";
+import {classifyMessageScope,messageScopeAllowsFlow} from "./flowMessageScope.ts";
 
 export type FlowEngine="durable"|"v2";
 /** null = no engine available in this context can run the document. */
@@ -102,7 +109,7 @@ export function compareActivationOrder(a:{activatedAt:string|null;flowKey:string
  * winner, or null when none is eligible. Input order never matters.
  */
 export function chooseInboundFlow(candidates:readonly ActiveFlowCandidate[],text:unknown,
- classify:EngineClassifier):SelectedFlow|null{
+ classify:EngineClassifier,conversationStart?:boolean|null):SelectedFlow|null{
  let best:SelectedFlow|null=null;
  const seen=new Set<string>();
  for(const c of candidates){
@@ -116,6 +123,7 @@ export function chooseInboundFlow(candidates:readonly ActiveFlowCandidate[],text
   if(engine!=="durable"&&engine!=="v2")continue;
   const trigger=documentTriggerData(c.document);
   if(!trigger||!dmTriggerAcceptsText(trigger,text))continue;
+  if(!messageScopeAllowsFlow(classifyMessageScope(trigger),conversationStart))continue;
   const mode=trigger.triggerMode==="keyword"?"keyword":"message";
   const candidate:SelectedFlow={flowKey:c.flowKey,revision:Number(c.revision),
    activatedAt:typeof c.activatedAt==="string"?c.activatedAt:null,document:c.document,
@@ -164,7 +172,7 @@ export async function listActiveActivations(db:Db,scope:SelectionScope):Promise<
  * activated revision, then chooseInboundFlow. Read errors -> "error".
  */
 export async function selectActiveFlowForInbound(db:Db,scope:SelectionScope,text:unknown,
- classify:EngineClassifier):Promise<InboundSelection>{
+ classify:EngineClassifier,conversationStart?:boolean|null):Promise<InboundSelection>{
  try{
   const active=await listActiveActivations(db,scope);
   if(active===null)return {status:"error"};
@@ -179,7 +187,7 @@ export async function selectActiveFlowForInbound(db:Db,scope:SelectionScope,text
    return {...a,document:pub.data?.document} as ActiveFlowCandidate;
   }));
   if(loaded.some(c=>c==="error"))return {status:"error"};
-  const winner=chooseInboundFlow(loaded as ActiveFlowCandidate[],text,classify);
+  const winner=chooseInboundFlow(loaded as ActiveFlowCandidate[],text,classify,conversationStart);
   return winner?{status:"selected",flow:winner}:{status:"none"};
  }catch{
   return {status:"error"};

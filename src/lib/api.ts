@@ -98,8 +98,21 @@ async function fn<T>(
     body: JSON.stringify(opts.body ?? {}),
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error((data as any)?.error ?? `HTTP ${res.status}`);
+  if (!res.ok) {
+    if (res.status === 403 && opts.claim && (data as any)?.error === INVALID_CLAIM_ERROR) dropStaleClaim(opts.claim);
+    throw new Error((data as any)?.error ?? `HTTP ${res.status}`);
+  }
   return data as T;
+}
+
+/** T5-D1: رمز الضم يفقد صلاحيته بعد ضم الحساب — يُحذف المحفوظ منه عند رفضه كي لا يُرسل مجددًا */
+const INVALID_CLAIM_ERROR = "رمز الجلسة غير صالح";
+function dropStaleClaim(sent: string) {
+  try {
+    if (localStorage.getItem("milano_claim") === sent) localStorage.removeItem("milano_claim");
+  } catch {
+    /* التخزين غير متاح */
+  }
 }
 
 /** نداء دالة channels منفصلة في Supabase */

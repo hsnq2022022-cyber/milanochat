@@ -222,3 +222,34 @@ test("failures fall back to lifecycle columns when ai_last_error_code is not ins
  assert.equal(out.flowFailures[0].ai_last_error_code,null);
  assert.ok(calls.some(c=>c.table==="automation_flow_outbox"&&/cancel_reason/.test(sel(c))&&!/ai_last_error_code/.test(sel(c))));
 });
+
+test("T6-S4: provider failures are an additive, tenant-scoped list of whitelisted fields; existing shapes unchanged",async()=>{
+ const at=(tenant_id:string,outbox_id:string,status:string,extra:Record<string,unknown>={})=>({tenant_id,outbox_id,
+  claim_id:"c-"+outbox_id,status,attempted_at:"2026-11-0"+(outbox_id.length%5+1)+"T00:00:00Z",review_status:"none",...extra});
+ const attempts=[
+  at(T,"p1","rejected",{failure_class:"rejected_invalid",provider_http_status:400,provider_error_code:100,
+   provider_error_subcode:null,provider_error_type:"OAuthException",provider_message_id:"mid-secret"}),
+  at(T,"p2","uncertain",{failure_class:"outside_window",provider_http_status:400,provider_error_code:10,
+   provider_error_subcode:2018278,provider_error_type:null,uncertain_at:"2026-11-02T00:00:00Z"}),
+  at(T,"p3","uncertain",{uncertain_at:"2026-11-02T00:00:00Z"}),            // S2 / no evidence: no info
+  at(B,"q1","uncertain",{failure_class:"auth",provider_http_status:401,uncertain_at:"2026-11-02T00:00:00Z"}),
+ ];
+ const {calls,client}=storeClient({automation_flow_delivery_attempts:attempts,automation_flow_outbox:[],automation_flow_runs:[]});
+ const out=await loadFlowReview(client,T);
+ assert.equal(out.flowAvailable,true);assert.equal(out.flowProviderFailuresAvailable,true);
+ // The fake ignores .or(): p3 (no class) is still dropped by the mapper.
+ assert.deepEqual(out.flowProviderFailures.map(f=>[f.outbox_id,f.status,f.failure_class,f.provider_http_status,
+  f.provider_error_code,f.provider_error_subcode,f.provider_error_type]).sort(),
+  [["p1","rejected","rejected_invalid",400,100,null,"OAuthException"],["p2","uncertain","outside_window",400,10,2018278,null]]);
+ for(const f of out.flowProviderFailures)assert.deepEqual(Object.keys(f).sort(),["attempted_at","failure_class","outbox_id",
+  "provider_error_code","provider_error_subcode","provider_error_type","provider_http_status","status"]);
+ // flowItems keep their exact previous shape (no new keys).
+ for(const f of out.flowItems)assert.deepEqual(Object.keys(f).sort(),["attempted_at","claim_id","outbox_id","provider_message_id",
+  "review_requested_at","review_status","status","uncertain_at"]);
+ assert.ok(!JSON.stringify(out).includes("q1"));assert.ok(!JSON.stringify(out.flowProviderFailures).includes("mid-secret"));
+ const fq=calls.find(c=>/failure_class/.test(sel(c)))!;
+ assert.ok(eqs(fq).some(([k,v])=>k==="tenant_id"&&v===T));
+ assert.deepEqual(fq.ops.find(([o])=>o==="or")?.[1],["failure_class.not.is.null"]);
+ const outB=await loadFlowReview(storeClient({automation_flow_delivery_attempts:attempts}).client,B);
+ assert.deepEqual(outB.flowProviderFailures.map(f=>f.outbox_id),["q1"]);
+});

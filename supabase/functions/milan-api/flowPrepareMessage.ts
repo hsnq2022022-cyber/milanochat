@@ -2,6 +2,8 @@ import type {SupabaseClient} from "npm:@supabase/supabase-js@2";
 import {hasPlaceholder,sanitizePlaceholders,clipUtf8Bytes} from "../../../src/flow/placeholders.ts";
 import {keywordTriggerProblem,dmTriggerAcceptsText,MAX_INBOUND_TEXT} from "./triggerKeywords.ts";
 import {selectActiveFlowForInbound} from "./flowInboundSelection.ts";
+import {documentTriggerData} from "./triggerKeywords.ts";
+import {classifyMessageScope,messageScopeAllowsFlow} from "./flowMessageScope.ts";
 import {FlowRoutingUnavailableError} from "./exclusiveMessageClaim.ts";
 type Platform ="instagram" | "facebook" | "whatsapp";
 
@@ -29,6 +31,13 @@ export type PrepareOptions={
   * documents are not candidates here (unchanged behaviour).
   */
  durableDocument?:(document:unknown)=>boolean;
+ /**
+  * True only when milan-api proved this is the conversation's first customer
+  * DM (conversationStart.ts). Gates triggers whose messageScope is
+  * "conversation_start" (flowMessageScope.ts); absent/null/false = not a
+  * start. Triggers without messageScope are unaffected.
+  */
+ conversationStart?:boolean|null;
 };
 
 /**
@@ -79,13 +88,16 @@ export async function prepareSimpleFlowReply(
   const durableDocument=options.durableDocument;
   selection=await selectActiveFlowForInbound(sb,{tenantId,accountId,platform},incomingText,
    doc=>simpleFlowDocumentSupported(doc,platform)?"v2":
-    (durableDocument&&durableDocument(doc))?"durable":null);
+    (durableDocument&&durableDocument(doc))?"durable":null,options.conversationStart);
  }catch(e){
   if(e instanceof FlowRoutingUnavailableError)throw e;
   return null;
  }
  if(selection.status==="error")throw new FlowRoutingUnavailableError();
  if(selection.status!=="selected"||selection.flow.engine!=="v2")return null;
+ // Re-checked on the exact document (selection already required it).
+ if(!messageScopeAllowsFlow(classifyMessageScope(documentTriggerData(selection.flow.document)),
+   options.conversationStart))return null;
  try{
   return simpleMessageFromDocument(selection.flow.document,platform,incomingText);
  }catch{return null;}

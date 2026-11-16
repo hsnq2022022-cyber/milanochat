@@ -69,7 +69,7 @@ export async function handle(req:Request){
   let flow;
   try{flow=await loadFlowReview(sb,tenant.id);}
   catch{flow={flowItems:[],flowFailures:[],flowRuns:[],runCounts:{},flowAvailable:false,
-   flowInternal:[],flowInternalAvailable:false};}
+   flowInternal:[],flowInternalAvailable:false,flowProviderFailures:[],flowProviderFailuresAvailable:false};}
   return json({items:rows??[],readOnly:true,...flow});
  }
  const since=new Date(Date.now()-30*86400000).toISOString();

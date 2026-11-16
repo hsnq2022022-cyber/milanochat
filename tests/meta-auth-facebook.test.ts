@@ -3,7 +3,7 @@ import {test} from "node:test";
 import assert from "node:assert/strict";
 import {readFileSync} from "node:fs";
 import {
-  linkFacebookPages, facebookDb, appSecretProof, FB_GRAPH_V, FB_PAGE_SUBSCRIBED_FIELDS,
+  linkFacebookPages, facebookDb, appSecretProof, FB_GRAPH_V, FB_PAGE_SUBSCRIBED_FIELDS, FB_PAGE_DM_SUBSCRIBED_FIELDS,
   FB_REQUIRED_SCOPES, type FbDb, type FbPageRow, type FbLinkDeps,
 } from "../supabase/functions/meta-auth/facebook.ts";
 
@@ -71,9 +71,12 @@ test("happy path: pages saved tenant-scoped, encrypted page token, long-lived ->
   const tok = new URL(g.calls[0].url);
   assert.equal(tok.searchParams.get("code"), "CODE1");
   assert.equal(tok.searchParams.get("redirect_uri"), "https://x.supabase.co/functions/v1/meta-auth/facebook/callback");
-  // /me/accounts with the LONG token + appsecret_proof
-  const acc = new URL(g.calls.find((c) => c.url.includes("/me/accounts"))!.url);
-  assert.equal(acc.searchParams.get("access_token"), LONG);
+  // /me/accounts with the LONG token (T5-S5: Authorization header, not the URL) + appsecret_proof
+  const accCall = g.calls.find((c) => c.url.includes("/me/accounts"))!;
+  const acc = new URL(accCall.url);
+  assert.equal(acc.searchParams.get("access_token"), null);
+  assert.ok(!accCall.url.includes(LONG));
+  assert.deepEqual(accCall.init?.headers, {authorization: `Bearer ${LONG}`});
   assert.equal(acc.searchParams.get("appsecret_proof"), await appSecretProof(SECRET, LONG));
   // subscription per page, with that page's token in the POST body (not the URL)
   const subs = g.calls.filter((c) => c.url.endsWith("/subscribed_apps"));
@@ -82,6 +85,9 @@ test("happy path: pages saved tenant-scoped, encrypted page token, long-lived ->
   assert.equal(subs[0].init!.method, "POST");
   assert.equal(b.get("access_token"), P1TOK);
   assert.equal(b.get("subscribed_fields"), FB_PAGE_SUBSCRIBED_FIELDS);
+  // Task 1: exact list = DM fields (unchanged) + feed (Page comments).
+  assert.equal(b.get("subscribed_fields"), "messages,messaging_postbacks,feed");
+  assert.equal(b.get("appsecret_proof"), await appSecretProof(SECRET, P1TOK));
   // no token or secret ever logged
   const all = logs.out.join("\n");
   for (const s of [SHORT, LONG, P1TOK, P2TOK, SECRET, "CODE1"]) assert.ok(!all.includes(s), `log leaks ${s}`);
@@ -193,4 +199,38 @@ test("FB_REQUIRED_SCOPES: exact Page permission list incl. comment automation", 
   ]);
   assert.equal(new Set(FB_REQUIRED_SCOPES).size, FB_REQUIRED_SCOPES.length);
   assert.ok(!FB_REQUIRED_SCOPES.some((s) => /business_management/.test(s)));
+});
+
+test("Page subscription: feed added to the DM fields; explicit refusal -> DM-only fallback; unknown outcome -> no fallback", async () => {
+  assert.equal(FB_PAGE_SUBSCRIBED_FIELDS, "messages,messaging_postbacks,feed");
+  assert.equal(FB_PAGE_DM_SUBSCRIBED_FIELDS, "messages,messaging_postbacks", "DM field list unchanged");
+  const fieldsOf = (g: ReturnType<typeof graph>) => g.calls.filter((c) => c.url.endsWith("/subscribed_apps"))
+    .map((c) => [c.url.split("/").slice(-2)[0], new URLSearchParams(String(c.init!.body)).get("subscribed_fields")]);
+  const runWith = async (sub: (n: number) => unknown) => {
+    let n = 0;
+    const base = graph();
+    const g = {calls: base.calls, fetch: async (url: string, init?: RequestInit) => {
+      if (new URL(url).pathname.endsWith("/subscribed_apps")) {
+        base.calls.push({url, init});
+        const r = sub(n++);
+        if (r instanceof Error) throw r;
+        return res(r);
+      }
+      return base.fetch(url, init);
+    }};
+    const logs = captureLogs();
+    let r;
+    try { r = await linkFacebookPages("C", deps(g as ReturnType<typeof graph>, memDb().db)); } finally { logs.restore(); }
+    for (const s of [P1TOK, P2TOK, SECRET, LONG]) assert.ok(!logs.out.join("\n").includes(s), "no secret logged");
+    return {r, fields: fieldsOf(g as ReturnType<typeof graph>)};
+  };
+  // Refused list with feed -> one DM-only call per refused page; the link still succeeds.
+  const refused = await runWith((n) => n === 0 ? {error: {code: 200, message: "x"}} : {success: true});
+  assert.equal(refused.r.ok, true);
+  assert.deepEqual(refused.fields, [["111", "messages,messaging_postbacks,feed"], ["111", "messages,messaging_postbacks"],
+    ["222", "messages,messaging_postbacks,feed"]]);
+  // Network error / unexpected body: never a DM-only call (it could drop feed if the first call landed).
+  const unknown = await runWith((n) => n === 0 ? new TypeError("fetch failed") : {success: false});
+  assert.equal(unknown.r.ok, true);
+  assert.deepEqual(unknown.fields, [["111", "messages,messaging_postbacks,feed"], ["222", "messages,messaging_postbacks,feed"]]);
 });

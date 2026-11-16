@@ -159,8 +159,56 @@ export type NormalizedComment={
  fromId:string;
  /** Facebook from.name; Instagram from.username; else null. */
  fromName:string|null;
+ /**
+  * Comment creation time (ms) from value.created_time when present and
+  * parseable (Facebook feed: unix seconds); absent otherwise (Instagram
+  * comment webhooks carry none, documented knowledge, unverified here).
+  */
+ createdTimeMs?:number;
 };
 export const MAX_NORMALIZED_COMMENTS=200;
+/**
+ * Private reply age limit (Meta: a private reply is allowed for 7 days after
+ * the comment; documented knowledge, unverified in this session).
+ */
+export const PRIVATE_REPLY_WINDOW_MS=7*24*60*60*1000;
+/**
+ * Send margin: the DM effect of a comment run is cancelled 'stale' by
+ * flow_skip_blocked_outbox after OUTBOX_STALE_MINUTES (60, flow-outbox-worker/
+ * skipPolicy.ts; pinned by tests) + a 2-minute lease, so a run begun at
+ * comment age <= COMMENT_START_MAX_AGE_MS can only send inside the window.
+ */
+export const PRIVATE_REPLY_SEND_MARGIN_MS=2*60*60*1000;
+export const COMMENT_START_MAX_AGE_MS=PRIVATE_REPLY_WINDOW_MS-PRIVATE_REPLY_SEND_MARGIN_MS;
+/**
+ * created_time -> ms. Unix seconds or ms (number or digit string; values below
+ * 1e11 are seconds) or an ISO 8601 string. Anything else: null.
+ */
+export function commentCreatedTimeMs(v:unknown):number|null{
+ let n:number|null=null;
+ if(typeof v==="number"&&Number.isSafeInteger(v)&&v>0)n=v;
+ else if(typeof v==="string"&&/^[0-9]{9,13}$/.test(v))n=Number(v);
+ else if(typeof v==="string"&&v.length<=40&&
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?(Z|[+-]\d{2}:?\d{2})$/.test(v)){
+  const t=Date.parse(v.replace(/([+-]\d{2})(\d{2})$/,"$1:$2"));
+  return Number.isFinite(t)&&t>0?t:null;
+ }
+ if(n===null)return null;
+ return n<1e11?n*1000:n;
+}
+/**
+ * Fail-safe start rule for a comment run (whose DM is a private reply):
+ * a known creation time must be no older than COMMENT_START_MAX_AGE_MS
+ * (boundary inclusive). Unknown / unparseable / future creation time: the
+ * event is judged by its receipt time, i.e. "now" - eligible. That is safe
+ * only because comments are ingested exclusively from the live signed
+ * webhook (milan-api index.ts); no recovery/replay path re-drives comments.
+ */
+export function commentStartAgeOk(createdTimeMs:number|null|undefined,nowMs:number):boolean{
+ if(typeof createdTimeMs!=="number"||!Number.isFinite(createdTimeMs))return true;
+ if(createdTimeMs>nowMs)return true;
+ return nowMs-createdTimeMs<=COMMENT_START_MAX_AGE_MS;
+}
 const MAX_COMMENT_CHARS=8192;
 const metaId=(v:unknown):string=>{
  if(typeof v==="number"&&Number.isSafeInteger(v)&&v>0)return String(v);
@@ -202,6 +250,8 @@ export function normalizeMetaComments(body:unknown,ownIds:readonly string[]=[]):
      fromId:metaId(from.id),fromName:name(from.name)};
    }
    if(!c||!c.commentId||!c.postId||!c.fromId)continue;
+   const created=commentCreatedTimeMs(v.created_time);
+   if(created!==null)c.createdTimeMs=created;
    if(!c.text.trim()||c.text.length>MAX_COMMENT_CHARS)continue;
    // No self-reply loop: the business' own comments (incl. our public reply).
    if(c.fromId===account||ownIds.includes(c.fromId))continue;

@@ -9,7 +9,7 @@
  * scrubPlaceholders pass first, so the stored body (deliveredText) equals the
  * sent text. No implicit retry: any failed send is classified, never resent.
  */
-import {scrubPlaceholders,ProviderHttpError,type ProviderRequest} from "./deliveryCore.ts";
+import {scrubPlaceholders,ProviderHttpError,metaErrorInfo,type ProviderRequest} from "./deliveryCore.ts";
 import {metaQuickReplies} from "./flowRichActions.ts";
 import {isAllowedFlowImageUrl} from "./mediaPolicy.ts";
 
@@ -236,7 +236,9 @@ async function perform(built:BuildResult,platform:"whatsapp"|"facebook",
   const failure:unknown=await res.json().catch(()=>null);
   const err=failure&&typeof failure==="object"?(failure as Record<string,unknown>).error:null;
   const code=err&&typeof err==="object"?(err as Record<string,unknown>).code:null;
-  throw new ProviderHttpError(res.status,typeof code==="number"?code:null);
+  // metaCode unchanged (classifiers above); subcode/type added for the
+  // text-failure log only (T6-S3, deliveryCore.metaErrorInfo, validated).
+  throw new ProviderHttpError(res.status,typeof code==="number"?code:null,metaErrorInfo(failure));
  }
  const data:unknown=await res.json().catch(()=>null);
  if(!data||typeof data!=="object")return null;

@@ -19,12 +19,121 @@ export type ProviderRequest={
   */
  recipientCommentId?:string;
 };
+/**
+ * Fields kept from a Meta Graph error body {"error":{message,type,code,
+ * error_subcode,fbtrace_id}}: ONLY code, error_subcode and type, validated.
+ * The message (it can echo customer text), fbtrace_id and the raw body are
+ * never kept, thrown or logged.
+ */
+export type MetaErrorInfo={code?:number;subcode?:number;type?:string};
+/** A Meta numeric code: a non-negative safe integer below 1e9, else undefined. */
+const metaInt=(v:unknown):number|undefined=>
+ typeof v==="number"&&Number.isSafeInteger(v)&&v>=0&&v<1e9?v:undefined;
+const metaType=(v:unknown):string|undefined=>
+ typeof v==="string"&&/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(v)?v:undefined;
+/** Never throws (hostile getters/proxies -> {}); never trusts the body shape. */
+export function metaErrorInfo(body:unknown):MetaErrorInfo{
+ try{
+  if(!body||typeof body!=="object"||Array.isArray(body))return {};
+  const err=(body as Record<string,unknown>).error;
+  if(!err||typeof err!=="object"||Array.isArray(err))return {};
+  const e=err as Record<string,unknown>;
+  const out:MetaErrorInfo={};
+  const code=metaInt(e.code),subcode=metaInt(e.error_subcode),type=metaType(e.type);
+  if(code!==undefined)out.code=code;
+  if(subcode!==undefined)out.subcode=subcode;
+  if(type!==undefined)out.type=type;
+  return out;
+ }catch{return {};}
+}
+/** Re-validates an already extracted MetaErrorInfo (never throws). */
+function safeMetaInfo(info:MetaErrorInfo|null|undefined):MetaErrorInfo{
+ try{
+  return info&&typeof info==="object"?
+   metaErrorInfo({error:{code:info.code,error_subcode:info.subcode,type:info.type}}):{};
+ }catch{return {};}
+}
+/** Error bodies above this size are not parsed (no code kept -> 'ambiguous'). */
+export const META_ERROR_BODY_MAX=16384;
+async function readMetaErrorInfo(res:Response):Promise<MetaErrorInfo>{
+ try{
+  const raw=await res.text();
+  if(typeof raw!=="string"||raw.length>META_ERROR_BODY_MAX)return {};
+  return metaErrorInfo(JSON.parse(raw));
+ }catch{return {};}
+}
 /** Non-2xx provider response; message identical to the previous plain Error. */
 export class ProviderHttpError extends Error{
  status:number;metaCode:number|null;
- constructor(status:number,metaCode:number|null=null){
+ /** T6-S3 (observability only): validated Meta error_subcode / type, if any. */
+ metaSubcode:number|null;metaType:string|null;
+ constructor(status:number,metaCode:number|null=null,info:MetaErrorInfo={}){
   super("Provider HTTP "+status);this.status=status;this.metaCode=metaCode;
+  const safe=safeMetaInfo(info);
+  this.metaSubcode=safe.subcode??null;this.metaType=safe.type??null;
  }
+}
+/**
+ * Non-2xx response to a TEXT send of sendProviderMessage (T6-S3). Message
+ * byte-identical to the previous plain Error ("Provider HTTP <status>") and
+ * name "Error" as before. Deliberately NOT a ProviderHttpError and without
+ * top-level status/metaCode fields: the image classifiers (classifyMediaFailure
+ * / classifyMultichannelFailure) read those, so a text failure can never be
+ * classified 'media_rejected' -> 'rejected'. Observability only: every text
+ * failure still finishes 'uncertain' and is never resent.
+ */
+export class ProviderTextHttpError extends Error{
+ readonly meta:Readonly<{status:number}&MetaErrorInfo>;
+ constructor(status:number,info:MetaErrorInfo={}){
+  super("Provider HTTP "+status);
+  this.meta=Object.freeze({status,...safeMetaInfo(info)});
+ }
+}
+/**
+ * Coarse class of a failed text send (observability only, NEVER a state
+ * decision). Definite classes require an HTTP 4xx (not 408) AND a documented
+ * Meta code; everything else is 'ambiguous' (Meta may have accepted it):
+ *  outside_window:   131047 (WhatsApp re-engagement / 24h window);
+ *                    10 + subcode 2018278 (Messenger/Instagram outside window)
+ *  auth:             190 (invalid/expired token); 401/403 without a code
+ *  throttled:        4, 17, 32, 613, 130429, 131056 (rate limits; never retried)
+ *  rejected_invalid: 100 (invalid parameter)
+ *  permanent_other:  10 without the window subcode (permission)
+ *  ambiguous:        5xx, 408, 429 without a known code, 2xx, network,
+ *                    timeout, no/unparseable body, unknown codes.
+ */
+export type TextSendFailureClass="outside_window"|"auth"|"throttled"|"rejected_invalid"|
+ "permanent_other"|"ambiguous";
+export const META_THROTTLE_CODES:ReadonlySet<number>=new Set([4,17,32,613,130429,131056]);
+export function classifyTextSendFailure(status:unknown,code?:unknown,subcode?:unknown):TextSendFailureClass{
+ try{
+  if(typeof status!=="number"||!Number.isInteger(status)||status<400||status>499||status===408)
+   return "ambiguous";
+  const c=metaInt(code),s=metaInt(subcode);
+  if(c===131047)return "outside_window";
+  if(c===10&&s===2018278)return "outside_window";
+  if(c===190)return "auth";
+  if(c!==undefined&&META_THROTTLE_CODES.has(c))return "throttled";
+  if(c===100)return "rejected_invalid";
+  if(c===10)return "permanent_other";
+  if(c===undefined&&(status===401||status===403))return "auth";
+  return "ambiguous";
+ }catch{return "ambiguous";}
+}
+/** Fixed log fields for a failed text send: class + numbers only (no ids, text, token, body). */
+export type TextSendFailure={class:TextSendFailureClass;status:number|null;code:number|null;subcode:number|null};
+export function describeTextSendFailure(err:unknown):TextSendFailure{
+ try{
+  let status:unknown=null,code:unknown=null,subcode:unknown=null;
+  if(err instanceof ProviderTextHttpError){
+   status=err.meta.status;code=err.meta.code;subcode=err.meta.subcode;
+  }else if(err instanceof ProviderHttpError){
+   status=err.status;code=err.metaCode;subcode=err.metaSubcode;
+  }
+  const st=typeof status==="number"&&Number.isInteger(status)&&status>=100&&status<=599?status:null;
+  const c=metaInt(code)??null,s=metaInt(subcode)??null;
+  return {class:classifyTextSendFailure(st,c,s),status:st,code:c,subcode:s};
+ }catch{return {class:"ambiguous",status:null,code:null,subcode:null};}
 }
 export type Sender=(input:ProviderRequest,perform?:typeof fetch)=>Promise<string|null>;
 function valid(text:string,max:number){return typeof text==="string"&&text.length>0&&text.length<=max;}
@@ -116,7 +225,9 @@ export async function sendProviderMessage(input:ProviderRequest,perform:typeof f
  const res=await perform(url,{method:"POST",headers,body:JSON.stringify(payload),
   signal:AbortSignal.timeout(15000)});
  if(!res.ok){
-  if(!image)throw Error("Provider HTTP "+res.status);
+  // Text: same message as before; status + validated Meta code/subcode/type
+  // kept for classification only (T6-S3). Still uncertain, never resent.
+  if(!image)throw new ProviderTextHttpError(res.status,await readMetaErrorInfo(res));
   // Image only: keep the Meta error code (e.g. 100 invalid/unfetchable URL).
   const failure:unknown=await res.json().catch(()=>null);
   const err=failure&&typeof failure==="object"?(failure as Record<string,unknown>).error:null;

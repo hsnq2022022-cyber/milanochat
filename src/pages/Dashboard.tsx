@@ -1209,6 +1209,7 @@ export default function Dashboard() {
                 setClaimBusy(true); setClaimErr("");
                 try {
                   await apiAuthFetch(token!, "/api/dashboard/claim", { method: "POST", body: JSON.stringify({ claimToken: claimVal.trim() }) });
+                  clearStoredClaim(); setClaimVal(""); // T5-D1: الرمز لم يعد صالحًا بعد الضم
                   loadAll();
                 } catch (e: any) {
                   setClaimErr(e?.message ?? "رمز غير صالح");

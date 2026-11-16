@@ -50,6 +50,7 @@ import { inboundRecoveryEnabled, runInboundRecovery, recoveryLeaseActive, markLi
 import { acceptsFlowWorkerBearer } from "../flowWorkerAuth.ts";
 import { syntheticEventId } from "./syntheticEventId.ts";
 import { prepareSimpleFlowReply } from "./flowPrepareMessage.ts";
+import { readConversationStart } from "./conversationStart.ts";
 import {attemptDurableInstagram,selectedFlowChoice,multichannelEnabled,
   durableIngressConfigured,supportedDurableDocument} from "./flowDurableIngress.ts";
 import { normalizeMetaMessages } from "./normalizeMetaMessage.ts";
@@ -59,14 +60,24 @@ import { ingestSignedComments, commentAutomationEnabled } from "./commentIngress
 import { readCommentActivity } from "./commentActivity.ts";
 import { commentActivityRules } from "./abuseGuards.ts";
 import { verifyMetaWebhookSignature } from "./metaSignature.ts";
+// T5-S4: request body size limits and input boundaries (bodyLimits.ts).
+import {
+  bodyClassFor, bodyLimitFor, readBodyLimited, BODY_TOO_LARGE_MESSAGE, BODY_TOO_LARGE_LOG_TAG,
+  INGEST_TEXT_MAX_CHARS, TEXT_TOO_LONG_MESSAGE, textWithinLimit, qaPairsWithinLimits,
+  QA_PAIRS_LIMIT_MESSAGE, optionalSourceUrlValid, SOURCE_URL_INVALID_MESSAGE,
+} from "./bodyLimits.ts";
 import { recordVerifiedMetaReceipts } from "./metaDeliveryReceipts.ts";
 // Security hardening (S1 / S3 / S4): pure, unit-tested modules.
 import { safeFetchText, denoResolver } from "./safeFetch.ts";
-import { rateGate, widgetIpRules, widgetScopeRules, aiActionRules, knowledgeAddRules, CLAIM_AI_ACTIONS } from "./abuseGuards.ts";
+import { rateGate, widgetIpRules, widgetScopeRules, aiActionRules, knowledgeAddRules, CLAIM_AI_ACTIONS, rateGateStrict, createTenantRules } from "./abuseGuards.ts";
 import { bindWhatsappNumber, supabaseBindStore, BIND_CONFLICT_BODY } from "./waBinding.ts";
 // Security hardening (S8 Widget billing / S9 WhatsApp binding verification).
 import { widgetBillingEnabled, reserveWidgetAnswer, commitWidgetAnswer, releaseWidgetAnswer, widgetBillingEarlyReply } from "./widgetBilling.ts";
 import { bindingIsVerified, readBindingVerified, provenWhatsappAccount } from "./waBinding.ts";
+// T5-D1: claim token authority ends when the tenant is claimed (claimToken.ts).
+import { tenantByClaimToken, claimTenantByToken, isClaimTokenFormat } from "./claimToken.ts";
+// T5-D2: CORS by action and request Origin (corsPolicy.ts, ../_shared/cors.ts).
+import { withMilanCors } from "./corsPolicy.ts";
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
@@ -88,8 +99,9 @@ const sbAdmin = (): SupabaseClient =>
    HTTP
 ═══════════════════════════════════════════════════════════════════════ */
 
+// T5-D2: no Access-Control-Allow-Origin here; every response gets it from
+// withMilanCors (corsPolicy.ts) at the Deno.serve entry point.
 const CORS = {
-  "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers":
     "authorization, x-client-info, apikey, content-type, x-tenant-token",
   "Access-Control-Allow-Methods":
@@ -295,19 +307,9 @@ async function tenantByClaim(
   req: Request,
   tenantId: string
 ) {
-  const { data } = await sb
-    .from("tenants")
-    .select("*")
-    .eq("id", tenantId)
-    .maybeSingle();
-
-  if (!data) return null;
-
-  if (data.claim_token !== claimOf(req)) {
-    return null;
-  }
-
-  return data;
+  // T5-D1: null (=> the same "invalid token" 403) unless the token is
+  // well-formed, matches in constant time AND the tenant is still unclaimed.
+  return await tenantByClaimToken(sb, tenantId, claimOf(req));
 }
 
 async function ownedTenant(
@@ -464,17 +466,44 @@ function safeErrorLog(e: unknown): Record<string, unknown> {
 }
 
 /** Client-facing text: fixed provider messages; our own plain Error texts
- * (Arabic user messages) unchanged; fetch/runtime errors -> fallback. */
+ * (Arabic user messages) unchanged; fetch/runtime errors -> fallback.
+ * T5-S2: a plain Error without Arabic text (internal English diagnostics,
+ * raw Postgres/PostgREST text) is never forwarded -> fallback. */
 function clientErrorMessage(e: unknown, fallback: string): string {
   if (e instanceof ProviderHttpError || e instanceof ProviderNetworkError) return e.message;
   if (e instanceof WaAuthError || e instanceof AccountTokenUnavailableError) return e.message;
   // safeFetch.ts SafeFetchError (URL import): fixed Arabic text + [code] by
   // construction; matched by name (its import line is pinned unchanged).
   if (e instanceof Error && e.name === "SafeFetchError") return e.message;
-  if (e instanceof Error && Object.getPrototypeOf(e) === Error.prototype && e.name === "Error") {
+  if (e instanceof Error && Object.getPrototypeOf(e) === Error.prototype && e.name === "Error" &&
+      /[\u0600-\u06FF]/.test(e.message)) {
     return e.message;
   }
   return fallback;
+}
+
+/* ── T5-S2: database errors safe for logs and clients ──
+ * Postgres/PostgREST message, details and hint can carry SQL, table /
+ * column / constraint names and row values (tokens, phone numbers, customer
+ * text): they never reach a client or a log line. Clients get a fixed Arabic
+ * message (same status and body keys); logs get a fixed tag + coarse code. */
+const DB_ERROR_MESSAGE = "تعذر إتمام العملية — حاول مرة أخرى";
+
+/** Coarse, value-free code: SQLSTATE (5 chars) or PGRSTnnn, else "unknown". */
+function safeDbCode(error: unknown): string {
+  try {
+    const c = typeof error === "object" && error !== null ? (error as { code?: unknown }).code : undefined;
+    if (typeof c === "string" && /^(?:[0-9A-Z]{5}|PGRST\d{3})$/.test(c)) return c;
+  } catch {
+    /* hostile error object */
+  }
+  return "unknown";
+}
+
+/** Logs `error` (if any) as tag + code only and returns the fixed client text. */
+function dbFail(error: unknown, tag: string, message: string = DB_ERROR_MESSAGE): string {
+  if (error) console.error("[milan-api] db error", { tag, code: safeDbCode(error) });
+  return message;
 }
 
 /**
@@ -924,7 +953,9 @@ async function fetchAccountWithToken(
     .eq("id", accountId)
     .maybeSingle();
 
-  if (error) throw new Error(`fetchAccountWithToken: ${error.message}`);
+  // T5-S2: fixed text; keeps "توكن" so the reply / unresolved 502 branch
+  // (/توكن|token|auth|190/) is unchanged for a failed account read.
+  if (error) throw new Error(dbFail(error, "account_read", "تعذر قراءة توكن حساب القناة — حاول مرة أخرى"));
   if (!data) throw new Error("لا يوجد حساب مرتبط بهذه المحادثة");
 
   return data;
@@ -1225,8 +1256,8 @@ async function getOrCreateWidgetSession(
 
   if (error || !data) {
     throw new Error(
-      error?.message ||
-        "تعذر إنشاء جلسة Widget"
+      dbFail(error, "widget_session_insert",
+        "تعذر إنشاء جلسة Widget")
     );
   }
 
@@ -1255,7 +1286,7 @@ async function widgetMessages(
 
   if (error) {
     throw new Error(
-      error.message
+      dbFail(error, "widget_messages_read", "تعذر جلب رسائل الجلسة")
     );
   }
 
@@ -1321,7 +1352,7 @@ async function answerFromKnowledge(
 
   if (error) {
     throw new Error(
-      `فشل البحث في قاعدة المعرفة: ${error.message}`
+      dbFail(error, "match_knowledge", "فشل البحث في قاعدة المعرفة")
     );
   }
 
@@ -1733,16 +1764,18 @@ async function fetchSenderProfile(opts: {
 
     if (channel === "instagram" && token.startsWith("IG")) {
       // Instagram Login
-      url = `https://graph.instagram.com/v21.0/${senderId}?fields=name,username,profile_pic&access_token=${encodeURIComponent(token)}`;
+      url = `https://graph.instagram.com/v21.0/${senderId}?fields=name,username,profile_pic`;
     } else if (channel === "instagram") {
       // Facebook Login → Instagram API
-      url = `https://graph.facebook.com/v21.0/${senderId}?fields=name,profile_picture&access_token=${encodeURIComponent(token)}`;
+      url = `https://graph.facebook.com/v21.0/${senderId}?fields=name,profile_picture`;
     } else {
       // Facebook Messenger
-      url = `https://graph.facebook.com/v21.0/${senderId}?fields=name,picture&access_token=${encodeURIComponent(token)}`;
+      url = `https://graph.facebook.com/v21.0/${senderId}?fields=name,picture`;
     }
 
-    const res = await fetch(url);
+    // T5-S5: the token travels in the Authorization header, never in the URL
+    // (same Bearer form as sendMeta / ../_shared/metaGraph.ts).
+    const res = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
 
     if (!res.ok) {
       // سجل آمن: HTTP status + sanitized Meta error code فقط.
@@ -1971,6 +2004,28 @@ async function handleIncomingWebhookMessage(
     return "retry";
   }
 
+  // messageScope "conversation_start" (conversationStart.ts): is this the
+  // conversation's first customer DM? Read BEFORE the inbound row is stored
+  // (a re-drive excludes its own row), only where a flow can be selected:
+  // a proven channel account on Instagram (durable / V2), or any channel
+  // while FLOW_MULTICHANNEL_ENABLED (durable) or FLOW_RUNTIME_MODE
+  // "message_only" (V2) is on. Read failure = unknown state: nothing is
+  // persisted, no flow and no AI; the event stays retryable.
+  let conversationStart: boolean | null = null;
+  if (typeof account?.id === "string" && account.id.length > 0 &&
+      (channel === "instagram" || multichannelEnabled() || env("FLOW_RUNTIME_MODE") === "message_only")) {
+    try {
+      conversationStart = await readConversationStart(sb, {
+        tenantId: String(tenantId), accountId: account.id, conversation: conv,
+        excludeInboundId: redrive ? redrive.inboundId : null,
+      });
+    } catch {
+      // ConversationStartUnavailableError (or any unexpected failure): unknown.
+      console.warn("[webhook-routing] conversation start unknown", { code: "conversation_start_unavailable" });
+      return await unknownState();
+    }
+  }
+
   /**
    * حفظ رسالة العميل الواردة.
    */
@@ -2155,6 +2210,7 @@ async function handleIncomingWebhookMessage(
   if(channel==="instagram"||
      ((channel==="whatsapp"||channel==="facebook")&&multichannelEnabled())){
     const durable=await attemptDurableInstagram(sb,{
+      conversationStart,
       tenantId,accountId:String(account.id),conversationId:String(conv.id),
       inboundId:inboundMessageId,eventId:externalMsgId,platform:channel,
       text:customerText,
@@ -2174,7 +2230,7 @@ async function handleIncomingWebhookMessage(
   const outcome = await processExclusiveEvent({
     prepareFlow: () => prepareSimpleFlowReply(
       sb, tenantId, String(account.id), channel, customerText,
-      durableRanked?{durableDocument:(d)=>supportedDurableDocument(d,channel)}:{}
+      durableRanked?{durableDocument:(d)=>supportedDurableDocument(d,channel),conversationStart}:{conversationStart}
     ),
     claim: async (engineReady) => {
       const { data, error } = await sb.rpc("flow_claim_inbound", {
@@ -2293,8 +2349,7 @@ async function handleIncomingWebhookMessage(
       });
       if(error){
         console.error("[webhook_billing] consume_reply PostgREST error",{
-          tenantId,messageId:outgoingId,code:error.code??"unknown",
-          message:error.message??"unknown"
+          tenantId,messageId:outgoingId,code:safeDbCode(error)
         });
         throw new Error("credit RPC error");
       }
@@ -2331,6 +2386,14 @@ async function handleIncomingWebhookMessage(
 ═══════════════════════════════════════════════════════════════════════ */
 
 Deno.serve(async (req) => {
+  // T5-D2: the handler below is unchanged; only the CORS origin headers of its
+  // response (preflight included) are set per action and request Origin.
+  return withMilanCors(req, await milanApiHandler(req), env);
+});
+
+// T5-D2: the former Deno.serve handler, byte-identical from here to its
+// closing "});" (only this declaration line is new).
+const milanApiHandler = (async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", {
       headers: CORS,
@@ -2343,7 +2406,16 @@ Deno.serve(async (req) => {
     url.searchParams.get("action") ??
     "";
 
-  const raw = await req.text();
+  // T5-S4 (bodyLimits.ts): per-class byte limit on the raw body, enforced on
+  // the declared Content-Length AND the bytes actually received, BEFORE
+  // JSON.parse and BEFORE any signature check. Same text as req.text().
+  const bodyClass = bodyClassFor(action);
+  const limitedBody = await readBodyLimited(req, bodyLimitFor(bodyClass));
+  if (!limitedBody.ok) {
+    console.warn(BODY_TOO_LARGE_LOG_TAG, { class: bodyClass });
+    return err(BODY_TOO_LARGE_MESSAGE, 413);
+  }
+  const raw = limitedBody.text;
 
   let body: Record<string, any> = {};
 
@@ -2386,7 +2458,7 @@ Deno.serve(async (req) => {
             },
           });
         } catch (error) {
-          console.error("[widget.js] Error fetching script:", error);
+          console.error("[widget.js] Error fetching script:", safeErrorLog(error));
           return err("Internal server error", 500);
         }
       }
@@ -2397,6 +2469,17 @@ Deno.serve(async (req) => {
       ──────────────────────────────────────────────────────────────── */
 
       case "create_tenant": {
+        // T5-S1 (abuseGuards.ts): DB-backed, FAIL-CLOSED per-IP limit
+        // (5 / 10 min AND 20 / 24 h) BEFORE any body use or tenant insert.
+        // Limiter unavailable => 503, never an in-memory fallback.
+        const ctLimited = await rateGateStrict({
+          rpc: sb, headers: req.headers, salt: env("RATE_LIMIT_IP_SALT"), cors: CORS,
+          rules: createTenantRules,
+        });
+        if (ctLimited) return ctLimited;
+        // T5-S4 (bodyLimits.ts): optional sourceUrl must be a string <= 2,048 chars.
+        if (!optionalSourceUrlValid(body.sourceUrl)) return err(SOURCE_URL_INVALID_MESSAGE);
+
         const {
           businessName,
           sourceType,
@@ -2463,8 +2546,9 @@ Deno.serve(async (req) => {
           !data
         ) {
           return err(
-            error?.message ??
-              "خطأ",
+            error
+              ? dbFail(error, "create_tenant", "تعذر إنشاء الحساب — حاول مرة أخرى")
+              : "خطأ",
             500
           );
         }
@@ -3276,7 +3360,7 @@ Deno.serve(async (req) => {
                   if (profUpdErr) {
                     console.error(
                       `[instagram_webhook] sender profile update failed | chatId=${chatId}`,
-                      profUpdErr.message
+                      { code: safeDbCode(profUpdErr) }
                     );
                   } else {
                     console.log(
@@ -3622,7 +3706,7 @@ Deno.serve(async (req) => {
         insertInError
       ) {
         throw new Error(
-          insertInError.message
+          dbFail(insertInError, "widget_message_insert", "تعذر حفظ الرسالة — حاول مرة أخرى")
         );
       }
 
@@ -3750,7 +3834,7 @@ Deno.serve(async (req) => {
         await releaseWidgetAnswer(sb, found.tenant.id, widgetBill);
         console.error(
           "[widget_message] AI error",
-          e
+          safeErrorLog(e)
         );
 
         const reply =
@@ -3873,8 +3957,7 @@ Deno.serve(async (req) => {
       if(widgetSaveError||!savedWidgetReply?.id){
         await releaseWidgetAnswer(sb, found.tenant.id, widgetBill);
         console.error("[widget_message] answer insert failed",{
-          tenantId:found.tenant.id,code:widgetSaveError?.code??"unknown",
-          message:widgetSaveError?.message??"missing id"
+          tenantId:found.tenant.id,code:widgetSaveError?safeDbCode(widgetSaveError):"missing_id"
         });
         return err("تعذر حفظ رد المساعد",500);
       }
@@ -4135,6 +4218,10 @@ ${text}
         ───────────────────────────────────────────────────────────── */
 
         case "qa_save": {
+          // T5-S4 (bodyLimits.ts): <= 50 pairs, bounded question / answer length,
+          // optional sourceUrl string <= 2,048 chars; before any DB write / embedding.
+          if (!qaPairsWithinLimits(body.pairs)) return err(QA_PAIRS_LIMIT_MESSAGE);
+          if (!optionalSourceUrlValid(body.sourceUrl)) return err(SOURCE_URL_INVALID_MESSAGE);
           const pairs =
             (
               Array.isArray(
@@ -4187,8 +4274,7 @@ ${text}
             !src
           ) {
             return err(
-              srcError?.message ??
-                "تعذر إنشاء مصدر المعرفة",
+              dbFail(srcError, "qa_save_source_insert", "تعذر إنشاء مصدر المعرفة"),
               500
             );
           }
@@ -4239,7 +4325,7 @@ ${text}
             chunksError
           ) {
             return err(
-              chunksError.message,
+              dbFail(chunksError, "qa_save_chunks_insert", "تعذر حفظ المحتوى في قاعدة المعرفة"),
               500
             );
           }
@@ -4271,6 +4357,9 @@ ${text}
               "النص قصير جدًا"
             );
           }
+
+          // T5-S4 (bodyLimits.ts): bounded text before chunking / embedding.
+          if (!textWithinLimit(text, INGEST_TEXT_MAX_CHARS)) return err(TEXT_TOO_LONG_MESSAGE);
 
           const chunks =
             chunkText(text);
@@ -4312,8 +4401,7 @@ ${text}
             !src
           ) {
             return err(
-              srcError?.message ??
-                "تعذر إنشاء المصدر",
+              dbFail(srcError, "ingest_text_source_insert", "تعذر إنشاء المصدر"),
               500
             );
           }
@@ -4353,7 +4441,7 @@ ${text}
             chunksError
           ) {
             return err(
-              chunksError.message,
+              dbFail(chunksError, "ingest_text_chunks_insert", "تعذر حفظ المحتوى في قاعدة المعرفة"),
               500
             );
           }
@@ -4411,7 +4499,7 @@ ${text}
 
           if (error) {
             return err(
-              error.message,
+              dbFail(error, "qa_test", "فشل البحث في قاعدة المعرفة"),
               500
             );
           }
@@ -4559,33 +4647,25 @@ ${text}`
           );
         }
 
+        // T5-D1 (claimToken.ts): a non-string / malformed token is "invalid or
+        // used" (404 below) with no DB call; otherwise ONE conditional UPDATE
+        // (claim_token match AND user_id IS NULL, token rotated) so exactly one
+        // concurrent claim wins and user_id is never overwritten.
         const {
           data,
           error,
-        } = await sb
-          .from("tenants")
-          .update({
-            user_id:
-              u.id,
-          })
-          .eq(
-            "claim_token",
-            claimToken
-          )
-          .is(
-            "user_id",
-            null
-          )
-          .select("id")
-          .maybeSingle();
+        } = isClaimTokenFormat(claimToken)
+          ? await claimTenantByToken(sb, u.id, claimToken)
+          : { data: null, error: null };
 
         if (
           error ||
           !data
         ) {
           return err(
-            error?.message ??
-              "رمز غير صالح أو مستخدم",
+            error
+              ? dbFail(error, "claim_account")
+              : "رمز غير صالح أو مستخدم",
             error
               ? 500
               : 404
@@ -4641,7 +4721,7 @@ ${text}`
 
         if (error) {
           return err(
-            error.message,
+            dbFail(error, "widget_dashboard_list", "تعذر جلب البيانات — حاول مرة أخرى"),
             500
           );
         }
@@ -4786,8 +4866,7 @@ ${text}`
           !data
         ) {
           return err(
-            error?.message ??
-              "تعذر إنشاء Widget",
+            dbFail(error, "widget_dashboard_create", "تعذر إنشاء Widget"),
             500
           );
         }
@@ -5049,8 +5128,7 @@ ${text}`
           !data
         ) {
           return err(
-            error?.message ??
-              "تعذر تحديث Widget",
+            dbFail(error, "widget_dashboard_update", "تعذر تحديث Widget"),
             500
           );
         }
@@ -5093,7 +5171,7 @@ ${text}`
 
         if (error) {
           return err(
-            error.message,
+            dbFail(error, "widget_dashboard_delete", "تعذر الحذف — حاول مرة أخرى"),
             500
           );
         }
@@ -5228,7 +5306,7 @@ ${text}`
 
         if (error) {
           return err(
-            error.message,
+            dbFail(error, "conversations", "تعذر جلب البيانات — حاول مرة أخرى"),
             500
           );
         }
@@ -5335,7 +5413,7 @@ ${text}`
 
         if (error) {
           return err(
-            error.message,
+            dbFail(error, "messages", "تعذر جلب البيانات — حاول مرة أخرى"),
             500
           );
         }
@@ -5534,7 +5612,7 @@ ${text}`
           })
           .eq("id", tenant.id);
 
-        if (upErr) return err(upErr.message, 500);
+        if (upErr) return err(dbFail(upErr, "agent_prompt_set", "تعذر حفظ التغييرات — حاول مرة أخرى"), 500);
 
         return json({ ok: true });
       }
@@ -5562,7 +5640,7 @@ ${text}`
           .eq("id", convId)
           .eq("tenant_id", tenant.id);
 
-        if (upErr) return err(upErr.message, 500);
+        if (upErr) return err(dbFail(upErr, "takeover", "تعذر حفظ التغييرات — حاول مرة أخرى"), 500);
 
         return json({ ok: true, expiresAt });
       }
@@ -5582,7 +5660,7 @@ ${text}`
           .eq("id", convId)
           .eq("tenant_id", tenant.id);
 
-        if (upErr) return err(upErr.message, 500);
+        if (upErr) return err(dbFail(upErr, "release", "تعذر حفظ التغييرات — حاول مرة أخرى"), 500);
 
         return json({ ok: true });
       }
@@ -5613,7 +5691,7 @@ ${text}`
 
         if (error) {
           return err(
-            error.message,
+            dbFail(error, "unresolved", "تعذر جلب البيانات — حاول مرة أخرى"),
             500
           );
         }
@@ -5878,7 +5956,7 @@ ${text}`
 
         if (error) {
           return err(
-            error.message,
+            dbFail(error, "knowledge", "تعذر جلب البيانات — حاول مرة أخرى"),
             500
           );
         }
@@ -6068,8 +6146,7 @@ ${text}`
             !src
           ) {
             return err(
-              srcError?.message ??
-                "تعذر إنشاء المصدر",
+              dbFail(srcError, "knowledge_add_url_source_insert", "تعذر إنشاء المصدر"),
               500
             );
           }
@@ -6110,7 +6187,7 @@ ${text}`
             chunksError
           ) {
             return err(
-              chunksError.message,
+              dbFail(chunksError, "knowledge_add_url_chunks_insert", "تعذر حفظ المحتوى في قاعدة المعرفة"),
               500
             );
           }
@@ -6139,6 +6216,9 @@ ${text}`
             "النص قصير جدًا"
           );
         }
+
+        // T5-S4 (bodyLimits.ts): bounded text before chunking / embedding.
+        if (!textWithinLimit(t, INGEST_TEXT_MAX_CHARS)) return err(TEXT_TOO_LONG_MESSAGE);
 
         const chunks =
           chunkText(t);
@@ -6181,8 +6261,7 @@ ${text}`
           !src
         ) {
           return err(
-            srcError?.message ??
-              "تعذر إنشاء المصدر",
+            dbFail(srcError, "knowledge_add_text_source_insert", "تعذر إنشاء المصدر"),
             500
           );
         }
@@ -6223,7 +6302,7 @@ ${text}`
           chunksError
         ) {
           return err(
-            chunksError.message,
+            dbFail(chunksError, "knowledge_add_text_chunks_insert", "تعذر حفظ المحتوى في قاعدة المعرفة"),
             500
           );
         }
@@ -6261,7 +6340,7 @@ ${text}`
 
         if (error) {
           return err(
-            error.message,
+            dbFail(error, "knowledge_delete", "تعذر الحذف — حاول مرة أخرى"),
             500
           );
         }
@@ -6404,7 +6483,7 @@ ${text}`
 
         if (error) {
           return err(
-            error.message,
+            dbFail(error, "pay_create", "تعذر إنشاء الفاتورة — حاول مرة أخرى"),
             500
           );
         }

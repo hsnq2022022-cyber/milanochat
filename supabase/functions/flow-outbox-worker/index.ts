@@ -17,8 +17,8 @@
  */
 import {createClient} from "npm:@supabase/supabase-js@2";
 import {acceptsFlowWorkerBearer} from "../flowWorkerAuth.ts";
-import {sendProviderMessage,decryptAccountToken,encryptMessageBody,deliveredText,type ProviderRequest}
- from "./deliveryCore.ts";
+import {sendProviderMessage,decryptAccountToken,encryptMessageBody,deliveredText,type ProviderRequest,
+ describeTextSendFailure,type TextSendFailure} from "./deliveryCore.ts";
 import {answerWithVerifiedKnowledgeOutcome,knowledgeQuestionValid,openAIKnowledgeDependencies}
  from "./flowKnowledge.ts";
 import {aiStepEnabled,lastInboundQuestion,generateAiStepAnswer,liveBotKnowledgeDependencies}
@@ -42,6 +42,8 @@ import {mediaEffectGate,classifyMediaFailure,finishOutcome,type MediaFailure,typ
  from "./mediaPolicy.ts";
 import {runInternalEffects,internalActionsReleased} from "../flow-internal-worker/internalEffects.ts";
 import {executeCommentReply,COMMENT_REPLY_MAX_ATTEMPTS,type CommentClaim} from "./commentReply.ts";
+import {recoverAbandonedLeases} from "./leaseRecovery.ts";
+import {captureFailure,deliveryFailureRecord,finishFailure,newFailureCapture} from "./deliveryFailure.ts";
 
 const env=(name:string)=>Deno.env.get(name)??"";
 const json=(body:unknown,status=200)=>new Response(JSON.stringify(body),
@@ -82,6 +84,11 @@ Deno.serve(async req=>{
   console.error("[outbox] stale sweep failed",{code:sweepError.code});
   return json({error:"Outbox lifecycle unavailable",sends:0},503);
  }
+ // Abandoned delivery leases (leaseRecovery.ts): 'leased' message/question/
+ // message_image rows whose lease expired more than the grace ago are
+ // finished 'uncertain' (never resent, never billed) BEFORE listing, so later
+ // effects of the run see them as attempted. Never throws, never sends.
+ await recoverAbandonedLeases(sb,Date.now());
  const OUTBOX_COLUMNS="id,tenant_id,run_id,delivery_status,effect_kind,payload,outgoing_message_id,provider_message_id,created_at";
  const {data:listed,error:listError}=await sb.from("automation_flow_outbox")
   .select(OUTBOX_COLUMNS)
@@ -185,7 +192,7 @@ Deno.serve(async req=>{
    // Paused tenant: stays pending (bounded by the stale sweep), not cancelled.
    if(!sw?.enabled){report("blocked");continue;}
    const [accountResult,conversationResult,activationResult]=await Promise.all([
-    sb.from("channel_accounts").select("id,tenant_id,platform,is_active,agent_enabled,auto_reply,external_id,access_token_encrypted")
+    sb.from("channel_accounts").select("id,tenant_id,platform,status,is_active,agent_enabled,auto_reply,external_id,access_token_encrypted")
       .eq("tenant_id",effect.tenant_id).eq("id",run.channel_account_id).maybeSingle(),
     // human_agent_expires_at is the canonical takeover expiry (milan-api,
     // human_agent_migration.sql); selecting a missing column fails the query.
@@ -256,6 +263,9 @@ Deno.serve(async req=>{
    // through flow_begin_comment_run. Flag OFF: held, never sent as a plain DM.
    const commentRun=String(run.provider_event_id??"").startsWith("comment:");
    if(commentRun&&!commentOn){report("blocked");continue;}
+   // Comment runs only: a disconnected / needs_reauth account never replies
+   // (held, never sent; the stale sweep cancels it). Other runs unchanged.
+   if(commentRun&&account.status!=="active"){report("blocked");continue;}
    if(effect.effect_kind==="reply_comment"){
     if(!commentRun||(account.platform!=="instagram"&&account.platform!=="facebook")){
      report("blocked");continue;
@@ -597,9 +607,35 @@ Deno.serve(async req=>{
    // rejection of the image (4xx such as code 100) is finished as 'rejected'
    // (dead_letter, 20261029210000); auth/5xx/429/network stay uncertain.
    const media:{failure:MediaFailure|null;rejected:boolean}={failure:null,rejected:false};
+   // T6-S3: coarse class + Meta status/code of a failed TEXT send, logged
+   // only (no ids/text/token/body). textSend never changes the finish
+   // outcome; the only text 'rejected' case is T6-S4's `failure` below.
+   const textSend:{failure:TextSendFailure|null}={failure:null};
+   // T6-S4 (deliveryFailure.ts): validated status/code/subcode/type/class of a
+   // failed provider HTTP send, persisted with the failure outcome through
+   // flow_fail_outbox_delivery (20261115150000). Only a text with Meta 4xx +
+   // code 100 ('rejected_invalid') is finished 'rejected' (dead_letter);
+   // every other text failure stays 'uncertain'. Missing function / error ->
+   // the unchanged flow_finish_outbox_delivery path below. Never resent.
+   const failure=newFailureCapture();
+   // Comment runs only: activity log of the private reply DM (tenant-scoped;
+   // only after a sent public reply). Used by BOTH send branches below.
+   const mirrorCommentDm=async(outcome:string)=>{
+    if(commentRecipientId===undefined)return;
+    // A send failure (incl. a T6-S4 rejection) returns "uncertain": 'failed'.
+    const dm=["settled","billing_pending","sent_unconfirmed"].includes(outcome)?"sent":
+     outcome==="uncertain"?"failed":null;
+    if(!dm)return;
+    const {error:dmError}=await sb.from("automation_comment_replies")
+     .update({dm_status:dm,dm_updated_at:new Date().toISOString(),updated_at:new Date().toISOString()})
+     .eq("tenant_id",effect.tenant_id).eq("run_id",effect.run_id)
+     .eq("reply_status","sent").eq("dm_status","pending");
+    if(dmError)console.error("[outbox] comment dm status failed",{code:dmError.code});
+   };
    // WhatsApp/Facebook (FLOW_MULTICHANNEL_ENABLED only): same reserve ->
    // send once -> finish -> persist/bill sequence. Failures are classified for
-   // the report; text finishes 'uncertain' (never resent). An image (also
+   // the report; text finishes 'uncertain' (never resent; T6-S4: Meta 4xx +
+   // code 100 -> 'rejected' / dead_letter, see `failure`). An image (also
    // FLOW_MEDIA_SEND_ENABLED) permanently rejected by Meta (4xx, e.g. 131047
    // or 100) is finished 'rejected' (dead_letter) exactly like Instagram images.
    if(multichannel){
@@ -615,9 +651,17 @@ Deno.serve(async req=>{
      send:()=>sendMultichannelMessage(multichannelRequest(token)).catch(e=>{
       multichannelFailure=classifyMultichannelFailure(e);
       if(imageUrl!==undefined)media.failure=classifyMediaFailure(e);
+      if(imageUrl===undefined)textSend.failure=describeTextSendFailure(e);
+      failure.record=deliveryFailureRecord(e,imageUrl!==undefined);
       throw e;
      }),
      confirm:async(status,providerId)=>{
+      // T6-S4: a provider HTTP failure is finished WITH its validated record.
+      if(status==="uncertain"&&failure.record){
+       const failed=await finishFailure(sb,effect.tenant_id,effect.id,failure.record,imageUrl!==undefined);
+       if(failed==="rejected"){if(imageUrl!==undefined)media.rejected=true;else failure.rejected=true;return true;}
+       if(failed==="uncertain")return true;
+      }
       const finish=async(result:FinishOutcome):Promise<boolean|null>=>{
        const {data,error}=await sb.rpc("flow_finish_outbox_delivery",{
         p_tenant:effect.tenant_id,p_outbox:effect.id,p_result:result,
@@ -637,10 +681,14 @@ Deno.serve(async req=>{
      persistAndBill
     });
     report(media.rejected?"dead_letter_media_rejected":sent);
+    if(failure.rejected)report("dead_letter_text_rejected");
+    // Facebook Page private reply (FLOW_MULTICHANNEL_ENABLED): same mirror.
+    await mirrorCommentDm(sent);
     if(multichannelFailure){
      console.warn("[outbox] multichannel send failed",{id:effect.id,code:multichannelFailure});
      report("multichannel_"+multichannelFailure);
     }
+    if(textSend.failure)console.warn("[outbox] text send failed",textSend.failure);
     continue;
    }
    const res=await executeOnce({
@@ -651,15 +699,21 @@ Deno.serve(async req=>{
      if(error){console.error("[outbox] reserve error",{code:error.code});return false;}
      return data===true;
     },
-    send:()=>imageUrl===undefined?sendProviderMessage({
+    send:()=>captureFailure(failure,imageUrl!==undefined,imageUrl===undefined?sendProviderMessage({
      platform:account.platform,externalId:String(account.external_id??""),
      token,recipient,text:messageText,quickReplies,websiteButtons,
      ...(commentRecipientId!==undefined?{recipientCommentId:commentRecipientId}:{})
-    }):sendProviderMessage({
+    }).catch(e=>{textSend.failure=describeTextSendFailure(e);throw e;}):sendProviderMessage({
      platform:account.platform,externalId:String(account.external_id??""),
      token,recipient,text:"",imageUrl,imageHost:base
-    }).catch(e=>{media.failure=classifyMediaFailure(e);throw e;}),
+    }).catch(e=>{media.failure=classifyMediaFailure(e);throw e;})),
     confirm:async(status,providerId)=>{
+     // T6-S4: a provider HTTP failure is finished WITH its validated record.
+     if(status==="uncertain"&&failure.record){
+      const failed=await finishFailure(sb,effect.tenant_id,effect.id,failure.record,imageUrl!==undefined);
+      if(failed==="rejected"){if(imageUrl!==undefined)media.rejected=true;else failure.rejected=true;return true;}
+      if(failed==="uncertain")return true;
+     }
      const finish=async(result:FinishOutcome):Promise<boolean|null>=>{
       const {data,error}=await sb.rpc("flow_finish_outbox_delivery",{
        p_tenant:effect.tenant_id,p_outbox:effect.id,p_result:result,
@@ -680,22 +734,13 @@ Deno.serve(async req=>{
     persistAndBill
    });
    report(media.rejected?"dead_letter_media_rejected":res);
-   if(commentRecipientId!==undefined){
-    // Activity log of the DM (tenant-scoped; only after a sent public reply).
-    const dm=["settled","billing_pending","sent_unconfirmed"].includes(res)?"sent":
-     res==="uncertain"?"failed":null;
-    if(dm){
-     const {error:dmError}=await sb.from("automation_comment_replies")
-      .update({dm_status:dm,dm_updated_at:new Date().toISOString(),updated_at:new Date().toISOString()})
-      .eq("tenant_id",effect.tenant_id).eq("run_id",effect.run_id)
-      .eq("reply_status","sent").eq("dm_status","pending");
-     if(dmError)console.error("[outbox] comment dm status failed",{code:dmError.code});
-    }
-   }
+   if(failure.rejected)report("dead_letter_text_rejected");
+   await mirrorCommentDm(res);
    if(media.failure){
     console.warn("[outbox] image send failed",{id:effect.id,code:media.failure});
     report(media.failure==="media_rejected"?"media_rejected":"media_"+media.failure);
    }
+   if(textSend.failure)console.warn("[outbox] text send failed",textSend.failure);
   }catch(err){
    // No automatic retry of any reserved provider call, even on timeout.
    console.error("[outbox] effect blocked/uncertain",{id:effect.id,

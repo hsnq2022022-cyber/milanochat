@@ -11,6 +11,7 @@ import type {FlowDocument} from "../../../src/flow/model.ts";
 import {simpleFlowDocumentSupported,v2EngineAvailable} from "./flowPrepareMessage.ts";
 import {selectActiveFlowForInbound} from "./flowInboundSelection.ts";
 import {keywordTriggerProblem,dmTriggerAcceptsText,documentTriggerData} from "./triggerKeywords.ts";
+import {classifyMessageScope,messageScopeAllowsFlow} from "./flowMessageScope.ts";
 import {durableAnswerMode,normalizeDurableAnswer,reaskText,type DurableAnswerMode}
  from "./flowDurableAnswer.ts";
 import {isAllowedFlowImageUrl} from "../flow-outbox-worker/mediaPolicy.ts";
@@ -464,6 +465,13 @@ export type DurableEvent={
   * synthetic, and the event falls back to V2 before any database access.
   */
  providerEventIdGenuine:boolean;
+ /**
+  * True only when milan-api proved this is the conversation's first customer
+  * DM (conversationStart.ts). Used ONLY when selecting a NEW run: a trigger
+  * with messageScope "conversation_start" needs exactly true. Resume paths
+  * (waiting question, button tap) never read it. Absent = not a start.
+  */
+ conversationStart?:boolean|null;
 };
 type Db=Pick<SupabaseClient,"from"|"rpc">;
 /**
@@ -1018,15 +1026,19 @@ export async function attemptDurableInstagram(
   const picked=await selectActiveFlowForInbound(db,
    {tenantId:event.tenantId,accountId:event.accountId,platform:event.platform},event.text,
    d=>supportedDurableDocument(d,event.platform)?"durable":
-    v2&&simpleFlowDocumentSupported(d,event.platform as "instagram"|"facebook"|"whatsapp")?"v2":null);
+    v2&&simpleFlowDocumentSupported(d,event.platform as "instagram"|"facebook"|"whatsapp")?"v2":null,
+   event.conversationStart);
   if(picked.status==="error")return "retry";
   if(picked.status!=="selected"||picked.flow.engine!=="durable")return "fallback";
   const selection={flow_key:picked.flow.flowKey,revision:picked.flow.revision};
   const doc=picked.flow.document;
   // Re-checked on the exact document (selection already required both):
-  // whitelisted durable graph and a trigger accepting this DM text.
+  // whitelisted durable graph, a trigger accepting this DM text and a
+  // messageScope allowing this message (conversation_start: first DM only).
   if(!supportedDurableDocument(doc,event.platform)||
-     !dmTriggerAcceptsText(documentTriggerData(doc),event.text))return "fallback";
+     !dmTriggerAcceptsText(documentTriggerData(doc),event.text)||
+     !messageScopeAllowsFlow(classifyMessageScope(documentTriggerData(doc)),event.conversationStart))
+   return "fallback";
   const state=createRuntimeState(doc,selection.flow_key,Number(selection.revision));
   const plan=planUntilWait(doc,state,{
    eventKey:event.eventId,nowMs:Date.now(),seed:seedFromEventKey(event.eventId)
