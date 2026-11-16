@@ -43,7 +43,10 @@ const SAFE=["id","tenant_id","platform","platform_account_id","account_name","ac
 test("20261115120000: newest migration, one bounded transaction each, no data change, service_role untouched",()=>{
  const stamps=readdirSync("supabase/migrations").filter(f=>f.endsWith(".sql")).map(f=>f.split("_")[0].padEnd(14,"0"));
  assert.equal(stamps.filter(s=>s==="20261115120000").length,1);
- for(const s of stamps)assert.ok(s<="20261115120000",s);
+ // Only these enumerated later migrations may follow (no channel_accounts object):
+ // 20261115130000_wayl_topup_atomic_grant: independent billing migration (new wayl_grant_topup_once(uuid,integer,text,jsonb) only; no flow object).
+ // 20261115150000_flow_delivery_failure_info: additive, newest (nullable failure columns + CHECK on automation_flow_delivery_attempts, new flow_fail_outbox_delivery; redefines no existing function; requires 210000).
+ for(const s of stamps)assert.ok(s<="20261115120000"||["20261115130000","20261115150000"].includes(s),s);
  assert.ok(existsSync(RB));
  for(const f of [MIG,RB]){
   const s=src(f),code=noComments(s);

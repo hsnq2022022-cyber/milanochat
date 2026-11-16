@@ -36,7 +36,9 @@ const WA="supabase/migrations/20261029290000_wa_bindings_verification.sql";
 const WA_RB="supabase/rollbacks/20261029290000_wa_bindings_verification.rollback.sql";
 const S2="supabase/migrations/20261029240000_tenants_billing_rls.sql";
 // 20261115120000_channel_accounts_hardening: independent security migration (channel_accounts grants/policies/index; no flow object).
-const NEW=["20261029260000","20261029270000","20261029280000","20261029290000","20261029300000","20261029310000","20261029320000","20261029330000","20261029340000","20261029350000",/* 360000 inbound recovery: additive, new objects only, requires 340000 */"20261029360000","20261115120000"];
+// 20261115130000_wayl_topup_atomic_grant: independent billing migration (new wayl_grant_topup_once(uuid,integer,text,jsonb) only; no flow object).
+// 20261115150000_flow_delivery_failure_info: additive, newest (nullable failure columns + CHECK on automation_flow_delivery_attempts, new flow_fail_outbox_delivery; redefines no existing function; requires 210000).
+const NEW=["20261029260000","20261029270000","20261029280000","20261029290000","20261029300000","20261029310000","20261029320000","20261029330000","20261029340000","20261029350000",/* 360000 inbound recovery: additive, new objects only, requires 340000 */"20261029360000","20261115120000","20261115130000","20261115150000"];
 const src=f=>readFileSync(f,"utf8");
 const noComments=s=>s.split("\n").map(l=>l.replace(/--.*$/,"")).join("\n");
 
