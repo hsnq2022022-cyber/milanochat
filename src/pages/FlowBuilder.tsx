@@ -40,6 +40,9 @@ import { flowText, flowKindLabel } from "../flow/uiLocale";
 import type { FlowLanguage } from "../flow/uiLocale";
 import { uuid } from "../lib/uuid.ts";
 import { useFlowActivation } from "../flow/useFlowActivation";
+import { useOperatorStatus } from "../flow/useOperatorStatus";
+import { useFlowCapabilities } from "../flow/useFlowCapabilities";
+import { CapabilityGateContext, UNAVAILABLE_BADGE, accountNotice, blockGate, type Gate } from "../flow/capabilityReasons";
 import { commentTriggerProviderPlatform } from "../flow/serverPublicationValidation";
 
 // لا تعرض أدوات الحفظ السحابي في الإنتاج قبل تجهيز الجدول والموافقة على النشر.
@@ -67,8 +70,21 @@ function Editor(){
   // The local document describes the server flow only when serverKey===activeFlowId;
   // the hook applies this platform to canActivate only in that case.
   const localCommentPlatform=useMemo(()=>commentTriggerProviderPlatform(doc),[doc]);
-  // activeFlowId is the LOCAL editor id; the hook resolves the real server flow_key.
-  const {state:activation,toggle:toggleActivation,updateToLatest}=useFlowActivation(activeFlowId,showPublications,localCommentPlatform);
+  // Server-decided (operator_status): operator controls render ONLY for "operator";
+  // "loading" and every failure hide them. The server refuses operator actions
+  // for everyone else, so this is UI hiding only, never the security boundary.
+  const operatorStatus=useOperatorStatus();
+  const isOperator=operatorStatus==="operator";
+  // activeFlowId is the LOCAL editor id; the hook resolves the real server flow_key
+  // (operator only; customers get the account from `accounts` alone).
+  const {state:activation,toggle:toggleActivation,updateToLatest,activateRevision}=useFlowActivation(activeFlowId,showPublications,localCommentPlatform,operatorStatus);
+  // Explicit revision choice (never defaults to latest); cleared when the managed server flow changes.
+  const [selectedRevision,setSelectedRevision]=useState<number|null>(null);
+  useEffect(()=>{setSelectedRevision(null);},[activation.serverKey]);
+  const selectionStale=selectedRevision!==null&&activation.phase==="ready"&&!activation.revisions.includes(selectedRevision);
+  // Editor gating from the server's per-account capabilities (UI only; the server
+  // decides at publish/activation). Not loaded / failed / demo -> nothing gated.
+  const capabilityState=useFlowCapabilities(activation.accountId,activeFlowId);
   // Local draft findings only gate activating the draft's own published flow.
   const editingOwnServerFlow=activation.serverKey===activeFlowId;
   const activeEnabled=activation.phase==="ready"&&activation.active;
@@ -231,6 +247,12 @@ function Editor(){
     }
     return map;
   },[issues]);
+  const capabilityGates=useMemo(()=>{
+    const map=new Map<string,Gate>();
+    for(const n of doc.nodes){const g=blockGate(n.data,capabilityState,activation.accountId,language==="en");if(g)map.set(n.id,g);}
+    return map;
+  },[doc.nodes,capabilityState,activation.accountId,language]);
+  const capabilityNotice=accountNotice(capabilityState,activation.accountId,language==="en");
   // Skin-only save indicator: observes the existing 700ms browser autosave without changing it.
   const [saveState,setSaveState]=useState<"saved"|"saving"|"paused"|"failed">("saving");
   useEffect(()=>{
@@ -292,7 +314,7 @@ function Editor(){
         </div>
         <FlowSwitcher flows={flows} activeFlowId={activeFlowId} activeName={doc.name} liveDoc={doc} language={language} onSwitch={switchTo} onCreate={createNewFlow} onBlank={createBlankFlow}/>
         {PUBLICATION_UI_ENABLED&&<button type="button" data-testid="flow-publications" className="fs-btn fs-btn-primary fs-publish" onClick={()=>setShowPublications(true)}>
-          <Send size={16}/><span className="sm:hidden">{t("publish")}</span><span className="hidden sm:inline">{language==="en"?"Published revisions":"الإصدارات المنشورة"}</span></button>}
+          <Send size={16}/><span className="sm:hidden">{t("publish")}</span><span className="hidden sm:inline">{isOperator?(language==="en"?"Published revisions":"الإصدارات المنشورة"):t("publish")}</span></button>}
         <button type="button" className="fs-ibtn fs-tb-toggle" aria-label={toolbarCollapsed?t("expand"):t("collapse")} aria-expanded={!toolbarCollapsed} onClick={()=>setToolbarCollapsed(v=>!v)}>
           {toolbarCollapsed?<ChevronDown size={18}/>:<ChevronUp size={18}/>} <span className="hidden lg:inline">{toolbarCollapsed?t("showTools"):t("hideTools")}</span>
         </button>
@@ -320,6 +342,8 @@ function Editor(){
           }}><Trash2 size={15}/></button>
         </div>
       {!toolbarCollapsed&&<div className="fs-tb-row fs-scroll-row" data-testid="flow-toolbar-secondary">
+        {/* Operator-only live controls (revisions, activation); customers publish/stop from the Publish panel. */}
+        {isOperator&&<>
         <button data-testid="flow-enabled-toggle" type="button" aria-label={t("activate")} aria-pressed={activeEnabled}
           aria-busy={activation.phase==="loading"||activation.busy} disabled={activationLocked}
           title={activation.reason||undefined}
@@ -344,6 +368,26 @@ function Editor(){
           }}>
           {language==="en"?"Update to latest":"تحديث إلى أحدث إصدار"}
         </button>}
+        {activation.phase==="ready"&&activation.revisions.length>0&&<>
+          <select data-testid="flow-revision-select" className={btn} aria-label={language==="en"?"Revision to activate":"الإصدار المطلوب تفعيله"}
+            value={selectedRevision??""} disabled={activation.busy}
+            onChange={e=>setSelectedRevision(e.target.value?Number(e.target.value):null)}>
+            <option value="">{language==="en"?"Choose revision…":"اختر الإصدار…"}</option>
+            {selectionStale&&<option value={selectedRevision!}>{"v"+selectedRevision+(language==="en"?" · stale":" · قديم")}</option>}
+            {activation.revisions.map(r=><option key={r} value={r}>{"v"+r+(r===activation.activeRevision?(language==="en"?" · active":" · نشط"):"")}</option>)}
+          </select>
+          <button type="button" data-testid="flow-activate-selected" className={btn}
+            disabled={activation.busy||selectedRevision===null||selectionStale||selectedRevision===activation.activeRevision||!activation.canActivate}
+            onClick={()=>{
+              if(editingOwnServerFlow&&errors.length>0){setShowIssues(true);setNotice("راجع الأخطاء قبل تفعيل التدفق.");return;}
+              void activateRevision(selectedRevision).then(r=>setNotice(r.message));
+            }}>
+            {language==="en"?"Activate selected revision":"تفعيل الإصدار المحدد"}
+          </button>
+          {selectionStale&&<span data-testid="flow-revision-stale" className="text-xs text-[#E5B54B]">
+            {language==="en"?"Stale selection: v"+selectedRevision+" is no longer published. Choose again.":"اختيار قديم: الإصدار v"+selectedRevision+" لم يعد منشورًا. اختر من جديد."}</span>}
+        </>}
+        </>}
         {activation.reason&&<span data-testid="flow-activation-reason" className="text-xs text-[#E5B54B]">{activation.reason}</span>}
         {/* Each flow is activated independently; the main AI chatbot is never switched off by a flow. */}
         <span data-testid="flow-chatbot-note" className="shrink-0 whitespace-nowrap text-xs text-[#BED4C9]"
@@ -377,13 +421,14 @@ function Editor(){
       </div></div>
     </header>
     {CLOUD_DRAFT_UI_ENABLED&&showCloudDrafts&&<CloudDraftPanel language={language} onClose={()=>setShowCloudDrafts(false)}/>}
-    {PUBLICATION_UI_ENABLED&&showPublications&&<FlowPublicationPanel key={activeFlowId} flowKey={activeFlowId} document={doc} language={language} onImportRevision={importPublishedRevision} onPreviewRevision={previewPublishedRevision} onClose={()=>setShowPublications(false)}/>}
+    {PUBLICATION_UI_ENABLED&&showPublications&&<FlowPublicationPanel key={activeFlowId+":"+operatorStatus} operator={isOperator} flowKey={activeFlowId} document={doc} language={language} onImportRevision={importPublishedRevision} onPreviewRevision={previewPublishedRevision} onClose={()=>setShowPublications(false)}/>}
     {recovery.messages.length>0&&<div role="alert" className="fs-recovery">
       <strong>تقرير استعادة التدفقات: </strong>{recovery.messages.join(" ")} تم استرجاع {recovery.recovered} وتجاهل {recovery.skipped}.
       {protectStoredLibrary&&<span className="mr-2 font-bold">الحفظ التلقائي متوقف لحماية بيانات المكتبة الأصلية؛ استخدم «تصدير» قبل تأكيد الحفظ اليدوي.</span>}
     </div>}
     <div className="relative flex min-h-0 flex-1 overflow-hidden">
       <section className="fs-stage relative min-w-0 flex-1" aria-label="مساحة التدفقات" data-touch-pan={isCompact} onClick={()=>{if(edgeMenu)setEdgeMenu(null);}}>
+        <CapabilityGateContext.Provider value={capabilityGates}>
         <FlowIssuesContext.Provider value={nodeIssues}>
         <ReactFlow<FlowNode,FlowEdge>
           nodes={renderedNodes} edges={renderedEdges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
@@ -435,6 +480,7 @@ function Editor(){
           <MiniMap nodeColor={n=>SKIN_COLOR[(n.data as FlowNode["data"]).kind]||"#3DD189"} nodeBorderRadius={8} className="fs-minimap !hidden md:!block" maskColor="rgba(2,12,8,.7)" pannable zoomable />
         </ReactFlow>
         </FlowIssuesContext.Provider>
+        </CapabilityGateContext.Provider>
         <WorkspaceTools language={language}/>
         <button type="button" data-testid="ai-flow-fab" className="fs-ai-fab nodrag nopan" aria-haspopup="dialog" onClick={()=>setShowAi(true)}>
           <Sparkles size={18} aria-hidden="true"/><span>مساعد الذكاء الاصطناعي</span></button>
@@ -468,23 +514,33 @@ function Editor(){
             <div className="fs-pal-grid">
               {KIND_LIST.filter(k=>k!=="trigger"||(!addRequest.source&&!doc.nodes.some(n=>n.data.kind==="trigger"))).map(kind=>{
                 const KindIcon=SKIN_ICON[kind],name=flowKindLabel(kind,language,LABELS[kind]);
-                return <button key={kind} type="button" aria-label={name} className="fs-pal-item" style={{"--c":SKIN_COLOR[kind]} as CSSProperties}
-                  onClick={()=>addNode(kind,addRequest.position,addRequest.source&&addRequest.port?{source:addRequest.source,port:addRequest.port}:undefined)}>
+                // Unavailable for this account: shown disabled with a plain reason, never hidden.
+                const gate=blockGate(makeNode(kind,{x:0,y:0}).data,capabilityState,activation.accountId,language==="en");
+                return <button key={kind} type="button" aria-label={name+(gate?" — "+gate.text:"")} className="fs-pal-item"
+                  data-testid={"pal-kind-"+kind} aria-disabled={gate?true:undefined} data-gated={gate?"true":undefined}
+                  style={{"--c":SKIN_COLOR[kind],...(gate?{opacity:.55,cursor:"not-allowed"}:{})} as CSSProperties}
+                  onClick={()=>{if(gate){setNotice(gate.text);return;}addNode(kind,addRequest.position,addRequest.source&&addRequest.port?{source:addRequest.source,port:addRequest.port}:undefined);}}>
                   <span className="fs-node-ico" aria-hidden="true"><KindIcon size={17}/></span>
-                  <span className="min-w-0"><b>{name}</b><small aria-hidden="true">{skinHint(kind,language)}</small></span>
+                  <span className="min-w-0"><b>{name}</b><small aria-hidden="true">{skinHint(kind,language)}</small>
+                    {gate&&<small data-testid={"pal-gate-"+kind} className="block text-[11px] leading-5 text-[#F5D99C]">{gate.text}</small>}</span>
                 </button>;})}
               {ACTION_PRESETS.map(p=>{
                 const ActIcon=SKIN_ICON.action,name=language==="ar"?p.ar:p.en;
-                return <button key={p.id} type="button" aria-label={name} data-testid={"pal-preset-"+p.id} className="fs-pal-item" style={{"--c":SKIN_COLOR.action} as CSSProperties}
-                  onClick={()=>addNode("action",addRequest.position,addRequest.source&&addRequest.port?{source:addRequest.source,port:addRequest.port}:undefined,p.preset)}>
+                const gate=blockGate(makeNode("action",{x:0,y:0},p.preset).data,capabilityState,activation.accountId,language==="en");
+                return <button key={p.id} type="button" aria-label={name+(gate?" — "+gate.text:"")} data-testid={"pal-preset-"+p.id} className="fs-pal-item"
+                  aria-disabled={gate?true:undefined} data-gated={gate?"true":undefined}
+                  style={{"--c":SKIN_COLOR.action,...(gate?{opacity:.55,cursor:"not-allowed"}:{})} as CSSProperties}
+                  onClick={()=>{if(gate){setNotice(gate.text);return;}addNode("action",addRequest.position,addRequest.source&&addRequest.port?{source:addRequest.source,port:addRequest.port}:undefined,p.preset);}}>
                   <span className="fs-node-ico" aria-hidden="true"><ActIcon size={17}/></span>
-                  <span className="min-w-0"><b>{name}</b><small aria-hidden="true">{language==="ar"?p.hintAr:p.hintEn}</small></span>
+                  <span className="min-w-0"><b>{name}</b><small aria-hidden="true">{language==="ar"?p.hintAr:p.hintEn}</small>
+                    {gate&&<small data-testid={"pal-gate-"+p.id} className="block text-[11px] leading-5 text-[#F5D99C]">{gate.text}</small>}</span>
                 </button>;})}
             </div>}
+          {capabilityNotice&&<p data-testid="capability-account-notice" className="mt-3 text-[11px] leading-5 text-[#F5D99C]">{capabilityNotice}</p>}
           <p className="mt-3 text-[11px] leading-5 text-[var(--fs-muted)]">بعد الإضافة يمكنك تحريك العقدة بحرية وإعادة ترتيب المخطط.</p>
         </div>}
       </section>
-      {selected&&<NodeEditor node={selected} language={language} onClose={()=>store().setSelected(null)}/>}
+      {selected&&<NodeEditor node={selected} language={language} capabilityNotice={capabilityGates.get(selected.id)?.text??null} onClose={()=>store().setSelected(null)}/>}
     </div>
     {showAi&&<AiFlowAssistant onClose={()=>setShowAi(false)} onApplied={message=>{setNotice(message);window.setTimeout(()=>void instance.fitView({padding:.2,maxZoom:1,duration:window.matchMedia?.("(prefers-reduced-motion: reduce)").matches?0:300}),80);}}/>}
     {notice&&<div role="status" className="fs-toast" onClick={()=>setNotice("")}>{notice} ×</div>}

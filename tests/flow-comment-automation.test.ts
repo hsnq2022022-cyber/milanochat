@@ -247,11 +247,21 @@ test("idempotency: an uncertain attempt is reconciled, never blindly re-posted",
 
 test("flow-publication validates comment triggers at publish (422), after the document check", () => {
   const src = readFileSync("supabase/functions/flow-publication/index.ts", "utf8");
-  const publish = src.slice(src.indexOf('if(action==="publish")'), src.indexOf('if(action==="list")'));
-  const a = publish.indexOf('if(!doc)return error("Flow document is invalid or targets another channel",422);');
-  const b = publish.indexOf("if(documentCommentTriggerProblem(doc)!==null)");
-  const c = publish.indexOf('client.rpc("flow_publish_revision"');
-  assert.ok(a > 0 && b > a && c > b, "validated before the publish RPC");
+  // publish and publish_live share validatePublishDocument, then createRevision.
+  const validate = src.slice(src.indexOf("function validatePublishDocument("), src.indexOf("async function createRevision("));
+  const a = validate.indexOf('if(!doc)return fail(error("Flow document is invalid or targets another channel",422));');
+  const b = validate.indexOf("if(documentCommentTriggerProblem(doc)!==null)");
+  assert.ok(a > 0 && b > a, "comment trigger validated after the document check");
+  const create = src.slice(src.indexOf("async function createRevision("), src.indexOf("const MAX_BODY_BYTES"));
+  assert.equal(src.split('client.rpc("flow_publish_revision"').length, 2, "one publish RPC call site");
+  assert.ok(create.includes('client.rpc("flow_publish_revision"'));
+  for (const action of ["publish", "publish_live"]) {
+    const start = src.indexOf(`if(action==="${action}")`);
+    const branch = src.slice(start, src.indexOf("if(action===", start + 10));
+    const v = branch.indexOf("validatePublishDocument(request.document,scope.platform)");
+    const c = branch.indexOf("await createRevision(");
+    assert.ok(v > 0 && c > v, action + ": validated before the publish RPC");
+  }
 });
 
 // ------------------------------------------------------------------ wiring

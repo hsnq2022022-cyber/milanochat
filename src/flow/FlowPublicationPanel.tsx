@@ -1,11 +1,15 @@
-import {useCallback,useEffect,useState} from "react";
+import {useCallback,useEffect,useRef,useState} from "react";
+import {classifyPublishLive,PUBLISH_LIVE_TEXT,savedNotLiveText,type PublishLiveResult} from "./publishLiveResult.ts";
+import {classifyStopError,classifyStopReply,STOP_TEXT,type StopResult} from "./emergencyStop.ts";
 import type {FlowDocument} from "./model.ts";
 import type {FlowLanguage} from "./uiLocale.ts";
 import { copyText } from "../lib/clipboard.ts";
-import {accountCanActivate,activeRevisionOf,catalogActiveFlows,resolveServerFlowKey,
+import {accountCanActivate,activeRevisionOf,catalogActiveFlows,readinessCandidateSummary,resolveServerFlowKey,
  type ActivationAccount,type CatalogActive} from "./activationAccount.ts";
 import {commentTriggerProviderPlatform} from "./serverPublicationValidation.ts";
 import {activationErrorMessage,invokeService,serviceErrorDetail} from "./useFlowActivation.ts";
+import {activationConfirmText,classifyRevision,listedActive,listedRevisions,REASON_LABELS,REFUSAL_TEXT,
+ selectionRefusal,STATUS_LABELS} from "./revisionSelection.ts";
 
 type Account=ActivationAccount;
 type Version={revision:number;created_at:string};
@@ -23,6 +27,8 @@ type ServerText={ar:string;en:string};
 type CommentReadiness={status:"supported"|"unsupported";label:ServerText;statusLabel:ServerText;detail?:ServerText};
 type Readiness={checks:ReadinessChecks;candidateKind:"buttons"|"delay"|"mixed"|"text"|"comment"|"unsupported";
  commentTrigger?:CommentReadiness|null;checkLabels?:Record<string,ServerText>;
+ // Additive server diagnostics (examined flow/revision, reasons); see readinessCandidateSummary.
+ candidate?:unknown;
  buttonsConfigured:boolean;delayConfigured:boolean;
  // Absent on older servers; the per-kind fallbacks below preserve the old behaviour.
  configured?:boolean;needsButtons?:boolean;needsScheduler?:boolean;needsInternalActions?:boolean;needsMedia?:boolean};
@@ -65,7 +71,15 @@ type Reply={ok?:boolean;error?:string;accounts?:Account[];
  items?:Version[];activation?:Activation;revision?:number;
  flows?:PublishedFlow[];active?:unknown;activeFlows?:unknown;truncated?:boolean;document?:unknown;readiness?:Readiness;candidateRevision?:number|null};
 type Props={flowKey:string;document:FlowDocument;language:FlowLanguage;onClose:()=>void;
- onImportRevision?:(document:unknown)=>boolean;onPreviewRevision?:(document:unknown)=>boolean};
+ onImportRevision?:(document:unknown)=>boolean;onPreviewRevision?:(document:unknown)=>boolean;
+ /**
+  * From the server's `operator_status` (useOperatorStatus); default false = customer.
+  * Customer mode: account, Publish (publish_live) and the emergency stop
+  * (deactivate) only; no catalog/list/read/readiness/activate/rollback call and
+  * no revision or technical text. The server stays authoritative: hiding is
+  * not a security boundary.
+  */
+ operator?:boolean};
 
 // Visible server code (support diagnostics); never secrets.
 const codeSuffix=(e:unknown,en:boolean)=>(en?" (code: ":" (رمز: ")+serviceErrorDetail(e)+")";
@@ -73,9 +87,10 @@ const style="min-h-11 rounded-lg border border-[#275443] bg-[#0F2E24] px-3 py-2 
 const CANARY_UI=(import.meta as ImportMeta & {env?:Record<string,string|undefined>})
  .env?.VITE_ENABLE_FLOW_CANARY_CONTROLS==="true";
 
-export default function FlowPublicationPanel({flowKey,document,language,onClose,onImportRevision,onPreviewRevision}:Props){
+export default function FlowPublicationPanel({flowKey,document,language,onClose,onImportRevision,onPreviewRevision,operator=false}:Props){
  const en=language==="en";
  const [accounts,setAccounts]=useState<Account[]>([]);
+ const [accountsLoaded,setAccountsLoaded]=useState(false);
  const [accountId,setAccountId]=useState("");
  const [managedFlowKey,setManagedFlowKey]=useState(flowKey);
  const [catalog,setCatalog]=useState<PublishedFlow[]>([]);
@@ -89,6 +104,11 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
  const [notice,setNotice]=useState("");
  const [readiness,setReadiness]=useState<Readiness|null>(null);
  const [checkedRevision,setCheckedRevision]=useState<number|null>(null);
+ // Readiness reports per exact revision (server candidateRevision) and the explicit selection.
+ const [reports,setReports]=useState<Record<number,Readiness>>({});
+ const [selectedRevision,setSelectedRevision]=useState<number|null>(null);
+ const [listTruncated,setListTruncated]=useState(false);
+ const resetSelection=()=>{setReports({});setSelectedRevision(null);};
  const isEditingLocalFlow=managedFlowKey===flowKey;
  // Comment flows: the server's canActivateComments hint (Facebook Page comments
  // need server flags). Other managed server flows keep the old canActivate rule.
@@ -104,17 +124,23 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
  useEffect(()=>{
   let cancelled=false;
   void call({action:"accounts"}).then(r=>{
-   if(!cancelled)setAccounts(r.accounts??[]);
+   if(cancelled)return;
+   const list=r.accounts??[];
+   setAccounts(list);setAccountsLoaded(true);
+   // Customers with exactly one channel account get it selected for them.
+   if(!operator&&list.length===1)setAccountId(list[0].id);
   }).catch(e=>{
-   if(!cancelled)setNotice((en?"Publication service unavailable.":"خدمة نشر التدفقات غير متاحة.")+codeSuffix(e,en));
+   if(!cancelled)setNotice(operator?(en?"Publication service unavailable.":"خدمة نشر التدفقات غير متاحة.")+codeSuffix(e,en)
+    :(en?"Publishing is unavailable right now; please try again shortly.":"خدمة النشر غير متاحة الآن، حاول مرة أخرى بعد قليل."));
   });
   return()=>{cancelled=true;};
- },[call,en]);
+ },[call,en,operator]);
 
  // The editor ID is local; discover immutable publications for the
  // authenticated account instead of guessing the active server flow key.
  useEffect(()=>{
-  if(!accountId){setCatalog([]);setActiveServerFlows([]);return;}
+  // catalog is operator-only: never called in customer mode.
+  if(!operator||!accountId){setCatalog([]);setActiveServerFlows([]);return;}
   let cancelled=false;
   void call({action:"catalog",accountId,flowKey}).then(r=>{
    if(cancelled)return;
@@ -132,11 +158,11 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
    if(!cancelled)setNotice((en?"Unable to list published flows.":"تعذر عرض التدفقات المنشورة.")+codeSuffix(e,en));
   });
   return()=>{cancelled=true;};
- },[accountId,flowKey,call,en]);
+ },[accountId,flowKey,call,en,operator]);
 
  // Read the immutable server revision without importing or writing to local storage.
  const previewRevision=async(revision:number)=>{
-  if(!onPreviewRevision||busy||!accountId)return;
+  if(!operator||!onPreviewRevision||busy||!accountId)return;
   setBusy(true);setNotice("");
   try{
    const r=await call({action:"read",accountId,flowKey:managedFlowKey,revision});
@@ -149,13 +175,15 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
  };
 
  const inspectReadiness=async(revision?:number)=>{
-  if(!accountId||busy)return;
+  if(!operator||!accountId||busy)return;
   setReadiness(null);setCheckedRevision(null);setBusy(true);setNotice("");
   try{
    const r=await call({action:"readiness",accountId,flowKey:managedFlowKey,...(revision?{revision}:{})});
    if(!r.readiness)throw Error("Missing readiness report");
    setReadiness(r.readiness);
    setCheckedRevision(r.candidateRevision??null);
+   const examined=r.candidateRevision;
+   if(typeof examined==="number"&&revision===examined)setReports(m=>({...m,[examined]:r.readiness!}));
   }catch(e){
    setNotice((en?"Unable to verify advanced flow configuration.":
     "تعذر التحقق من إعدادات التدفقات المتقدمة.")+codeSuffix(e,en));
@@ -174,6 +202,11 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
   const configured=readinessConfigured(readiness);
   // No token, account ID, customer identity, message or tenant information.
   const report={revision:checkedRevision,kind:readiness.candidateKind,configured,missing};
+  // Additive: which flow/revision the server examined and why checks are missing
+  // (flow key, revision numbers and reason codes only; absent on older servers).
+  const examined=readinessCandidateSummary(readiness);
+  if(examined)Object.assign(report,{flowKey:examined.flowKey,source:examined.source,found:examined.found,
+   activeRevision:examined.activeRevision,engine:examined.engine,reasons:examined.reasons});
   try{
    await copyText(JSON.stringify(report,null,2));
    setNotice(en?"Readiness report copied.":"تم نسخ تقرير الجاهزية.");
@@ -183,7 +216,7 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
  };
 
  const importRevision=async(revision:number)=>{
-  if(!onImportRevision||busy||!accountId)return;
+  if(!operator||!onImportRevision||busy||!accountId)return;
   if(!window.confirm(en
    ?"Import this published version as a NEW local copy, keeping your current flow?"
    :"استيراد الإصدار المنشور كنسخة محلية جديدة مع الحفاظ على التدفق المفتوح؟"))return;
@@ -199,44 +232,66 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
  };
 
  const refresh=async(id:string,key:string=managedFlowKey)=>{
+  if(!operator)return; // list is operator-only (customer publish shows the result notice only)
   const r=await call({action:"list",accountId:id,flowKey:key});
   setVersions(r.items??[]);
   setActivation(r.activation??null);
+  setListTruncated(r.truncated===true);
   setLoaded(true);
  };
  const load=async()=>{
-  if(!accountId||busy)return;
+  if(!operator||!accountId||busy)return;
   setBusy(true);setNotice("");setLoaded(false);
   try{await refresh(accountId,managedFlowKey);}
   catch(e){setNotice((en?"Unable to load revisions.":"تعذر تحميل الإصدارات.")+codeSuffix(e,en));}
   finally{setBusy(false);}
  };
+ const publishInFlight=useRef(false);
  const publish=async()=>{
-  if(!accountId||busy||!isEditingLocalFlow||!window.confirm(en
-   ?"Publish a new immutable revision? Messaging will NOT be activated."
-   :"نشر إصدار جديد غير قابل للتعديل؟ لن يتم تفعيل إرسال الرسائل."))return;
+  // Synchronous guard: a rapid second click must not send a second request.
+  if(publishInFlight.current||!accountId||busy||!isEditingLocalFlow)return;
+  if(!window.confirm(en?PUBLISH_LIVE_TEXT.confirm.en:PUBLISH_LIVE_TEXT.confirm.ar))return;
+  publishInFlight.current=true;
   setBusy(true);setNotice("");
   try{
-   const r=await call({action:"publish",accountId,flowKey,document});
-   await refresh(accountId,flowKey);
-   setNotice(en?"Published revision "+r.revision+" without activating messages.":
-    "تم نشر الإصدار "+r.revision+" دون تفعيل الرسائل.");
-  }catch(e){setNotice((en?"Publishing failed; your local draft is unchanged.":
-   "فشل النشر؛ لم تتغير المسودة المحلية.")+codeSuffix(e,en));}
-  finally{setBusy(false);}
+   let result:PublishLiveResult;
+   try{result=classifyPublishLive(await call({action:"publish_live",accountId,flowKey,document}));}
+   catch{result={kind:"unexpected"};}
+   // Customer text only: no codes, revisions or raw errors.
+   setNotice(result.kind==="live"?(en?PUBLISH_LIVE_TEXT.live.en:PUBLISH_LIVE_TEXT.live.ar)
+    :result.kind==="saved_not_live"?savedNotLiveText(result,en)
+    :(en?PUBLISH_LIVE_TEXT.failed.en:PUBLISH_LIVE_TEXT.failed.ar));
+   if(result.kind!=="unexpected"){try{await refresh(accountId,flowKey);}catch{/* result notice stands */}}
+  }finally{publishInFlight.current=false;setBusy(false);}
  };
+ const reasonText=(code:string)=>REASON_LABELS[code]?.[en?"en":"ar"]??
+  readinessLabels[code as keyof ReadinessChecks]?.[en?"en":"ar"]??code;
  const change=async(action:"activate"|"rollback"|"deactivate",revision?:number)=>{
-  if(!loaded||!accountId||busy)return;
-  const target=" ("+managedFlowKey+(revision?" · v"+revision:"")+")";
-  if(!window.confirm((action==="deactivate"
-   ?(en?"Stop this automation?":"هل تريد إيقاف التدفق؟")
-   :(productionReady
-     ?(en?"Activate a real incoming-message automation for this account?":
-       "تفعيل الأتمتة الفعلية للرسائل الواردة على هذا الحساب؟")
-     :(en?"Use a test-only activation? Server approval is required.":
-       "تفعيل إصدار تجريبي؟ يتطلب موافقة الخادم.")))+target))return;
+  if(!operator||!loaded||!accountId||busy)return;
+  if(action==="deactivate"){
+   if(!window.confirm((en?"Stop this automation?":"هل تريد إيقاف التدفق؟")+" ("+managedFlowKey+")"))return;
+  }
   setBusy(true);setNotice("");
   try{
+   if(action!=="deactivate"){
+    // Exact revision only: re-read this flow's revisions and active state; a
+    // missing/stale selection is refused (never another revision or flow).
+    const loadedActive=activation?.is_active?activation.revision:null;
+    const fresh=await call({action:"list",accountId,flowKey:managedFlowKey});
+    const refusal=selectionRefusal({selected:revision,freshRevisions:listedRevisions(fresh.items),
+     freshActive:listedActive(fresh.activation),loadedActive});
+    if(refusal){
+     if(refusal!=="already_active"){setVersions(fresh.items??[]);setActivation(fresh.activation??null);}
+     setNotice(REFUSAL_TEXT[refusal][en?"en":"ar"]);return;
+    }
+    const row=classifyRevision({revision:revision!,activeRevision:loadedActive,report:reports[revision!],reportRevision:revision});
+    if(!row.activatable){
+     setNotice((en?"Revision v"+revision+" cannot be activated; nothing was changed: ":"لا يمكن تفعيل الإصدار v"+revision+"؛ لم يتم أي تغيير: ")+
+      row.reasons.map(reasonText).join(", "));return;
+    }
+    if(!window.confirm((productionReady?"":(en?"Test-only activation; server approval is required.\n":"تفعيل تجريبي؛ يتطلب موافقة الخادم.\n"))+
+     activationConfirmText(managedFlowKey,loadedActive,revision!)))return;
+   }
    await call({action,accountId,flowKey:managedFlowKey,...(revision?{revision}:{})});
    await refresh(accountId,managedFlowKey);
    setNotice(en?"Server confirmed the change.":"أكد الخادم التغيير.");
@@ -246,6 +301,70 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
   }
   finally{setBusy(false);}
  };
+ // Customer emergency stop (owner action, server-scoped to the caller's own
+ // tenant/account): exactly one deactivate for the selected account and the
+ // LOCAL flow key (publish_live publishes under it). Plain feedback only; it
+ // never claims the flow stopped without the server's confirmation.
+ const stopInFlight=useRef(false);
+ const stop=async()=>{
+  if(stopInFlight.current||!accountId||busy)return;
+  if(!window.confirm(en?STOP_TEXT.confirm.en:STOP_TEXT.confirm.ar))return;
+  stopInFlight.current=true;
+  setBusy(true);setNotice("");
+  try{
+   let result:StopResult;
+   try{result=classifyStopReply(await call({action:"deactivate",accountId,flowKey}));}
+   catch(e){result=classifyStopError(e);}
+   setNotice(STOP_TEXT[result][en?"en":"ar"]);
+  }finally{stopInFlight.current=false;setBusy(false);}
+ };
+
+ if(!operator){
+  // Customer view: account by plain channel name, Publish and Stop. No revision
+  // numbers, revision selection, activation/rollback, readiness or technical text.
+  const channelName=(a:Account)=>{
+   const base=a.platform==="instagram"?"Instagram":a.platform==="facebook"?"Facebook":a.platform==="whatsapp"?"WhatsApp":(en?"Channel":"قناة");
+   const same=accounts.filter(x=>x.platform===a.platform);
+   return base+(same.length>1?" "+(same.indexOf(a)+1):"")+(a.is_active===false?(en?" (inactive)":" (غير نشط)"):"");
+  };
+  return <div className="fixed inset-0 z-[95] flex items-center justify-center bg-black/70 p-3" dir={en?"ltr":"rtl"}>
+   <section role="dialog" aria-modal="true" aria-label={en?"Publish flow":"نشر التدفق"} data-testid="flow-publish-panel"
+    className="flex max-h-[90dvh] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-[#275443] bg-[#0B241C] text-white shadow-2xl">
+    <header className="flex items-center justify-between border-b border-[#275443] p-4">
+     <h2 className="font-bold">{en?"Publish flow":"نشر التدفق"}</h2>
+     <button type="button" className={style} onClick={onClose} aria-label={en?"Close":"إغلاق"}>✕</button>
+    </header>
+    <div className="space-y-4 overflow-y-auto p-4 text-sm">
+     <p className="text-xs leading-6 text-[#BED4C9]">{en
+      ?"Publish the flow so it starts replying to messages. You can stop it at any time."
+      :"انشر التدفق ليبدأ بالرد على الرسائل، ويمكنك إيقافه في أي وقت."}</p>
+     {accounts.length>1&&<label className="block space-y-1">
+      <span>{en?"Channel account":"حساب القناة"}</span>
+      <select data-testid="flow-publish-account" className={style+" w-full"} value={accountId} disabled={busy}
+       onChange={e=>{setAccountId(e.target.value);setNotice("");}}>
+       <option value="">{en?"Select an account":"اختر الحساب"}</option>
+       {accounts.map(a=><option key={a.id} value={a.id}>{channelName(a)}</option>)}
+      </select>
+     </label>}
+     {accounts.length===1&&<p data-testid="flow-publish-account-name" className="text-xs text-[#C9E8D9]">
+      {(en?"Channel account: ":"حساب القناة: ")+channelName(accounts[0])}</p>}
+     {accountsLoaded&&accounts.length===0&&<p className="text-xs text-[#F5D99C]">{en
+      ?"No channel account is connected; connect one to publish."
+      :"لا يوجد حساب قناة مرتبط؛ اربط حسابًا لتتمكن من النشر."}</p>}
+     <div className="flex flex-wrap gap-2">
+      <button type="button" className={style} disabled={!accountId||busy||!isEditingLocalFlow}
+       data-testid="flow-publish" onClick={()=>void publish()}>{en?PUBLISH_LIVE_TEXT.button.en:PUBLISH_LIVE_TEXT.button.ar}</button>
+      {accounts.length>0&&<button type="button" className={style} disabled={!accountId||busy}
+       data-testid="flow-stop" onClick={()=>void stop()}>{en?STOP_TEXT.button.en:STOP_TEXT.button.ar}</button>}
+     </div>
+     {notice&&<p role="status" className="rounded-lg border border-[#275443] p-3 text-xs">{notice}</p>}
+     <p className="text-xs text-[#BED4C9]">{en
+      ?"The AI chatbot keeps answering messages that no active flow handles."
+      :"يستمر المساعد الذكي في الرد على الرسائل التي لا يتولاها تدفق نشط."}</p>
+    </div>
+   </section>
+  </div>;
+ }
 
  return <div className="fixed inset-0 z-[95] flex items-center justify-center bg-black/70 p-3"
   dir={en?"ltr":"rtl"}>
@@ -263,7 +382,7 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
     <label className="block space-y-1">
      <span>{en?"Channel account":"حساب القناة"}</span>
      <select className={style+" w-full"} value={accountId} disabled={busy}
-      onChange={e=>{setAccountId(e.target.value);setManagedFlowKey(flowKey);setCatalog([]);setActiveServerFlows([]);setCatalogTruncated(false);setLoaded(false);setVersions([]);setActivation(null);setReadiness(null);setCheckedRevision(null);setNotice("");}}>
+      onChange={e=>{resetSelection();setAccountId(e.target.value);setManagedFlowKey(flowKey);setCatalog([]);setActiveServerFlows([]);setCatalogTruncated(false);setLoaded(false);setVersions([]);setActivation(null);setReadiness(null);setCheckedRevision(null);setNotice("");}}>
       <option value="">{en?"Select an account":"اختر الحساب"}</option>
       {accounts.map(a=><option key={a.id} value={a.id}>
        {a.platform+" · "+a.id.slice(0,8)+(a.is_active?"":" (غير نشط)")}
@@ -273,7 +392,7 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
     {accountId&&<label className="block space-y-1">
      <span>{en?"Published flow":"إدارة التدفقات المنشورة للحساب"}</span>
      <select className={style+" w-full"} value={managedFlowKey} disabled={busy}
-      onChange={e=>{setManagedFlowKey(e.target.value);setLoaded(false);
+      onChange={e=>{resetSelection();setManagedFlowKey(e.target.value);setLoaded(false);
        setVersions([]);setActivation(null);setReadiness(null);setCheckedRevision(null);setNotice("");}}>
       <option value={flowKey}>{(en?"Current local flow":"التدفق المحلي المفتوح")+
        (activeRevisionOf(activeServerFlows,flowKey)!==null?(en?" · Active v":" · نشط v")+activeRevisionOf(activeServerFlows,flowKey):"")}</option>
@@ -316,7 +435,7 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
      <button type="button" className={style} disabled={!accountId||busy}
       onClick={()=>void load()}>{en?"Load revisions":"عرض الإصدارات"}</button>
      <button type="button" className={style} disabled={!accountId||busy||!isEditingLocalFlow}
-      onClick={()=>void publish()}>{en?"Publish new revision":"نشر إصدار جديد"}</button>
+      data-testid="flow-publish" onClick={()=>void publish()}>{en?PUBLISH_LIVE_TEXT.button.en:PUBLISH_LIVE_TEXT.button.ar}</button>
      {activation?.is_active&&<button type="button" className={style}
       disabled={busy||!loaded} onClick={()=>void change("deactivate")}>
       {en?"Stop automation":"إيقاف التدفق"}</button>}
@@ -346,7 +465,22 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
         <strong data-testid="flow-readiness-comment-status">{serverText(readiness.commentTrigger.statusLabel,en)}</strong></p>
        {serverText(readiness.commentTrigger.detail,en)&&<p className="mt-1">{serverText(readiness.commentTrigger.detail,en)}</p>}
       </div>}
-      {readiness.candidateKind==="unsupported"&&!readiness.commentTrigger&&<p className="mt-2 text-[#F5D99C]">
+      {(()=>{const c=readinessCandidateSummary(readiness);return c&&<p data-testid="flow-readiness-candidate"
+       data-source={c.source} className="mt-2 break-all text-[#C9E8D9]">
+       {(en?"Flow ":"التدفق ")+c.flowKey+" · "+(c.source==="none"?(en?"no revision examined":"لم يُفحص أي إصدار"):
+        (en?"examined v":"الإصدار المفحوص v")+c.revision+(c.source==="requested"?(en?" (selected)":" (المحدد)"):(en?" (active)":" (النشط)")))+
+        " · "+(c.activeRevision!==null?(en?"active v":"النشط v")+c.activeRevision:(en?"no active revision":"لا يوجد إصدار نشط"))}</p>;})()}
+      {readinessCandidateSummary(readiness)?.source==="none"&&<p data-testid="flow-readiness-no-candidate" className="mt-2 text-[#F5D99C]">
+       {en?"This flow has no active revision and no revision was selected, so no document was checked. Press Load revisions, then Check readiness on the exact revision.":
+        "لا يوجد إصدار نشط لهذا التدفق ولم يُحدَّد إصدار، لذلك لم يُفحص أي مستند. اضغط «عرض الإصدارات» ثم «فحص جاهزية الإصدار» على الإصدار المطلوب."}</p>}
+      {readinessCandidateSummary(readiness)?.reasons.supportedCandidate==="revision_not_found"&&<p className="mt-2 text-[#F5D99C]">
+       {en?"The selected revision was not found for this flow and account; nothing was checked.":
+        "الإصدار المحدد غير موجود لهذا التدفق والحساب؛ لم يُفحص شيء."}</p>}
+      {readinessCandidateSummary(readiness)?.engine==="v2"&&<p data-testid="flow-readiness-v2" className="mt-2 text-[#C9E8D9]">
+       {en?"This revision runs on the simple (V2) engine; the advanced (buttons/delay) checks do not apply to it.":
+        "هذا الإصدار يعمل على المحرك البسيط (V2)؛ فحوص التدفقات المتقدمة (الأزرار/التأخير) لا تنطبق عليه."}</p>}
+      {readiness.candidateKind==="unsupported"&&!readiness.commentTrigger&&
+       (readinessCandidateSummary(readiness)?.found??true)&&readinessCandidateSummary(readiness)?.engine!=="v2"&&<p className="mt-2 text-[#F5D99C]">
        {en?"This revision is not an advanced buttons or delay candidate.":
         "هذا الإصدار ليس تدفق أزرار أو تأخير مدعومًا."}</p>}
       {readiness.needsInternalActions===true&&<p data-testid="flow-readiness-internal-actions"
@@ -369,14 +503,27 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
       </button>
      </div>}
     {notice&&<p role="status" className="rounded-lg border border-[#275443] p-3 text-xs">{notice}</p>}
+    {loaded&&isEditingLocalFlow&&<div data-testid="revision-draft" data-status="draft"
+     className="rounded-lg border border-dashed border-[#275443] p-3 text-xs text-[#BED4C9]">
+     <strong>{en?"Local draft":"المسودة المحلية"}</strong>{" · "+STATUS_LABELS.draft[en?"en":"ar"]}</div>}
     {loaded&&<div className="space-y-2">
      <p className="text-xs text-[#BED4C9]">{activation?.is_active
       ?(en?"Active revision: ":"الإصدار النشط: ")+activation.revision
       :(en?"Activation OFF":"التفعيل معطّل")}</p>
      {versions.map(v=><div key={v.revision}
       className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[#275443] p-3">
-      <div><strong>{(en?"Revision ":"الإصدار ")+v.revision}</strong>
-       <p className="text-xs text-[#A8BDB2]">{v.created_at}</p></div>
+      {(()=>{const row=classifyRevision({revision:v.revision,activeRevision:activation?.is_active?activation.revision:null,
+        report:reports[v.revision],reportRevision:v.revision});
+       return <div><strong>{(en?"Revision ":"الإصدار ")+v.revision}</strong>
+       <p className="text-xs text-[#A8BDB2]">{v.created_at}</p>
+       <p data-testid={"revision-status-"+v.revision} data-status={row.status}
+        className={"text-xs "+(row.status==="active"||row.status==="candidate"?"text-[#C9E8D9]":row.status==="unchecked"?"text-[#BED4C9]":"text-[#F5D99C]")}>
+        {STATUS_LABELS[row.status][en?"en":"ar"]+(selectedRevision===v.revision?(en?" · selected":" · محدد"):"")}</p>
+       {row.reasons.length>0&&<p data-testid={"revision-reasons-"+v.revision} className="text-xs text-[#F5D99C]">
+        {row.reasons.map(reasonText).join(" · ")}</p>}</div>;})()}
+      <button type="button" data-testid={"select-published-revision-"+v.revision} aria-pressed={selectedRevision===v.revision}
+       className={style} disabled={busy} onClick={()=>{setSelectedRevision(v.revision);void inspectReadiness(v.revision);}}>
+       {en?"Select":"اختيار"}</button>
       <button type="button" data-testid={"readiness-published-revision-"+v.revision}
        className={style} disabled={busy} onClick={()=>void inspectReadiness(v.revision)}>
        {en?"Check readiness":"فحص جاهزية الإصدار"}
@@ -394,6 +541,8 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
        {activation?.is_active?(en?"Rollback here":"الرجوع لهذا الإصدار"):
         (productionReady?(en?"Activate live":"تفعيل فعلي"):(en?"Activate test":"تفعيل تجريبي"))}</button>}
      </div>)}
+     {listTruncated&&<p data-testid="revision-list-truncated" className="text-xs text-[#E5B54B]">{en
+      ?"Only the newest 100 revisions are listed.":"تُعرض أحدث 100 إصدار فقط."}</p>}
      {!versions.length&&<p className="text-xs">{en?"No revisions yet.":"لا توجد إصدارات منشورة."}</p>}
     </div>}
    </div>

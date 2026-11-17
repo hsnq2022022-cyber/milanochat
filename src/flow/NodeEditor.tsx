@@ -22,7 +22,9 @@ const operators={contains:"يحتوي",equals:"يساوي",not_equals:"لا يس
 const actions={tag:"إضافة وسم",untag:"حذف وسم",set_field:"تعيين متغير",handoff:"تحويل إلى موظف",notify:"إشعار المسؤول",ai:"AI Step تجريبية"};
 const modes={buttons:"أزرار سريعة",text:"نص",email:"بريد إلكتروني",phone:"هاتف",number:"رقم"};
 
-export default function NodeEditor({node,onClose,language="ar"}:{node:FlowNode|null;onClose:()=>void;language?:FlowLanguage}){
+export default function NodeEditor({node,onClose,language="ar",capabilityNotice=null}:{node:FlowNode|null;onClose:()=>void;language?:FlowLanguage;
+  /** Plain-language reason this block is not available for the account (capabilityReasons.ts), null = none/unknown. */
+  capabilityNotice?:string|null}){
   const store=useFlowStore();
   const [status,setStatus]=useState("");
   const [collapsed,setCollapsed]=useState(false);
@@ -98,6 +100,9 @@ export default function NodeEditor({node,onClose,language="ar"}:{node:FlowNode|n
       </div>
     </div>
     {!collapsed&&<div className="fs-insp-body min-h-0 flex-1 overflow-y-auto px-4 pb-6">
+      {capabilityNotice&&<p role="note" data-testid="step-capability-notice"
+        className="mt-3 rounded-lg border border-[#E5B54B]/60 bg-[#3A2F12] p-3 text-xs leading-6 text-[#F5D99C]">
+        <strong>{language==="ar"?"غير متاح لحسابك: ":"Not available: "}</strong>{capabilityNotice}</p>}
       {d.kind!=="trigger"&&<><label className={section}>{t("title")}</label><input className={input} value={d.title} maxLength={90} onChange={e=>edit({title:e.target.value})}/></>}
       {d.kind==="trigger"&&<>
         <label className={section}>{t("channel")}</label>

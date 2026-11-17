@@ -40,7 +40,11 @@ async function setup(page: Page, handlers: { review?: unknown; reviewNetworkErro
       const inbox = handlers.inbox ?? { status: 200, body: { items: [], readOnly: true } };
       return route.fulfill({ status: inbox.status, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify(inbox.body) });
     }
-    if (u.pathname.endsWith("/flow-publication")) return json(handlers.publication?.(body) ?? { ok: false });
+    if (u.pathname.endsWith("/flow-publication")) {
+      // The publication-panel specs here exercise the operator-only panel (catalog, revisions, readiness).
+      if (body.action === "operator_status") return json({ ok: true, operator: true });
+      return json(handlers.publication?.(body) ?? { ok: false });
+    }
     if (u.pathname.endsWith("/milan-api")) {
       const action = u.searchParams.get("action");
       if (action === "summary") return json({ tenant: { id: TENANT, businessName: "متجر تجريبي", isActive: true, creditsRemaining: 10, phone: "" }, wa: { status: "none" }, openUnresolved: 0 });

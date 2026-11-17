@@ -3,7 +3,8 @@ import { ADVANCED_ONLY_CHECKS, MOCK_HOST, mockAccounts, mockActivation, mockMult
 
 test.skip(!MOCK_HOST, "needs VITE_SUPABASE_URL=http://mock.supabase.test (fake host)");
 
-const fresh = (o: Partial<ActivationServer> = {}): ActivationServer => ({ active: null, calls: [], ...o });
+// Every spec here exercises the operator-only live controls: the fake server answers operator_status {operator:true}.
+const fresh = (o: Partial<ActivationServer> = {}): ActivationServer => ({ operator: true, active: null, calls: [], ...o });
 const mutations = (s: ActivationServer) => s.calls.filter((c) => c.action === "activate" || c.action === "deactivate");
 /** Accept every confirm() and record its text (Playwright dismisses dialogs by default). */
 const acceptDialogs = (page: Page) => {
@@ -25,7 +26,9 @@ test("toggle shows loading then reflects the real inactive status; no 'locally e
   await expect(toggle).toContainText("غير مفعّل");
   await expect(page.getByText("محليًا")).toHaveCount(0);
   const actions = new Set(s.calls.map((c) => c.action)); // dev StrictMode may repeat reads
-  expect([...actions].sort()).toEqual(["accounts", "catalog", "list"]);
+  // Read-only calls only; "capabilities" is the editor's per-account block availability (Phase 1 gating),
+  // "operator_status" the server's answer whether these operator controls may be shown.
+  expect([...actions].sort()).toEqual(["accounts", "capabilities", "catalog", "list", "operator_status"]);
   expect(mutations(s)).toHaveLength(0);
 });
 
@@ -335,14 +338,15 @@ const twoTenants = (): MultiAccountServer => ({
   },
   calls: [],
 });
-const callsOf = (s: MultiAccountServer, session: string) => s.calls.filter((c) => c.session === session && c.action !== "accounts");
+// operator_status carries no account or flow (asked once per page): excluded like "accounts".
+const callsOf = (s: MultiAccountServer, session: string) => s.calls.filter((c) => c.session === session && c.action !== "accounts" && c.action !== "operator_status");
 const mutationsOf = (s: MultiAccountServer, session: string) => callsOf(s, session).filter((c) => c.action === "activate" || c.action === "deactivate");
 
 test("isolation: session owning only A sends only A's id, flow key and revisions across load, update, OFF and ON", async ({ page }) => {
   const s = twoTenants();
   const bBefore = JSON.stringify(s.accounts[ACC_B]);
   acceptDialogs(page);
-  await mockAccounts(page, s, { name: "user-a", owned: [ACC_A] });
+  await mockAccounts(page, s, { name: "user-a", owned: [ACC_A], operator: true });
   await page.goto("/milanochat/#/flows");
   const toggle = page.getByTestId("flow-enabled-toggle");
   const line = page.getByTestId("flow-live-revision");
@@ -378,7 +382,7 @@ test("isolation: session owning only A sends only A's id, flow key and revisions
 test("isolation: a second session (tenant B) in a fresh context sees only its own flow and revisions", async ({ page, browser }) => {
   const s = twoTenants();
   acceptDialogs(page);
-  await mockAccounts(page, s, { name: "user-a", owned: [ACC_A] });
+  await mockAccounts(page, s, { name: "user-a", owned: [ACC_A], operator: true });
   await page.goto("/milanochat/#/flows");
   await page.getByTestId("flow-update-latest").click();
   await expect(page.getByRole("status").filter({ hasText: "تم تحديث التدفق إلى الإصدار v3" })).toBeVisible();
@@ -386,7 +390,7 @@ test("isolation: a second session (tenant B) in a fresh context sees only its ow
   const ctx = await browser.newContext();
   try {
     const pageB = await ctx.newPage();
-    await mockAccounts(pageB, s, { name: "user-b", owned: [ACC_B] });
+    await mockAccounts(pageB, s, { name: "user-b", owned: [ACC_B], operator: true });
     await pageB.goto("/milanochat/#/flows");
     await expect(pageB.getByTestId("flow-enabled-toggle")).toHaveAttribute("aria-pressed", "true");
     const lineB = pageB.getByTestId("flow-live-revision");
@@ -409,7 +413,7 @@ test("isolation: a stale/foreign account id gets the server 403, shown with its 
   const before = JSON.stringify(s.accounts);
   acceptDialogs(page);
   // The session's tenant owns only A, but a stale/foreign id B reaches the client.
-  await mockAccounts(page, s, { name: "user-a", owned: [ACC_A], listed: [ACC_B] });
+  await mockAccounts(page, s, { name: "user-a", owned: [ACC_A], listed: [ACC_B], operator: true });
   await page.goto("/milanochat/#/flows");
   const toggle = page.getByTestId("flow-enabled-toggle");
   await expect(page.getByTestId("flow-activation-reason")).toContainText("Account not authorized · HTTP 403");
@@ -425,7 +429,7 @@ test("isolation: a stale/foreign account id gets the server 403, shown with its 
 });
 
 /* ---------- Several flows active on one account (independent per flow) ---------- */
-const multi = (o: Partial<MultiFlowServer> = {}): MultiFlowServer => ({ flows: {}, active: {}, calls: [], ...o });
+const multi = (o: Partial<MultiFlowServer> = {}): MultiFlowServer => ({ operator: true, flows: {}, active: {}, calls: [], ...o });
 const multiMutations = (s: MultiFlowServer) => s.calls.filter((c) => c.action === "activate" || c.action === "deactivate");
 
 test("two active flows: this toggle manages only its own flow; the other stays ON at its own revision", async ({ page }) => {

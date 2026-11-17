@@ -3,6 +3,8 @@ import {getSupabase} from "../lib/supabase";
 import {accountCanActivate,activeRevisionOf,catalogActiveFlows,pickActivationAccount,readinessBlockers,resolveServerFlowKey,
  type ActivationAccount,type CatalogFlow,type ReadinessReport} from "./activationAccount.ts";
 import type {ProviderPlatform} from "./serverPublicationValidation.ts";
+import {activationConfirmText,classifyRevision,listedActive,listedRevisions,REFUSAL_TEXT,
+ selectionRefusal} from "./revisionSelection.ts";
 
 /**
  * Real (server) activation state for one flow, via the existing `flow-publication`
@@ -13,6 +15,8 @@ import type {ProviderPlatform} from "./serverPublicationValidation.ts";
  * refuses or affects another active flow (the server keeps them independent).
  * Nothing here is local: the toggle only reflects what the server reports, and
  * every server gate (auth, tenant/account scope, approval, readiness) still applies.
+ * catalog/list/readiness/activate are OPERATOR-only on the server: for customers
+ * (see ActivationAccess) the hook only resolves the account via `accounts`.
  */
 export type ActivationPhase="loading"|"ready"|"unavailable";
 export type ActivationState={
@@ -29,6 +33,10 @@ export type ActivationState={
  activeRevision:number|null;
  /** Active and a newer published revision exists. */
  canUpdate:boolean;
+ /** ALL published revisions of serverKey from the server `list` (newest first). */
+ revisions:number[];
+ /** Channel account the toggle uses (server `accounts`), null until known. */
+ accountId:string|null;
 };
 export type ToggleResult={ok:boolean;message:string};
 
@@ -100,6 +108,18 @@ export function activationErrorMessage(e:unknown,verb:Verb,en=false):string{
 }
 
 const UNAVAILABLE_REASON="حالة التفعيل غير متاحة الآن: خدمة التدفقات السحابية غير متاحة أو غير مفعّلة.";
+const NO_ACCOUNT_REASON="لا يوجد حساب قناة نشط مرتبط؛ اربط حسابًا لتتمكن من تفعيل التدفق.";
+/** Customer text: no server codes, HTTP statuses, revisions or engine words. */
+const CUSTOMER_UNAVAILABLE_REASON="خدمة التدفقات غير متاحة الآن، حاول مرة أخرى بعد قليل.";
+const OPERATOR_ONLY:ToggleResult={ok:false,message:"تعذر التنفيذ"};
+
+/**
+ * Who uses the hook (from useOperatorStatus; the server stays authoritative).
+ * "operator": full activation state (catalog -> list, toggle, update, revision
+ * selection). "customer"/"loading": ONLY the `accounts` action; the account id
+ * (and so the editor's capability gating) never depends on operator actions.
+ */
+export type ActivationAccess="loading"|"operator"|"customer";
 
 function asCatalogFlows(v:unknown):CatalogFlow[]{
  if(!Array.isArray(v))return [];
@@ -133,12 +153,20 @@ async function preflight(accountId:string,localKey:string,key:string,target:numb
  if(listed&&listed.latestRevision!==target)
   return {reload:true,refusal:"نُشر إصدار مختلف (v"+listed.latestRevision+") بدل v"+target+"؛ تم تحديث الحالة. لم يتم أي تغيير."+
    " / A different latest revision (v"+listed.latestRevision+") exists instead of v"+target+"; status refreshed. Nothing was changed."};
+ return readinessGuard(accountId,key,target,live);
+}
+
+/** Readiness for exactly `target` must be the server's report for that revision and pass. */
+async function readinessGuard(accountId:string,key:string,target:number,live:number|null):Promise<Preflight>{
  let r:Reply;
  try{r=await invokeService({action:"readiness",accountId,flowKey:key,revision:target});}
  catch(e){return {reload:false,refusal:"تعذر فحص جاهزية الإصدار v"+target+"؛ لم يتم أي تغيير (رمز: "+serviceErrorDetail(e)+
   "). / Readiness check for v"+target+" failed; nothing was changed (code: "+serviceErrorDetail(e)+")."};}
  const checked=typeof r.candidateRevision==="number"?r.candidateRevision:null;
- const blockers=checked!==target?["candidateRevision"]:readinessBlockers(r.readiness,{currentlyActive:live!==null});
+ // Unsupported documents (readiness.candidate reasons) are refused too, never only "simple".
+ const row=checked===target?classifyRevision({revision:target,activeRevision:live,report:r.readiness,reportRevision:checked}):null;
+ const blockers=checked!==target?["candidateRevision"]:
+  row&&(row.status==="unsupported"||row.status==="missing")?row.reasons:readinessBlockers(r.readiness,{currentlyActive:live!==null});
  if(blockers.length)return {reload:false,refusal:"الإصدار v"+target+" غير جاهز للتفعيل؛ لم يتم أي تغيير. النواقص: "+blockers.join(", ")+
   " / Revision v"+target+" is not ready; nothing was changed. Missing: "+blockers.join(", ")};
  return null;
@@ -152,11 +180,13 @@ async function preflight(accountId:string,localKey:string,key:string,target:numb
  * account; it is applied to `canActivate` only when serverKey===flowKey (the
  * local document describes that flow). The server decides on activate.
  */
-export function useFlowActivation(flowKey:string,refreshToken:unknown,commentPlatform:ProviderPlatform|null=null){
+export function useFlowActivation(flowKey:string,refreshToken:unknown,commentPlatform:ProviderPlatform|null=null,
+ access:ActivationAccess="customer"){
  const [state,setState]=useState<ActivationState>({phase:"loading",active:false,revision:null,busy:false,canActivate:false,reason:"",
-  serverKey:flowKey,latestRevision:null,activeRevision:null,canUpdate:false});
+  serverKey:flowKey,latestRevision:null,activeRevision:null,canUpdate:false,revisions:[],accountId:null});
  const account=useRef<Account|null>(null);
  const seq=useRef(0);
+ const operator=access==="operator";
 
  const load=useCallback(async()=>{
   const mine=++seq.current;
@@ -168,12 +198,21 @@ export function useFlowActivation(flowKey:string,refreshToken:unknown,commentPla
     account.current=pickActivationAccount(list,commentPlatform);
     if(!account.current){
      if(mine===seq.current)setState(s=>({...s,phase:"unavailable",active:false,revision:null,canActivate:false,
-      serverKey:flowKey,latestRevision:null,activeRevision:null,canUpdate:false,
-      reason:"لا يوجد حساب قناة نشط مرتبط؛ اربط حسابًا لتتمكن من تفعيل التدفق."}));
+      serverKey:flowKey,latestRevision:null,activeRevision:null,canUpdate:false,revisions:[],accountId:null,
+      reason:NO_ACCOUNT_REASON}));
      return;
     }
    }
    const acc=account.current;
+   if(!operator){
+    // Customer (or operator status still unknown): the account id comes from
+    // `accounts` ALONE, right away, so capability gating never depends on
+    // catalog/list. No operator-only action is ever called on this path.
+    if(mine===seq.current)setState(s=>({...s,phase:access==="loading"?"loading":"ready",active:false,revision:null,
+     canActivate:accountCanActivate(acc,commentPlatform),serverKey:flowKey,latestRevision:null,activeRevision:null,
+     canUpdate:false,revisions:[],accountId:acc.id,reason:""}));
+    return;
+   }
    // The editor id is local: find the server flow_key this account really runs.
    let serverKey=flowKey,catalogNote="";
    try{
@@ -186,6 +225,7 @@ export function useFlowActivation(flowKey:string,refreshToken:unknown,commentPla
    const r=await invokeService({action:"list",accountId:acc.id,flowKey:serverKey});
    if(mine!==seq.current)return;
    const latestRevision=typeof r.items?.[0]?.revision==="number"?r.items[0].revision:null;
+   const revisions=listedRevisions(r.items);
    const on=r.activation?.is_active===true;
    const activeRevision=on?r.activation!.revision:null;
    const allowed=accountCanActivate(acc,serverKey===flowKey?commentPlatform:null);
@@ -193,19 +233,20 @@ export function useFlowActivation(flowKey:string,refreshToken:unknown,commentPla
    setState(s=>({...s,phase:"ready",active:on,revision:activeRevision,
     canActivate:allowed,serverKey,latestRevision,activeRevision,
     canUpdate:on&&latestRevision!==null&&activeRevision!==null&&latestRevision>activeRevision,
-    reason:reasons.join(" ")}));
+    revisions,accountId:acc.id,reason:reasons.join(" ")}));
   }catch(e){
    if(mine===seq.current)setState(s=>({...s,phase:"unavailable",active:false,revision:null,canActivate:false,
-    serverKey:flowKey,latestRevision:null,activeRevision:null,canUpdate:false,
-    reason:UNAVAILABLE_REASON+" (رمز: "+serviceErrorDetail(e)+")"}));
+    serverKey:flowKey,latestRevision:null,activeRevision:null,canUpdate:false,revisions:[],accountId:null,
+    reason:operator?UNAVAILABLE_REASON+" (رمز: "+serviceErrorDetail(e)+")":CUSTOMER_UNAVAILABLE_REASON}));
   }
- },[flowKey,commentPlatform]);
+ },[flowKey,commentPlatform,operator,access]);
 
  // A different comment platform may need a different account: pick again.
  useEffect(()=>{account.current=null;},[commentPlatform]);
  useEffect(()=>{void load();return()=>{seq.current++;};},[load,refreshToken]);
 
  const toggle=useCallback(async():Promise<ToggleResult>=>{
+  if(!operator)return OPERATOR_ONLY; // operator-only (the server refuses it for customers too)
   const acc=account.current;
   if(!acc||state.busy||state.phase!=="ready")return {ok:false,message:"تعذر التفعيل"};
   const key=state.serverKey;
@@ -248,7 +289,7 @@ export function useFlowActivation(flowKey:string,refreshToken:unknown,commentPla
    setState(s=>({...s,busy:false}));
    return {ok:false,message:activationErrorMessage(e,"التفعيل")};
   }
- },[flowKey,load,state.active,state.busy,state.phase,state.serverKey,state.latestRevision,state.activeRevision]);
+ },[flowKey,load,operator,state.active,state.busy,state.phase,state.serverKey,state.latestRevision,state.activeRevision]);
 
  /**
   * Move the live automation of serverKey to exactly the displayed latest revision:
@@ -256,6 +297,7 @@ export function useFlowActivation(flowKey:string,refreshToken:unknown,commentPla
   * activate(serverKey, latest). Never another revision, never automatic.
   */
  const updateToLatest=useCallback(async():Promise<ToggleResult>=>{
+  if(!operator)return OPERATOR_ONLY;
   const acc=account.current;
   const from=state.activeRevision,to=state.latestRevision;
   if(!acc||state.busy||state.phase!=="ready"||!state.active||from===null||to===null||to<=from)
@@ -283,7 +325,49 @@ export function useFlowActivation(flowKey:string,refreshToken:unknown,commentPla
    setState(s=>({...s,busy:false}));
    return {ok:false,message:activationErrorMessage(e,"التحديث")};
   }
- },[flowKey,load,state.active,state.busy,state.phase,state.serverKey,state.latestRevision,state.activeRevision]);
+ },[flowKey,load,operator,state.active,state.busy,state.phase,state.serverKey,state.latestRevision,state.activeRevision]);
 
- return {state,toggle,updateToLatest};
+ /**
+  * Activate EXACTLY the revision the user selected (`selected`), replacing this
+  * flow's current active revision (other flows/accounts untouched). Re-reads the
+  * flow's revisions and active state first and refuses a missing/stale/already
+  * active selection; readiness(selected) must pass; the confirm names the flow,
+  * the selected revision and the one it replaces. No selection = refusal, never
+  * the latest. The state is then reloaded from the server.
+  */
+ const activateRevision=useCallback(async(selected:number|null):Promise<ToggleResult>=>{
+  if(!operator)return OPERATOR_ONLY;
+  const acc=account.current;
+  if(!acc||state.busy||state.phase!=="ready")return {ok:false,message:"تعذر التفعيل"};
+  const key=state.serverKey,loaded=state.activeRevision;
+  const refuse=(code:keyof typeof REFUSAL_TEXT)=>({ok:false,message:REFUSAL_TEXT[code].ar+" / "+REFUSAL_TEXT[code].en});
+  if(typeof selected!=="number")return refuse("no_selection");
+  setState(s=>({...s,busy:true}));
+  try{
+   let fresh:Reply;
+   try{fresh=await invokeService({action:"list",accountId:acc.id,flowKey:key});}
+   catch(e){setState(s=>({...s,busy:false}));
+    return {ok:false,message:"تعذر إعادة قراءة إصدارات التدفق؛ لم يتم أي تغيير (رمز: "+serviceErrorDetail(e)+
+     "). / Could not re-read the flow's revisions; nothing was changed (code: "+serviceErrorDetail(e)+")."};}
+   const refusal=selectionRefusal({selected,freshRevisions:listedRevisions(fresh.items),
+    freshActive:listedActive(fresh.activation),loadedActive:loaded});
+   if(refusal){setState(s=>({...s,busy:false}));if(refusal!=="already_active")void load();return refuse(refusal);}
+   const guard=await readinessGuard(acc.id,key,selected,loaded);
+   if(guard){setState(s=>({...s,busy:false}));return {ok:false,message:guard.refusal};}
+   if(!window.confirm(activationConfirmText(key,loaded,selected))){
+    setState(s=>({...s,busy:false}));
+    return {ok:false,message:"أُلغي التفعيل؛ لم يتغير شيء. / Activation cancelled; nothing changed."};
+   }
+   await invokeService({action:"activate",accountId:acc.id,flowKey:key,revision:selected});
+   setState(s=>({...s,busy:false}));
+   await load();
+   return {ok:true,message:"تم تفعيل الإصدار v"+selected+" للتدفق «"+key+"»"+(loaded!==null&&loaded!==selected?" بدل v"+loaded:"")+
+    " / Revision v"+selected+" of \""+key+"\" is active"+(loaded!==null&&loaded!==selected?" (replaced v"+loaded+")":"")};
+  }catch(e){
+   setState(s=>({...s,busy:false}));
+   return {ok:false,message:activationErrorMessage(e,"التفعيل")};
+  }
+ },[load,operator,state.busy,state.phase,state.serverKey,state.activeRevision]);
+
+ return {state,toggle,updateToLatest,activateRevision};
 }

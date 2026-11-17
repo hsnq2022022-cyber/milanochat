@@ -90,7 +90,35 @@ export function resolveServerFlowKey(input:{localKey:string;
 /** Shape of the server `readiness` report fields the client reads. */
 export type ReadinessReport={checks:Record<string,boolean|undefined>;candidateKind?:string;
  configured?:boolean;needsButtons?:boolean;needsScheduler?:boolean;
- needsInternalActions?:boolean;needsMedia?:boolean;commentTrigger?:unknown};
+ needsInternalActions?:boolean;needsMedia?:boolean;commentTrigger?:unknown;
+ /** Additive server diagnostics (flow-publication readiness.ts readinessCandidate); absent on older servers. */
+ candidate?:unknown};
+
+/** Validated, secret-free view of the server's readiness `candidate` diagnostics. */
+export type ReadinessCandidateSummary={flowKey:string;revision:number|null;
+ source:"requested"|"active"|"none";found:boolean;activeRevision:number|null;
+ engine:"durable"|"v2"|"comment"|null;
+ reasons:{activeRevision:string|null;supportedCandidate:string|null}};
+const REASON=/^[a-z_]{1,40}$/;
+const revOrNull=(v:unknown)=>typeof v==="number"&&Number.isSafeInteger(v)&&v>0?v:null;
+const reasonOrNull=(v:unknown)=>typeof v==="string"&&REASON.test(v)?v:null;
+/**
+ * The examined flow/revision and the server's reasons, or null when the server
+ * sent none or a malformed value (older server: UI and copy stay as before).
+ * Never derived in the browser and never another revision than the server's.
+ */
+export function readinessCandidateSummary(report:ReadinessReport|null|undefined):ReadinessCandidateSummary|null{
+ const c=report&&typeof report==="object"?report.candidate:undefined;
+ if(!c||typeof c!=="object"||Array.isArray(c))return null;
+ const v=c as Record<string,unknown>;
+ const source=v.source==="requested"||v.source==="active"||v.source==="none"?v.source:null;
+ if(source===null||typeof v.flowKey!=="string"||v.flowKey.length===0||typeof v.found!=="boolean")return null;
+ const r=v.reasons&&typeof v.reasons==="object"?v.reasons as Record<string,unknown>:{};
+ return {flowKey:v.flowKey.slice(0,120),revision:source==="none"?null:revOrNull(v.revision),source,
+  found:v.found,activeRevision:revOrNull(v.activeRevision),
+  engine:v.engine==="durable"||v.engine==="v2"||v.engine==="comment"?v.engine:null,
+  reasons:{activeRevision:reasonOrNull(r.activeRevision),supportedCandidate:reasonOrNull(r.supportedCandidate)}};
+}
 
 /** candidateKind values the server can report (flow-publication readiness). */
 const SIMPLE_KINDS=new Set(["text","unsupported"]);
@@ -141,6 +169,10 @@ export function readinessBlockers(report:ReadinessReport|null|undefined,
  opts:{currentlyActive:boolean}):string[]{
  if(!report||typeof report!=="object"||!report.checks||typeof report.checks!=="object")
   return ["readiness_unavailable"];
+ // The server examined no document (no such revision, or none at all): never
+ // treat that as a simple text revision. Absent diagnostics = previous rule.
+ const examined=readinessCandidateSummary(report);
+ if(examined&&!examined.found)return ["candidateNotFound"];
  const target=readinessTargetKind(report);
  if(target==="simple")return [];
  const kind=report.candidateKind;
