@@ -15,6 +15,8 @@ import {activationConfirmText,classifyRevision,listedActive,listedRevisions,REFU
  * refuses or affects another active flow (the server keeps them independent).
  * Nothing here is local: the toggle only reflects what the server reports, and
  * every server gate (auth, tenant/account scope, approval, readiness) still applies.
+ * catalog/list/readiness/activate are OPERATOR-only on the server: for customers
+ * (see ActivationAccess) the hook only resolves the account via `accounts`.
  */
 export type ActivationPhase="loading"|"ready"|"unavailable";
 export type ActivationState={
@@ -106,6 +108,18 @@ export function activationErrorMessage(e:unknown,verb:Verb,en=false):string{
 }
 
 const UNAVAILABLE_REASON="حالة التفعيل غير متاحة الآن: خدمة التدفقات السحابية غير متاحة أو غير مفعّلة.";
+const NO_ACCOUNT_REASON="لا يوجد حساب قناة نشط مرتبط؛ اربط حسابًا لتتمكن من تفعيل التدفق.";
+/** Customer text: no server codes, HTTP statuses, revisions or engine words. */
+const CUSTOMER_UNAVAILABLE_REASON="خدمة التدفقات غير متاحة الآن، حاول مرة أخرى بعد قليل.";
+const OPERATOR_ONLY:ToggleResult={ok:false,message:"تعذر التنفيذ"};
+
+/**
+ * Who uses the hook (from useOperatorStatus; the server stays authoritative).
+ * "operator": full activation state (catalog -> list, toggle, update, revision
+ * selection). "customer"/"loading": ONLY the `accounts` action; the account id
+ * (and so the editor's capability gating) never depends on operator actions.
+ */
+export type ActivationAccess="loading"|"operator"|"customer";
 
 function asCatalogFlows(v:unknown):CatalogFlow[]{
  if(!Array.isArray(v))return [];
@@ -166,11 +180,13 @@ async function readinessGuard(accountId:string,key:string,target:number,live:num
  * account; it is applied to `canActivate` only when serverKey===flowKey (the
  * local document describes that flow). The server decides on activate.
  */
-export function useFlowActivation(flowKey:string,refreshToken:unknown,commentPlatform:ProviderPlatform|null=null){
+export function useFlowActivation(flowKey:string,refreshToken:unknown,commentPlatform:ProviderPlatform|null=null,
+ access:ActivationAccess="customer"){
  const [state,setState]=useState<ActivationState>({phase:"loading",active:false,revision:null,busy:false,canActivate:false,reason:"",
   serverKey:flowKey,latestRevision:null,activeRevision:null,canUpdate:false,revisions:[],accountId:null});
  const account=useRef<Account|null>(null);
  const seq=useRef(0);
+ const operator=access==="operator";
 
  const load=useCallback(async()=>{
   const mine=++seq.current;
@@ -183,11 +199,20 @@ export function useFlowActivation(flowKey:string,refreshToken:unknown,commentPla
     if(!account.current){
      if(mine===seq.current)setState(s=>({...s,phase:"unavailable",active:false,revision:null,canActivate:false,
       serverKey:flowKey,latestRevision:null,activeRevision:null,canUpdate:false,revisions:[],accountId:null,
-      reason:"لا يوجد حساب قناة نشط مرتبط؛ اربط حسابًا لتتمكن من تفعيل التدفق."}));
+      reason:NO_ACCOUNT_REASON}));
      return;
     }
    }
    const acc=account.current;
+   if(!operator){
+    // Customer (or operator status still unknown): the account id comes from
+    // `accounts` ALONE, right away, so capability gating never depends on
+    // catalog/list. No operator-only action is ever called on this path.
+    if(mine===seq.current)setState(s=>({...s,phase:access==="loading"?"loading":"ready",active:false,revision:null,
+     canActivate:accountCanActivate(acc,commentPlatform),serverKey:flowKey,latestRevision:null,activeRevision:null,
+     canUpdate:false,revisions:[],accountId:acc.id,reason:""}));
+    return;
+   }
    // The editor id is local: find the server flow_key this account really runs.
    let serverKey=flowKey,catalogNote="";
    try{
@@ -212,15 +237,16 @@ export function useFlowActivation(flowKey:string,refreshToken:unknown,commentPla
   }catch(e){
    if(mine===seq.current)setState(s=>({...s,phase:"unavailable",active:false,revision:null,canActivate:false,
     serverKey:flowKey,latestRevision:null,activeRevision:null,canUpdate:false,revisions:[],accountId:null,
-    reason:UNAVAILABLE_REASON+" (رمز: "+serviceErrorDetail(e)+")"}));
+    reason:operator?UNAVAILABLE_REASON+" (رمز: "+serviceErrorDetail(e)+")":CUSTOMER_UNAVAILABLE_REASON}));
   }
- },[flowKey,commentPlatform]);
+ },[flowKey,commentPlatform,operator,access]);
 
  // A different comment platform may need a different account: pick again.
  useEffect(()=>{account.current=null;},[commentPlatform]);
  useEffect(()=>{void load();return()=>{seq.current++;};},[load,refreshToken]);
 
  const toggle=useCallback(async():Promise<ToggleResult>=>{
+  if(!operator)return OPERATOR_ONLY; // operator-only (the server refuses it for customers too)
   const acc=account.current;
   if(!acc||state.busy||state.phase!=="ready")return {ok:false,message:"تعذر التفعيل"};
   const key=state.serverKey;
@@ -263,7 +289,7 @@ export function useFlowActivation(flowKey:string,refreshToken:unknown,commentPla
    setState(s=>({...s,busy:false}));
    return {ok:false,message:activationErrorMessage(e,"التفعيل")};
   }
- },[flowKey,load,state.active,state.busy,state.phase,state.serverKey,state.latestRevision,state.activeRevision]);
+ },[flowKey,load,operator,state.active,state.busy,state.phase,state.serverKey,state.latestRevision,state.activeRevision]);
 
  /**
   * Move the live automation of serverKey to exactly the displayed latest revision:
@@ -271,6 +297,7 @@ export function useFlowActivation(flowKey:string,refreshToken:unknown,commentPla
   * activate(serverKey, latest). Never another revision, never automatic.
   */
  const updateToLatest=useCallback(async():Promise<ToggleResult>=>{
+  if(!operator)return OPERATOR_ONLY;
   const acc=account.current;
   const from=state.activeRevision,to=state.latestRevision;
   if(!acc||state.busy||state.phase!=="ready"||!state.active||from===null||to===null||to<=from)
@@ -298,7 +325,7 @@ export function useFlowActivation(flowKey:string,refreshToken:unknown,commentPla
    setState(s=>({...s,busy:false}));
    return {ok:false,message:activationErrorMessage(e,"التحديث")};
   }
- },[flowKey,load,state.active,state.busy,state.phase,state.serverKey,state.latestRevision,state.activeRevision]);
+ },[flowKey,load,operator,state.active,state.busy,state.phase,state.serverKey,state.latestRevision,state.activeRevision]);
 
  /**
   * Activate EXACTLY the revision the user selected (`selected`), replacing this
@@ -309,6 +336,7 @@ export function useFlowActivation(flowKey:string,refreshToken:unknown,commentPla
   * the latest. The state is then reloaded from the server.
   */
  const activateRevision=useCallback(async(selected:number|null):Promise<ToggleResult>=>{
+  if(!operator)return OPERATOR_ONLY;
   const acc=account.current;
   if(!acc||state.busy||state.phase!=="ready")return {ok:false,message:"تعذر التفعيل"};
   const key=state.serverKey,loaded=state.activeRevision;
@@ -339,7 +367,7 @@ export function useFlowActivation(flowKey:string,refreshToken:unknown,commentPla
    setState(s=>({...s,busy:false}));
    return {ok:false,message:activationErrorMessage(e,"التفعيل")};
   }
- },[load,state.busy,state.phase,state.serverKey,state.activeRevision]);
+ },[load,operator,state.busy,state.phase,state.serverKey,state.activeRevision]);
 
  return {state,toggle,updateToLatest,activateRevision};
 }

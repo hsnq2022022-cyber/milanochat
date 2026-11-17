@@ -7,7 +7,32 @@ const ACCOUNT = "22222222-2222-4222-8222-222222222222";
 const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString("base64url");
 const FAKE_JWT = `${b64({ alg: "none" })}.${b64({ sub: "u1", exp: 4102444800, role: "authenticated" })}.sig`;
 
+/**
+ * flow-publication actions any tenant owner may call (server CUSTOMER_ACTIONS). Every
+ * other action (readiness, catalog, read, list, legacy publish, activate, rollback,
+ * unknown) is operator-only: the fake answers 403 "Operator access required" for
+ * customers, exactly like the server, and still records the call so specs can
+ * assert that the customer UI sends ZERO operator-only calls.
+ */
+export const CUSTOMER_ACTIONS = ["accounts", "capabilities", "publish_live", "deactivate", "operator_status"];
+export const operatorActionCalls = <T extends { action?: unknown }>(calls: T[]) =>
+  calls.filter((c) => !CUSTOMER_ACTIONS.includes(c.action as string));
+const OPERATOR_REQUIRED = { ok: false, error: "Operator access required" };
+
 export type ActivationServer = {
+  /**
+   * operator_status answer: true = operator ({ok:true,operator:true}); default
+   * false = ordinary customer ({ok:true,operator:false}, operator-only actions 403).
+   */
+  operator?: boolean;
+  /** Override the operator_status reply (failure/shape variants); "abort" = network failure. */
+  operatorStatus?: { status: number; body: unknown } | "abort";
+  /** operator_status is answered only after this resolves (to observe the "loading" state). */
+  operatorStatusGate?: Promise<void>;
+  /** `capabilities` reply payload (per-account block availability); default: not available. */
+  capabilities?: Record<string, unknown>;
+  /** Override the reply of a deactivate call (shape variants). */
+  deactivateReply?: { status: number; body: unknown };
   /** Active revision on the account (null = nothing active). */
   active: number | null;
   /**
@@ -64,6 +89,13 @@ export async function mockActivation(page: Page, server: ActivationServer) {
     const reply = (status: number, b: unknown) => route.fulfill({ status, contentType: "application/json", headers: cors, body: JSON.stringify(b) });
     if (!new URL(req.url()).pathname.endsWith("/flow-publication")) return reply(200, {});
     server.calls.push(body);
+    if (body.action === "operator_status") {
+      if (server.operatorStatusGate) await server.operatorStatusGate;
+      if (server.operatorStatus === "abort") return route.abort("failed");
+      if (server.operatorStatus) return reply(server.operatorStatus.status, server.operatorStatus.body);
+      return reply(200, { ok: true, operator: server.operator === true });
+    }
+    if (server.operator !== true && !CUSTOMER_ACTIONS.includes(body.action)) return reply(403, OPERATOR_REQUIRED);
     const key: string = body.flowKey;
     switch (body.action) {
       case "accounts":
@@ -92,9 +124,13 @@ export async function mockActivation(page: Page, server: ActivationServer) {
           buttonsConfigured: configured && kind === "buttons", delayConfigured: configured && kind === "delay", configured };
         return reply(200, { ok: true, candidateRevision: revision, readiness });
       }
+      case "capabilities":
+        if (!server.capabilities) return reply(200, { ok: false, error: "unexpected" });
+        return reply(200, { ok: true, platform: "instagram", capabilities: server.capabilities });
       case "activate": case "deactivate":
         if (server.delayMs) await new Promise((r) => setTimeout(r, server.delayMs));
         if (server.mutationError) return reply(server.mutationError.status, { ok: false, error: server.mutationError.error });
+        if (body.action === "deactivate" && server.deactivateReply) return reply(server.deactivateReply.status, server.deactivateReply.body);
         if (body.action === "deactivate" && !isActive(key)) return reply(404, { ok: false, error: "No active publication found" });
         if (body.action === "activate") {
           server.active = body.revision;
@@ -132,7 +168,7 @@ export type MultiAccountServer = {
  * 403 "Account not authorized" for an account outside the session's tenant
  * (flow-publication index.ts account lookup .eq("id").eq("tenant_id")).
  */
-export async function mockAccounts(page: Page, server: MultiAccountServer, session: { name: string; owned: string[]; listed?: string[] }) {
+export async function mockAccounts(page: Page, server: MultiAccountServer, session: { name: string; owned: string[]; listed?: string[]; operator?: boolean }) {
   const ref = new URL(URL_).hostname.split(".")[0];
   const jwt = `${b64({ alg: "none" })}.${b64({ sub: session.name, exp: 4102444800, role: "authenticated" })}.sig`;
   await page.addInitScript(([key, value]) => localStorage.setItem(key, value), [
@@ -150,6 +186,8 @@ export async function mockAccounts(page: Page, server: MultiAccountServer, sessi
     const reply = (status: number, b: unknown) => route.fulfill({ status, contentType: "application/json", headers: cors, body: JSON.stringify(b) });
     if (!new URL(req.url()).pathname.endsWith("/flow-publication")) return reply(200, {});
     server.calls.push({ session: session.name, action: body.action, accountId: body.accountId, flowKey: body.flowKey, revision: body.revision });
+    if (body.action === "operator_status") return reply(200, { ok: true, operator: session.operator === true });
+    if (session.operator !== true && !CUSTOMER_ACTIONS.includes(body.action)) return reply(403, OPERATOR_REQUIRED);
     if (body.action === "accounts") {
       const list = (session.listed ?? session.owned).map((id) => server.accounts[id]).filter(Boolean);
       return reply(200, { ok: true, accounts: list.map((a) => ({ id: a.id, platform: a.platform ?? "instagram", is_active: true, canActivate: a.canActivate ?? true })) });
@@ -192,6 +230,8 @@ export async function mockAccounts(page: Page, server: MultiAccountServer, sessi
  * returns `activeFlows` (activation order) plus the legacy single `active` (the first).
  */
 export type MultiFlowServer = {
+  /** operator_status answer (default false = customer: operator-only actions 403). */
+  operator?: boolean;
   /** Published revisions per server flow_key (newest first). */
   flows: Record<string, number[]>;
   /** Active revision per flow_key: several flows may be active at once. */
@@ -221,6 +261,8 @@ export async function mockMultiFlows(page: Page, server: MultiFlowServer) {
     const reply = (status: number, b: unknown) => route.fulfill({ status, contentType: "application/json", headers: cors, body: JSON.stringify(b) });
     if (!new URL(req.url()).pathname.endsWith("/flow-publication")) return reply(200, {});
     server.calls.push(body);
+    if (body.action === "operator_status") return reply(200, { ok: true, operator: server.operator === true });
+    if (server.operator !== true && !CUSTOMER_ACTIONS.includes(body.action)) return reply(403, OPERATOR_REQUIRED);
     const key: string = body.flowKey;
     if (key && !(key in server.flows) && server.localRevisions?.length) server.flows[key] = [...server.localRevisions];
     const activeFlows = () => order.filter((k) => k in server.active).map((k) => ({ flow_key: k, revision: server.active[k] }));

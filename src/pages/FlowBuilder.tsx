@@ -40,6 +40,7 @@ import { flowText, flowKindLabel } from "../flow/uiLocale";
 import type { FlowLanguage } from "../flow/uiLocale";
 import { uuid } from "../lib/uuid.ts";
 import { useFlowActivation } from "../flow/useFlowActivation";
+import { useOperatorStatus } from "../flow/useOperatorStatus";
 import { useFlowCapabilities } from "../flow/useFlowCapabilities";
 import { CapabilityGateContext, UNAVAILABLE_BADGE, accountNotice, blockGate, type Gate } from "../flow/capabilityReasons";
 import { commentTriggerProviderPlatform } from "../flow/serverPublicationValidation";
@@ -69,8 +70,14 @@ function Editor(){
   // The local document describes the server flow only when serverKey===activeFlowId;
   // the hook applies this platform to canActivate only in that case.
   const localCommentPlatform=useMemo(()=>commentTriggerProviderPlatform(doc),[doc]);
-  // activeFlowId is the LOCAL editor id; the hook resolves the real server flow_key.
-  const {state:activation,toggle:toggleActivation,updateToLatest,activateRevision}=useFlowActivation(activeFlowId,showPublications,localCommentPlatform);
+  // Server-decided (operator_status): operator controls render ONLY for "operator";
+  // "loading" and every failure hide them. The server refuses operator actions
+  // for everyone else, so this is UI hiding only, never the security boundary.
+  const operatorStatus=useOperatorStatus();
+  const isOperator=operatorStatus==="operator";
+  // activeFlowId is the LOCAL editor id; the hook resolves the real server flow_key
+  // (operator only; customers get the account from `accounts` alone).
+  const {state:activation,toggle:toggleActivation,updateToLatest,activateRevision}=useFlowActivation(activeFlowId,showPublications,localCommentPlatform,operatorStatus);
   // Explicit revision choice (never defaults to latest); cleared when the managed server flow changes.
   const [selectedRevision,setSelectedRevision]=useState<number|null>(null);
   useEffect(()=>{setSelectedRevision(null);},[activation.serverKey]);
@@ -307,7 +314,7 @@ function Editor(){
         </div>
         <FlowSwitcher flows={flows} activeFlowId={activeFlowId} activeName={doc.name} liveDoc={doc} language={language} onSwitch={switchTo} onCreate={createNewFlow} onBlank={createBlankFlow}/>
         {PUBLICATION_UI_ENABLED&&<button type="button" data-testid="flow-publications" className="fs-btn fs-btn-primary fs-publish" onClick={()=>setShowPublications(true)}>
-          <Send size={16}/><span className="sm:hidden">{t("publish")}</span><span className="hidden sm:inline">{language==="en"?"Published revisions":"الإصدارات المنشورة"}</span></button>}
+          <Send size={16}/><span className="sm:hidden">{t("publish")}</span><span className="hidden sm:inline">{isOperator?(language==="en"?"Published revisions":"الإصدارات المنشورة"):t("publish")}</span></button>}
         <button type="button" className="fs-ibtn fs-tb-toggle" aria-label={toolbarCollapsed?t("expand"):t("collapse")} aria-expanded={!toolbarCollapsed} onClick={()=>setToolbarCollapsed(v=>!v)}>
           {toolbarCollapsed?<ChevronDown size={18}/>:<ChevronUp size={18}/>} <span className="hidden lg:inline">{toolbarCollapsed?t("showTools"):t("hideTools")}</span>
         </button>
@@ -335,6 +342,8 @@ function Editor(){
           }}><Trash2 size={15}/></button>
         </div>
       {!toolbarCollapsed&&<div className="fs-tb-row fs-scroll-row" data-testid="flow-toolbar-secondary">
+        {/* Operator-only live controls (revisions, activation); customers publish/stop from the Publish panel. */}
+        {isOperator&&<>
         <button data-testid="flow-enabled-toggle" type="button" aria-label={t("activate")} aria-pressed={activeEnabled}
           aria-busy={activation.phase==="loading"||activation.busy} disabled={activationLocked}
           title={activation.reason||undefined}
@@ -378,6 +387,7 @@ function Editor(){
           {selectionStale&&<span data-testid="flow-revision-stale" className="text-xs text-[#E5B54B]">
             {language==="en"?"Stale selection: v"+selectedRevision+" is no longer published. Choose again.":"اختيار قديم: الإصدار v"+selectedRevision+" لم يعد منشورًا. اختر من جديد."}</span>}
         </>}
+        </>}
         {activation.reason&&<span data-testid="flow-activation-reason" className="text-xs text-[#E5B54B]">{activation.reason}</span>}
         {/* Each flow is activated independently; the main AI chatbot is never switched off by a flow. */}
         <span data-testid="flow-chatbot-note" className="shrink-0 whitespace-nowrap text-xs text-[#BED4C9]"
@@ -411,7 +421,7 @@ function Editor(){
       </div></div>
     </header>
     {CLOUD_DRAFT_UI_ENABLED&&showCloudDrafts&&<CloudDraftPanel language={language} onClose={()=>setShowCloudDrafts(false)}/>}
-    {PUBLICATION_UI_ENABLED&&showPublications&&<FlowPublicationPanel key={activeFlowId} flowKey={activeFlowId} document={doc} language={language} onImportRevision={importPublishedRevision} onPreviewRevision={previewPublishedRevision} onClose={()=>setShowPublications(false)}/>}
+    {PUBLICATION_UI_ENABLED&&showPublications&&<FlowPublicationPanel key={activeFlowId+":"+operatorStatus} operator={isOperator} flowKey={activeFlowId} document={doc} language={language} onImportRevision={importPublishedRevision} onPreviewRevision={previewPublishedRevision} onClose={()=>setShowPublications(false)}/>}
     {recovery.messages.length>0&&<div role="alert" className="fs-recovery">
       <strong>تقرير استعادة التدفقات: </strong>{recovery.messages.join(" ")} تم استرجاع {recovery.recovered} وتجاهل {recovery.skipped}.
       {protectStoredLibrary&&<span className="mr-2 font-bold">الحفظ التلقائي متوقف لحماية بيانات المكتبة الأصلية؛ استخدم «تصدير» قبل تأكيد الحفظ اليدوي.</span>}

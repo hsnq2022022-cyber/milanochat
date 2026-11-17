@@ -136,7 +136,7 @@ test("start from scratch opens a separate flow with only a trigger, preserving t
 
 test("default pricing messages show three nonblocking warnings and can be enabled",async({page})=>{
   test.skip(!MOCK_HOST,"needs mock Supabase host");
-  await mockActivation(page,{active:null,calls:[]});
+  await mockActivation(page,{operator:true,active:null,calls:[]}); // the toggle is an operator control
   // Activation now asks for an explicit confirm naming the flow and revision.
   page.on("dialog",dialog=>{void dialog.accept();});
   await page.goto("/milanochat/#/flows");
@@ -152,7 +152,7 @@ test("default pricing messages show three nonblocking warnings and can be enable
 });
 test("an isolated node and a question option without a route block activation",async({page})=>{
   test.skip(!MOCK_HOST,"needs mock Supabase host");
-  await mockActivation(page,{active:null,calls:[]});
+  await mockActivation(page,{operator:true,active:null,calls:[]}); // the toggle is an operator control
   await page.goto("/milanochat/#/flows");
   const toggle=page.getByTestId("flow-enabled-toggle");
   await expect(toggle).toBeEnabled();
@@ -167,7 +167,7 @@ test("an isolated node and a question option without a route block activation",a
 
 test("an unconnected quick reply blocks activation and identifies its question node",async({page})=>{
   test.skip(!MOCK_HOST,"needs mock Supabase host");
-  await mockActivation(page,{active:null,calls:[]});
+  await mockActivation(page,{operator:true,active:null,calls:[]}); // the toggle is an operator control
   await page.goto("/milanochat/#/flows");
   await page.locator(".react-flow__node").nth(2).click();
   await page.locator("aside [data-testid^='flow-button']").first().click();

@@ -1,5 +1,6 @@
 import {useCallback,useEffect,useRef,useState} from "react";
 import {classifyPublishLive,PUBLISH_LIVE_TEXT,savedNotLiveText,type PublishLiveResult} from "./publishLiveResult.ts";
+import {classifyStopError,classifyStopReply,STOP_TEXT,type StopResult} from "./emergencyStop.ts";
 import type {FlowDocument} from "./model.ts";
 import type {FlowLanguage} from "./uiLocale.ts";
 import { copyText } from "../lib/clipboard.ts";
@@ -70,7 +71,15 @@ type Reply={ok?:boolean;error?:string;accounts?:Account[];
  items?:Version[];activation?:Activation;revision?:number;
  flows?:PublishedFlow[];active?:unknown;activeFlows?:unknown;truncated?:boolean;document?:unknown;readiness?:Readiness;candidateRevision?:number|null};
 type Props={flowKey:string;document:FlowDocument;language:FlowLanguage;onClose:()=>void;
- onImportRevision?:(document:unknown)=>boolean;onPreviewRevision?:(document:unknown)=>boolean};
+ onImportRevision?:(document:unknown)=>boolean;onPreviewRevision?:(document:unknown)=>boolean;
+ /**
+  * From the server's `operator_status` (useOperatorStatus); default false = customer.
+  * Customer mode: account, Publish (publish_live) and the emergency stop
+  * (deactivate) only; no catalog/list/read/readiness/activate/rollback call and
+  * no revision or technical text. The server stays authoritative: hiding is
+  * not a security boundary.
+  */
+ operator?:boolean};
 
 // Visible server code (support diagnostics); never secrets.
 const codeSuffix=(e:unknown,en:boolean)=>(en?" (code: ":" (رمز: ")+serviceErrorDetail(e)+")";
@@ -78,9 +87,10 @@ const style="min-h-11 rounded-lg border border-[#275443] bg-[#0F2E24] px-3 py-2 
 const CANARY_UI=(import.meta as ImportMeta & {env?:Record<string,string|undefined>})
  .env?.VITE_ENABLE_FLOW_CANARY_CONTROLS==="true";
 
-export default function FlowPublicationPanel({flowKey,document,language,onClose,onImportRevision,onPreviewRevision}:Props){
+export default function FlowPublicationPanel({flowKey,document,language,onClose,onImportRevision,onPreviewRevision,operator=false}:Props){
  const en=language==="en";
  const [accounts,setAccounts]=useState<Account[]>([]);
+ const [accountsLoaded,setAccountsLoaded]=useState(false);
  const [accountId,setAccountId]=useState("");
  const [managedFlowKey,setManagedFlowKey]=useState(flowKey);
  const [catalog,setCatalog]=useState<PublishedFlow[]>([]);
@@ -114,17 +124,23 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
  useEffect(()=>{
   let cancelled=false;
   void call({action:"accounts"}).then(r=>{
-   if(!cancelled)setAccounts(r.accounts??[]);
+   if(cancelled)return;
+   const list=r.accounts??[];
+   setAccounts(list);setAccountsLoaded(true);
+   // Customers with exactly one channel account get it selected for them.
+   if(!operator&&list.length===1)setAccountId(list[0].id);
   }).catch(e=>{
-   if(!cancelled)setNotice((en?"Publication service unavailable.":"خدمة نشر التدفقات غير متاحة.")+codeSuffix(e,en));
+   if(!cancelled)setNotice(operator?(en?"Publication service unavailable.":"خدمة نشر التدفقات غير متاحة.")+codeSuffix(e,en)
+    :(en?"Publishing is unavailable right now; please try again shortly.":"خدمة النشر غير متاحة الآن، حاول مرة أخرى بعد قليل."));
   });
   return()=>{cancelled=true;};
- },[call,en]);
+ },[call,en,operator]);
 
  // The editor ID is local; discover immutable publications for the
  // authenticated account instead of guessing the active server flow key.
  useEffect(()=>{
-  if(!accountId){setCatalog([]);setActiveServerFlows([]);return;}
+  // catalog is operator-only: never called in customer mode.
+  if(!operator||!accountId){setCatalog([]);setActiveServerFlows([]);return;}
   let cancelled=false;
   void call({action:"catalog",accountId,flowKey}).then(r=>{
    if(cancelled)return;
@@ -142,11 +158,11 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
    if(!cancelled)setNotice((en?"Unable to list published flows.":"تعذر عرض التدفقات المنشورة.")+codeSuffix(e,en));
   });
   return()=>{cancelled=true;};
- },[accountId,flowKey,call,en]);
+ },[accountId,flowKey,call,en,operator]);
 
  // Read the immutable server revision without importing or writing to local storage.
  const previewRevision=async(revision:number)=>{
-  if(!onPreviewRevision||busy||!accountId)return;
+  if(!operator||!onPreviewRevision||busy||!accountId)return;
   setBusy(true);setNotice("");
   try{
    const r=await call({action:"read",accountId,flowKey:managedFlowKey,revision});
@@ -159,7 +175,7 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
  };
 
  const inspectReadiness=async(revision?:number)=>{
-  if(!accountId||busy)return;
+  if(!operator||!accountId||busy)return;
   setReadiness(null);setCheckedRevision(null);setBusy(true);setNotice("");
   try{
    const r=await call({action:"readiness",accountId,flowKey:managedFlowKey,...(revision?{revision}:{})});
@@ -200,7 +216,7 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
  };
 
  const importRevision=async(revision:number)=>{
-  if(!onImportRevision||busy||!accountId)return;
+  if(!operator||!onImportRevision||busy||!accountId)return;
   if(!window.confirm(en
    ?"Import this published version as a NEW local copy, keeping your current flow?"
    :"استيراد الإصدار المنشور كنسخة محلية جديدة مع الحفاظ على التدفق المفتوح؟"))return;
@@ -216,6 +232,7 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
  };
 
  const refresh=async(id:string,key:string=managedFlowKey)=>{
+  if(!operator)return; // list is operator-only (customer publish shows the result notice only)
   const r=await call({action:"list",accountId:id,flowKey:key});
   setVersions(r.items??[]);
   setActivation(r.activation??null);
@@ -223,7 +240,7 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
   setLoaded(true);
  };
  const load=async()=>{
-  if(!accountId||busy)return;
+  if(!operator||!accountId||busy)return;
   setBusy(true);setNotice("");setLoaded(false);
   try{await refresh(accountId,managedFlowKey);}
   catch(e){setNotice((en?"Unable to load revisions.":"تعذر تحميل الإصدارات.")+codeSuffix(e,en));}
@@ -250,7 +267,7 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
  const reasonText=(code:string)=>REASON_LABELS[code]?.[en?"en":"ar"]??
   readinessLabels[code as keyof ReadinessChecks]?.[en?"en":"ar"]??code;
  const change=async(action:"activate"|"rollback"|"deactivate",revision?:number)=>{
-  if(!loaded||!accountId||busy)return;
+  if(!operator||!loaded||!accountId||busy)return;
   if(action==="deactivate"){
    if(!window.confirm((en?"Stop this automation?":"هل تريد إيقاف التدفق؟")+" ("+managedFlowKey+")"))return;
   }
@@ -284,6 +301,70 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
   }
   finally{setBusy(false);}
  };
+ // Customer emergency stop (owner action, server-scoped to the caller's own
+ // tenant/account): exactly one deactivate for the selected account and the
+ // LOCAL flow key (publish_live publishes under it). Plain feedback only; it
+ // never claims the flow stopped without the server's confirmation.
+ const stopInFlight=useRef(false);
+ const stop=async()=>{
+  if(stopInFlight.current||!accountId||busy)return;
+  if(!window.confirm(en?STOP_TEXT.confirm.en:STOP_TEXT.confirm.ar))return;
+  stopInFlight.current=true;
+  setBusy(true);setNotice("");
+  try{
+   let result:StopResult;
+   try{result=classifyStopReply(await call({action:"deactivate",accountId,flowKey}));}
+   catch(e){result=classifyStopError(e);}
+   setNotice(STOP_TEXT[result][en?"en":"ar"]);
+  }finally{stopInFlight.current=false;setBusy(false);}
+ };
+
+ if(!operator){
+  // Customer view: account by plain channel name, Publish and Stop. No revision
+  // numbers, revision selection, activation/rollback, readiness or technical text.
+  const channelName=(a:Account)=>{
+   const base=a.platform==="instagram"?"Instagram":a.platform==="facebook"?"Facebook":a.platform==="whatsapp"?"WhatsApp":(en?"Channel":"قناة");
+   const same=accounts.filter(x=>x.platform===a.platform);
+   return base+(same.length>1?" "+(same.indexOf(a)+1):"")+(a.is_active===false?(en?" (inactive)":" (غير نشط)"):"");
+  };
+  return <div className="fixed inset-0 z-[95] flex items-center justify-center bg-black/70 p-3" dir={en?"ltr":"rtl"}>
+   <section role="dialog" aria-modal="true" aria-label={en?"Publish flow":"نشر التدفق"} data-testid="flow-publish-panel"
+    className="flex max-h-[90dvh] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-[#275443] bg-[#0B241C] text-white shadow-2xl">
+    <header className="flex items-center justify-between border-b border-[#275443] p-4">
+     <h2 className="font-bold">{en?"Publish flow":"نشر التدفق"}</h2>
+     <button type="button" className={style} onClick={onClose} aria-label={en?"Close":"إغلاق"}>✕</button>
+    </header>
+    <div className="space-y-4 overflow-y-auto p-4 text-sm">
+     <p className="text-xs leading-6 text-[#BED4C9]">{en
+      ?"Publish the flow so it starts replying to messages. You can stop it at any time."
+      :"انشر التدفق ليبدأ بالرد على الرسائل، ويمكنك إيقافه في أي وقت."}</p>
+     {accounts.length>1&&<label className="block space-y-1">
+      <span>{en?"Channel account":"حساب القناة"}</span>
+      <select data-testid="flow-publish-account" className={style+" w-full"} value={accountId} disabled={busy}
+       onChange={e=>{setAccountId(e.target.value);setNotice("");}}>
+       <option value="">{en?"Select an account":"اختر الحساب"}</option>
+       {accounts.map(a=><option key={a.id} value={a.id}>{channelName(a)}</option>)}
+      </select>
+     </label>}
+     {accounts.length===1&&<p data-testid="flow-publish-account-name" className="text-xs text-[#C9E8D9]">
+      {(en?"Channel account: ":"حساب القناة: ")+channelName(accounts[0])}</p>}
+     {accountsLoaded&&accounts.length===0&&<p className="text-xs text-[#F5D99C]">{en
+      ?"No channel account is connected; connect one to publish."
+      :"لا يوجد حساب قناة مرتبط؛ اربط حسابًا لتتمكن من النشر."}</p>}
+     <div className="flex flex-wrap gap-2">
+      <button type="button" className={style} disabled={!accountId||busy||!isEditingLocalFlow}
+       data-testid="flow-publish" onClick={()=>void publish()}>{en?PUBLISH_LIVE_TEXT.button.en:PUBLISH_LIVE_TEXT.button.ar}</button>
+      {accounts.length>0&&<button type="button" className={style} disabled={!accountId||busy}
+       data-testid="flow-stop" onClick={()=>void stop()}>{en?STOP_TEXT.button.en:STOP_TEXT.button.ar}</button>}
+     </div>
+     {notice&&<p role="status" className="rounded-lg border border-[#275443] p-3 text-xs">{notice}</p>}
+     <p className="text-xs text-[#BED4C9]">{en
+      ?"The AI chatbot keeps answering messages that no active flow handles."
+      :"يستمر المساعد الذكي في الرد على الرسائل التي لا يتولاها تدفق نشط."}</p>
+    </div>
+   </section>
+  </div>;
+ }
 
  return <div className="fixed inset-0 z-[95] flex items-center justify-center bg-black/70 p-3"
   dir={en?"ltr":"rtl"}>

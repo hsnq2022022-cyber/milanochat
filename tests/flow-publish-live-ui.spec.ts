@@ -1,8 +1,11 @@
 import { test, expect, type Page } from "@playwright/test";
+import { CUSTOMER_ACTIONS, operatorActionCalls } from "./flowActivationMock";
 
 /**
  * Fake-host guard like flow-publication-lifecycle-ui.spec.ts:
  *   VITE_SUPABASE_URL=http://mock.supabase.test VITE_SUPABASE_ANON_KEY=fake-anon-key npx playwright test tests/flow-publish-live-ui.spec.ts
+ * Signed in as an ORDINARY CUSTOMER (operator_status operator:false); every
+ * operator-only action gets the server's 403 and must never be called.
  */
 const URL_ = process.env.VITE_SUPABASE_URL ?? "";
 const TENANT = "11111111-1111-4111-8111-111111111111";
@@ -30,10 +33,10 @@ async function setup(page: Page, mode: Mode) {
     calls.push({ path: u.pathname, body });
     if (u.pathname.endsWith("/flow-delivery-review")) return json({ events: {}, periodDays: 30, truncated: false });
     if (u.pathname.endsWith("/flow-publication")) {
+      if (!CUSTOMER_ACTIONS.includes(body.action)) return json({ ok: false, error: "Operator access required" }, 403);
       switch (body.action) {
+        case "operator_status": return json({ ok: true, operator: false });
         case "accounts": return json({ ok: true, accounts: [{ id: ACCOUNT, platform: "instagram", is_active: true, canActivate: true }] });
-        case "catalog": return json({ ok: true, flows: [], active: null });
-        case "list": return json({ ok: true, items: [{ revision: 2, created_at: "2025-01-01" }], activation: { revision: 2, is_active: false } });
         case "publish_live":
           await new Promise((r) => setTimeout(r, 300));
           if (mode === "abort") return route.abort("failed");
@@ -57,8 +60,10 @@ async function openPanel(page: Page) {
   page.on("dialog", (d) => void d.accept());
   await page.goto("/milanochat/#/flows");
   await page.getByTestId("flow-publications").click();
-  const dialog = page.getByRole("dialog", { name: "الإصدارات المنشورة" });
-  await dialog.getByRole("combobox").first().selectOption(ACCOUNT);
+  // Customer panel: the only channel account is selected automatically (shown by name).
+  const dialog = page.getByRole("dialog", { name: "نشر التدفق" });
+  await expect(dialog.getByTestId("flow-publish-account-name")).toHaveText("حساب القناة: Instagram");
+  await expect(dialog.getByTestId("flow-publish")).toBeEnabled();
   return dialog;
 }
 const publishes = (calls: any[]) => calls.filter((c) => c.body.action === "publish_live");
@@ -72,6 +77,7 @@ test("live: one publish_live request (double click), live notice, no activate ca
   expect(publishes(calls)).toHaveLength(1);
   expect(publishes(calls)[0].body).toMatchObject({ action: "publish_live", accountId: ACCOUNT });
   expect(calls.filter((c) => ["publish", "activate"].includes(c.body.action))).toHaveLength(0);
+  expect(operatorActionCalls(calls.filter((c) => c.path.endsWith("/flow-publication")).map((c) => c.body))).toEqual([]);
   await expect(dialog.getByText("8")).toHaveCount(0);
 });
 test("saved_not_live shows the safe message only, not a live claim", async ({ page }) => {

@@ -30,6 +30,8 @@ async function mock(page: Page, s: Server) {
     if (!new URL(req.url()).pathname.endsWith("/flow-publication")) return reply({});
     const b = req.postDataJSON?.() ?? {};
     s.calls.push(b);
+    // Revision selection is an operator-only control: this fake signs in an operator.
+    if (b.action === "operator_status") return reply({ ok: true, operator: true });
     if (b.flowKey !== undefined && b.flowKey !== KEY && b.action !== "accounts") return reply({ ok: false, error: "unexpected flow" }, 400);
     const activeFlows = s.active === null ? [] : [{ flow_key: KEY, revision: s.active }];
     switch (b.action) {

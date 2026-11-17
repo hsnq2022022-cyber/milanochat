@@ -1,7 +1,11 @@
 import { test, expect, type Page } from "@playwright/test";
+import { CUSTOMER_ACTIONS, operatorActionCalls } from "./flowActivationMock";
 
 /**
- * Editor capability gating against a fake flow-publication server.
+ * Editor capability gating against a fake flow-publication server, signed in as an
+ * ORDINARY CUSTOMER: operator_status says operator:false and every operator-only
+ * action (catalog, list, readiness, ...) gets the server's 403. The account id for
+ * gating must come from `accounts` alone.
  *   VITE_SUPABASE_URL=http://mock.supabase.test VITE_SUPABASE_ANON_KEY=fake-anon-key npx playwright test tests/flow-capability-gating.spec.ts
  */
 const URL_ = process.env.VITE_SUPABASE_URL ?? "";
@@ -30,10 +34,10 @@ async function mock(page: Page, capabilities: "fail" | Record<string, unknown>, 
     if (!new URL(req.url()).pathname.endsWith("/flow-publication")) return reply({});
     const b = req.postDataJSON?.() ?? {};
     calls.push(b);
+    if (!CUSTOMER_ACTIONS.includes(b.action)) return reply({ ok: false, error: "Operator access required" }, 403);
     switch (b.action) {
+      case "operator_status": return reply({ ok: true, operator: false });
       case "accounts": return reply({ ok: true, accounts: [{ id: ACCOUNT, platform: "instagram", is_active: true, canActivate: true }] });
-      case "catalog": return reply({ ok: true, flows: [], activeFlows: [], active: null, truncated: false });
-      case "list": return reply({ ok: true, items: [], activation: null });
       case "capabilities":
         if (capabilities === "fail") return reply({ ok: false, error: "Capabilities unavailable" }, 503);
         return reply({ ok: true, platform: "instagram", capabilities, canPublish: { basic: true, advanced: false, comments: false } });
@@ -73,11 +77,13 @@ test("palette: unavailable blocks are disabled with plain Arabic text and cannot
   await expect(page.locator('.fs-node[data-kind="delay"]')).toHaveCount(0);
   await menu.getByTestId("pal-kind-message").click();
   await expect(page.locator(".react-flow__node")).toHaveCount(before + 1);
+  // Gating worked for a customer without a single operator-only call.
+  expect(operatorActionCalls(calls)).toEqual([]);
 });
 
 test("existing unavailable block: badge on the card and a plain sentence in the step panel", async ({ page }) => {
   await preloadDelay(page);
-  await mock(page, nonCanary);
+  const calls = await mock(page, nonCanary);
   await page.goto("/milanochat/#/flows");
   const badge = page.locator('.fs-node[data-kind="delay"]').getByTestId("node-capability-badge");
   await expect(badge).toHaveText("غير متاح لحسابك");
@@ -86,6 +92,7 @@ test("existing unavailable block: badge on the card and a plain sentence in the 
   await expect(notice).toContainText("هذه الميزة غير متاحة لحسابك حاليًا");
   expect(await notice.textContent()).not.toMatch(FORBIDDEN);
   await expect(page.locator('.fs-node[data-kind="trigger"]').getByTestId("node-capability-badge")).toHaveCount(0);
+  expect(operatorActionCalls(calls)).toEqual([]);
 });
 
 test("capabilities failure: nothing gated, no badge, no claim", async ({ page }) => {

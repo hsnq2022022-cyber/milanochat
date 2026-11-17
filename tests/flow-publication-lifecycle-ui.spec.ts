@@ -35,6 +35,8 @@ async function setup(page: Page, handlers: { review?: unknown; publication?: (b:
       return json(body.mode === "metrics" ? { events: {}, periodDays: 30, truncated: false } : handlers.review);
     }
     if (u.pathname.endsWith("/flow-publication")) {
+      // These specs exercise the operator-only panel (revisions, activate/rollback, readiness).
+      if (body.action === "operator_status") return json({ ok: true, operator: true });
       if (handlers.delayMs && ["activate", "rollback", "deactivate"].includes(body.action)) await new Promise((r) => setTimeout(r, handlers.delayMs));
       return json(handlers.publication?.(body) ?? { ok: false });
     }
