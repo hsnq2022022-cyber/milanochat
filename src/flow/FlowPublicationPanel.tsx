@@ -1,4 +1,5 @@
-import {useCallback,useEffect,useState} from "react";
+import {useCallback,useEffect,useRef,useState} from "react";
+import {classifyPublishLive,PUBLISH_LIVE_TEXT,savedNotLiveText,type PublishLiveResult} from "./publishLiveResult.ts";
 import type {FlowDocument} from "./model.ts";
 import type {FlowLanguage} from "./uiLocale.ts";
 import { copyText } from "../lib/clipboard.ts";
@@ -228,19 +229,23 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
   catch(e){setNotice((en?"Unable to load revisions.":"تعذر تحميل الإصدارات.")+codeSuffix(e,en));}
   finally{setBusy(false);}
  };
+ const publishInFlight=useRef(false);
  const publish=async()=>{
-  if(!accountId||busy||!isEditingLocalFlow||!window.confirm(en
-   ?"Publish a new immutable revision? Messaging will NOT be activated."
-   :"نشر إصدار جديد غير قابل للتعديل؟ لن يتم تفعيل إرسال الرسائل."))return;
+  // Synchronous guard: a rapid second click must not send a second request.
+  if(publishInFlight.current||!accountId||busy||!isEditingLocalFlow)return;
+  if(!window.confirm(en?PUBLISH_LIVE_TEXT.confirm.en:PUBLISH_LIVE_TEXT.confirm.ar))return;
+  publishInFlight.current=true;
   setBusy(true);setNotice("");
   try{
-   const r=await call({action:"publish",accountId,flowKey,document});
-   await refresh(accountId,flowKey);
-   setNotice(en?"Published revision "+r.revision+" without activating messages.":
-    "تم نشر الإصدار "+r.revision+" دون تفعيل الرسائل.");
-  }catch(e){setNotice((en?"Publishing failed; your local draft is unchanged.":
-   "فشل النشر؛ لم تتغير المسودة المحلية.")+codeSuffix(e,en));}
-  finally{setBusy(false);}
+   let result:PublishLiveResult;
+   try{result=classifyPublishLive(await call({action:"publish_live",accountId,flowKey,document}));}
+   catch{result={kind:"unexpected"};}
+   // Customer text only: no codes, revisions or raw errors.
+   setNotice(result.kind==="live"?(en?PUBLISH_LIVE_TEXT.live.en:PUBLISH_LIVE_TEXT.live.ar)
+    :result.kind==="saved_not_live"?savedNotLiveText(result,en)
+    :(en?PUBLISH_LIVE_TEXT.failed.en:PUBLISH_LIVE_TEXT.failed.ar));
+   if(result.kind!=="unexpected"){try{await refresh(accountId,flowKey);}catch{/* result notice stands */}}
+  }finally{publishInFlight.current=false;setBusy(false);}
  };
  const reasonText=(code:string)=>REASON_LABELS[code]?.[en?"en":"ar"]??
   readinessLabels[code as keyof ReadinessChecks]?.[en?"en":"ar"]??code;
@@ -349,7 +354,7 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
      <button type="button" className={style} disabled={!accountId||busy}
       onClick={()=>void load()}>{en?"Load revisions":"عرض الإصدارات"}</button>
      <button type="button" className={style} disabled={!accountId||busy||!isEditingLocalFlow}
-      onClick={()=>void publish()}>{en?"Publish new revision":"نشر إصدار جديد"}</button>
+      data-testid="flow-publish" onClick={()=>void publish()}>{en?PUBLISH_LIVE_TEXT.button.en:PUBLISH_LIVE_TEXT.button.ar}</button>
      {activation?.is_active&&<button type="button" className={style}
       disabled={busy||!loaded} onClick={()=>void change("deactivate")}>
       {en?"Stop automation":"إيقاف التدفق"}</button>}
