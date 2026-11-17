@@ -129,6 +129,48 @@ export function evaluateCommentReadiness(platform:string,c:CommentReadinessInput
  };
 }
 
+/**
+ * Why activeRevision / supportedCandidate are false (null = that check passed):
+ * - no_active_revision: the flow has no active activation row on this account;
+ * - no_candidate_revision: no revision was requested and the flow has no
+ *   active one, so NO document was examined (candidateKind "unsupported" then
+ *   means "nothing examined", not "the document is unsupported");
+ * - revision_not_found: the requested/active revision has no publication;
+ * - not_durable_v2: a V2 simple-engine document (not a durable candidate);
+ * - not_durable: neither a durable, V2 nor supported comment document;
+ * - unsupported_comment_flow: a comment-trigger document that cannot run here.
+ */
+export type ReadinessCandidateReason="no_active_revision"|"no_candidate_revision"|
+ "revision_not_found"|"not_durable_v2"|"not_durable"|"unsupported_comment_flow";
+export type ReadinessCandidate={
+ flowKey:string;
+ /** Exactly the examined revision (requested, else the flow's active one), null = none. */
+ revision:number|null;
+ source:"requested"|"active"|"none";
+ found:boolean;
+ /** The flow's own active revision on this account, null = OFF. Never another flow's. */
+ activeRevision:number|null;
+ /** Engine the examined document targets, null = none examined or not runnable. */
+ engine:"durable"|"v2"|"comment"|null;
+ reasons:{activeRevision:ReadinessCandidateReason|null;supportedCandidate:ReadinessCandidateReason|null};
+};
+/** Pure: additive diagnostics for the readiness report. Never changes a check. */
+export function readinessCandidate(i:{flowKey:string;requested:boolean;revision:number|null;
+ activeRevision:number|null;activeCheck:boolean;found:boolean;durable:boolean;v2:boolean;
+ commentDocument:boolean;candidateKind:string}):ReadinessCandidate{
+ const source=i.revision===null?"none":i.requested?"requested":"active";
+ const found=source!=="none"&&i.found;
+ const engine=!found?null:i.durable?"durable":i.candidateKind==="comment"?"comment":i.v2?"v2":null;
+ const supportedReason:ReadinessCandidateReason|null=
+  source==="none"?"no_candidate_revision":!found?"revision_not_found":
+  i.candidateKind!=="unsupported"?null:i.commentDocument?"unsupported_comment_flow":
+  i.v2?"not_durable_v2":"not_durable";
+ return {flowKey:i.flowKey,revision:source==="none"?null:i.revision,source,found,
+  activeRevision:i.activeRevision,engine,
+  reasons:{activeRevision:i.activeCheck===true?null:"no_active_revision",
+   supportedCandidate:supportedReason}};
+}
+
 export function evaluateFlowReadiness(input:ReadinessInput){
  if(input.comment)return evaluateCommentFlowReadiness(input,input.comment);
  const checks={

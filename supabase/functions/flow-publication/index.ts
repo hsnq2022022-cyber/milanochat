@@ -11,7 +11,7 @@ import {
 } from "../../../src/flow/serverPublicationValidation.ts";
 import {flowNeedsMedia,parseCapabilities,mediaActivationAllowed,withMediaGate,
  type FlowCapability} from "../../../src/flow/publicationGate.ts";
-import {evaluateFlowReadiness,documentHasCommentTrigger} from "./readiness.ts";
+import {evaluateFlowReadiness,documentHasCommentTrigger,readinessCandidate} from "./readiness.ts";
 import {simpleFlowDocumentSupported} from "../milan-api/flowPrepareMessage.ts";
 import {documentKeywordTriggerProblem} from "../milan-api/triggerKeywords.ts";
 import {supportedDurableDocument,durableCandidateKind,durableRuntimeNeeds,durableNeedsInternalActions,
@@ -221,7 +221,7 @@ export async function handleFlowPublication(req:Request,
    // server-env flags (fail-closed) the activate action's comment path uses.
    const comment=!supported&&documentHasCommentTrigger(published)?{
     planValid:commentFlowPlan(published,scope.platform)!==null,...commentSwitches()}:undefined;
-   const readiness=evaluateFlowReadiness({
+   const evaluated=evaluateFlowReadiness({
     comment,
     platform:scope.platform,candidateKind,tenantActive:tenant.is_active===true,
     accountActive:account.is_active===true,
@@ -249,6 +249,17 @@ export async function handleFlowPublication(req:Request,
     mediaEnabled:mediaActivationAllowed(parseCapabilities(env("FLOW_ACTIVATION_CAPABILITIES")),
      env("FLOW_MEDIA_SEND_ENABLED")==="true")
    });
+   // Additive diagnostics (checks/candidateKind/configured are unchanged and
+   // stay fail-closed): WHICH flow and revision were examined and WHY
+   // activeRevision/supportedCandidate are false. No fallback: only the
+   // requested revision, else the flow's own active one, else nothing.
+   const activeRow=activated.data?.[0]?.revision;
+   const readiness={...evaluated,candidate:readinessCandidate({flowKey,
+    requested:requestedRevision!==undefined,revision:typeof revision==="number"?revision:null,
+    activeRevision:typeof activeRow==="number"?activeRow:null,activeCheck:evaluated.checks.activeRevision,
+    found:published!==undefined&&published!==null,durable:supported,
+    v2:simpleFlowDocumentSupported(published,scope.platform),commentDocument:comment!==undefined,
+    candidateKind:evaluated.candidateKind})};
    return respond({ok:true,readiness,candidateRevision:revision??null});
   }
 
