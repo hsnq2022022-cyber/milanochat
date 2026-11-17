@@ -46,6 +46,10 @@ export const T={a:"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",b:"bbbbbbbb-bbbb-4bbb-8
 export const A={a:"11111111-1111-4111-8111-111111111111",a2:"33333333-3333-4333-8333-333333333333",
  b:"22222222-2222-4222-8222-222222222222"};
 export const USER={a:"99999999-9999-4999-8999-99999999999a",b:"99999999-9999-4999-8999-99999999999b"};
+/** Signed in but owns no tenant (tenant-staff style): token "jwt-staff". "jwt-invalid": auth error. */
+export const STAFF_USER="99999999-9999-4999-8999-9999999999cc";
+/** Test-only dummy operator allowlist: both tenant owners (USER.a, USER.b). Override per call via env. */
+export const OPERATOR_IDS=USER.a+","+USER.b;
 export const ORIGIN="https://hsnq2022022-cyber.github.io";
 export const KEY="ig_live_welcome_20261029";
 export type Row={tenant:string;account:string;platform:string;flow_key:string;revision:number};
@@ -71,7 +75,8 @@ export function server(initial:{acts?:Act[];pubs?:Pub[];
  const acts=initial.acts??[],pubs=initial.pubs??[];
  const log:Array<{table?:string;rpc?:string;filters?:Record<string,unknown>;args?:any}>=[];
  const factory=(token:string)=>({
-  auth:{getUser:async()=>({data:{user:{id:token==="jwt-b"?USER.b:USER.a}},error:null})},
+  auth:{getUser:async()=>token==="jwt-invalid"?{data:{user:null},error:{message:"invalid"}}:
+   ({data:{user:{id:token==="jwt-b"?USER.b:token==="jwt-staff"?STAFF_USER:USER.a}},error:null})},
   from:(table:string)=>{
    const f:Record<string,unknown>={};
    const rows=()=>{
@@ -125,12 +130,13 @@ export function server(initial:{acts?:Act[];pubs?:Pub[];
    throw Error("unexpected rpc "+name);
   }
  });
- const call=async(body:Record<string,unknown>,token="jwt-a",env:Env=PROD_ENV)=>withEnv({SUPABASE_SERVICE_ROLE_KEY:"dummy",
-  SUPABASE_URL:"http://localhost:54321",...env},async()=>{
+ const call=async(body:Record<string,unknown>,token="jwt-a",env:Env=PROD_ENV,
+  headers:Record<string,string>={})=>withEnv({SUPABASE_SERVICE_ROLE_KEY:"dummy",
+  SUPABASE_URL:"http://localhost:54321",FLOW_OPERATOR_USER_IDS:OPERATOR_IDS,...env},async()=>{
   const res=await handleFlowPublication(new Request("https://example.test/functions/v1/flow-publication",{method:"POST",
-   headers:{origin:ORIGIN,authorization:"Bearer "+token,"content-type":"application/json"},body:JSON.stringify(body)}),
+   headers:{origin:ORIGIN,authorization:"Bearer "+token,"content-type":"application/json",...headers},body:JSON.stringify(body)}),
    ((_u:string,_k:string)=>factory(token)) as any);
-  return {status:res.status,body:await res.json() as any};
+  return {status:res.status,body:await res.json() as any,headers:res.headers};
  });
  const mutations=()=>log.filter(l=>l.rpc==="flow_activate_revision"||l.rpc==="flow_deactivate_revision");
  return {acts,pubs,log,call,mutations};

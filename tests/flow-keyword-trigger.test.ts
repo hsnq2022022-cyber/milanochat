@@ -555,7 +555,8 @@ function publicationClient(stored:unknown){
 }
 const post=(body:unknown)=>new Request("https://example.test/functions/v1/flow-publication",{method:"POST",
  headers:{origin:ORIGIN,authorization:"Bearer user-jwt","content-type":"application/json"},body:JSON.stringify(body)});
-const baseEnv:Env={SUPABASE_SERVICE_ROLE_KEY:"dummy-service",SUPABASE_URL:"http://localhost:54321"};
+const baseEnv:Env={SUPABASE_SERVICE_ROLE_KEY:"dummy-service",SUPABASE_URL:"http://localhost:54321",
+ FLOW_OPERATOR_USER_IDS:USER};
 async function call(env:Env,body:Record<string,unknown>,stored?:unknown){
  return withEnv({...baseEnv,...env},async()=>{
   const c=publicationClient(stored);

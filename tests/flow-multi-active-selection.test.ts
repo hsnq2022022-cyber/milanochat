@@ -525,7 +525,7 @@ function publicationServer(initial:{acts?:Act[];pubs?:Pub[]}={}){
   }
  });
  const call=async(body:Record<string,unknown>,token="jwt-a",env:Env={})=>withEnv({SUPABASE_SERVICE_ROLE_KEY:"dummy",
-  SUPABASE_URL:"http://localhost:54321",...env},async()=>{
+  SUPABASE_URL:"http://localhost:54321",FLOW_OPERATOR_USER_IDS:USER.a+","+USER.b,...env},async()=>{
   const res=await handleFlowPublication(new Request("https://example.test/functions/v1/flow-publication",{method:"POST",
    headers:{origin:ORIGIN,authorization:"Bearer "+token,"content-type":"application/json"},body:JSON.stringify(body)}),
    ((_u:string,_k:string)=>factory(token)) as any);

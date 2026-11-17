@@ -433,7 +433,7 @@ function publicationServer(pubs:Pub[]){
    throw Error("unexpected rpc "+name);}
  });
  const call=(body:Record<string,unknown>,env:Env={})=>withEnv({SUPABASE_SERVICE_ROLE_KEY:"dummy",
-  SUPABASE_URL:"http://localhost:54321",...env},async()=>{
+  SUPABASE_URL:"http://localhost:54321",FLOW_OPERATOR_USER_IDS:USER,...env},async()=>{
   const res=await handleFlowPublication(new Request("https://example.test/functions/v1/flow-publication",{method:"POST",
    headers:{origin:ORIGIN,authorization:"Bearer jwt","content-type":"application/json"},body:JSON.stringify(body)}),
    factory as any);

@@ -22,6 +22,7 @@ import {aiStepEnabled} from "../flow-outbox-worker/aiStep.ts";
 import {evaluateActivationGates} from "./activationGates.ts";
 import {deriveRequirements} from "../../../src/flow/requirements.ts";
 import {notLiveReason,savedNotLive} from "./publishLive.ts";
+import {parseOperatorAllowlist,isOperator,isCustomerAction} from "./operatorAuth.ts";
 import type {FlowDocument} from "../../../src/flow/model.ts";
 
 const env=(k:string)=>Deno.env.get(k)??"";
@@ -181,6 +182,22 @@ export async function handleFlowPublication(req:Request,
     status:429,headers:{...origins,
      "Retry-After":String(60-Math.floor(Date.now()/1000)%60)}});
 
+  const action=request.action;
+  // Operator allowlist (operatorAuth.ts), default deny: every action that is
+  // not an explicit customer action needs the verified auth user id on
+  // FLOW_OPERATOR_USER_IDS, parsed on every request. Checked before any
+  // account lookup (no account-ownership oracle). One generic 403 for "not
+  // listed" and "list missing/invalid"; never log ids, counts or the raw value.
+  // Operators get NO cross-tenant access: the tenant scope above is unchanged.
+  const customerAction=isCustomerAction(action);
+  if(!customerAction||action==="operator_status"){
+   const allowlist=parseOperatorAllowlist(env("FLOW_OPERATOR_USER_IDS"));
+   if(!allowlist.ok)console.error("[flow-publication] operator_allowlist_unavailable");
+   const operator=isOperator(auth.user.id,allowlist);
+   if(action==="operator_status")return respond({ok:true,operator});
+   if(!operator)return error("Operator access required",403);
+  }
+
   // Only the authenticated tenant's accounts are ever returned.
   if(request.action==="accounts"){
    const [accounts,globalSwitch,tenantSwitch]=await Promise.all([
@@ -231,7 +248,6 @@ export async function handleFlowPublication(req:Request,
 
   const scope={tenantId:tenant.id,accountId,platform:account.platform,
     actorId:auth.user.id};
-  const action=request.action;
 
   // Account-scoped, read-only capability availability for the editor. The same
   // gate inputs as the activate action below; only booleans and stable reason
