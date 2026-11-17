@@ -2,7 +2,7 @@ import {useCallback,useEffect,useState} from "react";
 import type {FlowDocument} from "./model.ts";
 import type {FlowLanguage} from "./uiLocale.ts";
 import { copyText } from "../lib/clipboard.ts";
-import {accountCanActivate,activeRevisionOf,catalogActiveFlows,resolveServerFlowKey,
+import {accountCanActivate,activeRevisionOf,catalogActiveFlows,readinessCandidateSummary,resolveServerFlowKey,
  type ActivationAccount,type CatalogActive} from "./activationAccount.ts";
 import {commentTriggerProviderPlatform} from "./serverPublicationValidation.ts";
 import {activationErrorMessage,invokeService,serviceErrorDetail} from "./useFlowActivation.ts";
@@ -23,6 +23,8 @@ type ServerText={ar:string;en:string};
 type CommentReadiness={status:"supported"|"unsupported";label:ServerText;statusLabel:ServerText;detail?:ServerText};
 type Readiness={checks:ReadinessChecks;candidateKind:"buttons"|"delay"|"mixed"|"text"|"comment"|"unsupported";
  commentTrigger?:CommentReadiness|null;checkLabels?:Record<string,ServerText>;
+ // Additive server diagnostics (examined flow/revision, reasons); see readinessCandidateSummary.
+ candidate?:unknown;
  buttonsConfigured:boolean;delayConfigured:boolean;
  // Absent on older servers; the per-kind fallbacks below preserve the old behaviour.
  configured?:boolean;needsButtons?:boolean;needsScheduler?:boolean;needsInternalActions?:boolean;needsMedia?:boolean};
@@ -174,6 +176,11 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
   const configured=readinessConfigured(readiness);
   // No token, account ID, customer identity, message or tenant information.
   const report={revision:checkedRevision,kind:readiness.candidateKind,configured,missing};
+  // Additive: which flow/revision the server examined and why checks are missing
+  // (flow key, revision numbers and reason codes only; absent on older servers).
+  const examined=readinessCandidateSummary(readiness);
+  if(examined)Object.assign(report,{flowKey:examined.flowKey,source:examined.source,found:examined.found,
+   activeRevision:examined.activeRevision,engine:examined.engine,reasons:examined.reasons});
   try{
    await copyText(JSON.stringify(report,null,2));
    setNotice(en?"Readiness report copied.":"تم نسخ تقرير الجاهزية.");
@@ -346,7 +353,22 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
         <strong data-testid="flow-readiness-comment-status">{serverText(readiness.commentTrigger.statusLabel,en)}</strong></p>
        {serverText(readiness.commentTrigger.detail,en)&&<p className="mt-1">{serverText(readiness.commentTrigger.detail,en)}</p>}
       </div>}
-      {readiness.candidateKind==="unsupported"&&!readiness.commentTrigger&&<p className="mt-2 text-[#F5D99C]">
+      {(()=>{const c=readinessCandidateSummary(readiness);return c&&<p data-testid="flow-readiness-candidate"
+       data-source={c.source} className="mt-2 break-all text-[#C9E8D9]">
+       {(en?"Flow ":"التدفق ")+c.flowKey+" · "+(c.source==="none"?(en?"no revision examined":"لم يُفحص أي إصدار"):
+        (en?"examined v":"الإصدار المفحوص v")+c.revision+(c.source==="requested"?(en?" (selected)":" (المحدد)"):(en?" (active)":" (النشط)")))+
+        " · "+(c.activeRevision!==null?(en?"active v":"النشط v")+c.activeRevision:(en?"no active revision":"لا يوجد إصدار نشط"))}</p>;})()}
+      {readinessCandidateSummary(readiness)?.source==="none"&&<p data-testid="flow-readiness-no-candidate" className="mt-2 text-[#F5D99C]">
+       {en?"This flow has no active revision and no revision was selected, so no document was checked. Press Load revisions, then Check readiness on the exact revision.":
+        "لا يوجد إصدار نشط لهذا التدفق ولم يُحدَّد إصدار، لذلك لم يُفحص أي مستند. اضغط «عرض الإصدارات» ثم «فحص جاهزية الإصدار» على الإصدار المطلوب."}</p>}
+      {readinessCandidateSummary(readiness)?.reasons.supportedCandidate==="revision_not_found"&&<p className="mt-2 text-[#F5D99C]">
+       {en?"The selected revision was not found for this flow and account; nothing was checked.":
+        "الإصدار المحدد غير موجود لهذا التدفق والحساب؛ لم يُفحص شيء."}</p>}
+      {readinessCandidateSummary(readiness)?.engine==="v2"&&<p data-testid="flow-readiness-v2" className="mt-2 text-[#C9E8D9]">
+       {en?"This revision runs on the simple (V2) engine; the advanced (buttons/delay) checks do not apply to it.":
+        "هذا الإصدار يعمل على المحرك البسيط (V2)؛ فحوص التدفقات المتقدمة (الأزرار/التأخير) لا تنطبق عليه."}</p>}
+      {readiness.candidateKind==="unsupported"&&!readiness.commentTrigger&&
+       (readinessCandidateSummary(readiness)?.found??true)&&readinessCandidateSummary(readiness)?.engine!=="v2"&&<p className="mt-2 text-[#F5D99C]">
        {en?"This revision is not an advanced buttons or delay candidate.":
         "هذا الإصدار ليس تدفق أزرار أو تأخير مدعومًا."}</p>}
       {readiness.needsInternalActions===true&&<p data-testid="flow-readiness-internal-actions"
