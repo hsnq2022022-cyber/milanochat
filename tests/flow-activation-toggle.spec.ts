@@ -25,7 +25,8 @@ test("toggle shows loading then reflects the real inactive status; no 'locally e
   await expect(toggle).toContainText("غير مفعّل");
   await expect(page.getByText("محليًا")).toHaveCount(0);
   const actions = new Set(s.calls.map((c) => c.action)); // dev StrictMode may repeat reads
-  expect([...actions].sort()).toEqual(["accounts", "catalog", "list"]);
+  // Read-only calls only; "capabilities" is the editor's per-account block availability (Phase 1 gating).
+  expect([...actions].sort()).toEqual(["accounts", "capabilities", "catalog", "list"]);
   expect(mutations(s)).toHaveLength(0);
 });
 
