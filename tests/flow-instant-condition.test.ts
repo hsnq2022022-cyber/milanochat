@@ -45,7 +45,7 @@ test("foreign account, unsupported nodes, malformed graph, and unsafe condition 
 });
 test("the real webhook passes customer text and the activation manifest recognizes only the condition capability",()=>{
  const webhook=readFileSync("supabase/functions/milan-api/index.ts","utf8");
- const publication=readFileSync("supabase/functions/flow-publication/index.ts","utf8");
+ const publication=readFileSync("supabase/functions/flow-publication/activationGates.ts","utf8");
  assert.match(webhook,/sb, tenantId, String\(account\.id\), channel, customerText/);
  assert.match(publication,/"message:text","condition"/);
  assert.doesNotMatch(publication,/"condition","delay"/);

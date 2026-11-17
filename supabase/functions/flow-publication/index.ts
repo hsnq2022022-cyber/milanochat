@@ -5,21 +5,21 @@
  */
 import {createClient} from "npm:@supabase/supabase-js@2";
 import {
- preparePublishedDocument,publicationCanActivate,testCanaryArmed,productionActivationAuthorized,
+ preparePublishedDocument,productionActivationAuthorized,
  UUID_REGEX,VALID_FLOW_KEY,type ProviderPlatform,
  messageScopeActivationProblem,MESSAGE_SCOPE_PROBLEM_MESSAGES
 } from "../../../src/flow/serverPublicationValidation.ts";
-import {flowNeedsMedia,parseCapabilities,mediaActivationAllowed,withMediaGate,
- type FlowCapability} from "../../../src/flow/publicationGate.ts";
+import {flowNeedsMedia,parseCapabilities,mediaActivationAllowed} from "../../../src/flow/publicationGate.ts";
 import {evaluateFlowReadiness,documentHasCommentTrigger,readinessCandidate} from "./readiness.ts";
 import {simpleFlowDocumentSupported} from "../milan-api/flowPrepareMessage.ts";
 import {documentKeywordTriggerProblem} from "../milan-api/triggerKeywords.ts";
-import {supportedDurableDocument,durableCandidateKind,durableRuntimeNeeds,durableNeedsInternalActions,
+import {supportedDurableDocument,durableCandidateKind,durableNeedsInternalActions,
  type DurableCandidateKind} from "../milan-api/flowDurableIngress.ts";
 import {documentCommentTriggerProblem,commentFlowPlan} from "../milan-api/commentTrigger.ts";
 import {listActiveActivations,compareActivationOrder} from "../milan-api/flowInboundSelection.ts";
 import {capabilityAvailability} from "./capabilities.ts";
 import {aiStepEnabled} from "../flow-outbox-worker/aiStep.ts";
+import {evaluateActivationGates} from "./activationGates.ts";
 
 const env=(k:string)=>Deno.env.get(k)??"";
 // Only the existing production GitHub Pages origin. Never reflect Origin.
@@ -45,10 +45,7 @@ const commentSwitches=()=>({
 });
 
 /** Canary capability set: trigger:keyword follows trigger:message (same V2 engine). */
-export function withKeywordTrigger(caps:Set<FlowCapability>):Set<FlowCapability>{
- if(caps.has("trigger:message"))caps.add("trigger:keyword");
- return caps;
-}
+export {withKeywordTrigger} from "./activationGates.ts";
 
 /** Clear publish errors for DM keyword trigger problems (triggerKeywords.ts). */
 const KEYWORD_PROBLEM_MESSAGES:Record<string,string>={
@@ -417,130 +414,13 @@ export async function handleFlowPublication(req:Request,
    const rev=request.revision;
    if(typeof rev!=="number"||!Number.isSafeInteger(rev)||rev<1)
     return error("Invalid revision",400);
-   if(tenant.is_active!==true||account.is_active!==true||
-      account.agent_enabled!==true||account.auto_reply!==true)
-    return error("Account is paused",403);
-
-   // Production approval requires two OFF-by-default DB switches plus a
-   // separate operator-owned production_approved bit. The RPC re-checks
-   // global/tenant gates transactionally before committing activation.
-   const canary=testCanaryArmed(env("FLOW_PUBLICATION_CANARY_READY"),
-     env("FLOW_PUBLICATION_CANARY_TENANT_ID"),
-     env("FLOW_PUBLICATION_CANARY_ACCOUNT_ID"),
-     scope.tenantId,scope.accountId);
-   const [globalSwitch,tenantSwitch]=await Promise.all([
-    client.from("automation_flow_global_switch").select("enabled")
-     .eq("singleton",true).maybeSingle(),
-    client.from("automation_flow_tenant_switches")
-     .select("enabled,production_approved").eq("tenant_id",scope.tenantId)
-     .maybeSingle()
-   ]);
-   if(globalSwitch.error||tenantSwitch.error)
-    return error("Automation switches unavailable",503);
-   const production=productionActivationAuthorized(
-    scope.platform,globalSwitch.data?.enabled,
-    tenantSwitch.data?.enabled,tenantSwitch.data?.production_approved);
-   // Platform-level comment authorization (instagram: same as production;
-   // facebook: only with FLOW_COMMENT_AUTOMATION_ENABLED+FLOW_MULTICHANNEL_ENABLED;
-   // whatsapp: never). It still needs a stored comment graph below.
-   const switches=commentSwitches();
-   const commentPlatformAuthorized=productionActivationAuthorized(
-    scope.platform,globalSwitch.data?.enabled,
-    tenantSwitch.data?.enabled,tenantSwitch.data?.production_approved,
-    {commentTrigger:true,...switches});
-   if(!canary&&!production&&!commentPlatformAuthorized)
-    return error("Publication activation is disabled",423);
-
-   const {data:publication,error:publicationError}=await client
-    .from("automation_flow_publications").select("document")
-    .eq("tenant_id",scope.tenantId).eq("channel_account_id",scope.accountId)
-    .eq("platform",scope.platform).eq("flow_key",flowKey)
-    .eq("revision",rev).maybeSingle();
-   if(publicationError)return error("Publication lookup unavailable",503);
-   if(!publication)return error("Publication revision not found",404);
-   // messageScope rules on the STORED document. "conversation_start" must be
-   // a message trigger answering immediately (both actions). With
-   // FLOW_MESSAGE_SCOPE_REQUIRED==="true" (default OFF) a message trigger must
-   // carry its own messageScope to be ACTIVATED; a rollback is exempt so an
-   // operator can always restore an older revision published before the rule.
-   const scopeProblem=messageScopeActivationProblem(publication.document,
-    action==="activate"&&env("FLOW_MESSAGE_SCOPE_REQUIRED")==="true");
-   if(scopeProblem!==null)return respond({ok:false,
-    error:MESSAGE_SCOPE_PROBLEM_MESSAGES[scopeProblem],code:scopeProblem},422);
-   // Advanced activation is independently gated by the operator AFTER the
-   // durable ingress and sender have passed real provider integration.
-   // This prevents a customer from activating a graph that would fall back
-   // to legacy AI or never wake up from its first delay.
-   // Explicit operator gates remain independent of browser publication controls.
-   const rawDocument:unknown=publication.document;
-   const durableGraph=supportedDurableDocument(rawDocument);
-   // Flags follow the actual nodes: buttons sender for question/button
-   // messages, scheduler for delays (both for mixed graphs, none for text).
-   const needs=durableGraph?durableRuntimeNeeds(rawDocument):{buttons:true,scheduler:true};
-   // tag/untag/notify/handoff run only through the internal executor.
-   const needsInternal=!durableGraph||durableNeedsInternalActions(rawDocument);
-   // Image blocks go live only with message:image in the server capability
-   // set (FLOW_ACTIVATION_CAPABILITIES) AND FLOW_MEDIA_SEND_ENABLED; PDF never.
-   const needsMedia=flowNeedsMedia(rawDocument);
-   const mediaAllowed=mediaActivationAllowed(parseCapabilities(env("FLOW_ACTIVATION_CAPABILITIES")),
-    env("FLOW_MEDIA_SEND_ENABLED")==="true");
-   const durable=production&&scope.platform==="instagram"&&durableGraph&&
-    env("FLOW_DURABLE_ACTIVATION_READY")==="true"&&
-    env("FLOW_DURABLE_INGRESS_ENABLED")==="true"&&
-    env("FLOW_DURABLE_CANARY_ACCOUNT_ID")===scope.accountId&&
-    env("FLOW_WORKERS_OPERATOR_RELEASE")==="production-canary-approved"&&
-    env("FLOW_OUTBOX_SEND_ENABLED")==="true"&&
-    env("FLOW_ATOMIC_CONSUME_READY")==="true"&&
-    env("FIELD_ENCRYPTION_KEY").length>0&&
-    (!needs.buttons||env("FLOW_RICH_BUTTONS_ENABLED")==="true")&&
-    (!needsInternal||env("FLOW_INTERNAL_ACTIONS_ENABLED")==="true")&&
-    (!needsMedia||mediaAllowed)&&
-    (!needs.scheduler||env("FLOW_DURABLE_SCHEDULER_ENABLED")==="true");
-   // Comment automation (20261029300000; FLOW_COMMENT_AUTOMATION_ENABLED,
-   // default OFF): the single supported comment graph (commentTrigger.ts
-   // commentFlowPlan) under the same operator gates as the durable path.
-   // OFF: false, so activation is decided exactly as before.
-   // Platform rule lives in productionActivationAuthorized (instagram as
-   // before; facebook Page comments also need FLOW_MULTICHANNEL_ENABLED;
-   // whatsapp never: no comment surface), fed the stored document's plan.
-   const commentGraph=!durableGraph&&switches.commentAutomationEnabled&&
-    commentFlowPlan(rawDocument,scope.platform)!==null;
-   const commentFlow=commentGraph&&commentPlatformAuthorized&&
-    env("FLOW_DURABLE_ACTIVATION_READY")==="true"&&
-    env("FLOW_DURABLE_INGRESS_ENABLED")==="true"&&
-    env("FLOW_DURABLE_CANARY_ACCOUNT_ID")===scope.accountId&&
-    env("FLOW_WORKERS_OPERATOR_RELEASE")==="production-canary-approved"&&
-    env("FLOW_OUTBOX_SEND_ENABLED")==="true"&&
-    env("FLOW_ATOMIC_CONSUME_READY")==="true"&&
-    env("FIELD_ENCRYPTION_KEY").length>0;
-   if(commentFlow){
-    const {data:enabled,error:dbError}=await client.rpc("flow_activate_revision",{
-     p_tenant_id:scope.tenantId,p_account_id:scope.accountId,
-     p_platform:scope.platform,p_flow_key:flowKey,p_revision:rev,p_actor_id:scope.actorId
-    });
-    if(dbError)return error("Activation unavailable",503);
-    if(enabled!==true)return error("Global/tenant switch is OFF",423);
-    return respond({ok:true,active:true,revision:rev});
-   }
-   // Not a comment flow: DM gating exactly as before (facebook/whatsapp DM
-   // flows are never production-authorized; only the test canary remains).
-   if(!canary&&!production)
-    return error("Publication activation is disabled",423);
-   // V2 shape (text-only / condition): text-independent check, so a keyword
-   // trigger is accepted only with >= 1 valid keyword (matched at reply time).
-   if(!durable){
-    if(!simpleFlowDocumentSupported(publication.document,scope.platform))
-     return error("This flow uses unsupported runtime features",422);
-    // message:image counts only while FLOW_MEDIA_SEND_ENABLED is on.
-    // trigger:keyword runs in the same V2 engine as trigger:message (keyword
-    // gate before the reply), so a canary set that grants trigger:message
-    // grants trigger:keyword too.
-    const caps=canary?
-     withKeywordTrigger(withMediaGate(parseCapabilities(env("FLOW_ACTIVATION_CAPABILITIES")),env("FLOW_MEDIA_SEND_ENABLED")==="true")):
-     new Set<FlowCapability>(["execution-engine","instagram","trigger:message","trigger:keyword","message:text","condition"]);
-    if(!publicationCanActivate(publication.document,scope.platform,caps,true))
-     return error("This flow uses unsupported runtime features",422);
-   }
+   // Every activation gate (account paused, canary/production/comment
+   // authorization, stored revision, messageScope, durable/comment operator
+   // flags, V2 capabilities) lives in activationGates.ts, same order and
+   // results. Comment flows and DM flows that pass end in the same RPC.
+   const gate=await evaluateActivationGates({client,env,commentSwitches,
+    scope,tenant,account,flowKey,rev,action});
+   if(!gate.ok)return respond(gate.body,gate.status);
 
    const {data:enabled,error:dbError}=await client.rpc("flow_activate_revision",{
     p_tenant_id:scope.tenantId,p_account_id:scope.accountId,

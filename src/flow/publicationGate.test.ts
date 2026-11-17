@@ -75,7 +75,7 @@ test("message:image counts only with FLOW_MEDIA_SEND_ENABLED; pdf stays refused;
  assert.equal(auditFlowPublication(pdf,withMediaGate(caps,true)).canPublish,false);
  assert.ok(auditFlowPublication(pdf,withMediaGate(caps,true)).issues.some(x=>x.capability==="message:pdf"));
  // The non-canary default set (flow-publication) has no media capability.
- const api=readFileSync("supabase/functions/flow-publication/index.ts","utf8");
+ const api=readFileSync("supabase/functions/flow-publication/activationGates.ts","utf8");
  assert.ok(api.includes(`new Set<FlowCapability>(["execution-engine","instagram","trigger:message","trigger:keyword","message:text","condition"])`));
 });
 test("website buttons: message:link capability required; 4 buttons or text over 640 never publishable",()=>{

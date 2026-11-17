@@ -64,7 +64,7 @@ test("server checks are owner-scoped, read-only, and do not expose secret values
 });
 
 test("real server activation cannot bypass durable worker gates",()=>{
- const api=readFileSync("supabase/functions/flow-publication/index.ts","utf8");
+ const api=readFileSync("supabase/functions/flow-publication/activationGates.ts","utf8");
  const start=api.indexOf("const rawDocument:unknown=publication.document");
  const end=api.indexOf("if(!durable)",start);
  assert(start>0&&end>start);
@@ -167,7 +167,7 @@ test("tag/untag/notify/handoff graphs additionally require FLOW_INTERNAL_ACTIONS
  assert.equal(durableNeedsInternalActions(doc as any),true);
 });
 test("activation guard requires the internal executor flag exactly when the graph has internal actions",()=>{
- const api=readFileSync("supabase/functions/flow-publication/index.ts","utf8");
+ const api=readFileSync("supabase/functions/flow-publication/activationGates.ts","utf8");
  const start=api.indexOf("const rawDocument:unknown=publication.document");
  const guard=api.slice(start,api.indexOf("if(!durable){",start));
  assert.match(guard,/const needsInternal=!durableGraph\|\|durableNeedsInternalActions\(rawDocument\);/);
@@ -204,7 +204,7 @@ test("image graphs additionally require message:image + FLOW_MEDIA_SEND_ENABLED;
  assert.match(ui,/ media:r\.needsMedia===true\n\}\);/);
 });
 test("activation guard requires message:image and FLOW_MEDIA_SEND_ENABLED exactly when the graph has images",()=>{
- const api=readFileSync("supabase/functions/flow-publication/index.ts","utf8");
+ const api=readFileSync("supabase/functions/flow-publication/activationGates.ts","utf8");
  const start=api.indexOf("const rawDocument:unknown=publication.document");
  const guard=api.slice(start,api.indexOf("if(!durable){",start));
  assert.match(guard,/const needsMedia=flowNeedsMedia\(rawDocument\);/);

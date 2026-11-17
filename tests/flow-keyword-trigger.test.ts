@@ -778,7 +778,7 @@ const MAX_TRIGGER_TEXT_SERVER=()=>MAX_INBOUND_TEXT;
 
 // ============================================ A-2: capabilities and gates
 test("A-2: trigger:keyword is in the production V2 set and follows trigger:message for the canary; no channel is opened",async()=>{
- const src=readFileSync("supabase/functions/flow-publication/index.ts","utf8");
+ const src=readFileSync("supabase/functions/flow-publication/activationGates.ts","utf8");
  assert.match(src,/new Set<FlowCapability>\(\["execution-engine","instagram","trigger:message","trigger:keyword","message:text","condition"\]\)/);
  assert.deepEqual([...withKeywordTrigger(new Set(["trigger:message"] as any))].sort(),["trigger:keyword","trigger:message"]);
  // Facebook / WhatsApp keyword flows: V2 off without FLOW_RUNTIME_MODE=message_only, durable off without multichannel
