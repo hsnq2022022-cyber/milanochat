@@ -6,6 +6,8 @@ import {accountCanActivate,activeRevisionOf,catalogActiveFlows,readinessCandidat
  type ActivationAccount,type CatalogActive} from "./activationAccount.ts";
 import {commentTriggerProviderPlatform} from "./serverPublicationValidation.ts";
 import {activationErrorMessage,invokeService,serviceErrorDetail} from "./useFlowActivation.ts";
+import {activationConfirmText,classifyRevision,listedActive,listedRevisions,REASON_LABELS,REFUSAL_TEXT,
+ selectionRefusal,STATUS_LABELS} from "./revisionSelection.ts";
 
 type Account=ActivationAccount;
 type Version={revision:number;created_at:string};
@@ -91,6 +93,10 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
  const [notice,setNotice]=useState("");
  const [readiness,setReadiness]=useState<Readiness|null>(null);
  const [checkedRevision,setCheckedRevision]=useState<number|null>(null);
+ // Readiness reports per exact revision (server candidateRevision) and the explicit selection.
+ const [reports,setReports]=useState<Record<number,Readiness>>({});
+ const [selectedRevision,setSelectedRevision]=useState<number|null>(null);
+ const resetSelection=()=>{setReports({});setSelectedRevision(null);};
  const isEditingLocalFlow=managedFlowKey===flowKey;
  // Comment flows: the server's canActivateComments hint (Facebook Page comments
  // need server flags). Other managed server flows keep the old canActivate rule.
@@ -158,6 +164,8 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
    if(!r.readiness)throw Error("Missing readiness report");
    setReadiness(r.readiness);
    setCheckedRevision(r.candidateRevision??null);
+   const examined=r.candidateRevision;
+   if(typeof examined==="number"&&revision===examined)setReports(m=>({...m,[examined]:r.readiness!}));
   }catch(e){
    setNotice((en?"Unable to verify advanced flow configuration.":
     "تعذر التحقق من إعدادات التدفقات المتقدمة.")+codeSuffix(e,en));
@@ -232,18 +240,34 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
    "فشل النشر؛ لم تتغير المسودة المحلية.")+codeSuffix(e,en));}
   finally{setBusy(false);}
  };
+ const reasonText=(code:string)=>REASON_LABELS[code]?.[en?"en":"ar"]??
+  readinessLabels[code as keyof ReadinessChecks]?.[en?"en":"ar"]??code;
  const change=async(action:"activate"|"rollback"|"deactivate",revision?:number)=>{
   if(!loaded||!accountId||busy)return;
-  const target=" ("+managedFlowKey+(revision?" · v"+revision:"")+")";
-  if(!window.confirm((action==="deactivate"
-   ?(en?"Stop this automation?":"هل تريد إيقاف التدفق؟")
-   :(productionReady
-     ?(en?"Activate a real incoming-message automation for this account?":
-       "تفعيل الأتمتة الفعلية للرسائل الواردة على هذا الحساب؟")
-     :(en?"Use a test-only activation? Server approval is required.":
-       "تفعيل إصدار تجريبي؟ يتطلب موافقة الخادم.")))+target))return;
+  if(action==="deactivate"){
+   if(!window.confirm((en?"Stop this automation?":"هل تريد إيقاف التدفق؟")+" ("+managedFlowKey+")"))return;
+  }
   setBusy(true);setNotice("");
   try{
+   if(action!=="deactivate"){
+    // Exact revision only: re-read this flow's revisions and active state; a
+    // missing/stale selection is refused (never another revision or flow).
+    const loadedActive=activation?.is_active?activation.revision:null;
+    const fresh=await call({action:"list",accountId,flowKey:managedFlowKey});
+    const refusal=selectionRefusal({selected:revision,freshRevisions:listedRevisions(fresh.items),
+     freshActive:listedActive(fresh.activation),loadedActive});
+    if(refusal){
+     if(refusal!=="already_active"){setVersions(fresh.items??[]);setActivation(fresh.activation??null);}
+     setNotice(REFUSAL_TEXT[refusal][en?"en":"ar"]);return;
+    }
+    const row=classifyRevision({revision:revision!,activeRevision:loadedActive,report:reports[revision!],reportRevision:revision});
+    if(!row.activatable){
+     setNotice((en?"Revision v"+revision+" cannot be activated; nothing was changed: ":"لا يمكن تفعيل الإصدار v"+revision+"؛ لم يتم أي تغيير: ")+
+      row.reasons.map(reasonText).join(", "));return;
+    }
+    if(!window.confirm((productionReady?"":(en?"Test-only activation; server approval is required.\n":"تفعيل تجريبي؛ يتطلب موافقة الخادم.\n"))+
+     activationConfirmText(managedFlowKey,loadedActive,revision!)))return;
+   }
    await call({action,accountId,flowKey:managedFlowKey,...(revision?{revision}:{})});
    await refresh(accountId,managedFlowKey);
    setNotice(en?"Server confirmed the change.":"أكد الخادم التغيير.");
@@ -270,7 +294,7 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
     <label className="block space-y-1">
      <span>{en?"Channel account":"حساب القناة"}</span>
      <select className={style+" w-full"} value={accountId} disabled={busy}
-      onChange={e=>{setAccountId(e.target.value);setManagedFlowKey(flowKey);setCatalog([]);setActiveServerFlows([]);setCatalogTruncated(false);setLoaded(false);setVersions([]);setActivation(null);setReadiness(null);setCheckedRevision(null);setNotice("");}}>
+      onChange={e=>{resetSelection();setAccountId(e.target.value);setManagedFlowKey(flowKey);setCatalog([]);setActiveServerFlows([]);setCatalogTruncated(false);setLoaded(false);setVersions([]);setActivation(null);setReadiness(null);setCheckedRevision(null);setNotice("");}}>
       <option value="">{en?"Select an account":"اختر الحساب"}</option>
       {accounts.map(a=><option key={a.id} value={a.id}>
        {a.platform+" · "+a.id.slice(0,8)+(a.is_active?"":" (غير نشط)")}
@@ -280,7 +304,7 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
     {accountId&&<label className="block space-y-1">
      <span>{en?"Published flow":"إدارة التدفقات المنشورة للحساب"}</span>
      <select className={style+" w-full"} value={managedFlowKey} disabled={busy}
-      onChange={e=>{setManagedFlowKey(e.target.value);setLoaded(false);
+      onChange={e=>{resetSelection();setManagedFlowKey(e.target.value);setLoaded(false);
        setVersions([]);setActivation(null);setReadiness(null);setCheckedRevision(null);setNotice("");}}>
       <option value={flowKey}>{(en?"Current local flow":"التدفق المحلي المفتوح")+
        (activeRevisionOf(activeServerFlows,flowKey)!==null?(en?" · Active v":" · نشط v")+activeRevisionOf(activeServerFlows,flowKey):"")}</option>
@@ -391,14 +415,27 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
       </button>
      </div>}
     {notice&&<p role="status" className="rounded-lg border border-[#275443] p-3 text-xs">{notice}</p>}
+    {loaded&&isEditingLocalFlow&&<div data-testid="revision-draft" data-status="draft"
+     className="rounded-lg border border-dashed border-[#275443] p-3 text-xs text-[#BED4C9]">
+     <strong>{en?"Local draft":"المسودة المحلية"}</strong>{" · "+STATUS_LABELS.draft[en?"en":"ar"]}</div>}
     {loaded&&<div className="space-y-2">
      <p className="text-xs text-[#BED4C9]">{activation?.is_active
       ?(en?"Active revision: ":"الإصدار النشط: ")+activation.revision
       :(en?"Activation OFF":"التفعيل معطّل")}</p>
      {versions.map(v=><div key={v.revision}
       className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[#275443] p-3">
-      <div><strong>{(en?"Revision ":"الإصدار ")+v.revision}</strong>
-       <p className="text-xs text-[#A8BDB2]">{v.created_at}</p></div>
+      {(()=>{const row=classifyRevision({revision:v.revision,activeRevision:activation?.is_active?activation.revision:null,
+        report:reports[v.revision],reportRevision:v.revision});
+       return <div><strong>{(en?"Revision ":"الإصدار ")+v.revision}</strong>
+       <p className="text-xs text-[#A8BDB2]">{v.created_at}</p>
+       <p data-testid={"revision-status-"+v.revision} data-status={row.status}
+        className={"text-xs "+(row.status==="active"||row.status==="candidate"?"text-[#C9E8D9]":row.status==="unchecked"?"text-[#BED4C9]":"text-[#F5D99C]")}>
+        {STATUS_LABELS[row.status][en?"en":"ar"]+(selectedRevision===v.revision?(en?" · selected":" · محدد"):"")}</p>
+       {row.reasons.length>0&&<p data-testid={"revision-reasons-"+v.revision} className="text-xs text-[#F5D99C]">
+        {row.reasons.map(reasonText).join(" · ")}</p>}</div>;})()}
+      <button type="button" data-testid={"select-published-revision-"+v.revision} aria-pressed={selectedRevision===v.revision}
+       className={style} disabled={busy} onClick={()=>{setSelectedRevision(v.revision);void inspectReadiness(v.revision);}}>
+       {en?"Select":"اختيار"}</button>
       <button type="button" data-testid={"readiness-published-revision-"+v.revision}
        className={style} disabled={busy} onClick={()=>void inspectReadiness(v.revision)}>
        {en?"Check readiness":"فحص جاهزية الإصدار"}

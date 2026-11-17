@@ -68,7 +68,11 @@ function Editor(){
   // the hook applies this platform to canActivate only in that case.
   const localCommentPlatform=useMemo(()=>commentTriggerProviderPlatform(doc),[doc]);
   // activeFlowId is the LOCAL editor id; the hook resolves the real server flow_key.
-  const {state:activation,toggle:toggleActivation,updateToLatest}=useFlowActivation(activeFlowId,showPublications,localCommentPlatform);
+  const {state:activation,toggle:toggleActivation,updateToLatest,activateRevision}=useFlowActivation(activeFlowId,showPublications,localCommentPlatform);
+  // Explicit revision choice (never defaults to latest); cleared when the managed server flow changes.
+  const [selectedRevision,setSelectedRevision]=useState<number|null>(null);
+  useEffect(()=>{setSelectedRevision(null);},[activation.serverKey]);
+  const selectionStale=selectedRevision!==null&&activation.phase==="ready"&&!activation.revisions.includes(selectedRevision);
   // Local draft findings only gate activating the draft's own published flow.
   const editingOwnServerFlow=activation.serverKey===activeFlowId;
   const activeEnabled=activation.phase==="ready"&&activation.active;
@@ -344,6 +348,25 @@ function Editor(){
           }}>
           {language==="en"?"Update to latest":"تحديث إلى أحدث إصدار"}
         </button>}
+        {activation.phase==="ready"&&activation.revisions.length>0&&<>
+          <select data-testid="flow-revision-select" className={btn} aria-label={language==="en"?"Revision to activate":"الإصدار المطلوب تفعيله"}
+            value={selectedRevision??""} disabled={activation.busy}
+            onChange={e=>setSelectedRevision(e.target.value?Number(e.target.value):null)}>
+            <option value="">{language==="en"?"Choose revision…":"اختر الإصدار…"}</option>
+            {selectionStale&&<option value={selectedRevision!}>{"v"+selectedRevision+(language==="en"?" · stale":" · قديم")}</option>}
+            {activation.revisions.map(r=><option key={r} value={r}>{"v"+r+(r===activation.activeRevision?(language==="en"?" · active":" · نشط"):"")}</option>)}
+          </select>
+          <button type="button" data-testid="flow-activate-selected" className={btn}
+            disabled={activation.busy||selectedRevision===null||selectionStale||selectedRevision===activation.activeRevision||!activation.canActivate}
+            onClick={()=>{
+              if(editingOwnServerFlow&&errors.length>0){setShowIssues(true);setNotice("راجع الأخطاء قبل تفعيل التدفق.");return;}
+              void activateRevision(selectedRevision).then(r=>setNotice(r.message));
+            }}>
+            {language==="en"?"Activate selected revision":"تفعيل الإصدار المحدد"}
+          </button>
+          {selectionStale&&<span data-testid="flow-revision-stale" className="text-xs text-[#E5B54B]">
+            {language==="en"?"Stale selection: v"+selectedRevision+" is no longer published. Choose again.":"اختيار قديم: الإصدار v"+selectedRevision+" لم يعد منشورًا. اختر من جديد."}</span>}
+        </>}
         {activation.reason&&<span data-testid="flow-activation-reason" className="text-xs text-[#E5B54B]">{activation.reason}</span>}
         {/* Each flow is activated independently; the main AI chatbot is never switched off by a flow. */}
         <span data-testid="flow-chatbot-note" className="shrink-0 whitespace-nowrap text-xs text-[#BED4C9]"

@@ -326,5 +326,5 @@ test("panel shows the examined candidate and copies it in the safe report (legac
  const flow=readFileSync("src/flow/useFlowActivation.ts","utf8");
  // The activation preflight still targets exactly one revision and checks the echoed one.
  assert.match(flow,/action:"readiness",accountId,flowKey:key,revision:target/);
- assert.match(flow,/checked!==target\?\["candidateRevision"\]:readinessBlockers\(r\.readiness/);
+ assert.match(flow,/checked!==target\?\["candidateRevision"\]:\n\s+row&&\(row\.status==="unsupported"\|\|row\.status==="missing"\)\?row\.reasons:readinessBlockers\(r\.readiness/);
 });
