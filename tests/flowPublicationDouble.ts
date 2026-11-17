@@ -58,7 +58,13 @@ export const act=(tenant:string,account:string,flow_key:string,revision:number,i
 export const ACCOUNTS=[{id:A.a,tenant_id:T.a},{id:A.a2,tenant_id:T.a},{id:A.b,tenant_id:T.b}]
  .map(a=>({...a,platform:"instagram",is_active:true,agent_enabled:true,auto_reply:true}));
 
-export function server(initial:{acts?:Act[];pubs?:Pub[]}){
+export function server(initial:{acts?:Act[];pubs?:Pub[];
+ /** Tables whose reads return a database error. */
+ failTables?:string[];
+ /** Switch rows (default: global on, tenant enabled + production_approved). null = no row. */
+ globalSwitch?:{enabled:boolean}|null;tenantSwitch?:{enabled:boolean;production_approved:boolean}|null;
+ /** Channel account overrides by id (e.g. paused auto reply). */
+ accountPatch?:Record<string,Record<string,unknown>>}){
  const acts=initial.acts??[],pubs=initial.pubs??[];
  const log:Array<{table?:string;rpc?:string;filters?:Record<string,unknown>;args?:any}>=[];
  const factory=(token:string)=>({
@@ -69,9 +75,9 @@ export function server(initial:{acts?:Act[];pubs?:Pub[]}){
     if(table==="tenants")return [{id:T.a,user_id:USER.a,is_active:true,credits_remaining:10},
      {id:T.b,user_id:USER.b,is_active:true,credits_remaining:10}]
      .filter(t=>(!("user_id" in f)||t.user_id===f.user_id)&&(!("id" in f)||t.id===f.id));
-    if(table==="channel_accounts")return ACCOUNTS.filter(a=>(!("id" in f)||a.id===f.id)&&(!("tenant_id" in f)||a.tenant_id===f.tenant_id));
-    if(table==="automation_flow_global_switch")return [{enabled:true}];
-    if(table==="automation_flow_tenant_switches")return [{enabled:true,production_approved:true}];
+    if(table==="channel_accounts")return ACCOUNTS.map(a=>({...a,...(initial.accountPatch?.[a.id]??{})})).filter(a=>(!("id" in f)||a.id===f.id)&&(!("tenant_id" in f)||a.tenant_id===f.tenant_id));
+    if(table==="automation_flow_global_switch")return initial.globalSwitch===null?[]:[initial.globalSwitch??{enabled:true}];
+    if(table==="automation_flow_tenant_switches")return initial.tenantSwitch===null?[]:[initial.tenantSwitch??{enabled:true,production_approved:true}];
     const m=(r:Row)=>(!("tenant_id" in f)||r.tenant===f.tenant_id)&&(!("channel_account_id" in f)||r.account===f.channel_account_id)&&
      (!("platform" in f)||r.platform===f.platform)&&(!("flow_key" in f)||r.flow_key===f.flow_key)&&(!("revision" in f)||r.revision===Number(f.revision));
     if(table==="automation_flow_activations")return acts.filter(a=>m(a)&&(!("is_active" in f)||a.is_active===f.is_active))
@@ -81,8 +87,12 @@ export function server(initial:{acts?:Act[];pubs?:Pub[]}){
     return [];
    };
    const q:any={select:()=>q,eq:(k:string,v:unknown)=>{f[k]=v;return q;},order:()=>q,in:()=>q,
-    maybeSingle:async()=>{log.push({table,filters:{...f}});const r=rows();return {data:r.length===1?r[0]:null,error:null};},
-    limit:async()=>{log.push({table,filters:{...f}});return {data:rows(),error:null};}};
+    maybeSingle:async()=>{log.push({table,filters:{...f}});
+     if(initial.failTables?.includes(table))return {data:null,error:{code:"XX000"}};
+     const r=rows();return {data:r.length===1?r[0]:null,error:null};},
+    limit:async()=>{log.push({table,filters:{...f}});
+     if(initial.failTables?.includes(table))return {data:null,error:{code:"XX000"}};
+     return {data:rows(),error:null};}};
    return q;
   },
   rpc:async(name:string,args:any)=>{

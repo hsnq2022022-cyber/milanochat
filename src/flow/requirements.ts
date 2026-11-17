@@ -17,10 +17,12 @@ export type Capability=
  |"comment_trigger"|"public_reply"|"private_reply"
  |"text"|"media_image"|"buttons"|"website_buttons"|"typed_question"
  |"delay"|"conditions"|"variables"|"randomizer"|"goto"
- |"internal_actions"|"ai_step"|"unsupported_block";
+ |"internal_actions"|"ai_step"
+ /** Document level: a flow the simple one-reply runtime cannot answer (several steps, variables, ...). */
+ |"multi_step"|"unsupported_block";
 export const CAPABILITIES:readonly Capability[]=["trigger_message","keyword_trigger","message_scope",
  "comment_trigger","public_reply","private_reply","text","media_image","buttons","website_buttons",
- "typed_question","delay","conditions","variables","randomizer","goto","internal_actions","ai_step","unsupported_block"];
+ "typed_question","delay","conditions","variables","randomizer","goto","internal_actions","ai_step","multi_step","unsupported_block"];
 /** Why a node is never live (stable codes; see capabilityReasons.ts for plain text). */
 export type UnsupportedReason=
  |"malformed_document"|"unknown_block"|"trigger_not_supported"|"trigger_channel_mismatch"
@@ -182,6 +184,7 @@ export function deriveRequirements(document:unknown,platform?:ProviderPlatform|n
    required.delete("trigger_message");
   if(simple)required.delete("conditions"); // the simple engine's own inbound condition
   const engine:FlowEngineClass|null=required.has("unsupported_block")?null:comment?"comment":simple?"simple":"durable";
+  if(engine==="durable")required.add("multi_step");
   return finish({ok:true,engine,required,per,unsupported},availability);
  }catch{
   return malformed(availability);

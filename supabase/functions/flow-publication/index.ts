@@ -18,6 +18,8 @@ import {supportedDurableDocument,durableCandidateKind,durableRuntimeNeeds,durabl
  type DurableCandidateKind} from "../milan-api/flowDurableIngress.ts";
 import {documentCommentTriggerProblem,commentFlowPlan} from "../milan-api/commentTrigger.ts";
 import {listActiveActivations,compareActivationOrder} from "../milan-api/flowInboundSelection.ts";
+import {capabilityAvailability} from "./capabilities.ts";
+import {aiStepEnabled} from "../flow-outbox-worker/aiStep.ts";
 
 const env=(k:string)=>Deno.env.get(k)??"";
 // Only the existing production GitHub Pages origin. Never reflect Origin.
@@ -183,6 +185,41 @@ export async function handleFlowPublication(req:Request,
   const scope={tenantId:tenant.id,accountId,platform:account.platform,
     actorId:auth.user.id};
   const action=request.action;
+
+  // Account-scoped, read-only capability availability for the editor. The same
+  // gate inputs as the activate action below; only booleans and stable reason
+  // codes leave the server (never env names/values, never other ids). Any read
+  // error fails closed (503, nothing reported as available). Never mutates.
+  if(action==="capabilities"){
+   const [globalSwitch,tenantSwitch]=await Promise.all([
+    client.from("automation_flow_global_switch").select("enabled")
+     .eq("singleton",true).maybeSingle(),
+    client.from("automation_flow_tenant_switches")
+     .select("enabled,production_approved").eq("tenant_id",scope.tenantId).maybeSingle()
+   ]);
+   if(globalSwitch.error||tenantSwitch.error)return error("Capabilities unavailable",503);
+   const switches=commentSwitches();
+   const report=capabilityAvailability({platform:scope.platform,
+    tenantActive:tenant.is_active===true,accountActive:account.is_active===true,
+    agentEnabled:account.agent_enabled===true,autoReply:account.auto_reply===true,
+    globalEnabled:globalSwitch.data?.enabled===true,tenantEnabled:tenantSwitch.data?.enabled===true,
+    productionApproved:tenantSwitch.data?.production_approved===true,
+    activationReady:env("FLOW_DURABLE_ACTIVATION_READY")==="true",
+    durableIngress:env("FLOW_DURABLE_INGRESS_ENABLED")==="true",
+    canaryMatched:env("FLOW_DURABLE_CANARY_ACCOUNT_ID")===scope.accountId,
+    operatorReleased:env("FLOW_WORKERS_OPERATOR_RELEASE")==="production-canary-approved",
+    outboxEnabled:env("FLOW_OUTBOX_SEND_ENABLED")==="true",
+    atomicDebitReady:env("FLOW_ATOMIC_CONSUME_READY")==="true",
+    encryptionConfigured:env("FIELD_ENCRYPTION_KEY").length>0,
+    richButtons:env("FLOW_RICH_BUTTONS_ENABLED")==="true",
+    scheduler:env("FLOW_DURABLE_SCHEDULER_ENABLED")==="true",
+    internalActions:env("FLOW_INTERNAL_ACTIONS_ENABLED")==="true",
+    mediaAllowed:mediaActivationAllowed(parseCapabilities(env("FLOW_ACTIVATION_CAPABILITIES")),
+     env("FLOW_MEDIA_SEND_ENABLED")==="true"),
+    aiStep:aiStepEnabled(env),
+    commentAutomation:switches.commentAutomationEnabled,multichannel:switches.multichannelEnabled});
+   return respond({ok:true,platform:scope.platform,capabilities:report.capabilities,canPublish:report.canPublish});
+  }
 
   // Account-scoped, read-only release preflight. Never returns secret values,
   // alters an activation, claims a message, or dispatches an Outbox item.

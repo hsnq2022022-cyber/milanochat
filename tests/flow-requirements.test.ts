@@ -37,7 +37,7 @@ let seq=0;const nid=()=>"n"+(++seq);
 const msg=(o:Record<string,unknown>={})=>({kind:"message",text:"Hello",image:"",options:[],contentBlocks:[],...o});
 const TEMPLATES:Record<string,(p:string)=>T>={
  text:()=>({data:msg(),ports:["next"]}),
- image:()=>({data:msg({text:"",contentBlocks:[{id:"b1",type:"image",url:IMG}]}),ports:["next"]}),
+ image:()=>({data:msg({text:"Pic",contentBlocks:[{id:"b1",type:"image",url:IMG}]}),ports:["next"]}),
  stepButtons:()=>({data:msg({options:[{id:"o1",label:"A"},{id:"o2",label:"B"}]}),ports:["o1","o2"]}),
  website:p=>({data:msg({platform:p,text:"Visit",options:[{id:"w1",label:"Site",action:"website",buttonType:"button",url:"https://example.com/x"}]}),ports:["next"]}),
  qButtons:()=>({data:{kind:"question",text:"Pick",image:"",contentBlocks:[],inputMode:"buttons",options:[{id:"q1",label:"Yes"},{id:"q2",label:"No"}]},ports:["q1","q2"]}),
@@ -138,6 +138,7 @@ test("PARITY with the server classifiers over the corpus (all server flags on)",
   }
   assert.equal(has(r,"media_image")||r.unsupported.some(u=>u.reason==="legacy_image_not_supported"),flowNeedsMedia(doc),tag+" media");
   assert.equal(has(r,"comment_trigger"),documentHasCommentTrigger(doc),tag+" comment");
+  assert.equal(has(r,"multi_step"),r.engine==="durable",tag+" multi_step");
   assert.ok(r.required.every(c=>CAPABILITIES.includes(c)));
  }
  // The corpus really exercises every class (guards against a vacuous parity).
@@ -155,7 +156,7 @@ test("per node kind table",()=>{
  assert.deepEqual(why(trigger("instagram")),[]);
  assert.deepEqual(nodeRequirements(trigger("instagram"),"whatsapp").unsupported,["trigger_channel_mismatch"]);
  assert.deepEqual(caps(TEMPLATES.text("instagram").data),["text"]);
- assert.deepEqual(caps(TEMPLATES.image("instagram").data),["media_image"]);
+ assert.deepEqual(caps(TEMPLATES.image("instagram").data),["text","media_image"]);
  assert.deepEqual(caps(TEMPLATES.stepButtons("instagram").data),["text","buttons"]);
  assert.deepEqual(caps(TEMPLATES.website("instagram").data),["text","website_buttons"]);
  assert.deepEqual(caps(TEMPLATES.qButtons("instagram").data),["text","buttons"]);
@@ -182,7 +183,7 @@ test("per node kind table",()=>{
 test("document derivation: engine class, comment private reply, node ids, availability -> unavailable",()=>{
  const two=chain("instagram",["stepButtons"]);
  const r=deriveRequirements(two,"instagram",{trigger_message:{available:true,reason:null},text:{available:true,reason:null},
-  buttons:{available:false,reason:"advanced_not_enabled"}});
+  buttons:{available:false,reason:"advanced_not_enabled"},multi_step:{available:true,reason:null}});
  assert.equal(r.engine,"durable");
  const btn=two.nodes[1].id;
  assert.deepEqual(r.unavailable,[{capability:"buttons",reason:"advanced_not_enabled",nodeIds:[btn]}]);
@@ -199,7 +200,7 @@ test("document derivation: engine class, comment private reply, node ids, availa
  const rr=deriveRequirements(chain("instagram",["request"]),"instagram",Object.fromEntries(CAPABILITIES.map(k=>[k,{available:true,reason:null}])));
  assert.deepEqual(rr.unavailable!.map(u=>[u.capability,u.reason]),[["unsupported_block","http_request_not_supported"]]);
  assert.deepEqual(deriveRequirements(chain("instagram",["delay"]),"instagram",{}).unavailable!.map(u=>[u.capability,u.reason]),
-  [["trigger_message","unavailable"],["delay","unavailable"]]);
+  [["trigger_message","unavailable"],["delay","unavailable"],["multi_step","unavailable"]]);
  // Deterministic.
  assert.deepEqual(deriveRequirements(two,"instagram"),deriveRequirements(structuredClone(two),"instagram"));
 });
