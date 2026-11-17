@@ -1,7 +1,8 @@
 /**
  * Activation gates for flow-publication, shared by every action that turns a
- * stored revision live (today: activate / rollback). Extracted verbatim from
- * index.ts: the same checks in the same order, the same env reads, the same
+ * stored revision live (activate / rollback), and by publish_live for the
+ * prepared document before its revision is created (optional `document`).
+ * Extracted verbatim from index.ts: the same checks in the same order, the same env reads, the same
  * DB reads, the same HTTP statuses/bodies and the same fail-closed results.
  *
  * Pure decision: never mutates and never calls flow_activate_revision. On
@@ -40,11 +41,18 @@ export type ActivationGateInput={
  tenant:{is_active?:unknown};
  account:{is_active?:unknown;agent_enabled?:unknown;auto_reply?:unknown};
  flowKey:string;
- /** Already validated by the caller (safe integer >= 1). */
- rev:number;
  /** "rollback" is exempt from FLOW_MESSAGE_SCOPE_REQUIRED only. */
  action:"activate"|"rollback";
-};
+}&(
+ /** Stored revision: its document is read (tenant/account/platform/flow_key scoped). Already validated (safe integer >= 1). */
+ {rev:number;document?:undefined}|
+ /**
+  * publish_live: the caller's already validated and prepared document (exactly
+  * what flow_publish_revision will store), evaluated BEFORE the revision exists.
+  * Skips ONLY the stored-revision lookup; every other gate is unchanged.
+  */
+ {rev?:undefined;document:object}
+);
 
 export type ActivationGateResult=
  {ok:true}|
@@ -54,7 +62,7 @@ const error=(message:string,status:number):ActivationGateResult=>
  ({ok:false,status,body:{ok:false,error:message}});
 
 export async function evaluateActivationGates(input:ActivationGateInput):Promise<ActivationGateResult>{
- const {client,env,commentSwitches,scope,tenant,account,flowKey,rev,action}=input;
+ const {client,env,commentSwitches,scope,tenant,account,flowKey,action}=input;
  if(tenant.is_active!==true||account.is_active!==true||
     account.agent_enabled!==true||account.auto_reply!==true)
   return error("Account is paused",403);
@@ -89,13 +97,19 @@ export async function evaluateActivationGates(input:ActivationGateInput):Promise
  if(!canary&&!production&&!commentPlatformAuthorized)
   return error("Publication activation is disabled",423);
 
- const {data:publication,error:publicationError}=await client
-  .from("automation_flow_publications").select("document")
-  .eq("tenant_id",scope.tenantId).eq("channel_account_id",scope.accountId)
-  .eq("platform",scope.platform).eq("flow_key",flowKey)
-  .eq("revision",rev).maybeSingle();
- if(publicationError)return error("Publication lookup unavailable",503);
- if(!publication)return error("Publication revision not found",404);
+ // `any` as before (the untyped Db row): publicationCanActivate takes it unchanged.
+ let publication:{document:any};
+ if(input.document!==undefined)publication={document:input.document};
+ else{
+  const {data:stored,error:publicationError}=await client
+   .from("automation_flow_publications").select("document")
+   .eq("tenant_id",scope.tenantId).eq("channel_account_id",scope.accountId)
+   .eq("platform",scope.platform).eq("flow_key",flowKey)
+   .eq("revision",input.rev).maybeSingle();
+  if(publicationError)return error("Publication lookup unavailable",503);
+  if(!stored)return error("Publication revision not found",404);
+  publication=stored;
+ }
  // messageScope rules on the STORED document. "conversation_start" must be
  // a message trigger answering immediately (both actions). With
  // FLOW_MESSAGE_SCOPE_REQUIRED==="true" (default OFF) a message trigger must

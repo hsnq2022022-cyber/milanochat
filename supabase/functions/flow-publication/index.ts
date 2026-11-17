@@ -20,6 +20,9 @@ import {listActiveActivations,compareActivationOrder} from "../milan-api/flowInb
 import {capabilityAvailability} from "./capabilities.ts";
 import {aiStepEnabled} from "../flow-outbox-worker/aiStep.ts";
 import {evaluateActivationGates} from "./activationGates.ts";
+import {deriveRequirements} from "../../../src/flow/requirements.ts";
+import {notLiveReason,savedNotLive} from "./publishLive.ts";
+import type {FlowDocument} from "../../../src/flow/model.ts";
 
 const env=(k:string)=>Deno.env.get(k)??"";
 // Only the existing production GitHub Pages origin. Never reflect Origin.
@@ -54,6 +57,53 @@ const KEYWORD_PROBLEM_MESSAGES:Record<string,string>={
  keyword_trigger_too_many_keywords:"Keyword trigger has more than 40 keywords",
  keyword_trigger_keyword_too_long:"Keyword trigger keyword is longer than 120 characters"
 };
+
+/**
+ * Publish validation shared by `publish` and `publish_live` (same checks, same
+ * order, same 422 bodies). Keyword trigger configuration is checked on the
+ * RAW document first: import sanitizing would otherwise silently turn an
+ * unknown mode into "contains". Explicit 422s, never truncation.
+ */
+function validatePublishDocument(raw:unknown,platform:ProviderPlatform):
+ {ok:true;doc:FlowDocument}|{ok:false;response:Response}{
+ const fail=(response:Response)=>({ok:false as const,response});
+ // messageScope "conversation_start" needs a message trigger whose first
+ // step answers immediately (explicit code; checked on the RAW document).
+ const rawScopeProblem=messageScopeActivationProblem(raw,false);
+ if(rawScopeProblem!==null)return fail(respond({ok:false,
+  error:MESSAGE_SCOPE_PROBLEM_MESSAGES[rawScopeProblem],code:rawScopeProblem},422));
+ const rawKeywordProblem=documentKeywordTriggerProblem(raw);
+ if(rawKeywordProblem!==null)return fail(error(KEYWORD_PROBLEM_MESSAGES[rawKeywordProblem]??
+  "Keyword trigger configuration is invalid",422));
+ const doc=preparePublishedDocument(raw,platform);
+ if(!doc)return fail(error("Flow document is invalid or targets another channel",422));
+ // Comment trigger config (scope/post id/match type/keywords/public reply):
+ // server-side validation. Other triggers: no new requirement.
+ if(documentCommentTriggerProblem(doc)!==null)
+  return fail(error("Comment trigger configuration is invalid",422));
+ // DM keyword trigger: at least one keyword must survive server parsing
+ // (triggerKeywords.ts, same rule as the runtime). Message triggers: unchanged.
+ const keywordProblem=documentKeywordTriggerProblem(doc);
+ if(keywordProblem!==null)return fail(error(KEYWORD_PROBLEM_MESSAGES[keywordProblem]??
+  "Keyword trigger configuration is invalid",422));
+ return {ok:true,doc};
+}
+
+/** The immutable revision (flow_publish_revision), same args/errors for publish and publish_live. */
+async function createRevision(client:{rpc:(name:string,args:Record<string,unknown>)=>any},
+ scope:{tenantId:string;accountId:string;platform:ProviderPlatform;actorId:string},
+ flowKey:string,doc:FlowDocument):Promise<{ok:true;revision:number}|{ok:false;response:Response}>{
+ const {data,error:dbError}=await client.rpc("flow_publish_revision",{
+  p_tenant_id:scope.tenantId,p_account_id:scope.accountId,
+  p_platform:scope.platform,p_flow_key:flowKey,p_actor_id:scope.actorId,
+  p_document:doc
+ });
+ if(dbError){console.error("[flow-publication] publish database error",dbError.code);
+  return {ok:false,response:error("Flow publish is unavailable",503)};}
+ if(!Number.isSafeInteger(data)||data<1)
+  return {ok:false,response:error("Publishing was rejected",403)};
+ return {ok:true,revision:data};
+}
 
 const MAX_BODY_BYTES=4*1024*1024+4096;
 const MAX_BEARER_BYTES=8192;
@@ -346,38 +396,42 @@ export async function handleFlowPublication(req:Request,
   if(action==="publish"){
    if(tenant.is_active!==true||account.is_active!==true)
     return error("Account is disabled",403);
-   // Keyword trigger configuration is checked on the RAW document first:
-   // import sanitizing would otherwise silently turn an unknown mode into
-   // "contains". Explicit 422s, never truncation.
-   // messageScope "conversation_start" needs a message trigger whose first
-   // step answers immediately (explicit code; checked on the RAW document).
-   const rawScopeProblem=messageScopeActivationProblem(request.document,false);
-   if(rawScopeProblem!==null)return respond({ok:false,
-    error:MESSAGE_SCOPE_PROBLEM_MESSAGES[rawScopeProblem],code:rawScopeProblem},422);
-   const rawKeywordProblem=documentKeywordTriggerProblem(request.document);
-   if(rawKeywordProblem!==null)return error(KEYWORD_PROBLEM_MESSAGES[rawKeywordProblem]??
-    "Keyword trigger configuration is invalid",422);
-   const doc=preparePublishedDocument(request.document,scope.platform);
-   if(!doc)return error("Flow document is invalid or targets another channel",422);
-   // Comment trigger config (scope/post id/match type/keywords/public reply):
-   // server-side validation. Other triggers: no new requirement.
-   if(documentCommentTriggerProblem(doc)!==null)
-    return error("Comment trigger configuration is invalid",422);
-   // DM keyword trigger: at least one keyword must survive server parsing
-   // (triggerKeywords.ts, same rule as the runtime). Message triggers: unchanged.
-   const keywordProblem=documentKeywordTriggerProblem(doc);
-   if(keywordProblem!==null)return error(KEYWORD_PROBLEM_MESSAGES[keywordProblem]??
-    "Keyword trigger configuration is invalid",422);
-   const {data,error:dbError}=await client.rpc("flow_publish_revision",{
-    p_tenant_id:scope.tenantId,p_account_id:scope.accountId,
-    p_platform:scope.platform,p_flow_key:flowKey,p_actor_id:scope.actorId,
-    p_document:doc
-   });
-   if(dbError){console.error("[flow-publication] publish database error",dbError.code);
-    return error("Flow publish is unavailable",503);}
-   if(!Number.isSafeInteger(data)||data<1)
-    return error("Publishing was rejected",403);
-   return respond({ok:true,revision:data,activationChanged:false});
+   const prepared=validatePublishDocument(request.document,scope.platform);
+   if(!prepared.ok)return prepared.response;
+   const created=await createRevision(client,scope,flowKey,prepared.doc);
+   if(!created.ok)return created.response;
+   return respond({ok:true,revision:created.revision,activationChanged:false});
+  }
+
+  // One call: validate (exactly as publish) -> derive requirements -> every
+  // activation gate on the prepared document -> create the immutable revision
+  // -> activate THAT exact revision. Gate blocked / activation not confirmed:
+  // the revision stays saved and the answer is saved_not_live (never "live").
+  // Validation or revision-creation failure: publish's errors, nothing saved.
+  if(action==="publish_live"){
+   if(tenant.is_active!==true||account.is_active!==true)
+    return error("Account is disabled",403);
+   const prepared=validatePublishDocument(request.document,scope.platform);
+   if(!prepared.ok)return prepared.response;
+   const doc=prepared.doc;
+   // Phase 1 derivation: a block no live engine runs can never go live.
+   const unsupported=deriveRequirements(doc,scope.platform).required.includes("unsupported_block");
+   const gate=await evaluateActivationGates({client,env,commentSwitches,
+    scope,tenant,account,flowKey,document:doc,action:"activate"});
+   const created=await createRevision(client,scope,flowKey,doc);
+   if(!created.ok)return created.response;
+   const revision=created.revision;
+   if(!gate.ok||unsupported)
+    return respond(savedNotLive(revision,notLiveReason(gate.ok?null:gate,unsupported)));
+   try{
+    const {data:enabled,error:dbError}=await client.rpc("flow_activate_revision",{
+     p_tenant_id:scope.tenantId,p_account_id:scope.accountId,
+     p_platform:scope.platform,p_flow_key:flowKey,p_revision:revision,p_actor_id:scope.actorId
+    });
+    if(dbError)return respond(savedNotLive(revision,"unavailable"));
+    if(enabled!==true)return respond(savedNotLive(revision,"switch_off"));
+   }catch{return respond(savedNotLive(revision,"unavailable"));}
+   return respond({ok:true,status:"live",revision});
   }
 
   if(action==="list"){

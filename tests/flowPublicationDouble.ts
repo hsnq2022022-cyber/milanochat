@@ -64,7 +64,10 @@ export function server(initial:{acts?:Act[];pubs?:Pub[];
  /** Switch rows (default: global on, tenant enabled + production_approved). null = no row. */
  globalSwitch?:{enabled:boolean}|null;tenantSwitch?:{enabled:boolean;production_approved:boolean}|null;
  /** Channel account overrides by id (e.g. paused auto reply). */
- accountPatch?:Record<string,Record<string,unknown>>}){
+ accountPatch?:Record<string,Record<string,unknown>>;
+ /** flow_publish_revision / flow_activate_revision overrides (default: stateful fakes). */
+ publishRpc?:(args:any)=>{data:unknown;error:unknown};
+ activateRpc?:(args:any)=>{data:unknown;error:unknown}}){
  const acts=initial.acts??[],pubs=initial.pubs??[];
  const log:Array<{table?:string;rpc?:string;filters?:Record<string,unknown>;args?:any}>=[];
  const factory=(token:string)=>({
@@ -98,6 +101,14 @@ export function server(initial:{acts?:Act[];pubs?:Pub[];
   rpc:async(name:string,args:any)=>{
    log.push({rpc:name,args});
    if(name==="flow_publication_rate_allow")return {data:true,error:null};
+   if(name==="flow_publish_revision"){ // next revision per (tenant,account,platform,flow_key)
+    if(initial.publishRpc)return initial.publishRpc(args);
+    const rev=Math.max(0,...pubs.filter(p=>p.tenant===args.p_tenant_id&&p.account===args.p_account_id&&
+     p.platform===args.p_platform&&p.flow_key===args.p_flow_key).map(p=>p.revision))+1;
+    pubs.push({...pub(args.p_tenant_id,args.p_account_id,args.p_flow_key,rev,args.p_document),platform:args.p_platform});
+    return {data:rev,error:null};
+   }
+   if(name==="flow_activate_revision"&&initial.activateRpc)return initial.activateRpc(args);
    if(name==="flow_activate_revision"){ // PK (tenant,account,platform,flow_key): ON CONFLICT DO UPDATE
     const k=(a:Row)=>a.tenant===args.p_tenant_id&&a.account===args.p_account_id&&a.platform===args.p_platform&&a.flow_key===args.p_flow_key;
     if(!pubs.some(p=>k(p)&&p.revision===args.p_revision))return {data:false,error:null};
