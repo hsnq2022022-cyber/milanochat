@@ -96,6 +96,7 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
  // Readiness reports per exact revision (server candidateRevision) and the explicit selection.
  const [reports,setReports]=useState<Record<number,Readiness>>({});
  const [selectedRevision,setSelectedRevision]=useState<number|null>(null);
+ const [listTruncated,setListTruncated]=useState(false);
  const resetSelection=()=>{setReports({});setSelectedRevision(null);};
  const isEditingLocalFlow=managedFlowKey===flowKey;
  // Comment flows: the server's canActivateComments hint (Facebook Page comments
@@ -217,6 +218,7 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
   const r=await call({action:"list",accountId:id,flowKey:key});
   setVersions(r.items??[]);
   setActivation(r.activation??null);
+  setListTruncated(r.truncated===true);
   setLoaded(true);
  };
  const load=async()=>{
@@ -453,6 +455,8 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
        {activation?.is_active?(en?"Rollback here":"الرجوع لهذا الإصدار"):
         (productionReady?(en?"Activate live":"تفعيل فعلي"):(en?"Activate test":"تفعيل تجريبي"))}</button>}
      </div>)}
+     {listTruncated&&<p data-testid="revision-list-truncated" className="text-xs text-[#E5B54B]">{en
+      ?"Only the newest 100 revisions are listed.":"تُعرض أحدث 100 إصدار فقط."}</p>}
      {!versions.length&&<p className="text-xs">{en?"No revisions yet.":"لا توجد إصدارات منشورة."}</p>}
     </div>}
    </div>

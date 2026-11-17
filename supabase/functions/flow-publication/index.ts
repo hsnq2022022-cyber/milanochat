@@ -351,7 +351,7 @@ export async function handleFlowPublication(req:Request,
     client.from("automation_flow_publications")
       .select("revision,created_at,platform")
       .eq("tenant_id",scope.tenantId)
-      .eq("channel_account_id",scope.accountId)
+      .eq("channel_account_id",scope.accountId).eq("platform",scope.platform)
       .eq("flow_key",flowKey).order("revision",{ascending:false}).limit(100),
     client.from("automation_flow_activations")
       .select("revision,is_active")
@@ -361,7 +361,9 @@ export async function handleFlowPublication(req:Request,
       .eq("flow_key",flowKey).maybeSingle()
    ]);
    if(pubs.error||act.error)return error("Publication list unavailable",503);
-   return respond({ok:true,items:pubs.data??[],activation:act.data??null});
+   // truncated: additive, older revisions beyond the newest 100 are not listed.
+   return respond({ok:true,items:pubs.data??[],activation:act.data??null,
+    truncated:(pubs.data??[]).length===100});
   }
 
   if(action==="deactivate"){
