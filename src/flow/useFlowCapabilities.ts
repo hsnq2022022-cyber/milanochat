@@ -1,7 +1,6 @@
 import {useEffect,useState} from "react";
 import {invokeService} from "./useFlowActivation.ts";
-import {CAPABILITIES,type Availability,type ProviderPlatform} from "./requirements.ts";
-import type {CapabilityState} from "./capabilityReasons.ts";
+import {parseCapabilities,type CapabilityState} from "./capabilityReasons.ts";
 
 /**
  * Capabilities of ONE channel account from the flow-publication `capabilities`
@@ -11,23 +10,7 @@ import type {CapabilityState} from "./capabilityReasons.ts";
  */
 const cache=new Map<string,CapabilityState>();
 type Reply={ok?:boolean;error?:string;platform?:unknown;capabilities?:unknown};
-
-/** Validated report, or null (malformed = treated as a failure, fail closed). */
-export function parseCapabilities(accountId:string,reply:Reply|null|undefined):CapabilityState|null{
- if(!reply||reply.ok!==true)return null;
- const p=reply.platform;
- if(p!=="instagram"&&p!=="facebook"&&p!=="whatsapp")return null;
- const raw=reply.capabilities;
- if(!raw||typeof raw!=="object"||Array.isArray(raw))return null;
- const caps:Availability={};
- for(const c of CAPABILITIES){
-  const e=(raw as Record<string,unknown>)[c];
-  if(!e||typeof e!=="object")continue;
-  const {available,reason}=e as {available?:unknown;reason?:unknown};
-  caps[c]={available:available===true,reason:typeof reason==="string"&&/^[a-z_]{1,40}$/.test(reason)?reason:null};
- }
- return {status:"ready",accountId,platform:p as ProviderPlatform,capabilities:caps};
-}
+export {parseCapabilities};
 
 export function useFlowCapabilities(accountId:string|null,flowKey:string):CapabilityState{
  const idle:CapabilityState={status:"idle",accountId,platform:null,capabilities:null};

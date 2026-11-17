@@ -6,7 +6,7 @@
  * Also the PURE editor gating rules used by the palette and the node editor.
  */
 import {createContext,useContext} from "react";
-import {nodeRequirements,type Availability,type Capability,type ProviderPlatform} from "./requirements.ts";
+import {CAPABILITIES,nodeRequirements,type Availability,type Capability,type ProviderPlatform} from "./requirements.ts";
 
 type Text={ar:string;en:string};
 export const REASON_TEXT:Record<string,Text>={
@@ -79,6 +79,24 @@ export function accountNotice(state:CapabilityState|null|undefined,accountId:str
  if(!state||state.status!=="ready"||state.accountId!==accountId)return null;
  const r=state.capabilities.text?.reason;
  return r&&ACCOUNT_LEVEL.has(r)&&r!=="unavailable"?reasonText(r,en):null;
+}
+
+/* Server `capabilities` reply parsing. */
+/** Validated report, or null (malformed = treated as a failure, fail closed). */
+export function parseCapabilities(accountId:string,reply:{ok?:boolean;platform?:unknown;capabilities?:unknown}|null|undefined):CapabilityState|null{
+ if(!reply||reply.ok!==true)return null;
+ const p=reply.platform;
+ if(p!=="instagram"&&p!=="facebook"&&p!=="whatsapp")return null;
+ const raw=reply.capabilities;
+ if(!raw||typeof raw!=="object"||Array.isArray(raw))return null;
+ const caps:Availability={};
+ for(const c of CAPABILITIES){
+  const e=(raw as Record<string,unknown>)[c];
+  if(!e||typeof e!=="object")continue;
+  const {available,reason}=e as {available?:unknown;reason?:unknown};
+  caps[c]={available:available===true,reason:typeof reason==="string"&&/^[a-z_]{1,40}$/.test(reason)?reason:null};
+ }
+ return {status:"ready",accountId,platform:p as ProviderPlatform,capabilities:caps};
 }
 
 /** Node id -> gate, for the canvas badges (AutomationNode). */
