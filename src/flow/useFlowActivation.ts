@@ -33,6 +33,8 @@ export type ActivationState={
  canUpdate:boolean;
  /** ALL published revisions of serverKey from the server `list` (newest first). */
  revisions:number[];
+ /** Channel account the toggle uses (server `accounts`), null until known. */
+ accountId:string|null;
 };
 export type ToggleResult={ok:boolean;message:string};
 
@@ -166,7 +168,7 @@ async function readinessGuard(accountId:string,key:string,target:number,live:num
  */
 export function useFlowActivation(flowKey:string,refreshToken:unknown,commentPlatform:ProviderPlatform|null=null){
  const [state,setState]=useState<ActivationState>({phase:"loading",active:false,revision:null,busy:false,canActivate:false,reason:"",
-  serverKey:flowKey,latestRevision:null,activeRevision:null,canUpdate:false,revisions:[]});
+  serverKey:flowKey,latestRevision:null,activeRevision:null,canUpdate:false,revisions:[],accountId:null});
  const account=useRef<Account|null>(null);
  const seq=useRef(0);
 
@@ -180,7 +182,7 @@ export function useFlowActivation(flowKey:string,refreshToken:unknown,commentPla
     account.current=pickActivationAccount(list,commentPlatform);
     if(!account.current){
      if(mine===seq.current)setState(s=>({...s,phase:"unavailable",active:false,revision:null,canActivate:false,
-      serverKey:flowKey,latestRevision:null,activeRevision:null,canUpdate:false,revisions:[],
+      serverKey:flowKey,latestRevision:null,activeRevision:null,canUpdate:false,revisions:[],accountId:null,
       reason:"لا يوجد حساب قناة نشط مرتبط؛ اربط حسابًا لتتمكن من تفعيل التدفق."}));
      return;
     }
@@ -206,10 +208,10 @@ export function useFlowActivation(flowKey:string,refreshToken:unknown,commentPla
    setState(s=>({...s,phase:"ready",active:on,revision:activeRevision,
     canActivate:allowed,serverKey,latestRevision,activeRevision,
     canUpdate:on&&latestRevision!==null&&activeRevision!==null&&latestRevision>activeRevision,
-    revisions,reason:reasons.join(" ")}));
+    revisions,accountId:acc.id,reason:reasons.join(" ")}));
   }catch(e){
    if(mine===seq.current)setState(s=>({...s,phase:"unavailable",active:false,revision:null,canActivate:false,
-    serverKey:flowKey,latestRevision:null,activeRevision:null,canUpdate:false,revisions:[],
+    serverKey:flowKey,latestRevision:null,activeRevision:null,canUpdate:false,revisions:[],accountId:null,
     reason:UNAVAILABLE_REASON+" (رمز: "+serviceErrorDetail(e)+")"}));
   }
  },[flowKey,commentPlatform]);

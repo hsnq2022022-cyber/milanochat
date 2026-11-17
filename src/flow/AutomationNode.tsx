@@ -8,6 +8,7 @@ import type { FlowNode as FlowNodeType } from "./model";
 import { useAddStepMenu } from "./addMenu";
 import { useLayoutDirection } from "./direction";
 import { PLATFORM_COLOR, SKIN_COLOR, SKIN_ICON, useNodeIssues } from "./skin";
+import { UNAVAILABLE_BADGE, useCapabilityGate } from "./capabilityReasons";
 
 export default function AutomationNode({id,data,selected}:NodeProps<FlowNodeType>){
   const updateInternals=useUpdateNodeInternals();
@@ -15,6 +16,7 @@ export default function AutomationNode({id,data,selected}:NodeProps<FlowNodeType
   const horizontal=useLayoutDirection(s=>s.direction)==="LR";
   const outPos=horizontal?Position.Right:Position.Bottom;
   const issue=useNodeIssues(id);
+  const capabilityGate=useCapabilityGate(id);
   const gotoTarget=data.kind==="goto"?data.gotoNode:"";
   const gotoName=useStore(s=>{
     if(!gotoTarget)return "";
@@ -52,6 +54,9 @@ export default function AutomationNode({id,data,selected}:NodeProps<FlowNodeType
     {data.kind!=="trigger"&&
       <Handle id="in" type="target" position={horizontal?Position.Left:Position.Top} className="fs-port fs-port-in"/>}
 
+    {capabilityGate&&<span data-testid="node-capability-badge" role="note" title={capabilityGate.text}
+      className="absolute -top-3 left-3 z-10 inline-flex items-center gap-1 rounded-full border border-[#E5B54B] bg-[#3A2F12] px-2 py-0.5 text-[11px] font-semibold text-[#F5D99C]">
+      <AlertTriangle size={11} aria-hidden="true"/>{UNAVAILABLE_BADGE.ar}</span>}
     {(errorCount>0||warningCount>0)&&<span className={"fs-node-badge "+(errorCount?"is-error":"is-warning")}
       role="img" title={issue?.first||""}
       aria-label={(errorCount?"أخطاء: "+errorCount:"تحذيرات: "+warningCount)+(issue?.first?" — "+issue.first:"")}>
