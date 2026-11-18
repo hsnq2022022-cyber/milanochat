@@ -48,4 +48,4 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          supabase functions deploy flow-publication --project-ref "$PROJECT_REF"
+          supabase functions deploy flow-publication --project-ref "$PROJECT_REF" --yes
