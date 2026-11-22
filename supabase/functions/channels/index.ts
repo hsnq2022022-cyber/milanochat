@@ -6,6 +6,7 @@
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { issueOAuthState, oauthStateSecret, type IssueResult } from "../_shared/oauthState.ts";
 import { withCors, trustedCorsPolicy } from "../_shared/cors.ts";
+import { normalizeRedirectUri } from "../_shared/redirectUri.ts";
 
 // ─── CORS ───
 // T5-D2: Access-Control-Allow-Origin only for the trusted application origins
@@ -217,7 +218,7 @@ Deno.serve(withCors(() => trustedCorsPolicy((k) => Deno.env.get(k)), async (req:
 
       if (channel === "instagram") {
         const appId = Deno.env.get("INSTAGRAM_APP_ID") ?? "";
-        const redirectUri = (Deno.env.get("INSTAGRAM_REDIRECT_URI") ?? "").replace(/\/+$/, "");
+        const redirectUri = normalizeRedirectUri(Deno.env.get("INSTAGRAM_REDIRECT_URI"));
         if (!appId || !redirectUri) {
           return jsonResponse(
             { error: "إعدادات Instagram OAuth غير مكتملة — تحقق من الأسرار INSTAGRAM_APP_ID و INSTAGRAM_REDIRECT_URI" },

@@ -19,6 +19,7 @@ import { isAccountTakenViolation } from "./facebook.ts";
 import { metaAuthHeaders } from "../_shared/metaGraph.ts";
 import { subscribeInstagramWebhooks } from "./instagramSubscription.ts";
 import { handleRedirectDiagnostics } from "./redirectDiagnostics.ts";
+import { normalizeRedirectUri } from "../_shared/redirectUri.ts";
 
 const IG_TOKEN_URL = "https://api.instagram.com/oauth/access_token";
 const IG_GRAPH_HOST = "https://graph.instagram.com";
@@ -163,7 +164,7 @@ Deno.serve(async (req: Request) => {
     const tenantId: string = st.tenantId;
 
     // نفس redirect_uri الذي أُرسل في طلب التفويض
-    const redirectUri = Deno.env.get("INSTAGRAM_REDIRECT_URI") ||
+    const redirectUri = normalizeRedirectUri(Deno.env.get("INSTAGRAM_REDIRECT_URI")) ||
       `${supaUrl}/functions/v1/meta-auth/instagram/callback`;
 
     // 1) code → short-lived token
