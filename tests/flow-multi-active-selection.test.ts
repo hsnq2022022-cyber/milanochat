@@ -638,3 +638,150 @@ test("selection: at equal keyword length an exact trigger beats a contains trigg
  // invalid stored mode never matches
  assert.equal(chooseInboundFlow([cand("bad",v2Doc({...trig("keyword","menu"),operator:"starts_with"},"B"),null)],"menu",both),null);
 });
+
+// ====================================== 5. deactivation -> reactivation -> re-selection (exact revision)
+// SQL semantics of flow_activate_revision / flow_deactivate_revision on one (tenant, account, platform, flow_key)
+// row, for the durable-runtime cases below that drive the state directly (the API cases use the real handler).
+let sqlClock=Date.parse("2026-12-01T00:00:00Z");
+const sqlActivate=(acts:Act[],key:string,revision:number)=>{
+ const at=new Date(sqlClock+=60000).toISOString();
+ const row=acts.find(a=>a.tenant===T.a&&a.account===A.a&&a.platform==="instagram"&&a.flow_key===key);
+ if(row){row.revision=revision;row.is_active=true;row.activated_at=at;}
+ else acts.push(act(T.a,A.a,key,revision,at));
+};
+const sqlDeactivate=(acts:Act[],key:string)=>{
+ const row=acts.find(a=>a.flow_key===key&&a.is_active);if(row)row.is_active=false; // revision is kept
+};
+const replyDoc=(text:string)=>modelDoc("message","",text);
+
+test("re-selection: deactivate then reactivate selects exactly the reactivated revision (never the latest, never the deactivated one)",async()=>{
+ await withEnv({},async()=>{
+  const s=publicationServer({pubs:[1,2,3].map(r=>pub(T.a,A.a,"welcome",r,replyDoc("R"+r)))});
+  let n=0;
+  const inbound=async()=>route(fakeDb({acts:s.acts,pubs:s.pubs}).db,ev({eventId:"mid-reselect-"+(++n)}));
+  const call=(action:string,revision?:unknown)=>s.call({action,accountId:A.a,flowKey:"welcome",...(revision===undefined?{}:{revision})});
+  assert.equal((await call("activate",2)).status,200);
+  assert.deepEqual((await inbound()).sent,["R2"]);
+  assert.equal((await call("deactivate")).status,200);
+  // The row keeps the old revision reference (2) but is OFF: it is never selected.
+  assert.deepEqual(s.acts.map(a=>[a.revision,a.is_active]),[[2,false]]);
+  const off=await inbound();
+  assert.deepEqual(off.sent,["AI-ANSWER"]);assert.equal(off.ai,1);
+  // Selection layer on its own (independent of the SQL claim backstop): the stale reference is not a candidate.
+  const scope={tenantId:T.a,accountId:A.a,platform:"instagram"};
+  assert.equal((await selectActiveFlowForInbound(fakeDb({acts:s.acts,pubs:s.pubs}).db,scope,"hello",both)).status,"none");
+  // Reactivate an OLDER revision: exactly r1 - not the stale r2 reference, not the latest r3.
+  assert.equal((await call("activate",1)).status,200);
+  const sel=await selectActiveFlowForInbound(fakeDb({acts:s.acts,pubs:s.pubs}).db,scope,"hello",both);
+  assert.ok(sel.status==="selected"&&sel.flow.flowKey==="welcome"&&sel.flow.revision===1,"selection names exactly r1");
+  assert.deepEqual((await inbound()).sent,["R1"]);
+  assert.deepEqual(s.acts.map(a=>[a.revision,a.is_active]),[[1,true]],"one row per flow_key, now at r1");
+  // Replace live r1 by the newest r3, deactivate, then reactivate r2 again: always exactly the requested one.
+  for(const [rev,expected] of [[3,"R3"],[2,"R2"]] as const){
+   assert.equal((await call("activate",rev)).status,200);
+   assert.deepEqual((await inbound()).sent,[expected]);
+   assert.equal((await call("deactivate")).status,200);
+   assert.deepEqual((await inbound()).sent,["AI-ANSWER"]);
+  }
+  // At every point at most ONE active revision exists for the flow key (single-active-revision).
+  assert.equal(s.acts.filter(a=>a.flow_key==="welcome").length,1);
+  assert.ok(s.acts.filter(a=>a.flow_key==="welcome"&&a.is_active).length<=1);
+ });
+});
+
+test("re-selection: stale, missing and mismatched revision references are refused and nothing becomes active",async()=>{
+ const s=publicationServer({pubs:[pub(T.a,A.a,"welcome",1,replyDoc("W1")),pub(T.a,A.a,"other",5,replyDoc("O5"))]});
+ await s.call({action:"activate",accountId:A.a,flowKey:"welcome",revision:1});
+ await s.call({action:"deactivate",accountId:A.a,flowKey:"welcome"});
+ const before=JSON.stringify(s.acts);
+ const attempt=(revision:unknown)=>s.call({action:"activate",accountId:A.a,flowKey:"welcome",...(revision===undefined?{}:{revision})});
+ assert.equal((await attempt(9)).status,404,"missing revision (never falls back to another)");
+ assert.equal((await attempt(5)).status,404,"a revision that exists only for ANOTHER flow key is not this flow's revision");
+ for(const bad of [undefined,null,0,-1,1.5,"1","latest"])assert.equal((await attempt(bad)).status,400,"invalid selection: "+String(bad));
+ assert.equal(JSON.stringify(s.acts),before,"no refused request changed any activation");
+ assert.equal(s.log.filter(l=>l.rpc==="flow_activate_revision").length,1,"only the original activation reached the RPC");
+ // Even after those refusals the deactivated flow is not live: the inbound goes to the AI.
+ await withEnv({},async()=>{
+  const r=await route(fakeDb({acts:s.acts,pubs:s.pubs}).db,ev({eventId:"mid-refused"}));
+  assert.deepEqual(r.sent,["AI-ANSWER"]);
+ });
+ // The same flow key on another account/tenant is untouched and cannot be reactivated from here.
+ const iso=publicationServer({acts:[act(T.b,A.b,"welcome",1,"2026-01-01T00:00:00Z")],pubs:[pub(T.b,A.b,"welcome",1,replyDoc("B"))]});
+ assert.equal((await iso.call({action:"activate",accountId:A.b,flowKey:"welcome",revision:1})).status,403);
+ assert.equal(iso.acts[0].is_active,true);
+});
+
+test("re-selection: an active row whose revision has no publication is never executed; other flows keep working",async()=>{
+ for(const env of [{},canary])await withEnv(env,async()=>{
+  const acts=[act(T.a,A.a,"welcome",3,"2026-01-01T00:00:00Z"),act(T.a,A.a,"prices",1,"2026-02-01T00:00:00Z")];
+  const pubs=[pub(T.a,A.a,"welcome",2,replyDoc("STALE-R2")),   // r3 is referenced but not published; r2 exists
+   pub(T.a,A.a,"prices",1,v2Doc(trig("keyword","price"),"PRICES"))];
+  // Selection itself: not a candidate, never substituted by r2 (previous) or any other revision.
+  const sel=await selectActiveFlowForInbound(fakeDb({acts,pubs}).db,{tenantId:T.a,accountId:A.a,platform:"instagram"},"hello",both);
+  assert.equal(sel.status,"none");
+  const f=fakeDb({acts,pubs});
+  const r=await route(f.db,ev({text:"hello"}));
+  assert.deepEqual(r.sent,["AI-ANSWER"]);
+  assert.ok(!f.calls.some(c=>c.name==="flow_claim_begin_durable_run"),"no run started from a dangling reference");
+  assert.ok(![...f.claims.values()].includes("flow"));
+  // The healthy keyword flow on the same account is unaffected by the dangling one.
+  const g=fakeDb({acts,pubs});
+  assert.deepEqual((await route(g.db,ev({eventId:"mid-price",text:"price?"}))).sent,["PRICES"]);
+ });
+});
+
+test("durable runtime parity: V3 (buttons) and V4 (delay) start through the same exact-revision begin after reactivation",async()=>{
+ await withEnv(canary,async()=>{
+  const KEY="ig_live_welcome_20261029";
+  const pubs=[pub(T.a,A.a,KEY,3,buttonsDoc(trig("message"),"Q3")),pub(T.a,A.a,KEY,4,delayDoc(trig("message"),"LATER4")),
+   pub(T.a,A.a,KEY,5,delayDoc(trig("message"),"LATER5"))];
+  const acts:Act[]=[];let n=0;
+  const start=async()=>{const f=fakeDb({acts,pubs});const r=await route(f.db,ev({eventId:"mid-durable-"+(++n)}));
+   return {r,begin:f.calls.filter(c=>c.name==="flow_claim_begin_durable_run")};};
+  sqlActivate(acts,KEY,3);
+  let x=await start();
+  assert.equal(x.r.durable,"handled");assert.equal(x.begin.length,1);
+  assert.equal(x.begin[0].args.p_flow,KEY);assert.equal(x.begin[0].args.p_revision,3,"V3 buttons: exactly r3");
+  sqlDeactivate(acts,KEY);
+  x=await start();
+  assert.equal(x.begin.length,0,"deactivated: no durable start from the stale r3 reference");
+  assert.deepEqual(x.r.sent,["AI-ANSWER"]);
+  sqlActivate(acts,KEY,4);
+  x=await start();
+  assert.equal(x.begin.length,1);assert.equal(x.begin[0].args.p_revision,4,"V4 delay: exactly r4 (not the newer r5, not r3)");
+  sqlDeactivate(acts,KEY);sqlActivate(acts,KEY,3);
+  x=await start();
+  assert.equal(x.begin[0].args.p_revision,3,"back to V3 after deactivation: exactly r3");
+  assert.equal(acts.filter(a=>a.flow_key===KEY).length,1);
+ });
+});
+
+test("durable runtime: a waiting run of revision N cannot resume under a different reactivated revision; the current revision still resumes",async()=>{
+ await withEnv(canary,async()=>{
+  const waiting=():Run=>({id:"99999999-9999-4999-8999-999999999993",tenant_id:T.a,channel_account_id:A.a,platform:"instagram",
+   conversation_id:CONV,provider_event_id:"mid-start",flow_key:"menu",publication_revision:2,current_node_id:"choose",
+   run_status:"awaiting_input",step_count:1,variables:{},wake_at:null});
+  const pubs=[pub(T.a,A.a,"menu",2,buttonsDoc(trig("keyword","menu"),"Q2")),pub(T.a,A.a,"menu",3,buttonsDoc(trig("keyword","menu"),"Q3"))];
+  const tap=async(acts:Act[])=>{
+   const f=fakeDb({acts,pubs,runs:[waiting()]});
+   (f.db as any).rpc=((orig:any)=>async(nme:string,a:any)=>nme==="flow_claim_inbound_durable"?
+    (f.calls.push({name:nme,args:a}),{data:[{acquired:true,route:"flow"}],error:null}):orig(nme,a))(f.db.rpc);
+   const r=await route(f.db,ev({eventId:"mid-tap",text:"prices",selectedChoiceId:"prices"}));
+   return {f,r};
+  };
+  // Control: r2 is the live revision -> the run resumes on r2.
+  const live=[act(T.a,A.a,"menu",2,"2026-01-01T00:00:00Z")];
+  const ok=await tap(live);
+  assert.equal(ok.r.durable,"handled");
+  assert.equal(ok.f.calls.find(c=>c.name==="flow_resume_button_run")?.args.p_run,waiting().id);
+  // Deactivate r2 and reactivate at r3: the stale r2 run must NOT continue under r3 and r3 is not started by the tap.
+  const acts=[act(T.a,A.a,"menu",2,"2026-01-01T00:00:00Z")];
+  sqlDeactivate(acts,"menu");sqlActivate(acts,"menu",3);
+  const stale=await tap(acts);
+  assert.ok(!stale.f.calls.some(c=>c.name==="flow_resume_button_run"),"the stale run never resumes");
+  assert.ok(!stale.f.calls.some(c=>c.name==="flow_claim_begin_durable_run"),"the tap never starts r3");
+  const cancel=stale.f.calls.filter(c=>c.name==="flow_cancel_run");
+  assert.equal(cancel.length,1);assert.equal(cancel[0].args.p_reason,"revision_inactive");assert.equal(cancel[0].args.p_run,waiting().id);
+  assert.equal(stale.r.durable,"fallback");
+ });
+});

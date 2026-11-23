@@ -1,0 +1,133 @@
+M1   meta  KILLED   passed=14 failed=15  | restore original /debug + logs (full original)
+        -> meta-auth: /debug public endpoint removed (orig leaks, hotfix 404)
+        -> meta-auth: full callback success flow identical (location + outbound call sequence + token-exchange contract)
+        -> meta-auth: fetch error containing the request URL (secret+token) is no longer logged
+M2   meta  KILLED   passed=26 failed=3  | re-add token-exchange redirect_uri log
+        -> meta-auth: full callback success flow identical (location + outbound call sequence + token-exchange contract)
+        -> meta-auth DB error logging: upsert: network failure (message embeds fake URL + query params)
+        -> meta-auth DB error logging: upsert: HTTP error with code (message embeds fake URL)
+M3   meta  KILLED   passed=28 failed=1  | final catch logs full error object
+        -> meta-auth: fetch error containing the request URL (secret+token) is no longer logged
+M4   meta  KILLED   passed=28 failed=1  | subscribed_apps catch logs e.message
+        -> meta-auth: subscribed_apps fetch error no longer logs access token; redirect unchanged
+M5   meta  KILLED   passed=27 failed=2  | subscribed_apps failure logs the whole JSON body
+        -> meta-auth: subscribed_apps non-success body is not dumped into logs
+        -> meta-auth Meta API error log never carries remote free text: subscribed_apps
+M6   meta  KILLED   passed=13 failed=16  | state verified with wrong secret
+        -> meta-auth: full callback success flow identical (location + outbound call sequence + token-exchange contract)
+        -> meta-auth: state validation contract unchanged (bad signature, expired, wrong platform, malformed)
+        -> meta-auth: fetch error containing the request URL (secret+token) is no longer logged
+M7   meta  KILLED   passed=28 failed=1  | state expiry check removed
+        -> meta-auth: state validation contract unchanged (bad signature, expired, wrong platform, malformed)
+M8   meta  KILLED   passed=28 failed=1  | platform check removed
+        -> meta-auth: state validation contract unchanged (bad signature, expired, wrong platform, malformed)
+M9   meta  KILLED   passed=28 failed=1  | redirect_uri taken from secret instead of canonical
+        -> meta-auth: full callback success flow identical (location + outbound call sequence + token-exchange contract)
+M10  meta  KILLED   passed=28 failed=1  | /debug returning only app id (new minimal leak)
+        -> meta-auth: /debug public endpoint removed (orig leaks, hotfix 404)
+C1   chan  KILLED   passed=28 failed=1  | re-add IG-DIAG log of redirect secret
+        -> channels: instagram direct login ?debug=1 -> debug fields + IG-DIAG logs removed, URL/state contract unchanged
+C2   chan  KILLED   passed=28 failed=1  | re-add debug fields (instagram)
+        -> channels: instagram direct login ?debug=1 -> debug fields + IG-DIAG logs removed, URL/state contract unchanged
+C3   chan  KILLED   passed=28 failed=1  | re-add debug fields (facebook)
+        -> channels: facebook login + instagram fallback unchanged (scopes, redirect, state secret); debug key gone
+C4   chan  KILLED   passed=28 failed=1  | PATCH returns raw error.message
+        -> channels: DB errors no longer returned to the client or logged as full objects
+C5   chan  KILLED   passed=28 failed=1  | DELETE returns raw error.message
+        -> channels: DB errors no longer returned to the client or logged as full objects
+C6   chan  KILLED   passed=27 failed=2  | fatal returns e.message
+        -> channels: fatal/config errors return a generic message
+        -> channels fatal handler: an error carrying a fake credential-bearing URL is neither logged nor returned (kills 
+C7   chan  KILLED   passed=28 failed=1  | fatal logs full error object
+        -> channels fatal handler: an error carrying a fake credential-bearing URL is neither logged nor returned (kills 
+C8   chan  KILLED   passed=28 failed=1  | accounts select logs full error object
+        -> channels: DB errors no longer returned to the client or logged as full objects
+C9   chan  KILLED   passed=27 failed=2  | instagram state signed with META secret
+        -> channels: instagram direct login ?debug=1 -> debug fields + IG-DIAG logs removed, URL/state contract unchanged
+        -> channels: hotfix state is accepted by BOTH original and hotfix meta-auth (cross-version contract)
+C10  chan  KILLED   passed=27 failed=2  | state TTL 15m -> 5m
+        -> channels: instagram direct login ?debug=1 -> debug fields + IG-DIAG logs removed, URL/state contract unchanged
+        -> channels: facebook login + instagram fallback unchanged (scopes, redirect, state secret); debug key gone
+C11  chan  KILLED   passed=27 failed=2  | state payload key u -> user
+        -> channels: instagram direct login ?debug=1 -> debug fields + IG-DIAG logs removed, URL/state contract unchanged
+        -> channels: facebook login + instagram fallback unchanged (scopes, redirect, state secret); debug key gone
+C12  chan  KILLED   passed=28 failed=1  | instagram scope dropped
+        -> channels: instagram direct login ?debug=1 -> debug fields + IG-DIAG logs removed, URL/state contract unchanged
+C13  chan  KILLED   passed=28 failed=1  | always use direct login (fallback removed)
+        -> channels: facebook login + instagram fallback unchanged (scopes, redirect, state secret); debug key gone
+C14  chan  KILLED   passed=28 failed=1  | facebook redirect_uri changed
+        -> channels: facebook login + instagram fallback unchanged (scopes, redirect, state secret); debug key gone
+A1   api   KILLED   passed=28 failed=1  | restore original /db-test (full original)
+        -> api: /db-test removed (404), /health + unknown routes + OPTIONS unchanged
+A2   api   KILLED   passed=28 failed=1  | CORS origin changed
+        -> api: /db-test removed (404), /health + unknown routes + OPTIONS unchanged
+A3   api   KILLED   passed=28 failed=1  | health payload changed
+        -> api: /db-test removed (404), /health + unknown routes + OPTIONS unchanged
+A4   api   KILLED   passed=28 failed=1  | unknown route 404 body changed
+        -> api: /db-test removed (404), /health + unknown routes + OPTIONS unchanged
+M11  meta  KILLED   passed=27 failed=2  | claim error logs raw message (URL+nonce)
+        -> meta-auth DB error logging: claim: network failure (message embeds fake REST URL + nonce)
+        -> meta-auth DB error logging: claim: HTTP error with code (message embeds fake URL)
+M12  meta  KILLED   passed=27 failed=2  | upsert error logs raw message (URL+params)
+        -> meta-auth DB error logging: upsert: network failure (message embeds fake URL + query params)
+        -> meta-auth DB error logging: upsert: HTTP error with code (message embeds fake URL)
+M13  meta  KILLED   passed=28 failed=1  | reflected error param logged via fail() (original behavior)
+        -> meta-auth: attacker-controlled `error` parameter is not logged (newline/unicode/control chars); redirect contr
+M14  meta  KILLED   passed=28 failed=1  | provider-error branch logs the attacker value
+        -> meta-auth: attacker-controlled `error` parameter is not logged (newline/unicode/control chars); redirect contr
+M15  meta  KILLED   passed=28 failed=1  | provider-error redirect value changed (contract)
+        -> meta-auth: attacker-controlled `error` parameter is not logged (newline/unicode/control chars); redirect contr
+M16  meta  KILLED   passed=25 failed=4  | dbErrTag returns the raw message
+        -> meta-auth DB error logging: claim: network failure (message embeds fake REST URL + nonce)
+        -> meta-auth DB error logging: claim: HTTP error with code (message embeds fake URL)
+        -> meta-auth DB error logging: upsert: network failure (message embeds fake URL + query params)
+M19  meta  KILLED   passed=28 failed=1  | access_denied mapping removed
+        -> meta-auth: attacker-controlled `error` parameter is not logged (newline/unicode/control chars); redirect contr
+M20  meta  KILLED   passed=28 failed=1  | nonce claim no longer requires consumed=false
+        -> meta-auth: nonce claim request unchanged (method, filters, body) vs production
+M21  meta  KILLED   passed=28 failed=1  | nonce claim writes consumed:false
+        -> meta-auth: nonce claim request unchanged (method, filters, body) vs production
+M22  meta  KILLED   passed=28 failed=1  | token exchange grant_type changed
+        -> meta-auth: full callback success flow identical (location + outbound call sequence + token-exchange contract)
+M23  meta  KILLED   passed=28 failed=1  | facebook callback code changed
+        -> meta-auth: other routes unchanged (facebook callback, unknown route, POST)
+M24  meta  KILLED   passed=13 failed=16  | state HMAC hash SHA-256 -> SHA-512
+        -> meta-auth: full callback success flow identical (location + outbound call sequence + token-exchange contract)
+        -> meta-auth: state validation contract unchanged (bad signature, expired, wrong platform, malformed)
+        -> meta-auth: fetch error containing the request URL (secret+token) is no longer logged
+C0   chan  KILLED   passed=22 failed=7  | restore original channels (full vulnerable v112)
+        -> channels: instagram direct login ?debug=1 -> debug fields + IG-DIAG logs removed, URL/state contract unchanged
+        -> channels: facebook login + instagram fallback unchanged (scopes, redirect, state secret); debug key gone
+        -> channels: DB errors no longer returned to the client or logged as full objects
+C15  chan  KILLED   passed=28 failed=1  | warn logs the redirect secret value
+        -> channels: instagram direct login ?debug=1 -> debug fields + IG-DIAG logs removed, URL/state contract unchanged
+C16  chan  KILLED   passed=28 failed=1  | facebook scope dropped
+        -> channels: facebook login + instagram fallback unchanged (scopes, redirect, state secret); debug key gone
+C17  chan  KILLED   passed=27 failed=2  | default-tenant create error logged as full object
+        -> channels default-tenant creation failure (C17): insert HTTP error (message/details/hint carry fake URL, token,
+        -> channels default-tenant creation failure (C17): insert network failure (message carries fake REST + credential
+C18  chan  KILLED   passed=28 failed=1  | account update failure logs full error object
+        -> channels: DB errors no longer returned to the client or logged as full objects
+C19  chan  KILLED   passed=28 failed=1  | account disconnect failure logs full error object
+        -> channels: DB errors no longer returned to the client or logged as full objects
+M25  meta  KILLED   passed=28 failed=1  | token-exchange log prints Meta free-text message
+        -> meta-auth Meta API error log never carries remote free text: token exchange (Instagram OAuth error shape)
+M26  meta  KILLED   passed=27 failed=2  | long-lived log prints Meta free-text message
+        -> meta-auth Meta API error log never carries remote free text: long-lived exchange (Graph error shape)
+        -> meta-auth Meta API error log never carries remote free text: long-lived exchange (message only, no code/type)
+M27  meta  KILLED   passed=28 failed=1  | /me log prints Meta free-text message
+        -> meta-auth Meta API error log never carries remote free text: /me profile request
+M28  meta  KILLED   passed=28 failed=1  | subscribed_apps log prints Meta free-text message
+        -> meta-auth Meta API error log never carries remote free text: subscribed_apps
+M29  meta  KILLED   passed=24 failed=5  | metaErrTag returns the free-text message
+        -> meta-auth Meta API error log never carries remote free text: token exchange (Instagram OAuth error shape)
+        -> meta-auth Meta API error log never carries remote free text: long-lived exchange (Graph error shape)
+        -> meta-auth Meta API error log never carries remote free text: long-lived exchange (message only, no code/type)
+M30  meta  KILLED   passed=28 failed=1  | Meta error body dumped as JSON in token-exchange log
+        -> meta-auth Meta API error log never carries remote free text: token exchange (Instagram OAuth error shape)
+C20  chan  KILLED   passed=27 failed=2  | default-tenant create error logs raw message
+        -> channels default-tenant creation failure (C17): insert HTTP error (message/details/hint carry fake URL, token,
+        -> channels default-tenant creation failure (C17): insert network failure (message carries fake REST + credential
+C21  chan  KILLED   passed=27 failed=2  | default-tenant create failure no longer returns null (flow change)
+        -> channels default-tenant creation failure (C17): insert HTTP error (message/details/hint carry fake URL, token,
+        -> channels default-tenant creation failure (C17): insert network failure (message carries fake REST + credential

@@ -1,0 +1,11 @@
+c7d1427f065534d4570841f3bf6d08b2180140447f5c010bfba4d2b7d53e38c4  ./README.md
+99f6d4e29d0515d5bf28577b00a9da6fc6110bca8952221cdb3ea37ff261f09e  ./hotfix-mutants/run.py
+52151c9f752c3ef4e261b73f6c164f36930f594618f57d631a69706084dbec4d  ./hotfix/WORKDIR-MANIFEST.txt
+c9bc945ca7757566e7042333d3fdd49dbb88d5835cccc23dfe7f920d8646580b  ./hotfix/api.v108.hotfix.index.ts
+d9f503e7e5cc054b6d859de86e95422653415ef510efde97fe9e622e45406aa0  ./hotfix/channels.v112.hotfix.index.ts
+e54bdc07ba1394e81f9f428df6cf95dca1e703a1506cf420de91b91dcd1fd043  ./hotfix/meta-auth.v63.hotfix.index.ts
+2a269a5e0b43d8d4f138711c6e43e699bf0a0cb3f09e1d2f1746b172b660e7b6  ./originals/MANIFEST.txt
+e0bd50831a5869bfe2f3a80d0e3719ebeef8d2ae0c08eb32225fbbdd7df92347  ./originals/api.v108.index.ts
+af51a98a31de03cf3e442eaa5506dd674bee92dcc8ca5402fc1463bb8ac38855  ./originals/channels.v112.index.ts
+d297196103c3861b34e369600158739b23387b35ffea8a041ba2d037ae32208e  ./originals/meta-auth.v63.index.ts
+1158727d60bcfa2ec7645454ce0a88a878eb43d730d105e360266f993921a3c1  ./tests/behavior.test.ts

@@ -1,0 +1,13 @@
+Hotfix working copies (temporary, outside the repo, NOT committed, NOT deployed)
+baseline (read-only, untouched):
+  /tmp/claude-0/-home-user-milanochat/b83f4a81-cf0b-5d1e-b57f-3a22ee1b536e/scratchpad/prod-snapshots/meta-auth.v63.index.ts
+  /tmp/claude-0/-home-user-milanochat/b83f4a81-cf0b-5d1e-b57f-3a22ee1b536e/scratchpad/prod-snapshots/channels.v112.index.ts
+  /tmp/claude-0/-home-user-milanochat/b83f4a81-cf0b-5d1e-b57f-3a22ee1b536e/scratchpad/prod-snapshots/api.v108.index.ts
+working copies (editable):
+  /tmp/claude-0/-home-user-milanochat/b83f4a81-cf0b-5d1e-b57f-3a22ee1b536e/scratchpad/hotfix-work/meta-auth.v63.hotfix.index.ts
+  /tmp/claude-0/-home-user-milanochat/b83f4a81-cf0b-5d1e-b57f-3a22ee1b536e/scratchpad/hotfix-work/channels.v112.hotfix.index.ts
+  /tmp/claude-0/-home-user-milanochat/b83f4a81-cf0b-5d1e-b57f-3a22ee1b536e/scratchpad/hotfix-work/api.v108.hotfix.index.ts
+created 2026-11-23T10:35:01Z
+meta-auth.v63.hotfix.index.ts      8a241dd56ccd695ed5fb0123ac406f6c549a611cee25e180b25ca05df422123c  bytes=10446
+channels.v112.hotfix.index.ts      d9f503e7e5cc054b6d859de86e95422653415ef510efde97fe9e622e45406aa0  bytes=16792
+api.v108.hotfix.index.ts           c9bc945ca7757566e7042333d3fdd49dbb88d5835cccc23dfe7f920d8646580b  bytes=3849

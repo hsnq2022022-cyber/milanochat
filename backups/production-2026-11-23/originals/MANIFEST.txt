@@ -1,0 +1,20 @@
+Production source snapshots (rollback baseline) - project nmhefwvhoholcjrbbila
+Retrieved via Supabase management tooling (get_edge_function), 2026-11-23, ~10:28-10:36 UTC.
+Source text only; no secret values are present (manual full read + no env values in source).
+NOT committed to git. NOT uploaded.
+
+function    version  verify_jwt  updated_at(epoch ms)  ezbr_sha256 (bundle hash reported by Supabase, not of the text)
+meta-auth   v63      false       1791657651600         9820a0cf374afe00c11a9c9ffad96d77b171677d445723a58e633e95aa78ad99
+channels    v112     false       1791657594941         27f844bf6b6aee54abd0b5091b1a84e1de3a624036abd26025c967c0bdcdbd3a
+api         v108     false       1791144836191         b01ebb95a15ec91e32fa91d8cd0dc7126429a7ff462b976fc8b22d5d1dfb70f1
+
+file                            sha256 (of saved text)                                            bytes
+meta-auth.v63.index.ts          d297196103c3861b34e369600158739b23387b35ffea8a041ba2d037ae32208e  11416
+channels.v112.index.ts          af51a98a31de03cf3e442eaa5506dd674bee92dcc8ca5402fc1463bb8ac38855  18274
+api.v108.index.ts               e0bd50831a5869bfe2f3a80d0e3719ebeef8d2ae0c08eb32225fbbdd7df92347  5230
+
+Integrity method: each file was written twice from the management-tool output in two independent
+transcription passes; SHA-256 of both passes matched for all three. The management API does not return a
+hash of the source text, so a byte-for-byte match against the API is established only via this
+double-transcription check plus a Deno parse check. Files end without a trailing newline.
+Single-file deployments (function layout is flat: only index.ts).
