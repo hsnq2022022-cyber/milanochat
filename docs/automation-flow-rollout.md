@@ -142,6 +142,14 @@ wrote it; verify each item in the Meta App Dashboard before enabling.
      not start (`registry_missing`, `registry_other_account`, `not_allowlisted`); the editor shows that
      message instead of presenting the flow as fully live. `test_only` tenants never needed the registry.
 
+## Database object contract (verified locally; production unverified)
+
+`tests/flow-db-object-coverage.test.mjs` fails when an Edge Function uses a SQL function or table that no repository SQL defines, except an exact documented list. At the time of writing the Flow engine itself is fully defined: every other `flow_*` function and every `automation_*` table the workers use is created by a migration, a baseline file or an installed-shape fixture. What is NOT defined anywhere in the repository (production-resident, definitions unverified):
+- the four publication functions used only by `flow-publication`: `flow_publish_revision`, `flow_activate_revision`, `flow_deactivate_revision`, `flow_publication_rate_allow`. Earlier review-only versions exist on the unmerged branches `feature/flows-live-publication-api` and `review/flow-publication-security-gates` (migrations `20261028190000` and `20261028200000`), but they predate production's approved-activation gate (`supabase/proposals/automation_flow_production_approval.sql`), so they must not be copied into a migration. The owner has to read the live definitions (`pg_get_functiondef`, read-only) first;
+- `consume_flow_reply` and `consume_widget_reply` (billing debits) and the `orders` table (payments).
+
+`tests/flow-lifecycle-integration.test.ts` also audits the live catalog of every migration-owned object after the chain is applied: one definition per function name, `search_path` pinned, no `PUBLIC`/`anon`/`authenticated` privilege, row level security on, and only two documented client reads (`automation_comment_replies` for the tenant owner, `tenant_staff_memberships` for the member's own row, both `SELECT` only behind an `auth.uid()` policy).
+
 ## Stage 10: persistent execution engine
 
 - Interpreter for message + media + quick replies, data collection, condition, randomizer, goto and end.

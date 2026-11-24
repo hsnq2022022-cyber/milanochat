@@ -2197,6 +2197,130 @@ Deno.test({name:"flow V3/V4 lifecycle integration (real handlers + throwaway Pos
    }finally{Deno.env.delete("FLOW_INTERNAL_ACTIONS_ENABLED");}
   });
 
+  await t.step("replacement: a NEW trigger supersedes a sleeping run, and a NEW revision replaces the one a run sleeps on; neither leaves a late or duplicate message from the old run",async()=>{
+   const asleep=async(tag:string)=>{
+    const c=await conv("938"+tag);const m1=await inbound(c,"mid.rp."+tag+".1");
+    assert.equal(await attemptDurableInstagram(sb,ev(c,m1,"mid.rp."+tag+".1",null)),"handled");await outboxTick();
+    const m2=await inbound(c,"mid.rp."+tag+".2");
+    assert.equal(await attemptDurableInstagram(sb,ev(c,m2,"mid.rp."+tag+".2","prices")),"handled");await outboxTick();
+    const run=(await runsOf(c))[0];assert.equal(run.run_status,"sleeping");return {c,run};
+   };
+   const texts=()=>meta.calls.map(x=>x.body.message.text);
+   // ---- A) a new matching message while the run sleeps: atomic supersede + start (flow_claim_begin_durable_run)
+   await freshDb();resetMeta();await activate("chain",true);
+   const a=await asleep("1");
+   assert.deepEqual(texts(),["أهلاً بك في المتجر","شنو تحتاج؟","هذه قائمة الأسعار"]);
+   await exec(`UPDATE public.automation_flow_runs SET wake_at=now()-interval '1 second' WHERE id='${a.run.id}';`); // the old wake is DUE
+   const m3=await inbound(a.c,"mid.rp.1.3");
+   assert.equal(await attemptDurableInstagram(sb,evText(a.c,m3,"mid.rp.1.3","مرحبا")),"handled");
+   const runs=await runsOf(a.c);
+   assert.equal(runs.length,2,"one old, one new run");
+   const old=runs.find(r=>r.id===a.run.id)!,fresh=runs.find(r=>r.id!==a.run.id)!;
+   assert.equal(old.ended_reason,"superseded");assert.equal(old.run_status,"blocked");
+   assert.deepEqual([fresh.run_status,fresh.current_node_id,fresh.ended_reason],["awaiting_input","menu",null]);
+   assert.equal(await val(`SELECT count(*)::int FROM public.automation_flow_runs WHERE conversation_id='${a.c}' AND run_status IN('ready','awaiting_input','sleeping')`),1,"exactly one active run");
+   // The old run never fires: its due wake is not leased, nothing from it is planned or sent.
+   const w=await runtimeTick();assert.equal(w.body.leased,0,JSON.stringify(w.body));
+   await outboxTick();await outboxTick();
+   assert.deepEqual(texts(),["أهلاً بك في المتجر","شنو تحتاج؟","هذه قائمة الأسعار","أهلاً بك في المتجر","شنو تحتاج؟"],"only the NEW run's welcome and menu were added, once each");
+   assert.ok(!texts().includes("هل تحتاج شيئاً آخر؟"),"no late follow-up from the superseded run");
+   assert.equal(await val(`SELECT count(*)::int FROM public.automation_flow_outbox o JOIN public.automation_flow_runs r ON r.tenant_id=o.tenant_id AND r.id=o.run_id
+    WHERE r.id='${a.run.id}' AND o.delivery_status IN('pending','retry_wait','leased')`),0,"nothing of the old run is left to send");
+   assert.equal(await val(`SELECT count(*)::int FROM public.automation_message_claims WHERE route='legacy_ai'`),0,"the customer was never handed to the AI");
+
+   // ---- B) a NEW REVISION replaces the one the run sleeps on (flow_activate_revision upserts the same key)
+   await freshDb();resetMeta();await activate("chain",true);
+   const b=await asleep("2");const callsB=meta.calls.length;
+   await exec(`INSERT INTO public.automation_flow_publications(tenant_id,flow_key,revision,channel_account_id,platform,document,published_by)
+     SELECT tenant_id,flow_key,2,channel_account_id,platform,replace(document::text,'أهلاً بك في المتجر','أهلاً بك في الإصدار الثاني')::jsonb,published_by
+     FROM public.automation_flow_publications WHERE flow_key='chain' AND revision=1;
+    UPDATE public.automation_flow_activations SET revision=2 WHERE tenant_id='${A}' AND channel_account_id='${ACC}' AND flow_key='chain';
+    UPDATE public.automation_flow_runs SET wake_at=now()-interval '1 second' WHERE id='${b.run.id}';`);
+   const wb=await runtimeTick();
+   assert.equal(wb.body.leased,0,"a run on a replaced revision is ended before it is ever leased: "+JSON.stringify(wb.body));
+   assert.deepEqual(await rows(`SELECT run_status,ended_reason FROM public.automation_flow_runs WHERE id='${b.run.id}'`),[{run_status:"blocked",ended_reason:"revision_inactive"}]);
+   await outboxTick();assert.equal(meta.calls.length,callsB,"nothing from the old revision is sent after the replacement");
+   // The next inbound is served by the NEW revision, once.
+   const c2=await conv("938299");const n1=await inbound(c2,"mid.rp.2.n1");
+   assert.equal(await attemptDurableInstagram(sb,ev(c2,n1,"mid.rp.2.n1",null)),"handled");
+   await outboxTick();await outboxTick();
+   assert.deepEqual(texts().slice(callsB),["أهلاً بك في الإصدار الثاني","شنو تحتاج؟"]);
+   assert.equal(await val(`SELECT publication_revision FROM public.automation_flow_runs WHERE conversation_id='${c2}'`),2);
+  });
+
+  await t.step("expiry: a run that waits 24h for input is ended by the runtime tick (input_timeout), its unsent effects are cancelled, a late tap is inert, a fresh message starts a new run",async()=>{
+   await freshDb();resetMeta();await activate("chain",true);
+   const c=await conv("9390001");const m1=await inbound(c,"mid.ex.1");
+   assert.equal(await attemptDurableInstagram(sb,ev(c,m1,"mid.ex.1",null)),"handled");
+   const run=(await runsOf(c))[0];assert.equal(run.run_status,"awaiting_input");
+   // welcome + menu are planned but NOT sent yet (the outbox has not ticked); 25 hours pass without a reply
+   assert.deepEqual((await effectsOf(c)).map(e=>e.delivery_status),["pending","pending"]);
+   await exec(`UPDATE public.automation_flow_runs SET updated_at=now()-interval '25 hours' WHERE id='${run.id}';`);
+   const w=await runtimeTick();assert.equal(w.status,200);assert.equal(w.body.expired,1,JSON.stringify(w.body));
+   assert.deepEqual(await rows(`SELECT run_status,ended_reason FROM public.automation_flow_runs WHERE id='${run.id}'`),[{run_status:"blocked",ended_reason:"input_timeout"}]);
+   assert.deepEqual((await effectsOf(c)).map(e=>[e.delivery_status,e.cancel_reason]),[["cancelled","input_timeout"],["cancelled","input_timeout"]]);
+   await outboxTick();assert.equal(meta.calls.length,0,"a question for a timed-out run is never sent late");
+   assert.equal((await runtimeTick()).body.expired,0,"expiry is idempotent");
+   // A late button tap does not revive it and never starts a fresh run or hands the customer to the AI.
+   const m2=await inbound(c,"mid.ex.2");
+   assert.equal(await attemptDurableInstagram(sb,ev(c,m2,"mid.ex.2","prices")),"handled");
+   assert.equal((await runsOf(c)).length,1);await outboxTick();assert.equal(meta.calls.length,0);
+   assert.equal(await val(`SELECT count(*)::int FROM public.automation_message_claims WHERE route='legacy_ai'`),0);
+   // A new text message is a new trigger: a fresh run answers once.
+   const m3=await inbound(c,"mid.ex.3");
+   assert.equal(await attemptDurableInstagram(sb,evText(c,m3,"mid.ex.3","مرحبا")),"handled");
+   assert.equal((await runsOf(c)).length,2);
+   await outboxTick();await outboxTick();
+   assert.deepEqual(meta.calls.map(x=>x.body.message.text),["أهلاً بك في المتجر","شنو تحتاج؟"]);
+  });
+
+  await t.step("catalog audit of every migration-owned object (marker CREATED_BY_*): no duplicate overloads, search_path pinned, no PUBLIC/anon/authenticated privilege, RLS on, no client table grants",async()=>{
+   await freshDb();
+   const fns=await rows<{fn:string;name:string;secdef:boolean;trig:boolean;cfg:string;acl:string;marker:string}>(`SELECT p.oid::regprocedure::text AS fn,p.proname AS name,p.prosecdef AS secdef,p.prorettype='trigger'::regtype AS trig,
+    coalesce(array_to_string(p.proconfig,','),'') AS cfg,coalesce(p.proacl::text,'') AS acl,obj_description(p.oid,'pg_proc') AS marker
+    FROM pg_proc p WHERE p.pronamespace='public'::regnamespace AND obj_description(p.oid,'pg_proc') LIKE 'CREATED_BY_%' ORDER BY 1`);
+   assert.ok(fns.length>=30,"the audit sees the migration-owned functions: "+fns.length);
+   const exposed=/(^|[{,"])(=|anon=|authenticated=)/;
+   for(const f of fns){
+    assert.equal(f.cfg,'search_path=""',`${f.fn}: search_path pinned to empty`);
+    assert.notEqual(f.acl,"",`${f.fn}: explicit ACL (a NULL ACL grants EXECUTE to PUBLIC)`);
+    assert.doesNotMatch(f.acl,exposed,`${f.fn}: no PUBLIC/anon/authenticated EXECUTE (${f.acl})`);
+    // Trigger functions are never called through the API: nobody needs EXECUTE (flow_guard_one_active_run).
+    if(!f.trig)assert.match(f.acl,/service_role=X\//,`${f.fn}: service_role can execute`);
+   }
+   // Exactly one definition per name among migration-owned functions (no overload drift) ...
+   const names=new Map<string,string[]>();for(const f of fns)names.set(f.name,[...(names.get(f.name)??[]),f.fn]);
+   for(const [n,list] of names)assert.equal(list.length,1,`overloads of ${n}: ${list.join(" | ")}`);
+   // ... and no unmarked function shares a name with a migration-owned one.
+   const same=await rows<{fn:string}>(`SELECT p.oid::regprocedure::text AS fn FROM pg_proc p WHERE p.pronamespace='public'::regnamespace
+    AND p.proname=ANY(SELECT q.proname FROM pg_proc q WHERE q.pronamespace='public'::regnamespace AND obj_description(q.oid,'pg_proc') LIKE 'CREATED_BY_%')
+    AND coalesce(obj_description(p.oid,'pg_proc'),'') NOT LIKE 'CREATED_BY_%'`);
+   assert.deepEqual(same,[],"no unmarked overload of a migration-owned function");
+   // SECURITY DEFINER functions (flow AI generations, MCP OAuth cleanup) pin an empty search_path and are service_role only.
+   for(const f of fns.filter(x=>x.secdef&&!x.trig))assert.match(f.acl,/service_role=X\//,f.fn);
+   const tabs=await rows<{t:string;rls:boolean;acl:string}>(`SELECT c.oid::regclass::text AS t,c.relrowsecurity AS rls,coalesce(c.relacl::text,'') AS acl
+    FROM pg_class c WHERE c.relnamespace='public'::regnamespace AND c.relkind='r' AND obj_description(c.oid,'pg_class') LIKE 'CREATED_BY_%' ORDER BY 1`);
+   assert.ok(tabs.length>=6,"the audit sees the migration-owned tables: "+tabs.length);
+   const policies=await rows<{t:string;cmd:string;roles:string;qual:string}>(`SELECT schemaname||'.'||tablename AS t,cmd,roles::text AS roles,coalesce(qual,'') AS qual FROM pg_policies WHERE schemaname='public'`);
+   for(const x of tabs){
+    assert.equal(x.rls,true,`${x.t}: row level security enabled`);
+    assert.notEqual(x.acl,"",`${x.t}: explicit ACL`);
+    // Never PUBLIC or anon.
+    assert.doesNotMatch(x.acl,/(^|[{,"])(=|anon=)/,`${x.t}: no PUBLIC/anon privilege (${x.acl})`);
+    // The only client grants are SELECT-only reads through an auth.uid()-scoped RLS policy: the tenant owner reads
+    // automation_comment_replies (automation_comment_replies_owner_select), a staff member reads their own
+    // tenant_staff_memberships row (tenant_staff_self_read). Anything else fails here.
+    const auth=x.acl.match(/(^|[{,"])authenticated=([A-Za-z*]+)\//);
+    if(auth){
+     assert.equal(auth[2],"r",`${x.t}: authenticated may only SELECT (${x.acl})`);
+     const pol=policies.filter(q=>q.t===x.t.replace(/^(?!public\.)/,"public."));
+     assert.ok(pol.length>0&&pol.every(q=>q.cmd==="SELECT"&&/authenticated/.test(q.roles)&&/user_id/.test(q.qual)&&/auth\.uid\(\)/.test(q.qual)),
+      `${x.t}: authenticated SELECT must be scoped to auth.uid(): ${JSON.stringify(pol)}`);
+    }
+   }
+   assert.deepEqual(tabs.filter(x=>/(^|[{,"])authenticated=/.test(x.acl)).map(x=>x.t).sort(),["automation_comment_replies","tenant_staff_memberships"],"exactly the two documented owner-scoped read exceptions");
+  });
+
   await t.step("worker endpoints refuse unauthenticated ticks before touching the database",async()=>{
    const before=restLog.length;
    assert.equal((await tick(outboxWorker,"Bearer wrong")).status,401);

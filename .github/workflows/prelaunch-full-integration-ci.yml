@@ -239,7 +239,7 @@ jobs:
           node -e '
             const fs=require("fs");
             const xml=fs.readFileSync(process.env.RUNNER_TEMP+"/lifecycle.xml","utf8");
-            const MIN_STEPS=29;
+            const MIN_STEPS=32;
             const bad=(xml.match(/<(failure|error|skipped)\b/g)||[]).length;
             const cases=(xml.match(/<testcase\b/g)||[]).length;
             const failures=/<testsuites [^>]*\bfailures="0"/.test(xml)&&/<testsuites [^>]*\berrors="0"/.test(xml);
@@ -402,6 +402,7 @@ jobs:
           node --experimental-strip-types --test tests/flow-durable-accounts.test.ts
           node --experimental-strip-types --test tests/flow-runtime-parity.test.ts
           node --experimental-strip-types --test tests/flow-registry-allowlist-agreement.test.ts
+          node --experimental-strip-types --test tests/flow-db-object-coverage.test.mjs
           node --experimental-strip-types --test tests/flow-capabilities-action.test.ts
           node --experimental-strip-types --test tests/flow-publish-live.test.ts
           node --experimental-strip-types --test tests/flow-requirements.test.ts
