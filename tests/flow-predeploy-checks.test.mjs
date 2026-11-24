@@ -31,6 +31,8 @@ const SWEEP="supabase/migrations/20261029220000_flow_media_stale_sweep.sql";
 const SWEEP_RB="supabase/rollbacks/20261029220000_flow_media_stale_sweep.rollback.sql";
 const MULTI="supabase/migrations/20261029230000_flow_multichannel_support.sql";
 const MULTI_RB="supabase/rollbacks/20261029230000_flow_multichannel_support.rollback.sql";
+const RWH="supabase/migrations/20261115160000_flow_registry_wake_hold.sql";
+const RWH_RB="supabase/rollbacks/20261115160000_flow_registry_wake_hold.rollback.sql";
 const STAFF="supabase/migrations/20261028227000_tenant_staff_memberships.sql";
 const INTERNAL="supabase/migrations/20261028228000_flow_internal_actions.sql";
 const BEGIN_SIG="flow_begin_durable_run(uuid,uuid,uuid,uuid,text,text,bigint,text,text,integer,text,jsonb,timestamptz,jsonb)";
@@ -716,9 +718,9 @@ test("live PG: 150000 coverage, canonical takeover columns, 130000-after-150000 
     "function:public.flow_claim_inbound_durable(uuid,uuid,text,text,uuid,uuid)",
     `durable_button_run:public.${BEGIN_SIG}`,`durable_button_run:public.${RESUME_SIG}`,
     "durable_ingress_for_20261029170000","durable_button_run_guards",`superseding_begin:public.${SUPER_SIG}`,
-    "media_effects","media_stale_sweep","multichannel_support"].includes(r.item)||
+    "media_effects","media_stale_sweep","multichannel_support","registry_wake_hold"].includes(r.item)||
    r.status==="INFO"&&["preflight:20261029180000","preflight:20261029190000","preflight:20261029210000",
-    "preflight:20261029220000","preflight:20261029230000"].includes(r.item),
+    "preflight:20261029220000","preflight:20261029230000","preflight:20261115160000"].includes(r.item),
    `${r.item}: ${r.status} ${r.detail}`);
  assert.equal(d(rows,"credits_pause").status,"ABSENT");
  assert.match(d(rows,"credits_pause").detail,/20261029160000 not applied/);
@@ -1297,4 +1299,204 @@ test("live PG: other sessions' locks are reported, and a blocking lock makes the
  assert.match(r.stderr,/lock timeout/);
  assert.ok(took<4500,`gave up after ${took}ms (lock_timeout 2s)`);
  assert.equal((await blocker).code,0);
+});
+
+// ===========================================================================
+// 20261115160000_flow_registry_wake_hold: pins, guards, apply / twice / rollback, ordering
+// ===========================================================================
+const bodyOf=(f,tag)=>{const t=readFileSync(f,"utf8");const o=`AS $${tag}$`;const a=t.indexOf(o)+o.length;
+ return t.slice(a,t.indexOf(`$${tag}$`,a));};
+const md5x=x=>createHash("md5").update(x).digest("hex");
+const normx=x=>x.replace(/[ \t\n\r\f\v]+/g," ").replace(/^ +| +$/g,"");
+const RWH_SIGS={stale:"flow_end_stale_paused_runs(integer,integer)",lease:"flow_lease_due_runs(integer)"};
+
+test("20261115160000: every pin embeds the exact reviewed body hashes; migration and rollback guards are the same text",()=>{
+ const m=readFileSync(RWH,"utf8"),rb=readFileSync(RWH_RB,"utf8");
+ for(const tag of ["stale","lease"]){
+  const hOld=md5x(normx(bodyOf(MULTI,tag))),hNew=md5x(normx(bodyOf(RWH,tag)));
+  assert.notEqual(hOld,hNew,tag);
+  assert.equal(md5x(normx(bodyOf(RWH_RB,tag))),hOld,`${tag}: rollback restores the exact 230000 body`);
+  assert.equal(bodyOf(RWH_RB,tag),bodyOf(MULTI,tag),`${tag}: rollback body is byte-identical to the 230000 body`);
+  for(const [name,txt] of [["migration",m],["rollback",rb],["predeploy review",script]])
+   assert.ok(txt.includes(`'${hOld}'`)&&txt.includes(`'${hNew}'`),`${tag} hashes in ${name}`);
+  // the 230000 migration / rollback keep pinning ONLY the 230000 bodies (loosening them would hide drift)
+  assert.ok(!readFileSync(MULTI,"utf8").includes(hNew)&&!readFileSync(MULTI_RB,"utf8").includes(hNew),`${tag}: 230000 files unchanged`);
+ }
+ const helper=md5x(normx(bodyOf(RWH,"blocks")));
+ assert.ok(m.includes(`'${helper}'`)&&rb.includes(`'${helper}'`)&&script.includes(`'${helper}'`),"helper hash everywhere");
+ assert.ok(script.includes(`ver.h='${md5x(bodyOf(RWH,"lease"))}' THEN '20261115160000'`),"vv: raw md5 of the new lease body");
+ for(const tag of ["stale","lease"])assert.ok(script.includes(`'${md5x(normx(bodyOf(RWH,tag)))}')`),`mcsucc ${tag}`);
+ // Guard text: the migration and the rollback run the same checks (only the verb of the message differs).
+ const guard=t=>t.slice(t.indexOf("DO $guard$"),t.indexOf("$guard$;")).replaceAll("replace it","VERB it").replaceAll("roll back it","VERB it")
+  .replace(/\n IF to_regclass\('public\.automation_flow_canary_accounts'\) IS NULL[\s\S]*?END IF;/,"");
+ assert.equal(guard(rb),guard(m),"identical attribute checks in migration and rollback");
+ for(const must of ["obj_description(v_fn,'pg_proc') IS DISTINCT FROM r.marker","p.prosecdef","p.proisstrict","p.provolatile<>'v'",
+  "p.proconfig IS DISTINCT FROM ARRAY['search_path=\"\"']","pg_get_function_arguments(v_fn) IS DISTINCT FROM r.args",
+  "pg_get_function_result(v_fn) IS DISTINCT FROM r.res","Unrecognized overload"])
+  assert.ok(m.includes(must)&&rb.includes(must),must);
+ // Documented behaviour.
+ for(const [name,txt] of [["migration",m],["rollback",rb],["predeploy review",script]])
+  assert.match(txt,/ROLLBACK ORDER/,name);
+ assert.match(m,/IDEMPOTENT BY DESIGN/);
+ // No table / column / index / constraint changes.
+ assert.doesNotMatch(m,/\b(ALTER\s+TABLE|CREATE\s+TABLE|CREATE\s+(UNIQUE\s+)?INDEX|ADD\s+CONSTRAINT|DROP\s+TABLE)\b/i);
+ // Older rollbacks that recognise only the older bodies must stay that strict.
+ for(const f of readdirSync("supabase/rollbacks").filter(f=>/^2026102[89]/.test(f)&&f<"20261115"))
+  assert.ok(!readFileSync(`supabase/rollbacks/${f}`,"utf8").includes(md5x(normx(bodyOf(RWH,"lease")))),`${f} untouched`);
+});
+
+test("live PG: 20261115160000: predecessor state, apply, apply twice, attributes kept, rollback exact, ordering, drift refused",{skip},()=>{
+ const d=(rs,item)=>one(rs,"d_prerequisites",item);
+ // fingerprint line only (the second line is the next transaction id, which any write advances)
+ const SNAPX=db=>ok(db,{sql:SNAP},"snapshot").stdout.split("\n")[0];
+ const FN=[RWH_SIGS.stale,RWH_SIGS.lease];
+ const attrs=db=>ok(db,{sql:FN.map(f=>`SELECT p.oid::regprocedure::text||'|'||p.proowner::regrole::text||'|'||p.prosecdef::text||'|'||p.proisstrict::text||'|'||p.provolatile::text||'|'||
+   coalesce(p.proconfig::text,'')||'|'||coalesce(p.proacl::text,'')||'|'||coalesce(obj_description(p.oid,'pg_proc'),'')||'|'||
+   pg_get_function_arguments(p.oid)||'|'||pg_get_function_result(p.oid)||'|'||p.prolang::regclass::text||'|'||p.pronargs
+   FROM pg_proc p WHERE p.oid='public.${f}'::regprocedure;`).join("\n")},"attrs").stdout;
+ const hashes=db=>ok(db,{sql:`SELECT 'stale_norm',md5(btrim(regexp_replace(prosrc,'[[:space:]]+',' ','g'))) FROM pg_proc WHERE oid='public.${RWH_SIGS.stale}'::regprocedure
+  UNION ALL SELECT 'lease_norm',md5(btrim(regexp_replace(prosrc,'[[:space:]]+',' ','g'))) FROM pg_proc WHERE oid='public.${RWH_SIGS.lease}'::regprocedure
+  UNION ALL SELECT 'lease_raw',md5(prosrc) FROM pg_proc WHERE oid='public.${RWH_SIGS.lease}'::regprocedure
+  UNION ALL SELECT 'helper_norm',md5(btrim(regexp_replace(prosrc,'[[:space:]]+',' ','g'))) FROM pg_proc WHERE oid=to_regprocedure('public.flow_registry_blocks_run(uuid,uuid,text)')
+  ORDER BY 1;`},"hashes").stdout.trim().split("\n").filter(Boolean).map(l=>l.split("\t")).reduce((o,[k,v])=>({...o,[k]:v}),{});
+ const hasHelper=db=>ok(db,{sql:"SELECT to_regprocedure('public.flow_registry_blocks_run(uuid,uuid,text)') IS NOT NULL;"},"helper").stdout.trim()==="t";
+ const clone=(from,to)=>ok("postgres",{sql:`CREATE DATABASE ${to} TEMPLATE ${from};`},`clone ${to}`);
+ const refuses=(db,file,re,label)=>{
+  const before=SNAPX(db);const r=psql(db,{file});
+  assert.notEqual(r.status,0,`${label}: must be refused`);assert.match(r.stderr,re,`${label}: ${r.stderr}`);
+  assert.equal(SNAPX(db),before,`${label}: refusal changed nothing`);
+ };
+
+ // ---- predecessor state: everything up to and including 20261029230000
+ // Cluster-wide roles of the live shape, created only when absent (this test also runs on its own).
+ ok("postgres",{sql:`DO $r$ DECLARE n text; BEGIN
+  FOREACH n IN ARRAY ARRAY['anon','authenticated','service_role'] LOOP
+   IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname=n) THEN
+    EXECUTE format('CREATE ROLE %I NOLOGIN%s',n,CASE WHEN n='service_role' THEN ' BYPASSRLS' ELSE '' END);
+   END IF;
+  END LOOP; END $r$;`},"live-shape roles");
+ prepare("pdc_rwh",{roles:false});
+ ok("pdc_rwh",{file:DURABLE},"125000");ok("pdc_rwh",{file:LIFECYCLE},"130000");ok("pdc_rwh",{file:AI_RETRY},"140000");
+ ok("pdc_rwh",{sql:`ALTER TABLE public.tenants ADD COLUMN is_active boolean NOT NULL DEFAULT true;
+  ALTER TABLE public.channel_accounts ADD COLUMN is_active boolean NOT NULL DEFAULT true,
+  ADD COLUMN agent_enabled boolean NOT NULL DEFAULT true,ADD COLUMN auto_reply boolean NOT NULL DEFAULT true;
+  ALTER TABLE public.conversations ADD COLUMN transferred boolean NOT NULL DEFAULT false,
+  ADD COLUMN auto_paused_reason text,ADD COLUMN human_agent_expires_at timestamptz;
+  ALTER TABLE public.automation_flow_tenant_switches ADD COLUMN IF NOT EXISTS production_approved boolean NOT NULL DEFAULT false;`},"production-shape columns");
+ for(const f of [TAKEOVER,CREDITS,"supabase/migrations/20261029170000_flow_canary_claim_durable.sql",GUARDS,SUPERSEDING,MEDIA,SWEEP,MULTI])ok("pdc_rwh",{file:f},f);
+ let {rows}=assertReadOnlyRun("pdc_rwh");
+ assert.equal(d(rows,"registry_wake_hold").status,"ABSENT");
+ assert.match(d(rows,"registry_wake_hold").detail,/flow_end_stale_paused_runs=previous flow_lease_due_runs=previous/);
+ assert.equal(d(rows,"preflight:20261115160000").status,"OK",d(rows,"preflight:20261115160000").detail);
+ assert.equal(d(rows,"multichannel_support").status,"OK");
+ const preAttrs=attrs("pdc_rwh"),preHash=hashes("pdc_rwh"),preSnap=SNAPX("pdc_rwh");
+ // PostgreSQL itself computes the pinned predecessor hashes
+ assert.equal(preHash.stale_norm,"c7a764911307aefeb1f593312364d440");
+ assert.equal(preHash.lease_norm,"7cddbd9a4964716eec402f399e878a78");
+ assert.equal(preHash.lease_raw,"130bba5dd3c48c1e16398d921e53c6af");
+ assert.equal(hasHelper("pdc_rwh"),false);
+ // The migration refuses over a foreign function of the same name (also on the predecessor state)
+ clone("pdc_rwh","pdc_rwh_f1");
+ ok("pdc_rwh_f1",{sql:"CREATE FUNCTION public.flow_registry_blocks_run(p_tenant uuid,p_account uuid,p_platform text) RETURNS boolean LANGUAGE sql AS 'SELECT true';"},"foreign helper");
+ refuses("pdc_rwh_f1",RWH,/Existing public\.flow_registry_blocks_run is not the 20261115160000 function; refusing to replace it/,"foreign helper (predecessor)");
+ clone("pdc_rwh","pdc_rwh_f2");
+ ok("pdc_rwh_f2",{sql:"CREATE OR REPLACE FUNCTION public.flow_end_stale_paused_runs(p_max_age_minutes integer DEFAULT 1440,p_limit integer DEFAULT 100) RETURNS integer LANGUAGE plpgsql SECURITY INVOKER SET search_path='' AS $x$BEGIN RETURN 0; END$x$;"},"drifted stale body");
+ refuses("pdc_rwh_f2",RWH,/differs from both the 20261029230000 and the 20261115160000 definition; refusing to replace it/,"drifted predecessor body");
+
+ // ---- apply
+ clone("pdc_rwh","pdc_rwh_post");
+ ok("pdc_rwh_post",{file:RWH},"apply 20261115160000");
+ ({rows}=assertReadOnlyRun("pdc_rwh_post"));
+ assert.equal(d(rows,"registry_wake_hold").status,"OK",d(rows,"registry_wake_hold").detail);
+ assert.match(d(rows,"registry_wake_hold").detail,/flow_end_stale_paused_runs=20261115160000 flow_lease_due_runs=20261115160000/);
+ assert.match(d(rows,"registry_wake_hold").detail,/rollback: supabase\/rollbacks\/20261115160000_flow_registry_wake_hold\.rollback\.sql FIRST, before any older rollback/);
+ assert.equal(d(rows,"preflight:20261115160000").status,"OK");
+ assert.equal(d(rows,"multichannel_support").status,"OK",d(rows,"multichannel_support").detail);
+ assert.match(d(rows,"multichannel_support").detail,/flow_end_stale_paused_runs=20261115160000 .*flow_lease_due_runs=20261115160000/);
+ assert.equal((d(rows,"multichannel_support").detail.match(/=20261029230000/g)??[]).length,5);
+ assert.match(d(rows,"function_version:public.flow_lease_due_runs(integer)").detail,/^installed_version=20261115160000 /);
+ assert.equal(d(rows,"function_version:public.flow_lease_due_runs(integer)").status,"OK");
+ assert.ok(!rows.some(r=>r.status.startsWith("CONFLICT")),JSON.stringify(rows.filter(r=>r.status.startsWith("CONFLICT"))));
+ const postHash=hashes("pdc_rwh_post");
+ assert.equal(postHash.stale_norm,"3c73a9a945101b64b6fcf7696546bb25");
+ assert.equal(postHash.lease_norm,"71ad64971138c2b5dd24d785df20aec6");
+ assert.equal(postHash.lease_raw,"548d5ad3bf1a88025ee5457a632b824c");
+ assert.equal(postHash.helper_norm,"d4c6ef0577139cedaa217ec41eb42170");
+ for(const [k,tag] of [["stale_norm","stale"],["lease_norm","lease"]])assert.equal(postHash[k],md5x(normx(bodyOf(RWH,tag))),`${k} equals the file`);
+ assert.equal(postHash.lease_raw,md5x(bodyOf(RWH,"lease")));
+ // identity, ownership, security mode, search_path, arguments and defaults, result, language and privileges of both replaced functions are unchanged
+ assert.equal(attrs("pdc_rwh_post"),preAttrs,"replaced functions keep every attribute, owner, marker and ACL");
+ assert.match(attrs("pdc_rwh_post"),/\|false\|false\|v\|\{"search_path=\\"\\""\}\|/);
+ // helper: invoker, stable, empty search_path, service_role only
+ const helperAttrs=ok("pdc_rwh_post",{sql:`SELECT p.prosecdef::text||'|'||p.provolatile::text||'|'||p.proconfig::text||'|'||coalesce(p.proacl::text,'NULL')||'|'||obj_description(p.oid,'pg_proc')
+  FROM pg_proc p WHERE p.oid='public.flow_registry_blocks_run(uuid,uuid,text)'::regprocedure;`},"helper attrs").stdout.trim();
+ assert.match(helperAttrs,/^false\|s\|\{"search_path=\\"\\""\}\|\{[^}]*service_role=X\/[a-z_]+[^}]*\}\|CREATED_BY_20261115160000_FLOW_REGISTRY_WAKE_HOLD$/);
+ assert.doesNotMatch(helperAttrs,/[{,"](=|anon=|authenticated=)/,"no PUBLIC/anon/authenticated privilege");
+
+ // ---- apply twice: accepted by the guards, changes nothing
+ const once=SNAPX("pdc_rwh_post");
+ ok("pdc_rwh_post",{file:RWH},"apply 20261115160000 a second time");
+ assert.equal(SNAPX("pdc_rwh_post"),once,"second application: identical schema, functions, comments, ACLs and data");
+ ({rows}=assertReadOnlyRun("pdc_rwh_post"));assert.equal(d(rows,"registry_wake_hold").status,"OK");
+ // a partial state (helper dropped by hand) is completed by a re-run, never left half installed
+ clone("pdc_rwh_post","pdc_rwh_part");
+ ok("pdc_rwh_part",{sql:"DROP FUNCTION public.flow_registry_blocks_run(uuid,uuid,text);"},"drop helper");
+ ({rows}=assertReadOnlyRun("pdc_rwh_part"));
+ assert.match(d(rows,"registry_wake_hold").status,/^CONFLICT: 20261115160000 objects$/,"reported, not hidden");
+ ok("pdc_rwh_part",{file:RWH},"re-run completes the partial state");
+ assert.equal(SNAPX("pdc_rwh_part"),once);
+
+ // ---- older rollbacks must refuse while the new bodies are installed (rollback ORDER)
+ refuses("pdc_rwh_post",MULTI_RB,/neither the 20261029230000 nor the previous body/,"230000 rollback over the new bodies");
+ refuses("pdc_rwh_post",SWEEP_RB,/20261029230000 objects still exist; roll back 20261029230000_flow_multichannel_support first/,"220000 rollback");
+ refuses("pdc_rwh_post",TAKEOVER_RB,/roll back 20261029230000_flow_multichannel_support first/,"150000 rollback");
+
+ // ---- drift guards: the migration AND the rollback refuse, nothing changes
+ const LEASE_DEF="RETURNS TABLE(tenant_id uuid,run_id uuid,lease_token uuid) LANGUAGE plpgsql SECURITY INVOKER SET search_path='' AS $x$BEGIN RETURN; END$x$;";
+ const HELPER_DEF="RETURNS boolean LANGUAGE sql STABLE SECURITY INVOKER SET search_path='' AS 'SELECT false';";
+ const cases=[
+  ["lease body drift",`CREATE OR REPLACE FUNCTION public.flow_lease_due_runs(p_limit integer DEFAULT 20) ${LEASE_DEF}`,/differs from both the 20261029230000 and the 20261115160000 definition/,true],
+  ["stale marker removed","COMMENT ON FUNCTION public.flow_end_stale_paused_runs(integer,integer) IS NULL;",/Missing or unrecognized public\.flow_end_stale_paused_runs/,true],
+  ["lease SECURITY DEFINER","ALTER FUNCTION public.flow_lease_due_runs(integer) SECURITY DEFINER;",/differs from both/,true],
+  ["lease search_path changed","ALTER FUNCTION public.flow_lease_due_runs(integer) SET search_path=public;",/differs from both/,true],
+  ["stale STRICT","ALTER FUNCTION public.flow_end_stale_paused_runs(integer,integer) STRICT;",/differs from both/,true],
+  ["lease STABLE","ALTER FUNCTION public.flow_lease_due_runs(integer) STABLE;",/differs from both/,true],
+  ["foreign overload of lease","CREATE FUNCTION public.flow_lease_due_runs(integer,integer) RETURNS integer LANGUAGE sql AS 'SELECT 1';",/Unrecognized overload of public\.flow_lease_due_runs exists/,true],
+  ["helper body drift",`CREATE OR REPLACE FUNCTION public.flow_registry_blocks_run(p_tenant uuid,p_account uuid,p_platform text) ${HELPER_DEF}`,/is not the 20261115160000 function/,true],
+  ["helper marker removed","COMMENT ON FUNCTION public.flow_registry_blocks_run(uuid,uuid,text) IS NULL;",/is not the 20261115160000 function/,true],
+  ["helper VOLATILE","ALTER FUNCTION public.flow_registry_blocks_run(uuid,uuid,text) VOLATILE;",/is not the 20261115160000 function/,true],
+  ["helper SECURITY DEFINER","ALTER FUNCTION public.flow_registry_blocks_run(uuid,uuid,text) SECURITY DEFINER;",/is not the 20261115160000 function/,true],
+  ["helper search_path changed","ALTER FUNCTION public.flow_registry_blocks_run(uuid,uuid,text) SET search_path=public;",/is not the 20261115160000 function/,true],
+  ["foreign overload of the helper","CREATE FUNCTION public.flow_registry_blocks_run(uuid,uuid) RETURNS boolean LANGUAGE sql AS 'SELECT true';",/Unrecognized overload of public\.flow_registry_blocks_run exists/,true]];
+ for(const [i,[label,sql,re]] of cases.entries()){
+  const t=`pdc_rwh_t${i}`;clone("pdc_rwh_post",t);
+  ok(t,{sql},`tamper: ${label}`);
+  refuses(t,RWH,re,`migration: ${label}`);
+  refuses(t,RWH_RB,/Unrecognized overload|differs from both|Missing or unrecognized|is not the 20261115160000 function/,`rollback: ${label}`);
+  // the read-only predeploy review reports the state instead of hiding it
+  if(!label.startsWith("foreign overload of lease")){
+   ({rows}=assertReadOnlyRun(t));
+   assert.match(d(rows,"registry_wake_hold").status,/^CONFLICT: 20261115160000 objects$/,`${label}: ${d(rows,"registry_wake_hold").detail}`);
+  }
+ }
+
+ // ---- rollback from the migrated state restores the exact previous definitions
+ clone("pdc_rwh_post","pdc_rwh_rb");
+ ok("pdc_rwh_rb",{file:RWH_RB},"rollback 20261115160000");
+ assert.equal(hasHelper("pdc_rwh_rb"),false,"helper dropped");
+ const rbHash=hashes("pdc_rwh_rb");
+ assert.equal(rbHash.stale_norm,preHash.stale_norm);assert.equal(rbHash.lease_norm,preHash.lease_norm);assert.equal(rbHash.lease_raw,preHash.lease_raw);
+ assert.equal(attrs("pdc_rwh_rb"),preAttrs,"attributes identical to the predecessor state");
+ assert.equal(SNAPX("pdc_rwh_rb"),preSnap,"schema, functions, comments, ACLs and data identical to the state before the migration");
+ ({rows}=assertReadOnlyRun("pdc_rwh_rb"));
+ assert.equal(d(rows,"registry_wake_hold").status,"ABSENT");assert.equal(d(rows,"multichannel_support").status,"OK");
+ assert.ok(!rows.some(r=>r.status.startsWith("CONFLICT")),"no conflicts after the rollback");
+ ok("pdc_rwh_rb",{file:RWH_RB},"rollback twice");
+ assert.equal(SNAPX("pdc_rwh_rb"),preSnap,"second rollback changes nothing");
+ // ordering: once THIS migration is rolled back the older rollback's body guard passes again (it may still stop on its own data guard)
+ const older=psql("pdc_rwh_rb",{file:MULTI_RB});
+ assert.doesNotMatch(older.stderr,/neither the 20261029230000 nor the previous body/,"230000 rollback body guard passes after the new rollback");
+ // and the migration can be applied again after a rollback
+ ok("pdc_rwh_rb",{file:RWH},"re-apply after rollback");
+ assert.equal(SNAPX("pdc_rwh_rb"),once);
 });

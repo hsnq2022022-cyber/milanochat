@@ -87,9 +87,11 @@ export function canWakeDurableRun(v:WakeEligibility,nowMs:number):boolean{
  * and flow_end_stale_paused_runs ends them 24 hours past wake_at. The OPERATOR REGISTRY is handled
  * the same way (flow_registry_blocks_run, 20261115160000), and a registry refusal that still
  * arrives here is a lease RELEASE (registryOnlyHold), not a failure.
- * Gates only this worker evaluates (the FLOW_DURABLE_CANARY_ACCOUNT_ID allowlist, platform) return
- * null here and the worker FAILS the lease: the run stays sleeping, but every re-lease adds an
- * attempt and the 4th lease ends it as lease_exhausted (about 6 minutes), unchanged behaviour.
+ * Gates only this worker evaluates return null here. The FLOW_DURABLE_CANARY_ACCOUNT_ID allowlist is
+ * PARKED when FLOW_WAKE_MAX_OVERDUE_MINUTES is valid (allowlistOnlyHold; the overdue bound then ends
+ * the run), and otherwise, like the platform gate and every other refusal, the worker FAILS the lease:
+ * the run stays sleeping, but every re-lease adds an attempt and the 4th lease ends it as
+ * lease_exhausted (about 6 minutes), the previous behaviour.
  */
 export type WakeEndReason="revision_inactive"|"human_takeover"|"ineligible";
 export function wakeEndReason(v:WakeEligibility,nowMs:number):WakeEndReason|null{
@@ -110,4 +112,21 @@ export function wakeEndReason(v:WakeEligibility,nowMs:number):WakeEndReason|null
 export function registryOnlyHold(v:WakeEligibility,nowMs:number):boolean{
   return v.tenantTestOnly!==true&&v.registryRegistered!==true&&
     canWakeDurableRun({...v,registryRegistered:true},nowMs);
+}
+/**
+ * How long an ALLOWLIST-held run's lease is parked (minutes). Equal to the smallest valid
+ * FLOW_WAKE_MAX_OVERDUE_MINUTES (overdueGuard.ts), so the overdue bound is checked at least that
+ * often and a re-allowlisted account resumes within this time with no manual step.
+ */
+export const ALLOWLIST_PARK_MINUTES=5;
+/**
+ * True when the ONLY thing refusing this wake is the FLOW_DURABLE_CANARY_ACCOUNT_ID allowlist: the
+ * account is not in it (also when the secret is unset or malformed, which admits nobody), and with the
+ * allowlist satisfied every other fact (registry in production, tenant/account state, takeover,
+ * revision, ownership) passes canWakeDurableRun. Registry-also-missing, a registry read error, a
+ * permanent end reason or any other refusal is NOT an allowlist-only hold.
+ */
+export function allowlistOnlyHold(v:WakeEligibility,nowMs:number):boolean{
+  if(durableAccountAllowed(v.canaryAccountId,v.accountId))return false;
+  return canWakeDurableRun({...v,canaryAccountId:v.accountId},nowMs);
 }

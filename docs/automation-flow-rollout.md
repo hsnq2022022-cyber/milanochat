@@ -91,13 +91,35 @@ wrote it; verify each item in the Meta App Dashboard before enabling.
        its retry budget across any number of ticks and wakes on the first tick after re-registration. If the
        row disappears between the lease and the worker's check, or the registry cannot be read, the worker
        releases that lease (still no attempt consumed). Genuine execution failures still end in
-       `lease_exhausted` after 4 leases. A removed ALLOWLIST entry is different and unchanged: that wake still
-       fails its lease and ends as `lease_exhausted` after about 6 minutes.
+       `lease_exhausted` after 4 leases. A removed ALLOWLIST entry is handled separately (next paragraph).
      - **Outbox message:** stays `pending` (reported `blocked`) and resumes exactly once (the delivery attempt is unique per effect).
      - **Delivered but not yet recorded/billed (`charge_pending`):** the registry does NOT hold this recovery. The
        provider already accepted the message, and the recovery only persists and bills (never sends), so it
        completes exactly once with the registry present, removed or unreadable.
      - **Internal effect:** stays pending (`blocked_registry`).
+   - **Allowlist hold on a due wake** (verified by the local PostgreSQL lifecycle test):
+     - *What it is:* the account is not in `FLOW_DURABLE_CANARY_ACCOUNT_ID` (entry removed, another id, or the secret
+       unset or malformed, which admits nobody) and nothing else refuses the wake: with the allowlist satisfied the
+       tenant, account, revision, takeover and ownership checks and (production tenants) the registry would pass.
+       A missing or unreadable registry as well, a failed eligibility read, or any other refusal is NOT an allowlist
+       hold.
+     - *Parking (only with a valid `FLOW_WAKE_MAX_OVERDUE_MINUTES`):* the worker keeps its lease row but sets
+       `attempts=0` and `expires_at` 5 minutes ahead. `flow_lease_due_runs` skips a run with a live lease, so a parked
+       run is not leased every tick, takes no batch slot (more than 20 parked runs do not starve eligible due runs),
+       and its next lease starts again at `attempts=1`: an absent account can never reach `lease_exhausted`. The run
+       row and its wake payload are not touched. It is a hold, not a state change: the run stays `sleeping`.
+     - *Resuming:* put the account back in the allowlist. On the first lease after the park expires (at most 5 minutes
+       later, no manual database step) the run is eligible and continues once through the normal path (same run,
+       same payload, one planned follow-up).
+     - *Bound (required):* every lease first checks `FLOW_WAKE_MAX_OVERDUE_MINUTES` (integer 5 to 10080, default
+       OFF). A parked run whose `wake_at` is older than that is ended as `stale` (audited in `ended_reason`) and
+       nothing is sent. Parking is therefore only used when the setting is valid. Missing, malformed or out of range
+       means OFF: the allowlist hold is NOT parked and keeps the previous behaviour (the lease fails, attempts accrue,
+       the 4th lease ends the run as `lease_exhausted`, about 6 minutes). Set the overdue bound before relying on an
+       allowlist removal being recoverable; a value of 5 is the tightest, larger values keep the run recoverable longer.
+     - *Not covered:* registry holds are separate (above: never leased, or the lease is released); genuine runtime
+       failures (a query error, malformed variables or publication, a refused plan) always fail the lease and still end
+       as `lease_exhausted` after 4 attempts, with or without the setting.
    - **Stale replies:** a still-unsent Flow message (production tenants) is cancelled `superseded` (audited) only when
      a newer AI reply was actually DELIVERED in the same conversation. An `automation_message_claims` row with route
      `legacy_ai` is NOT proof: it is written before the answer is generated or sent and stays after an empty answer

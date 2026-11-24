@@ -239,7 +239,7 @@ jobs:
           node -e '
             const fs=require("fs");
             const xml=fs.readFileSync(process.env.RUNNER_TEMP+"/lifecycle.xml","utf8");
-            const MIN_STEPS=28;
+            const MIN_STEPS=29;
             const bad=(xml.match(/<(failure|error|skipped)\b/g)||[]).length;
             const cases=(xml.match(/<testcase\b/g)||[]).length;
             const failures=/<testsuites [^>]*\bfailures="0"/.test(xml)&&/<testsuites [^>]*\berrors="0"/.test(xml);

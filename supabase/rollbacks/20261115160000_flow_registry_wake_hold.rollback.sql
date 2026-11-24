@@ -1,23 +1,71 @@
 -- REVIEW ONLY rollback of 20261115160000_flow_registry_wake_hold: restores the 20261029230000 bodies of
 -- flow_end_stale_paused_runs and flow_lease_due_runs and drops flow_registry_blocks_run.
 -- NOT applied anywhere by this repository. Never `supabase db push`.
--- Refuses to run if either function is not this migration's body (or already the old body).
+-- Guards (same checks as the migration): both functions must be the 20261029230000 or this
+-- migration's body with their markers and attributes, and flow_registry_blocks_run must be absent or
+-- exactly this migration's function; anything else (drift, another overload, a foreign function with
+-- that name) aborts with nothing changed. Idempotent: over the already restored state it re-creates the
+-- same bodies and drops nothing.
+-- ROLLBACK ORDER: run THIS script before any older rollback (20261029230000 and earlier). Those
+-- recognise only the older bodies and refuse while this migration's bodies are installed.
 BEGIN;
 SET LOCAL lock_timeout='3s';
 DO $guard$
 DECLARE r record; v_fn regprocedure; p record;
 BEGIN
+ -- The two functions this migration changes: exact identity and attributes (the same checks as
+ -- 20261029230000) and the recognised body (md5 of the whitespace-normalised prosrc): the
+ -- 20261029230000 body or this migration's own body. Anything else is drift: refuse.
  FOR r IN SELECT * FROM (VALUES
-  ('public.flow_end_stale_paused_runs(integer,integer)','c7a764911307aefeb1f593312364d440','3c73a9a945101b64b6fcf7696546bb25'),
-  ('public.flow_lease_due_runs(integer)','7cddbd9a4964716eec402f399e878a78','71ad64971138c2b5dd24d785df20aec6')
- ) f(sig,h_old,h_new) LOOP
+  ('public.flow_end_stale_paused_runs(integer,integer)',
+   'CREATED_BY_20261029150000_FLOW_TAKEOVER_RESUME',
+   'p_max_age_minutes integer DEFAULT 1440, p_limit integer DEFAULT 100','integer',
+   'c7a764911307aefeb1f593312364d440','3c73a9a945101b64b6fcf7696546bb25'),
+  ('public.flow_lease_due_runs(integer)',
+   'CREATED_BY_20261029130000_FLOW_RUN_LIFECYCLE',
+   'p_limit integer DEFAULT 20','TABLE(tenant_id uuid, run_id uuid, lease_token uuid)',
+   '7cddbd9a4964716eec402f399e878a78','71ad64971138c2b5dd24d785df20aec6')
+ ) f(sig,marker,args,res,h_old,h_new) LOOP
+  IF EXISTS(SELECT 1 FROM pg_catalog.pg_proc x
+    WHERE x.pronamespace='public'::regnamespace AND x.proname=split_part(substr(r.sig,8),'(',1)
+     AND x.oid IS DISTINCT FROM to_regprocedure(r.sig)) THEN
+   RAISE EXCEPTION 'Unrecognized overload of % exists; refusing to roll back it', split_part(r.sig,'(',1);
+  END IF;
   v_fn := to_regprocedure(r.sig);
-  IF v_fn IS NULL THEN RAISE EXCEPTION 'Missing %', r.sig; END IF;
+  IF v_fn IS NULL OR obj_description(v_fn,'pg_proc') IS DISTINCT FROM r.marker THEN
+   RAISE EXCEPTION 'Missing or unrecognized %; apply 20261029230000_flow_multichannel_support first', r.sig;
+  END IF;
   SELECT x.* INTO p FROM pg_catalog.pg_proc x WHERE x.oid=v_fn;
-  IF md5(btrim(regexp_replace(p.prosrc,'[[:space:]]+',' ','g'))) NOT IN(r.h_old,r.h_new) THEN
-   RAISE EXCEPTION 'Unrecognized body of %; refusing to roll back', r.sig;
+  IF p.prolang IS DISTINCT FROM (SELECT oid FROM pg_catalog.pg_language WHERE lanname='plpgsql')
+  OR p.prokind<>'f' OR p.prosecdef OR p.proisstrict OR p.provolatile<>'v'
+  OR p.proconfig IS DISTINCT FROM ARRAY['search_path=""']
+  OR pg_catalog.pg_get_function_arguments(v_fn) IS DISTINCT FROM r.args
+  OR pg_catalog.pg_get_function_result(v_fn) IS DISTINCT FROM r.res
+  OR md5(btrim(regexp_replace(p.prosrc,'[[:space:]]+',' ','g'))) NOT IN(r.h_old,r.h_new) THEN
+   RAISE EXCEPTION 'Existing % differs from both the 20261029230000 and the 20261115160000 definition; refusing to roll back it', r.sig;
   END IF;
  END LOOP;
+ -- The helper this migration adds. Absent is fine (first apply / already rolled back). If it exists
+ -- it must be exactly this migration's function (marker, language, STABLE, SECURITY INVOKER,
+ -- search_path='', arguments, result, body); a same-named function that is not is never touched.
+ IF EXISTS(SELECT 1 FROM pg_catalog.pg_proc x
+   WHERE x.pronamespace='public'::regnamespace AND x.proname='flow_registry_blocks_run'
+    AND x.oid IS DISTINCT FROM to_regprocedure('public.flow_registry_blocks_run(uuid,uuid,text)')) THEN
+  RAISE EXCEPTION 'Unrecognized overload of public.flow_registry_blocks_run exists; refusing to roll back it';
+ END IF;
+ v_fn := to_regprocedure('public.flow_registry_blocks_run(uuid,uuid,text)');
+ IF v_fn IS NOT NULL THEN
+  SELECT x.* INTO p FROM pg_catalog.pg_proc x WHERE x.oid=v_fn;
+  IF obj_description(v_fn,'pg_proc') IS DISTINCT FROM 'CREATED_BY_20261115160000_FLOW_REGISTRY_WAKE_HOLD'
+  OR p.prolang IS DISTINCT FROM (SELECT oid FROM pg_catalog.pg_language WHERE lanname='sql')
+  OR p.prokind<>'f' OR p.prosecdef OR p.proisstrict OR p.provolatile<>'s'
+  OR p.proconfig IS DISTINCT FROM ARRAY['search_path=""']
+  OR pg_catalog.pg_get_function_arguments(v_fn) IS DISTINCT FROM 'p_tenant uuid, p_account uuid, p_platform text'
+  OR pg_catalog.pg_get_function_result(v_fn) IS DISTINCT FROM 'boolean'
+  OR md5(btrim(regexp_replace(p.prosrc,'[[:space:]]+',' ','g'))) IS DISTINCT FROM 'd4c6ef0577139cedaa217ec41eb42170' THEN
+   RAISE EXCEPTION 'Existing public.flow_registry_blocks_run is not the 20261115160000 function; refusing to roll back it';
+  END IF;
+ END IF;
 END
 $guard$;
 CREATE OR REPLACE FUNCTION public.flow_end_stale_paused_runs(

@@ -425,6 +425,8 @@ vv AS (
    WHEN ver.h=ver.h130 THEN '20261029130000'
    -- 20261029230000 replaces the 150000 lease body (md5 of prosrc).
    WHEN ver.sig='flow_lease_due_runs(integer)' AND ver.h='130bba5dd3c48c1e16398d921e53c6af' THEN '20261029230000'
+   -- 20261115160000 replaces the 230000 lease body again (md5 of prosrc).
+   WHEN ver.sig='flow_lease_due_runs(integer)' AND ver.h='548d5ad3bf1a88025ee5457a632b824c' THEN '20261115160000'
    ELSE 'unrecognized' END AS v
  FROM ver
 ),
@@ -532,17 +534,17 @@ SELECT section,item,status,tenant_id,n,ids,detail FROM (
   CASE
    WHEN vv.v='absent' AND vv.sig='flow_lease_due_runs(integer)' THEN 'MISSING: public.'||vv.sig
    WHEN vv.v='absent' AND s150.n=0 THEN 'ABSENT'
-   WHEN s150.n>0 AND vv.v NOT IN('20261029150000','20261029230000') THEN 'CONFLICT: public.'||vv.sig||' body'
-   WHEN s150.n=0 AND vv.v IN('20261029150000','20261029230000') THEN 'CONFLICT: public.'||vv.sig||' body'
+   WHEN s150.n>0 AND vv.v NOT IN('20261029150000','20261029230000','20261115160000') THEN 'CONFLICT: public.'||vv.sig||' body'
+   WHEN s150.n=0 AND vv.v IN('20261029150000','20261029230000','20261115160000') THEN 'CONFLICT: public.'||vv.sig||' body'
    WHEN vv.v='unrecognized' THEN 'CONFLICT: public.'||vv.sig||' body'
    ELSE 'OK' END,
   NULL,s150.n,NULL,
   format('installed_version=%s body_md5=%s; 150000 helper functions present=%s/2%s',vv.v,coalesce(vv.h,'-'),s150.n,
    CASE
-    WHEN s150.n>0 AND vv.v NOT IN('20261029150000','20261029230000') THEN '; body is not the 20261029150000 version while 150000 objects exist: '
+    WHEN s150.n>0 AND vv.v NOT IN('20261029150000','20261029230000','20261115160000') THEN '; body is not the 20261029150000 version while 150000 objects exist: '
      '20261029130000 was most likely re-applied after 20261029150000 (same ownership marker, so its preflight passes). '
      'Re-apply 20261029150000 (idempotent) to restore it; never re-apply 20261029130000 after 20261029150000'
-    WHEN s150.n=0 AND vv.v IN('20261029150000','20261029230000') THEN '; 20261029150000 body without its helper functions (partial rollback?): '
+    WHEN s150.n=0 AND vv.v IN('20261029150000','20261029230000','20261115160000') THEN '; 20261029150000 body without its helper functions (partial rollback?): '
      'run the 20261029150000 rollback or re-apply 20261029150000'
     WHEN vv.v='unrecognized' THEN '; body or marker matches no known migration version'
     ELSE '' END)
@@ -1377,8 +1379,14 @@ mcf(sig,marker,prefix,h_old,h_new) AS (VALUES
  ('flow_reserve_outbox_delivery(uuid,uuid)',
   'CREATED_BY_20261028226000_FLOW_OUTBOX_DELIVERY',false,'1b7a6fe3f6a9ee97203d50d5e0e0baa7','4a8882ddd7ad430c4187db821cc3de99')
 ),
+-- 20261115160000 replaces flow_end_stale_paused_runs / flow_lease_due_runs once more (md5 of the
+-- whitespace-normalized prosrc); such a body still counts as installed by 20261029230000 or later.
+mcsucc(sig,h) AS (VALUES
+ ('flow_end_stale_paused_runs(integer,integer)','3c73a9a945101b64b6fcf7696546bb25'),
+ ('flow_lease_due_runs(integer)','71ad64971138c2b5dd24d785df20aec6')
+),
 mcfx AS (
- SELECT mcf.*,p.oid,
+ SELECT mcf.*,mcsucc.h AS h_succ,p.oid,
   CASE WHEN mcf.prefix THEN split_part(coalesce(obj_description(p.oid,'pg_proc'),''),' ',1)
    ELSE obj_description(p.oid,'pg_proc') END AS m,
   md5(btrim(regexp_replace(p.prosrc,'[[:space:]]+',' ','g'))) AS ph,p.prosecdef,
@@ -1388,11 +1396,13 @@ mcfx AS (
   (SELECT count(*) FROM pg_catalog.pg_proc x
    WHERE x.pronamespace='public'::regnamespace AND x.proname=split_part(mcf.sig,'(',1)
     AND x.oid IS DISTINCT FROM p.oid) AS overloads
- FROM mcf LEFT JOIN pg_catalog.pg_proc p ON p.oid=to_regprocedure('public.'||mcf.sig)
+ FROM mcf LEFT JOIN mcsucc ON mcsucc.sig=mcf.sig
+ LEFT JOIN pg_catalog.pg_proc p ON p.oid=to_regprocedure('public.'||mcf.sig)
 ),
 mcfs AS (
  SELECT mcfx.*,
   CASE WHEN mcfx.oid IS NULL THEN 'absent' WHEN mcfx.ph=mcfx.h_new THEN '20261029230000'
+   WHEN mcfx.ph=mcfx.h_succ THEN '20261115160000'
    WHEN mcfx.ph=mcfx.h_old THEN 'previous' ELSE 'unrecognized' END AS v,
   mcfx.oid IS NOT NULL AND mcfx.m IS NOT DISTINCT FROM mcfx.marker AND NOT mcfx.prosecdef
    AND mcfx.cfg='search_path=""' AND mcfx.overloads=0 AS sound
@@ -1411,8 +1421,8 @@ mcc AS (
   AND c.conname='automation_flow_canary_accounts_platform_chk' AND c.contype='c'
 ),
 mct AS (
- SELECT (SELECT count(*) FROM mcfs WHERE mcfs.v='20261029230000') AS fn_new,
-  (SELECT count(*) FROM mcfs WHERE mcfs.v='20261029230000' AND mcfs.sound AND NOT mcfs.exposed) AS fn_new_ok,
+ SELECT (SELECT count(*) FROM mcfs WHERE mcfs.v IN('20261029230000','20261115160000')) AS fn_new,
+  (SELECT count(*) FROM mcfs WHERE mcfs.v IN('20261029230000','20261115160000') AND mcfs.sound AND NOT mcfs.exposed) AS fn_new_ok,
   (SELECT string_agg(split_part(mcfs.sig,'(',1)||'='||mcfs.v,' ' ORDER BY mcfs.sig) FROM mcfs) AS versions,
   coalesce(mcc.n=1 AND mcc.def=mcc.def_new AND mcc.mk='CREATED_BY_20261029230000_FLOW_MULTICHANNEL_SUPPORT',false) AS ck_new,
   coalesce(mcc.def=mcc.def_new OR mcc.mk='CREATED_BY_20261029230000_FLOW_MULTICHANNEL_SUPPORT',false) AS ck_touched,
@@ -1434,7 +1444,7 @@ pf230 AS (
     WHERE p.oid=to_regprocedure('public.flow_skip_blocked_outbox(integer,integer)'))
     IS NOT DISTINCT FROM 'dacdf7bb582a7d380651d478f47c6b97'),
   ('the seven replaced functions with their markers, attributes and the previous or 20261029230000 body',
-   (SELECT count(*) FROM mcfs WHERE mcfs.sound AND mcfs.v IN('previous','20261029230000'))=7),
+   (SELECT count(*) FROM mcfs WHERE mcfs.sound AND mcfs.v IN('previous','20261029230000','20261115160000'))=7),
   ('canary platform CHECK: the 20261029170000 definition, or the 20261029230000 definition with its marker',
    (SELECT mcc.n=1 AND (mcc.def=mcc.def_old AND mcc.mk IS DISTINCT FROM 'CREATED_BY_20261029230000_FLOW_MULTICHANNEL_SUPPORT'
      OR mcc.def=mcc.def_new AND mcc.mk='CREATED_BY_20261029230000_FLOW_MULTICHANNEL_SUPPORT') FROM mcc))
@@ -1459,6 +1469,114 @@ SELECT section,item,status,tenant_id,n,ids,detail FROM (
   NULL,(SELECT count(*) FROM pf230),NULL,
   CASE WHEN (SELECT count(*) FROM pf230)=0 THEN 'all 20261029230000 preflight requirements satisfied'
    ELSE 'unmet (normal until 20261029130000..220000 are applied): '||(SELECT string_agg(label,'; ' ORDER BY label) FROM pf230) END
+) x ORDER BY ord,item;
+
+-- (d) 20261115160000_flow_registry_wake_hold (due wakes of production runs whose operator
+-- registry row is missing are never leased, so they keep their retry budget). Catalog only.
+--  * registry_wake_hold: OK = flow_end_stale_paused_runs and flow_lease_due_runs have the
+--    20261115160000 body (md5 of the whitespace-normalized prosrc) with their unchanged ownership
+--    markers, plpgsql, not security definer, not strict, search_path='', the exact arguments and
+--    result, no other overload and no PUBLIC/anon/authenticated privilege, AND the helper
+--    flow_registry_blocks_run is exactly the 20261115160000 function (marker, sql, stable,
+--    search_path='', arguments, result, body md5, no client privilege).
+--    ABSENT = no 20261115160000 body and no helper. CONFLICT = any partial or inconsistent state
+--    (the migration completes a partial state, its rollback refuses a drifted one). detail lists
+--    the body version of both functions (previous = the 20261029230000 body / 20261115160000 /
+--    absent / unrecognized).
+--  * preflight:20261115160000: its prerequisites (both functions sound with the 20261029230000 or
+--    20261115160000 body, the 20261029170000 canary registry and the tenant switch table, no foreign
+--    flow_registry_blocks_run); INFO while unmet.
+-- ROLLBACK ORDER: roll 20261115160000 back FIRST. Every older rollback (20261029230000 and
+-- earlier) recognises only the older bodies and refuses while these bodies are installed.
+WITH
+rwh(sig,marker,args,res,h_old,h_new) AS (VALUES
+ ('flow_end_stale_paused_runs(integer,integer)','CREATED_BY_20261029150000_FLOW_TAKEOVER_RESUME',
+  'p_max_age_minutes integer DEFAULT 1440, p_limit integer DEFAULT 100','integer',
+  'c7a764911307aefeb1f593312364d440','3c73a9a945101b64b6fcf7696546bb25'),
+ ('flow_lease_due_runs(integer)','CREATED_BY_20261029130000_FLOW_RUN_LIFECYCLE',
+  'p_limit integer DEFAULT 20','TABLE(tenant_id uuid, run_id uuid, lease_token uuid)',
+  '7cddbd9a4964716eec402f399e878a78','71ad64971138c2b5dd24d785df20aec6')
+),
+rwx AS (
+ SELECT rwh.*,p.oid,obj_description(p.oid,'pg_proc') AS m,
+  md5(btrim(regexp_replace(p.prosrc,'[[:space:]]+',' ','g'))) AS ph,
+  p.prosecdef,p.proisstrict,p.provolatile,
+  p.prolang=(SELECT l.oid FROM pg_catalog.pg_language l WHERE l.lanname='plpgsql') AS plp,
+  coalesce(array_to_string(p.proconfig,','),'') AS cfg,
+  pg_catalog.pg_get_function_arguments(p.oid) AS a,pg_catalog.pg_get_function_result(p.oid) AS r,
+  p.oid IS NOT NULL AND (p.proacl IS NULL OR EXISTS(SELECT 1 FROM unnest(p.proacl) e
+   WHERE e::text LIKE '=%' OR e::text LIKE 'anon=%' OR e::text LIKE 'authenticated=%')) AS exposed,
+  (SELECT count(*) FROM pg_catalog.pg_proc x
+   WHERE x.pronamespace='public'::regnamespace AND x.proname=split_part(rwh.sig,'(',1)
+    AND x.oid IS DISTINCT FROM p.oid) AS overloads
+ FROM rwh LEFT JOIN pg_catalog.pg_proc p ON p.oid=to_regprocedure('public.'||rwh.sig)
+),
+rws AS (
+ SELECT rwx.*,
+  CASE WHEN rwx.oid IS NULL THEN 'absent' WHEN rwx.ph=rwx.h_new THEN '20261115160000'
+   WHEN rwx.ph=rwx.h_old THEN 'previous' ELSE 'unrecognized' END AS v,
+  rwx.oid IS NOT NULL AND rwx.m IS NOT DISTINCT FROM rwx.marker AND rwx.plp AND NOT rwx.prosecdef
+   AND NOT rwx.proisstrict AND rwx.provolatile='v' AND rwx.cfg='search_path=""'
+   AND rwx.a=rwx.args AND rwx.r=rwx.res AND rwx.overloads=0 AS sound
+ FROM rwx
+),
+rwb AS (
+ SELECT p.oid,
+  obj_description(p.oid,'pg_proc') IS NOT DISTINCT FROM 'CREATED_BY_20261115160000_FLOW_REGISTRY_WAKE_HOLD'
+   AND p.prolang=(SELECT l.oid FROM pg_catalog.pg_language l WHERE l.lanname='sql')
+   AND NOT p.prosecdef AND NOT p.proisstrict AND p.provolatile='s'
+   AND coalesce(array_to_string(p.proconfig,','),'')='search_path=""'
+   AND pg_catalog.pg_get_function_arguments(p.oid)='p_tenant uuid, p_account uuid, p_platform text'
+   AND pg_catalog.pg_get_function_result(p.oid)='boolean'
+   AND md5(btrim(regexp_replace(p.prosrc,'[[:space:]]+',' ','g')))='d4c6ef0577139cedaa217ec41eb42170' AS sound,
+  p.oid IS NOT NULL AND (p.proacl IS NULL OR EXISTS(SELECT 1 FROM unnest(p.proacl) e
+   WHERE e::text LIKE '=%' OR e::text LIKE 'anon=%' OR e::text LIKE 'authenticated=%')) AS exposed,
+  (SELECT count(*) FROM pg_catalog.pg_proc x
+   WHERE x.pronamespace='public'::regnamespace AND x.proname='flow_registry_blocks_run'
+    AND x.oid IS DISTINCT FROM p.oid) AS overloads
+ FROM (SELECT 1) one
+ LEFT JOIN pg_catalog.pg_proc p ON p.oid=to_regprocedure('public.flow_registry_blocks_run(uuid,uuid,text)')
+),
+rwt AS (
+ SELECT (SELECT count(*) FROM rws WHERE rws.v='20261115160000') AS fn_new,
+  (SELECT count(*) FROM rws WHERE rws.v='20261115160000' AND rws.sound AND NOT rws.exposed) AS fn_new_ok,
+  (SELECT string_agg(split_part(rws.sig,'(',1)||'='||rws.v,' ' ORDER BY rws.sig) FROM rws) AS versions,
+  rwb.oid IS NOT NULL AS helper,
+  coalesce(rwb.sound AND NOT rwb.exposed AND rwb.overloads=0,false) AS helper_ok,
+  coalesce(rwb.exposed,false) AS helper_exposed
+ FROM rwb
+),
+pf16 AS (
+ SELECT r.label FROM (VALUES
+  ('both replaced functions with their markers, attributes and the 20261029230000 or 20261115160000 body',
+   (SELECT count(*) FROM rws WHERE rws.sound AND rws.v IN('previous','20261115160000'))=2),
+  ('the 20261029170000 canary registry (with its marker) and the tenant switch table',
+   obj_description(to_regclass('public.automation_flow_canary_accounts'),'pg_class')
+    IS NOT DISTINCT FROM 'CREATED_BY_20261029170000_FLOW_CANARY_CLAIM_DURABLE'
+   AND to_regclass('public.automation_flow_tenant_switches') IS NOT NULL),
+  ('no foreign or drifted flow_registry_blocks_run',
+   (SELECT NOT rwt.helper OR rwt.helper_ok FROM rwt))
+ ) r(label,ok) WHERE NOT r.ok
+)
+SELECT section,item,status,tenant_id,n,ids,detail FROM (
+ SELECT 0 AS ord,'d_prerequisites'::text AS section,'registry_wake_hold'::text AS item,
+  CASE WHEN t.fn_new=2 AND t.fn_new_ok=2 AND t.helper_ok THEN 'OK'
+   WHEN t.fn_new=0 AND NOT t.helper THEN 'ABSENT'
+   ELSE 'CONFLICT: 20261115160000 objects' END AS status,
+  NULL::uuid AS tenant_id,t.fn_new AS n,NULL::text AS ids,
+  CASE WHEN t.fn_new=2 AND t.fn_new_ok=2 AND t.helper_ok
+    THEN 'installed by 20261115160000 (a due wake of a production run whose registry row is missing is never leased, so it keeps its retry budget and the 24 hour stale bound ends it); rollback: supabase/rollbacks/20261115160000_flow_registry_wake_hold.rollback.sql FIRST, before any older rollback (20261029230000 and earlier), which refuse while these bodies are installed; '||t.versions
+   WHEN t.fn_new=0 AND NOT t.helper
+    THEN '20261115160000 not applied: a missing registry row is handled by the wake worker only (it leases the run and gives the lease back); '||coalesce(t.versions,'-')
+   ELSE format('partial or inconsistent 20261115160000 state: %s of 2 functions have its body (%s with marker, attributes and privileges intact), helper present=%s intact=%s exposed=%s; %s',
+    t.fn_new,t.fn_new_ok,t.helper,t.helper_ok,t.helper_exposed,t.versions) END AS detail
+ FROM rwt t
+ UNION ALL
+ SELECT 1,'d_prerequisites','preflight:20261115160000',
+  CASE WHEN (SELECT count(*) FROM pf16)=0 THEN 'OK' ELSE 'INFO' END,
+  NULL,(SELECT count(*) FROM pf16),NULL,
+  CASE WHEN (SELECT count(*) FROM pf16)=0 THEN 'all 20261115160000 preflight requirements satisfied'
+   ELSE 'unmet (normal until 20261029230000 is applied): '||(SELECT string_agg(label,'; ' ORDER BY label) FROM pf16) END
 ) x ORDER BY ord,item;
 
 -- ===========================================================================

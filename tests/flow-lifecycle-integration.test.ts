@@ -1276,7 +1276,7 @@ Deno.test({name:"flow V3/V4 lifecycle integration (real handlers + throwaway Pos
    await outboxTick();assert.equal(meta.calls.length,4,"exactly once");
   });
 
-  await t.step("registry READ failure at wake time: lease released every tick (no attempt consumed), run stays recoverable; real execution failures still end in lease_exhausted",async()=>{
+  await t.step("registry READ failure at wake time: lease released every tick (no attempt consumed), run stays recoverable; WITHOUT FLOW_WAKE_MAX_OVERDUE_MINUTES an allowlist hold keeps the previous failing behaviour (lease_exhausted)",async()=>{
    await freshDb();resetMeta();await activate("chain",true);
    await exec(`UPDATE public.automation_flow_tenant_switches SET test_only=false,production_approved=true WHERE tenant_id='${A}';
     INSERT INTO public.automation_flow_canary_accounts(tenant_id,channel_account_id,platform,approved_by)
@@ -1304,8 +1304,9 @@ Deno.test({name:"flow V3/V4 lifecycle integration (real handlers + throwaway Pos
    const ok=await runtimeTick();assert.equal(ok.body.committed,1,JSON.stringify(ok.body));
    assert.equal((await runsOf(c))[0].run_status,"completed");
 
-   // Retry safety is NOT weakened: a genuine execution failure (not the registry) still consumes attempts and
-   // ends the run as lease_exhausted on the 4th lease.
+   // No FLOW_WAKE_MAX_OVERDUE_MINUTES (the default): an ALLOWLIST hold is NOT parked (a parked run would have no
+   // bound), so it keeps the previous behaviour: every lease fails, attempts accrue, lease_exhausted on the 4th.
+   Deno.env.delete("FLOW_WAKE_MAX_OVERDUE_MINUTES");
    await freshDb();resetMeta();await activate("chain",true);
    await exec(`UPDATE public.automation_flow_tenant_switches SET test_only=false,production_approved=true WHERE tenant_id='${A}';
     INSERT INTO public.automation_flow_canary_accounts(tenant_id,channel_account_id,platform,approved_by)
@@ -1322,6 +1323,7 @@ Deno.test({name:"flow V3/V4 lifecycle integration (real handlers + throwaway Pos
     for(let i=1;i<=3;i++){
      const w=await runtimeTick();
      assert.equal(w.body.leased,1,"attempt "+i+" "+JSON.stringify(w.body));assert.equal(w.body.blocked,1);assert.equal(w.body.held??0,0);
+     assert.equal(w.body.parked??0,0,"not parked without a valid overdue bound");
      await exec(`UPDATE public.automation_flow_run_leases SET expires_at=now()-interval '1 second' WHERE run_id='${run2.id}';`);
     }
     assert.equal(await val(`SELECT attempts FROM public.automation_flow_run_leases WHERE run_id='${run2.id}'`),3);
@@ -1329,6 +1331,161 @@ Deno.test({name:"flow V3/V4 lifecycle integration (real handlers + throwaway Pos
    }finally{Deno.env.set("FLOW_DURABLE_CANARY_ACCOUNT_ID",ACC);}
    assert.deepEqual(await rows(`SELECT run_status,ended_reason FROM public.automation_flow_runs WHERE id='${run2.id}'`),
     [{run_status:"blocked",ended_reason:"lease_exhausted"}]);
+  });
+
+  await t.step("allowlist hold: the lease is PARKED (no attempt per tick, no lease_exhausted, no starvation); the overdue bound ends it; re-allowlisting resumes it; genuine failures still exhaust; registry and read-failure behaviour unchanged",async()=>{
+   const lease=(runId:string)=>rows<{attempts:number;token:string;exp:string;window:boolean}>(`SELECT attempts,token::text,expires_at::text AS exp,
+    (expires_at>now()+interval '4 minutes' AND expires_at<=now()+interval '5 minutes 5 seconds') AS window
+    FROM public.automation_flow_run_leases WHERE run_id='${runId}'`).then(r=>r[0]);
+   const expire=(runId:string)=>exec(`UPDATE public.automation_flow_run_leases SET expires_at=now()-interval '1 second' WHERE run_id='${runId}';`);
+   const due=(runId:string,ago="1 second")=>exec(`UPDATE public.automation_flow_runs SET wake_at=now()-interval '${ago}' WHERE id='${runId}';`);
+   const prod=async()=>{
+    Deno.env.set("FLOW_DURABLE_CANARY_ACCOUNT_ID",ACC);Deno.env.delete("FLOW_WAKE_MAX_OVERDUE_MINUTES");
+    await freshDb();resetMeta();await activate("chain",true);
+    await exec(`UPDATE public.automation_flow_tenant_switches SET test_only=false,production_approved=true WHERE tenant_id='${A}';
+     INSERT INTO public.automation_flow_canary_accounts(tenant_id,channel_account_id,platform,approved_by)
+     VALUES('${A}','${ACC}','instagram','test-operator');`);
+   };
+   // A live production session asleep on its delay: welcome, menu and the 'prices' message are already sent.
+   const sleeper=async(tag:string)=>{
+    const c=await conv("936"+tag);const m1=await inbound(c,"mid.al."+tag+".1");
+    assert.equal(await attemptDurableInstagram(sb,ev(c,m1,"mid.al."+tag+".1",null)),"handled");await outboxTick();
+    const m2=await inbound(c,"mid.al."+tag+".2");
+    assert.equal(await attemptDurableInstagram(sb,ev(c,m2,"mid.al."+tag+".2","prices")),"handled");await outboxTick();
+    const run=(await runsOf(c))[0];assert.equal(run.run_status,"sleeping");
+    return {c,run};
+   };
+   const identity=(runId:string)=>rows(`SELECT id,tenant_id,channel_account_id,platform,conversation_id,flow_key,publication_revision,
+    current_node_id,variables,provider_event_id FROM public.automation_flow_runs WHERE id='${runId}'`);
+   const restore=()=>{Deno.env.set("FLOW_DURABLE_CANARY_ACCOUNT_ID",ACC);Deno.env.delete("FLOW_WAKE_MAX_OVERDUE_MINUTES");};
+   try{
+    // ---------------------------------------------------------------- A) parking, no exhaustion, bounded by the overdue guard
+    await prod();
+    const {c,run}=await sleeper("1");const before=await identity(run.id);const callsBefore=meta.calls.length;
+    await due(run.id);
+    Deno.env.set("FLOW_WAKE_MAX_OVERDUE_MINUTES","60");Deno.env.set("FLOW_DURABLE_CANARY_ACCOUNT_ID",ACCB); // the account left the allowlist
+    let w=await runtimeTick();
+    assert.deepEqual([w.body.leased,w.body.parked,w.body.blocked,w.body.held,w.body.committed,w.body.cancelled],[1,1,0,0,0,0],JSON.stringify(w.body));
+    let l=await lease(run.id);
+    assert.equal(l.attempts,0,"retry budget not consumed");assert.equal(l.window,true,"parked 5 minutes ahead (explicit expiry)");
+    // Many ticks: the parked run is NOT leased again (no attempt, no batch slot), whatever the cadence.
+    for(let i=2;i<=9;i++){
+     w=await runtimeTick();assert.equal(w.body.leased,0,"tick "+i+" "+JSON.stringify(w.body));
+     assert.deepEqual(await lease(run.id),l,"lease row untouched while parked");
+    }
+    // Park after park (time passes): attempts stay 0, so the 4th-lease rule can never fire for an absent account.
+    for(let i=1;i<=6;i++){
+     await expire(run.id);w=await runtimeTick();
+     assert.deepEqual([w.body.leased,w.body.parked,w.body.blocked,w.body.cancelled],[1,1,0,0],`park ${i} ${JSON.stringify(w.body)}`);
+     assert.equal((await lease(run.id)).attempts,0,"park "+i);
+    }
+    assert.deepEqual(await rows(`SELECT run_status,ended_reason FROM public.automation_flow_runs WHERE id='${run.id}'`),[{run_status:"sleeping",ended_reason:null}]);
+    assert.deepEqual(await identity(run.id),before,"run identity and payload untouched while parked");
+    assert.equal(meta.calls.length,callsBefore,"nothing sent while parked");
+    // The overdue bound is reached on the recovery path and ends the parked run (audited as 'stale').
+    Deno.env.set("FLOW_WAKE_MAX_OVERDUE_MINUTES","5");await due(run.id,"10 minutes");await expire(run.id);
+    w=await runtimeTick();
+    assert.deepEqual([w.body.leased,w.body.cancelled,w.body.parked,w.body.committed],[1,1,0,0],JSON.stringify(w.body));
+    assert.deepEqual(await rows(`SELECT run_status,ended_reason FROM public.automation_flow_runs WHERE id='${run.id}'`),[{run_status:"blocked",ended_reason:"stale"}]);
+
+    // ---------------------------------------------------------------- B) re-allowlisting resumes it by itself, exactly once
+    await prod();
+    const s2=await sleeper("2");const id2=await identity(s2.run.id);
+    await due(s2.run.id);
+    Deno.env.set("FLOW_WAKE_MAX_OVERDUE_MINUTES","60");Deno.env.set("FLOW_DURABLE_CANARY_ACCOUNT_ID",ACCB);
+    w=await runtimeTick();assert.equal(w.body.parked,1);
+    const parkedLease=await lease(s2.run.id);assert.equal(parkedLease.window,true);
+    Deno.env.set("FLOW_DURABLE_CANARY_ACCOUNT_ID",ACC); // allowlisted again: nothing else to do
+    w=await runtimeTick();assert.equal(w.body.leased,0,"still inside the park window: recovery latency <= ALLOWLIST_PARK_MINUTES");
+    await expire(s2.run.id);
+    w=await runtimeTick();
+    assert.deepEqual([w.body.leased,w.body.committed,w.body.parked,w.body.blocked],[1,1,0,0],JSON.stringify(w.body));
+    // Same run and payload; only the node moves on, from the delay it was asleep on to the end of the flow.
+    const strip=(rs:Array<Record<string,unknown>>)=>rs.map(({current_node_id:_n,...r})=>r);
+    assert.deepEqual(strip(await identity(s2.run.id)),strip(id2),"same run, same payload (variables, flow, revision, conversation, event)");
+    assert.equal(id2[0].current_node_id,"wait");assert.equal((await identity(s2.run.id))[0].current_node_id,"done");
+    assert.equal((await runsOf(s2.c))[0].run_status,"completed");
+    const callsB=meta.calls.length;
+    await outboxTick();assert.equal(meta.calls.length,callsB+1);assert.equal(meta.calls.at(-1)!.body.message.text,"هل تحتاج شيئاً آخر؟");
+    await outboxTick();assert.equal(meta.calls.length,callsB+1,"follow-up sent exactly once");
+    assert.equal((await runtimeTick()).body.leased,0,"nothing left to wake");
+    assert.equal(await val(`SELECT count(*)::int FROM public.automation_flow_outbox o JOIN public.automation_flow_runs r ON r.tenant_id=o.tenant_id AND r.id=o.run_id
+     WHERE r.id='${s2.run.id}' AND o.payload->>'text'='هل تحتاج شيئاً آخر؟'`),1,"one planned effect, no duplicate execution");
+
+    // ---------------------------------------------------------------- C) >20 parked runs never starve an eligible due run (test_only tenant: unchanged mode)
+    await freshDb();resetMeta();await activate("chain",true);
+    assert.equal(await val(`SELECT test_only FROM public.automation_flow_tenant_switches WHERE tenant_id='${A}'`),true);
+    await exec(`INSERT INTO public.channel_accounts(id,tenant_id,platform,channel,external_id) VALUES('${ACC2}','${A}','instagram','instagram','17841400000000003');
+     INSERT INTO public.automation_flow_publications(tenant_id,flow_key,revision,channel_account_id,platform,document,published_by)
+      SELECT tenant_id,'chain2',revision,'${ACC2}',platform,document,published_by FROM public.automation_flow_publications WHERE channel_account_id='${ACC}' AND flow_key='chain';
+     INSERT INTO public.automation_flow_activations(tenant_id,channel_account_id,platform,flow_key,revision,is_active)
+     VALUES('${A}','${ACC2}','instagram','chain2',1,true);`);
+    Deno.env.set("FLOW_DURABLE_CANARY_ACCOUNT_ID",ACC+","+ACC2);
+    const parkedRuns:string[]=[];
+    for(let i=0;i<22;i++){
+     const pc=await conv("937"+String(100+i),A,ACC2);const a1=await inbound(pc,"mid.al.p"+i+".1");
+     assert.equal(await attemptDurableInstagram(sb,ev(pc,a1,"mid.al.p"+i+".1",null,A,ACC2)),"handled");
+     const a2=await inbound(pc,"mid.al.p"+i+".2");
+     assert.equal(await attemptDurableInstagram(sb,ev(pc,a2,"mid.al.p"+i+".2","prices",A,ACC2)),"handled");
+     parkedRuns.push((await runsOf(pc))[0].id);
+    }
+    const ec=await conv("937900");const e1=await inbound(ec,"mid.al.e.1");
+    assert.equal(await attemptDurableInstagram(sb,ev(ec,e1,"mid.al.e.1",null)),"handled");
+    const e2=await inbound(ec,"mid.al.e.2");assert.equal(await attemptDurableInstagram(sb,ev(ec,e2,"mid.al.e.2","prices")),"handled");
+    const eligible=(await runsOf(ec))[0];
+    await exec(`UPDATE public.automation_flow_runs SET wake_at=now()-interval '2 hours' WHERE conversation_id IN(SELECT id FROM public.conversations WHERE account_id='${ACC2}');
+     UPDATE public.automation_flow_runs SET wake_at=now()-interval '1 minute' WHERE id='${eligible.id}';`);
+    Deno.env.set("FLOW_DURABLE_CANARY_ACCOUNT_ID",ACC);Deno.env.set("FLOW_WAKE_MAX_OVERDUE_MINUTES","600"); // ACC2 left the allowlist
+    w=await runtimeTick(); // the oldest 20 due runs are the parked-to-be ones: they fill the batch and are PARKED
+    assert.deepEqual([w.body.leased,w.body.parked,w.body.committed],[20,20,0],JSON.stringify(w.body));
+    w=await runtimeTick(); // the 20 parked runs are skipped by the scan: the last 2 are parked and the eligible run is served
+    assert.deepEqual([w.body.leased,w.body.parked,w.body.committed],[3,2,1],JSON.stringify(w.body));
+    assert.equal((await runsOf(ec))[0].run_status,"completed");
+    assert.equal((await runtimeTick()).body.leased,0,"22 parked runs hold no batch slot");
+    assert.equal(await val(`SELECT count(*)::int FROM public.automation_flow_runs WHERE id=ANY('{${parkedRuns.join(",")}}'::uuid[]) AND run_status='sleeping' AND ended_reason IS NULL`),22);
+    assert.equal(await val(`SELECT count(*)::int FROM public.automation_flow_run_leases WHERE run_id=ANY('{${parkedRuns.join(",")}}'::uuid[]) AND attempts=0`),22);
+
+    // ---------------------------------------------------------------- D) a GENUINE runtime failure still consumes attempts and exhausts, even with the bound set and the account allowlisted
+    await prod();
+    const s4=await sleeper("4");await due(s4.run.id);
+    await exec(`UPDATE public.automation_flow_runs SET variables='{"menu":1}'::jsonb WHERE id='${s4.run.id}';`); // numeric value: "invalid run variables"
+    Deno.env.set("FLOW_DURABLE_CANARY_ACCOUNT_ID",ACC);Deno.env.set("FLOW_WAKE_MAX_OVERDUE_MINUTES","60");
+    for(let i=1;i<=3;i++){
+     w=await runtimeTick();
+     assert.deepEqual([w.body.leased,w.body.blocked,w.body.parked,w.body.held??0],[1,1,0,0],`attempt ${i} ${JSON.stringify(w.body)}`);
+     assert.equal((await lease(s4.run.id)).attempts,i);await expire(s4.run.id);
+    }
+    await runtimeTick();
+    assert.deepEqual(await rows(`SELECT run_status,ended_reason FROM public.automation_flow_runs WHERE id='${s4.run.id}'`),[{run_status:"blocked",ended_reason:"lease_exhausted"}]);
+
+    // ---------------------------------------------------------------- E) combined with the registry, and read failures: fail closed, never mistaken for an allowlist hold
+    await prod();
+    const s5=await sleeper("5");await due(s5.run.id);
+    Deno.env.set("FLOW_WAKE_MAX_OVERDUE_MINUTES","60");Deno.env.set("FLOW_DURABLE_CANARY_ACCOUNT_ID",ACCB);
+    await exec(`DELETE FROM public.automation_flow_canary_accounts WHERE tenant_id='${A}' AND platform='instagram';`);
+    for(let i=1;i<=4;i++){w=await runtimeTick();assert.equal(w.body.leased,0,"registry missing + allowlist missing: never leased "+JSON.stringify(w.body));}
+    await exec(`INSERT INTO public.automation_flow_canary_accounts(tenant_id,channel_account_id,platform,approved_by) VALUES('${A}','${ACC}','instagram','test-operator');`);
+    failReads.add("automation_flow_canary_accounts"); // registry unreadable AND allowlist missing: combined, not allowlist-only
+    try{
+     w=await runtimeTick();
+     assert.deepEqual([w.body.leased,w.body.blocked,w.body.parked,w.body.held??0],[1,1,0,0],JSON.stringify(w.body));
+     assert.equal((await lease(s5.run.id)).attempts,1,"attempt consumed: fail closed");
+    }finally{failReads.delete("automation_flow_canary_accounts");}
+    await expire(s5.run.id);
+    failReads.add("tenants"); // an eligibility read fails: not an allowlist hold either
+    try{
+     w=await runtimeTick();
+     assert.deepEqual([w.body.leased,w.body.blocked,w.body.parked],[1,1,0],JSON.stringify(w.body));
+     assert.equal((await lease(s5.run.id)).attempts,2);
+    }finally{failReads.delete("tenants");}
+    // Registry-only hold is unchanged with the bound configured: released, not parked.
+    await expire(s5.run.id);Deno.env.set("FLOW_DURABLE_CANARY_ACCOUNT_ID",ACC);failReads.add("automation_flow_canary_accounts");
+    try{
+     w=await runtimeTick();
+     assert.deepEqual([w.body.leased,w.body.held,w.body.parked,w.body.blocked],[1,1,0,0],JSON.stringify(w.body));
+     assert.equal(await val(`SELECT count(*)::int FROM public.automation_flow_run_leases WHERE run_id='${s5.run.id}'`),0,"released");
+    }finally{failReads.delete("automation_flow_canary_accounts");}
+   }finally{restore();failReads.clear();}
   });
 
   await t.step("charge_pending recovery: accepted-by-Meta delivery is persisted and billed exactly once with registry present, removed or unreadable; never re-sent; NEW effects stay gated",async()=>{
