@@ -18,6 +18,8 @@ import { facebookDb, linkFacebookPages } from "./facebook.ts";
 import { isAccountTakenViolation } from "./facebook.ts";
 import { metaAuthHeaders } from "../_shared/metaGraph.ts";
 import { subscribeInstagramWebhooks } from "./instagramSubscription.ts";
+import { handleRedirectDiagnostics } from "./redirectDiagnostics.ts";
+import { normalizeRedirectUri } from "../_shared/redirectUri.ts";
 
 const IG_TOKEN_URL = "https://api.instagram.com/oauth/access_token";
 const IG_GRAPH_HOST = "https://graph.instagram.com";
@@ -80,17 +82,20 @@ const fail = (code: string) => {
 Deno.serve(async (req: Request) => {
   const url = new URL(req.url);
 
-  // تشخيص: يعرض قيم الإعداد غير السرية فقط (للتحقق من مطابقة redirect_uri)
+  // Operator-only, boolean-only redirect diagnostics (never any value):
+  // see redirectDiagnostics.ts. Non-operators get the generic 404.
   if (req.method === "GET" && url.pathname.endsWith("/debug")) {
-    const ru = Deno.env.get("INSTAGRAM_REDIRECT_URI") ?? null;
-    return new Response(JSON.stringify({
-      INSTAGRAM_REDIRECT_URI: ru,
-      length: ru?.length ?? 0,
-      hasWhitespaceOrQuotes: ru ? /[\s"']/.test(ru) : null,
-      expected: `${Deno.env.get("SUPABASE_URL")}/functions/v1/meta-auth/instagram/callback`,
-      INSTAGRAM_APP_ID: Deno.env.get("INSTAGRAM_APP_ID") ?? null,
-      USE_INSTAGRAM_DIRECT_LOGIN: Deno.env.get("USE_INSTAGRAM_DIRECT_LOGIN") ?? null,
-    }, null, 2), { headers: { "Content-Type": "application/json" } });
+    return await handleRedirectDiagnostics(req, {
+      env: (k) => Deno.env.get(k),
+      getUserId: async (jwt) => {
+        const u = Deno.env.get("SUPABASE_URL");
+        const k = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+        if (!u || !k) return null;
+        const c = createClient(u, k, { auth: { autoRefreshToken: false, persistSession: false } });
+        const { data, error } = await c.auth.getUser(jwt);
+        return error || !data?.user ? null : data.user.id;
+      },
+    });
   }
 
   // Facebook Login (Pages / Messenger): state issued by channels with
@@ -159,7 +164,7 @@ Deno.serve(async (req: Request) => {
     const tenantId: string = st.tenantId;
 
     // نفس redirect_uri الذي أُرسل في طلب التفويض
-    const redirectUri = Deno.env.get("INSTAGRAM_REDIRECT_URI") ||
+    const redirectUri = normalizeRedirectUri(Deno.env.get("INSTAGRAM_REDIRECT_URI")) ||
       `${supaUrl}/functions/v1/meta-auth/instagram/callback`;
 
     // 1) code → short-lived token
