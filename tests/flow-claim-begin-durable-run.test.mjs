@@ -57,7 +57,7 @@ test("330000 is the newest migration; its rollback and the whole called chain ex
  // 20261115120000_channel_accounts_hardening: independent security migration (channel_accounts grants/policies/index; no flow object).
  // 20261115130000_wayl_topup_atomic_grant: independent billing migration (new wayl_grant_topup_once(uuid,integer,text,jsonb) only; no flow object).
  // 20261115150000_flow_delivery_failure_info: additive, newest (nullable failure columns + CHECK on automation_flow_delivery_attempts, new flow_fail_outbox_delivery; redefines no existing function; requires 210000).
- for(const s of stamps)assert.ok(s<="20261029330000"||s==="20261029340000"||s==="20261029350000"||s==="20261029360000"||s==="20261115120000"||s==="20261115130000"||s==="20261115150000",s);
+ for(const s of stamps)assert.ok(s<="20261029330000"||s==="20261029340000"||s==="20261029350000"||s==="20261029360000"||s==="20261115120000"||s==="20261115130000"||s==="20261115150000"||s==="20261115160000",s);
  for(const f of [...CHAIN125_300,RB,PROD_CLAIM])assert.ok(existsSync(f),f);
 });
 test("migration and rollback: one bounded transaction, additive, service_role only, no DELETE, no data change",()=>{

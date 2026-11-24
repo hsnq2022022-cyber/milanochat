@@ -6,6 +6,7 @@
  * `accounts` reply (FLOW_COMMENT_AUTOMATION_ENABLED / FLOW_MULTICHANNEL_ENABLED).
  */
 import type {ProviderPlatform} from "./serverPublicationValidation.ts";
+import {isSafeArabicMessage} from "./publishLiveResult.ts";
 
 export type ActivationAccount={id:string;platform:string;is_active:boolean|null;
  canActivate?:boolean;canActivateComments?:boolean};
@@ -194,4 +195,21 @@ export function readinessBlockers(report:ReadinessReport|null|undefined,
  if(kind==="unsupported"&&!blockers.includes("supportedCandidate"))blockers.push("supportedCandidate");
  if(opts.currentlyActive&&report.configured===false&&blockers.length===0)blockers.push("configured");
  return blockers;
+}
+
+/**
+ * Server note (additive `runtime` on a catalog active flow) saying the flow is ACTIVE but the runtime will
+ * not start it (e.g. the operator registry row was removed). Only a safe Arabic sentence for exactly this
+ * flow_key is returned; anything else, or an older server without the field, gives null.
+ */
+export function catalogRuntimeNote(reply:{activeFlows?:unknown}|null|undefined,key:string):string|null{
+ if(!reply||typeof reply!=="object"||!Array.isArray(reply.activeFlows))return null;
+ for(const item of reply.activeFlows){
+  if(!item||typeof item!=="object")continue;
+  const a=item as {flow_key?:unknown;runtime?:unknown};
+  if(a.flow_key!==key||!a.runtime||typeof a.runtime!=="object")continue;
+  const r=a.runtime as {status?:unknown;message?:unknown};
+  if(r.status==="not_running"&&isSafeArabicMessage(r.message))return r.message.trim();
+ }
+ return null;
 }

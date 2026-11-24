@@ -67,10 +67,58 @@ wrote it; verify each item in the Meta App Dashboard before enabling.
    reconnect the account (Instagram / Facebook connect again) to receive comment events.
 6. Server gates (all default OFF, exact value `true`): `FLOW_COMMENT_AUTOMATION_ENABLED` (milan-api,
    flow-outbox-worker, flow-publication), `FLOW_DURABLE_INGRESS_ENABLED`, `FLOW_MULTICHANNEL_ENABLED`
-   (Facebook Page comments), `FLOW_DURABLE_CANARY_ACCOUNT_ID` (the ONE account id that may run),
+   (Facebook Page comments), `FLOW_DURABLE_CANARY_ACCOUNT_ID` (one account id, or a strict comma-separated allowlist),
    worker `FLOW_WORKERS_OPERATOR_RELEASE`, `FLOW_OUTBOX_SEND_ENABLED`, `FLOW_ATOMIC_CONSUME_READY`; SQL:
    migration 20261029300000 applied, global switch on, tenant switch enabled + production_approved,
    the account registered in `automation_flow_canary_accounts`, a published + activated comment flow.
+
+   **Allowlist and registry must agree.** An account runs durable flows only when it is in
+   `FLOW_DURABLE_CANARY_ACCOUNT_ID` AND (production tenants, i.e. not `test_only`) registered in
+   `automation_flow_canary_accounts`. The registry key is `(tenant_id, platform)`: **at most one durable
+   account per tenant and platform** (different tenants are independent). Publication reads the same registry
+   and refuses to report a durable flow as live: `activate`/`rollback` answer HTTP 409 with `code`
+   `FLOW_DURABLE_REGISTRY_MISSING` / `FLOW_DURABLE_REGISTRY_OTHER_ACCOUNT` (503 `..._UNAVAILABLE` on a read
+   failure) and an Arabic reason; `publish_live` keeps the revision saved, answers `saved_not_live` with the
+   matching `reason`, Arabic `message` and the same `code`.
+
+   **Lifecycle when a registry row (or allowlist entry) is removed.** Rollout of a customer: register the row
+   (operator, SQL) AND add the id to the allowlist. Rollback: delete the row and/or remove the id.
+   - New durable claims stop at once (`flow_claim_inbound_durable` returns no row; V2 / the AI answer).
+   - Work already delivered is never touched.
+   - Pending work is HELD, not cancelled and not sent (proven by the local PostgreSQL lifecycle test):
+     - **Due wake:** `flow_lease_due_runs` never leases a registry-blocked production run
+       (`flow_registry_blocks_run`, migration `20261115160000`, review-only, NOT applied anywhere), so it keeps
+       its retry budget across any number of ticks and wakes on the first tick after re-registration. If the
+       row disappears between the lease and the worker's check, or the registry cannot be read, the worker
+       releases that lease (still no attempt consumed). Genuine execution failures still end in
+       `lease_exhausted` after 4 leases. A removed ALLOWLIST entry is different and unchanged: that wake still
+       fails its lease and ends as `lease_exhausted` after about 6 minutes.
+     - **Outbox message:** stays `pending` (reported `blocked`) and resumes exactly once (the delivery attempt is unique per effect).
+     - **Delivered but not yet recorded/billed (`charge_pending`):** the registry does NOT hold this recovery. The
+       provider already accepted the message, and the recovery only persists and bills (never sends), so it
+       completes exactly once with the registry present, removed or unreadable.
+     - **Internal effect:** stays pending (`blocked_registry`).
+   - **Stale replies:** a still-unsent Flow message (production tenants) is cancelled `superseded` (audited) only when
+     a newer AI reply was actually DELIVERED in the same conversation. An `automation_message_claims` row with route
+     `legacy_ai` is NOT proof: it is written before the answer is generated or sent and stays after an empty answer
+     or a failed send. Evidence for a claim claimed after the effect was created is either a persisted outbound
+     message whose id is the claim's `outgoing_message_id`, or its `automation_delivery_attempts` row with status
+     `confirmed`. An `attempting` attempt (send in flight), an unrecognised status, a truncated scan or any read
+     error HOLDS the message; a claim without evidence, or an `uncertain` attempt (send failed or unconfirmed),
+     does not stop it and it is sent. Messages created after the claim (for example the follow-up after a delay),
+     public comment replies and `test_only` tenants are not affected. V2 flow replies in production-approved
+     tenants are claimed with route `flow` per the pinned production definition of `flow_claim_inbound` (not verified live), so only AI replies supersede.
+   - The existing stale sweeps bound the hold and audit it: `flow_skip_blocked_outbox` cancels held messages as
+     `stale` 60 minutes (`OUTBOX_STALE_MINUTES`) after they were created; `flow_end_stale_paused_runs` ends a held
+     run as `stale` 24 hours past its `wake_at`; internal effects are cancelled `stale` 1,440 minutes
+     (`INTERNAL_STALE_MINUTES`) after creation. Re-registering before those limits resumes the work.
+   - A customer message to a conversation whose session was waiting for a button tap or a typed answer falls to
+     V2/the AI while the row is missing (the claim is refused before any state change; the run keeps waiting
+     until it expires). A free-text message to a non-typed question ends the run as it always does.
+   - The activation row stays `is_active`. The operator `catalog` reply adds an additive `runtime` object
+     (`status:"not_running"`, `reason`, Arabic `message`) on every ACTIVE durable/comment flow the runtime will
+     not start (`registry_missing`, `registry_other_account`, `not_allowlisted`); the editor shows that
+     message instead of presenting the flow as fully live. `test_only` tenants never needed the registry.
 
 ## Stage 10: persistent execution engine
 

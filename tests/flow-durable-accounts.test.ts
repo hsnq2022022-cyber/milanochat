@@ -51,7 +51,7 @@ test("the allowlist is bounded",()=>{
 const outbox={
  globalEnabled:true,tenantEnabled:true,testOnly:false,productionApproved:true,platform:"instagram",
  accountId:A,canaryAccountId:[A,B].join(","),accountActive:true,agentEnabled:true,autoReply:true,
- tenantActive:true,credits:3,revisionActive:true,humanTakeover:false,
+ tenantActive:true,credits:3,revisionActive:true,humanTakeover:false,registryRegistered:true,
 } as const;
 test("Outbox dispatch: every allowlisted account may send, nobody else, and all other gates still apply",()=>{
  assert.equal(canDispatchOutbox(outbox),true);
@@ -68,7 +68,7 @@ const wake:WakeEligibility={
  tenantTestOnly:false,tenantProductionApproved:true,globalEnabled:true,accountId:B,canaryAccountId:[A,B].join(","),
  accountTenantMatches:true,accountActive:true,agentEnabled:true,autoReply:true,conversationTenantMatches:true,
  conversationAccountMatches:true,humanTransferred:false,humanAgentExpiresAt:null,humanPausedReason:null,
- activeRevision:4,revisionIsActive:true,
+ activeRevision:4,revisionIsActive:true,registryRegistered:true,
 };
 test("scheduled wake: an allowlisted account's sleeping run wakes; others and malformed lists never",()=>{
  assert.equal(canWakeDurableRun(wake,now),true);

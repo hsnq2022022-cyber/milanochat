@@ -69,6 +69,8 @@ function world(over:{outbox?:Row[];tables?:Record<string,Row[]>}={}){
   automation_flow_global_switch:[{singleton:true,enabled:true}],
   automation_flow_tenant_switches:[{tenant_id:A,enabled:true,test_only:false,production_approved:true},
    {tenant_id:B,enabled:true,test_only:false,production_approved:true}],
+  automation_flow_canary_accounts:[{tenant_id:A,channel_account_id:ACC,platform:"instagram"},
+   {tenant_id:B,channel_account_id:ACCB,platform:"instagram"}],
   tenants:[{id:A,is_active:true,user_id:OWNER},{id:B,is_active:true,user_id:AGENT}],
   automation_flow_runs:[{id:RUN,tenant_id:A,channel_account_id:ACC,platform:"instagram",conversation_id:CONV,
    flow_key:"lead",publication_revision:1,run_status:"handoff"},
@@ -237,6 +239,8 @@ test("gates: switch/approval, canary and pauses keep effects pending; inactive r
  const cases:Array<[string,(t:Record<string,Row[]>)=>void,string,string]>=[
   ["tenant switch off",t=>{t.automation_flow_tenant_switches[0].enabled=false;},"blocked_switch","pending"],
   ["not production approved",t=>{t.automation_flow_tenant_switches[0].production_approved=false;},"blocked_switch","pending"],
+  ["registry row removed",t=>{t.automation_flow_canary_accounts.shift();},"blocked_registry","pending"],
+  ["registry slot held by another account",t=>{t.automation_flow_canary_accounts[0].channel_account_id=ACCB;},"blocked_registry","pending"],
   ["auto_reply off",t=>{t.channel_accounts[0].auto_reply=false;},"paused","pending"],
   ["tenant inactive",t=>{t.tenants[0].is_active=false;},"paused","pending"],
   ["revision inactive",t=>{t.automation_flow_activations[0].is_active=false;},"skipped_revision_inactive","cancelled"],
@@ -253,6 +257,13 @@ test("gates: switch/approval, canary and pauses keep effects pending; inactive r
  const t=one();
  assert.deepEqual(await runInternalEffects(fakeDb(t).db,{...deps,canaryAccountId:ACCB}),{blocked_canary:1});
  assert.equal(status(t,"t").delivery_status,"pending");
+ // test_only tenants never used the registry: not required there.
+ const to=one();to.automation_flow_canary_accounts.length=0;to.automation_flow_tenant_switches[0].test_only=true;
+ assert.equal((await runInternalEffects(fakeDb(to).db,deps)).blocked_registry,undefined);
+ // Registry removal never beats "revision inactive": dead work is still cancelled.
+ const dead=one();dead.automation_flow_canary_accounts.length=0;dead.automation_flow_activations[0].is_active=false;
+ assert.deepEqual(await runInternalEffects(fakeDb(dead).db,deps),{skipped_revision_inactive:1});
+ assert.equal(status(dead,"t").delivery_status,"cancelled");
  const g=one();g.automation_flow_global_switch[0].enabled=false;
  const {db,log}=fakeDb(g);
  assert.deepEqual(await runInternalEffects(db,deps),{blocked_global:1});

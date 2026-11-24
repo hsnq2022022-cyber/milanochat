@@ -27,6 +27,17 @@ export type WakeEligibility={
   humanPausedReason:unknown;
   activeRevision:unknown;
   revisionIsActive:unknown;
+  /**
+   * The operator registry holds exactly this tenant/account/platform (same question as the SQL claim
+   * flow_claim_inbound_durable). Required unless the tenant is test_only (that mode never used it).
+   * Absent / not exactly true = NOT registered. The REGISTRY is a hold that must not burn the run's
+   * retry budget: flow_lease_due_runs (20261115160000) never leases a registry-blocked run, and when
+   * the worker still meets one after leasing (removal between lease and check, or a registry read
+   * error) it RELEASES the lease (registryOnlyHold) instead of failing it. The run stays sleeping and
+   * resumes after re-registration; flow_end_stale_paused_runs ends it 24 hours past wake_at.
+   * (A removed ALLOWLIST entry is different: it still fails the lease, see wakeEndReason.)
+   */
+  registryRegistered?:unknown;
 };
 /**
  * Same rule as milan-api (lazy expiry ~index.ts:1672-1700) and the SQL helper
@@ -55,6 +66,7 @@ export function canWakeDurableRun(v:WakeEligibility,nowMs:number):boolean{
   if(v.globalEnabled!==true||v.tenantFound===false||v.tenantActive!==true||
     v.tenantSwitchEnabled!==true||
     (v.tenantTestOnly!==true&&v.tenantProductionApproved!==true))return false;
+  if(v.tenantTestOnly!==true&&v.registryRegistered!==true)return false;
   if(typeof v.accountId!=="string"||!v.accountId||
     !durableAccountAllowed(v.canaryAccountId,v.accountId)||v.accountTenantMatches!==true||
     v.accountActive!==true||v.agentEnabled!==true||v.autoReply!==true)return false;
@@ -70,10 +82,14 @@ export function canWakeDurableRun(v:WakeEligibility,nowMs:number):boolean{
  *    not resume behind the agent's back after the takeover ends);
  *  - ineligible: tenant row gone, account/conversation ownership mismatch or
  *    conversation gone.
- * TEMPORARY conditions (tenant/account inactive, agent_enabled or auto_reply
- * off) and operator rollout gates (global/tenant switch, approval, canary,
- * platform) return null: the run stays sleeping and resumes when re-enabled;
- * flow_end_stale_paused_runs bounds how long it can stay paused.
+ * TEMPORARY conditions the SQL knows about (tenant/account inactive, agent_enabled or auto_reply
+ * off, tenant switch / approval) never reach this worker: flow_lease_due_runs does not lease them
+ * and flow_end_stale_paused_runs ends them 24 hours past wake_at. The OPERATOR REGISTRY is handled
+ * the same way (flow_registry_blocks_run, 20261115160000), and a registry refusal that still
+ * arrives here is a lease RELEASE (registryOnlyHold), not a failure.
+ * Gates only this worker evaluates (the FLOW_DURABLE_CANARY_ACCOUNT_ID allowlist, platform) return
+ * null here and the worker FAILS the lease: the run stays sleeping, but every re-lease adds an
+ * attempt and the 4th lease ends it as lease_exhausted (about 6 minutes), unchanged behaviour.
  */
 export type WakeEndReason="revision_inactive"|"human_takeover"|"ineligible";
 export function wakeEndReason(v:WakeEligibility,nowMs:number):WakeEndReason|null{
@@ -85,4 +101,13 @@ export function wakeEndReason(v:WakeEligibility,nowMs:number):WakeEndReason|null
   if(v.tenantFound===false||v.accountTenantMatches!==true||
     v.conversationTenantMatches!==true||v.conversationAccountMatches!==true)return "ineligible";
   return null;
+}
+/**
+ * True when the ONLY thing refusing this wake is the operator registry: the same facts with the
+ * registry satisfied would pass canWakeDurableRun. The worker then releases the lease (no attempt
+ * consumed) instead of failing the lease. Any other refusal (or a permanent end reason) is unchanged.
+ */
+export function registryOnlyHold(v:WakeEligibility,nowMs:number):boolean{
+  return v.tenantTestOnly!==true&&v.registryRegistered!==true&&
+    canWakeDurableRun({...v,registryRegistered:true},nowMs);
 }

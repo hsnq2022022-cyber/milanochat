@@ -22,6 +22,7 @@ import {encryptMessageBody} from "../supabase/functions/flow-outbox-worker/deliv
 import {verifyMetaWebhookSignature} from "../supabase/functions/milan-api/metaSignature.ts";
 import {persistInboundOnce} from "../supabase/functions/milan-api/persistInboundOnce.ts";
 import {loadFlowReview} from "../supabase/functions/flow-delivery-review/review.ts";
+import {durableRegistryStatus} from "../supabase/functions/_shared/durableRegistry.ts";
 
 const A="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",B="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const ACC="11111111-1111-4111-8111-111111111111";
@@ -105,12 +106,16 @@ function pgError(err:string){
 }
 const rpcMeta=new Map<string,{set:boolean;comp:boolean}|null>();
 export const restLog:string[]=[];
+/** Tables whose REST reads fail (simulates a PostgREST/network error); SQL functions are unaffected. */
+const failReads=new Set<string>();
 async function postgrest(req:Request):Promise<Response>{
  const url=new URL(req.url);
  const path=url.pathname.replace(/^\/rest\/v1\//,"");
  const text=req.method==="GET"?"":await req.text();
  const body=text?JSON.parse(text):{};
  restLog.push(req.method+" "+path);
+ if(req.method==="GET"&&failReads.has(path))
+  return pgResponse(500,{code:"XX000",message:"injected read failure",details:null,hint:null});
  if(path.startsWith("rpc/")){
   const name=path.slice(4);ident(name);
   if(!rpcMeta.has(name)){
@@ -329,7 +334,7 @@ const LIVE_COLUMNS=`
 ALTER TABLE public.tenants ADD COLUMN is_active boolean NOT NULL DEFAULT true,
  ADD COLUMN business_name text NOT NULL DEFAULT 'Test Store';
 ALTER TABLE public.channel_accounts ADD COLUMN is_active boolean NOT NULL DEFAULT true,
- ADD COLUMN agent_enabled boolean NOT NULL DEFAULT true,ADD COLUMN auto_reply boolean NOT NULL DEFAULT true,
+ ADD COLUMN agent_enabled boolean NOT NULL DEFAULT true,ADD COLUMN status text NOT NULL DEFAULT 'active',ADD COLUMN auto_reply boolean NOT NULL DEFAULT true,
  ADD COLUMN external_id text,ADD COLUMN access_token_encrypted text;
 ALTER TABLE public.conversations ADD COLUMN transferred boolean NOT NULL DEFAULT false,
  ADD COLUMN auto_paused_reason text,ADD COLUMN human_agent_expires_at timestamptz;
@@ -425,7 +430,9 @@ const CHAIN=[
  "supabase/migrations/20261029330000_flow_claim_begin_durable_run.sql",
  // Retryable unknown flow eligibility (inboundRoutingRetry.ts) and durable keyword starts.
  "supabase/migrations/20261029340000_flow_inbound_routing_retry.sql",
- "supabase/migrations/20261029350000_flow_durable_keyword_start.sql"
+ "supabase/migrations/20261029350000_flow_durable_keyword_start.sql",
+ // Registry-blocked production runs are never leased (no attempt consumed) and are bounded by the stale sweep.
+ "supabase/migrations/20261115160000_flow_registry_wake_hold.sql"
 ];
 const repo=new URL("..",import.meta.url).pathname;
 let dbSeq=0;
@@ -1183,6 +1190,353 @@ Deno.test({name:"flow V3/V4 lifecycle integration (real handlers + throwaway Pos
    await outboxTick();assert.equal(meta.calls.length,2,"nothing sent for the non-canary account");
   });
 
+  await t.step("registry removal (production canary): new claims stop, delivered work stays, pending work is HELD (not cancelled), re-registration resumes exactly once",async()=>{
+   await freshDb();resetMeta();await activate("chain",true);
+   await exec(`UPDATE public.automation_flow_tenant_switches SET test_only=false,production_approved=true WHERE tenant_id='${A}';
+    INSERT INTO public.automation_flow_canary_accounts(tenant_id,channel_account_id,platform,approved_by)
+    VALUES('${A}','${ACC}','instagram','test-operator');`);
+   const scope={tenantId:A,accountId:ACC,platform:"instagram"};
+   const outboxOf=(c:string)=>rows<{kind:string;status:string;cancel:string|null}>(
+    `SELECT o.effect_kind AS kind,o.delivery_status AS status,o.cancel_reason AS cancel FROM public.automation_flow_outbox o
+     JOIN public.automation_flow_runs r ON r.tenant_id=o.tenant_id AND r.id=o.run_id
+     WHERE r.conversation_id='${c}' ORDER BY o.created_at,(o.payload->>'seq')::int`);
+   // Publication's registry reader and the REAL SQL claim agree while registered.
+   assert.equal(await durableRegistryStatus(sb,scope),"registered");
+   const claimable=async(mid:string)=>{
+    const cc=await conv("9300"+mid.length+mid.slice(-3),A,ACC);const mm=await inbound(cc,mid);
+    return (await rows(`SELECT acquired FROM public.flow_claim_inbound_durable('${A}','${ACC}','instagram','${mid}','${cc}','${mm}')`,"service_role")).length===1;
+   };
+   assert.equal(await claimable("mid.reg.probe.1"),true);
+   // A live session: welcome+menu sent, tap taken, delay planned. The tap's message is still PENDING.
+   const c=await conv("9300001");
+   const m1=await inbound(c,"mid.reg.1");
+   assert.equal(await attemptDurableInstagram(sb,ev(c,m1,"mid.reg.1",null)),"handled");
+   assert.equal((await outboxTick()).body.status.settled,2);
+   const m2=await inbound(c,"mid.reg.2");
+   assert.equal(await attemptDurableInstagram(sb,ev(c,m2,"mid.reg.2","prices")),"handled");
+   let runs=await runsOf(c);assert.equal(runs[0].run_status,"sleeping");
+   assert.equal(meta.calls.length,2);
+   const before=await outboxOf(c);
+   assert.deepEqual(before.map(e=>e.status),["settled","settled","pending","pending"]);
+   const sentBefore=await val(`SELECT count(*)::int FROM public.automation_flow_delivery_attempts`);
+
+   // ---- operator removes the registry row (an operator database session; the allowlist env still names ACC)
+   await exec(`DELETE FROM public.automation_flow_canary_accounts WHERE tenant_id='${A}' AND platform='instagram';`);
+   // 1) Publication reader and runtime now agree: not registered, and the real claim refuses (no row, no claim).
+   assert.equal(await durableRegistryStatus(sb,scope),"missing");
+   assert.equal(await claimable("mid.reg.probe.2"),false);
+   // 2) New inbound messages cannot claim the durable Flow: falls back (V2/AI own them), nothing claimed or started.
+   const c2=await conv("9300002");const n1=await inbound(c2,"mid.reg.n1");
+   assert.equal(await attemptDurableInstagram(sb,ev(c2,n1,"mid.reg.n1",null)),"fallback");
+   assert.equal(await val(`SELECT count(*)::int FROM public.automation_message_claims WHERE provider_event_id='mid.reg.n1'`),0);
+   assert.equal((await runsOf(c2)).length,0);
+   // 3) The existing session's next customer message cannot continue it either; the sleeping run is kept, not cancelled.
+   const m3=await inbound(c,"mid.reg.3");
+   assert.equal(await attemptDurableInstagram(sb,evText(c,m3,"mid.reg.3","مرحبا")),"fallback");
+   runs=await runsOf(c);assert.equal(runs.length,1);assert.equal(runs[0].run_status,"sleeping");
+   // 4) Pending OUTBOX work is held: nothing is sent, nothing is cancelled.
+   const o=await outboxTick();
+   assert.equal(o.status,200);assert.equal(o.body.status.settled??0,0,JSON.stringify(o.body));
+   assert.equal(meta.calls.length,2,"no provider call after removal");
+   assert.deepEqual(await outboxOf(c),before,"statuses unchanged, no cancel_reason");
+   // 5) A due WAKE is held across MANY ticks without consuming its retry budget: flow_lease_due_runs never
+   // leases a registry-blocked run, so no lease row (and no attempt) ever exists, and it is never cancelled
+   // by lease exhaustion (that needs 4 leases). 6 ticks > the old 3-attempt budget.
+   await exec(`UPDATE public.automation_flow_runs SET wake_at=now()-interval '1 second' WHERE id='${runs[0].id}';`);
+   for(let i=1;i<=6;i++){
+    const w=await runtimeTick();
+    assert.equal(w.status,200);assert.equal(w.body.leased,0,"tick "+i+": never leased "+JSON.stringify(w.body));
+    assert.equal(w.body.committed,0);assert.equal(w.body.cancelled,0);assert.equal(w.body.blocked,0);
+    assert.equal(await val(`SELECT count(*)::int FROM public.automation_flow_run_leases WHERE run_id='${runs[0].id}'`),0);
+   }
+   runs=await runsOf(c);assert.equal(runs[0].run_status,"sleeping");
+   assert.equal(await val(`SELECT ended_reason IS NULL FROM public.automation_flow_runs WHERE id='${runs[0].id}'`),true);
+   assert.equal((await outboxOf(c)).length,4,"no follow-up effect planned while unregistered");
+   // 6) Already-delivered work is untouched (same rows, same attempts, no resend).
+   assert.deepEqual((await outboxOf(c)).slice(0,2),before.slice(0,2));
+   assert.equal(await val(`SELECT count(*)::int FROM public.automation_flow_delivery_attempts`),sentBefore);
+   // 7) The activation row is untouched: the API's job is to report it as NOT RUNNING (activeRuntimeStatus), not to flip it.
+   assert.equal(await val(`SELECT is_active FROM public.automation_flow_activations WHERE tenant_id='${A}' AND flow_key='chain'`),true);
+   assert.equal((await rows(`SELECT count(*)::int AS n FROM public.automation_flow_runs WHERE ended_reason IS NOT NULL`))[0].n,0);
+
+   // ---- re-registration resumes the held work exactly once (no resend of settled effects)
+   await exec(`INSERT INTO public.automation_flow_canary_accounts(tenant_id,channel_account_id,platform,approved_by)
+    VALUES('${A}','${ACC}','instagram','test-operator');`);
+   assert.equal(await durableRegistryStatus(sb,scope),"registered");
+   const o2=await outboxTick();assert.equal(o2.body.status.settled,1,JSON.stringify(o2.body));
+   assert.equal(meta.calls.length,3);assert.equal(meta.calls[2].body.message.text,"هذه قائمة الأسعار");
+   await outboxTick();assert.equal(meta.calls.length,3,"exactly once");
+   // The held wake resumes on the first tick after re-registration (first lease: attempts=1), exactly once.
+   const w2=await runtimeTick();
+   assert.equal(w2.body.leased,1,JSON.stringify(w2.body));assert.equal(w2.body.committed,1);assert.equal(w2.body.held??0,0);
+   runs=await runsOf(c);assert.equal(runs[0].run_status,"completed");
+   assert.equal((await outboxOf(c)).length,5,"one follow-up effect planned, exactly once");
+   assert.equal((await runtimeTick()).body.leased,0,"nothing left to wake");
+   await outboxTick();assert.equal(meta.calls.length,4);assert.equal(meta.calls[3].body.message.text,"هل تحتاج شيئاً آخر؟");
+   await outboxTick();assert.equal(meta.calls.length,4,"exactly once");
+  });
+
+  await t.step("registry READ failure at wake time: lease released every tick (no attempt consumed), run stays recoverable; real execution failures still end in lease_exhausted",async()=>{
+   await freshDb();resetMeta();await activate("chain",true);
+   await exec(`UPDATE public.automation_flow_tenant_switches SET test_only=false,production_approved=true WHERE tenant_id='${A}';
+    INSERT INTO public.automation_flow_canary_accounts(tenant_id,channel_account_id,platform,approved_by)
+    VALUES('${A}','${ACC}','instagram','test-operator');`);
+   const c=await conv("9320001");const m1=await inbound(c,"mid.rf.1");
+   assert.equal(await attemptDurableInstagram(sb,ev(c,m1,"mid.rf.1",null)),"handled");
+   await outboxTick();
+   const m2=await inbound(c,"mid.rf.2");
+   assert.equal(await attemptDurableInstagram(sb,ev(c,m2,"mid.rf.2","prices")),"handled");
+   await outboxTick();
+   const run=(await runsOf(c))[0];assert.equal(run.run_status,"sleeping");
+   await exec(`UPDATE public.automation_flow_runs SET wake_at=now()-interval '1 second' WHERE id='${run.id}';`);
+   // The registry row EXISTS (SQL leases the run) but the worker's REST read of it fails.
+   failReads.add("automation_flow_canary_accounts");
+   try{
+    for(let i=1;i<=6;i++){
+     const w=await runtimeTick();
+     assert.equal(w.body.leased,1,"tick "+i+" "+JSON.stringify(w.body));assert.equal(w.body.held,1);
+     assert.equal(w.body.committed,0);assert.equal(w.body.blocked,0);assert.equal(w.body.cancelled,0);
+     assert.equal(await val(`SELECT count(*)::int FROM public.automation_flow_run_leases WHERE run_id='${run.id}'`),0,"lease released, attempts reset");
+    }
+   }finally{failReads.delete("automation_flow_canary_accounts");}
+   assert.equal((await runsOf(c))[0].run_status,"sleeping");
+   // Read works again: the very next tick wakes it (attempts=1).
+   const ok=await runtimeTick();assert.equal(ok.body.committed,1,JSON.stringify(ok.body));
+   assert.equal((await runsOf(c))[0].run_status,"completed");
+
+   // Retry safety is NOT weakened: a genuine execution failure (not the registry) still consumes attempts and
+   // ends the run as lease_exhausted on the 4th lease.
+   await freshDb();resetMeta();await activate("chain",true);
+   await exec(`UPDATE public.automation_flow_tenant_switches SET test_only=false,production_approved=true WHERE tenant_id='${A}';
+    INSERT INTO public.automation_flow_canary_accounts(tenant_id,channel_account_id,platform,approved_by)
+    VALUES('${A}','${ACC}','instagram','test-operator');`);
+   const c2=await conv("9320002");const n1=await inbound(c2,"mid.rf.n1");
+   assert.equal(await attemptDurableInstagram(sb,ev(c2,n1,"mid.rf.n1",null)),"handled");
+   await outboxTick();
+   const n2=await inbound(c2,"mid.rf.n2");
+   assert.equal(await attemptDurableInstagram(sb,ev(c2,n2,"mid.rf.n2","prices")),"handled");
+   const run2=(await runsOf(c2))[0];
+   await exec(`UPDATE public.automation_flow_runs SET wake_at=now()-interval '1 second' WHERE id='${run2.id}';`);
+   Deno.env.set("FLOW_DURABLE_CANARY_ACCOUNT_ID",ACCB); // registry present, but the wake worker's allowlist refuses
+   try{
+    for(let i=1;i<=3;i++){
+     const w=await runtimeTick();
+     assert.equal(w.body.leased,1,"attempt "+i+" "+JSON.stringify(w.body));assert.equal(w.body.blocked,1);assert.equal(w.body.held??0,0);
+     await exec(`UPDATE public.automation_flow_run_leases SET expires_at=now()-interval '1 second' WHERE run_id='${run2.id}';`);
+    }
+    assert.equal(await val(`SELECT attempts FROM public.automation_flow_run_leases WHERE run_id='${run2.id}'`),3);
+    await runtimeTick(); // 4th lease -> exhausted
+   }finally{Deno.env.set("FLOW_DURABLE_CANARY_ACCOUNT_ID",ACC);}
+   assert.deepEqual(await rows(`SELECT run_status,ended_reason FROM public.automation_flow_runs WHERE id='${run2.id}'`),
+    [{run_status:"blocked",ended_reason:"lease_exhausted"}]);
+  });
+
+  await t.step("charge_pending recovery: accepted-by-Meta delivery is persisted and billed exactly once with registry present, removed or unreadable; never re-sent; NEW effects stay gated",async()=>{
+   for(const mode of ["present","removed","unreadable"] as const){
+    await freshDb();resetMeta();await activate("chain",true);
+    await exec(`UPDATE public.automation_flow_tenant_switches SET test_only=false,production_approved=true WHERE tenant_id='${A}';
+     INSERT INTO public.automation_flow_canary_accounts(tenant_id,channel_account_id,platform,approved_by)
+     VALUES('${A}','${ACC}','instagram','test-operator');`);
+    const c=await conv("9330001");const m1=await inbound(c,"mid.cp."+mode);
+    assert.equal(await attemptDurableInstagram(sb,ev(c,m1,"mid.cp."+mode,null)),"handled");
+    // Billing is down for one tick: Meta accepts the welcome message, persistence succeeds, the debit fails.
+    await exec(`CREATE OR REPLACE FUNCTION public.consume_flow_reply(p_tenant_id uuid,p_message_id uuid)
+     RETURNS integer LANGUAGE plpgsql AS $f$BEGIN RAISE EXCEPTION 'billing down';END$f$;`);
+    const b=await outboxTick();assert.equal(b.body.status.billing_pending,2,JSON.stringify(b.body));
+    await exec(`CREATE OR REPLACE FUNCTION public.consume_flow_reply(p_tenant_id uuid,p_message_id uuid)
+     RETURNS integer LANGUAGE sql AS $f$SELECT 4$f$;`);
+    assert.equal(meta.calls.length,2,"welcome + question accepted by Meta");
+    // NEW work created while still registered, not yet sent: the customer taps -> message + delay.
+    const m2=await inbound(c,"mid.cp.t."+mode);
+    assert.equal(await attemptDurableInstagram(sb,ev(c,m2,"mid.cp.t."+mode,"prices")),"handled");
+    const eff=()=>rows<{kind:string;status:string}>(`SELECT o.effect_kind AS kind,o.delivery_status AS status
+     FROM public.automation_flow_outbox o JOIN public.automation_flow_runs r ON r.tenant_id=o.tenant_id AND r.id=o.run_id
+     WHERE r.conversation_id='${c}' ORDER BY o.created_at,(o.payload->>'seq')::int`);
+    assert.deepEqual((await eff()).map(e=>e.status),["charge_pending","charge_pending","pending","pending"],mode);
+    const attemptsBefore=Number(await val(`SELECT count(*)::int FROM public.automation_flow_delivery_attempts`));
+    // Registry state changes AFTER Meta accepted the first two messages.
+    if(mode==="removed")await exec(`DELETE FROM public.automation_flow_canary_accounts WHERE tenant_id='${A}' AND platform='instagram';`);
+    if(mode==="unreadable")failReads.add("automation_flow_canary_accounts");
+    try{
+     const r=await outboxTick();
+     assert.equal(r.body.status.settled,mode==="present"?3:2,mode+" "+JSON.stringify(r.body));
+     const st=(await eff()).map(e=>e.status);
+     assert.deepEqual(st.slice(0,2),["settled","settled"],mode+": delivered work recovered");
+     // New, unsent work is still gated: only with the registry present does the tap's message go out.
+     if(mode==="present"){assert.equal(meta.calls.length,3);assert.equal(st[2],"settled");}
+     else{assert.equal(meta.calls.length,2,mode+": no new send");assert.equal(st[2],"pending",mode);}
+     await outboxTick();
+     assert.equal(meta.calls.length,mode==="present"?3:2,mode+": nothing sent twice");
+    }finally{failReads.delete("automation_flow_canary_accounts");}
+    // Exactly once: one provider call per accepted message (never re-sent for recovery), no new attempt row for
+    // the recovered ones, one persisted outbound row each.
+    assert.equal(meta.calls.filter(x=>x.body.message.text==="أهلاً بك في المتجر").length,1,mode);
+    assert.equal(Number(await val(`SELECT count(*)::int FROM public.automation_flow_delivery_attempts`)),attemptsBefore+(mode==="present"?1:0),mode);
+    assert.equal(await val(`SELECT count(*)::int FROM public.messages WHERE conversation_id='${c}' AND direction='out' AND body_encrypted IS NOT NULL`),mode==="present"?3:2,mode);
+   }
+  });
+
+  await t.step("stale Flow replies: a held message is SUPERSEDED (cancelled, audited, never sent) after the AI/V2 owns a newer inbound; later Flow messages and test_only tenants are unaffected",async()=>{
+   await freshDb();resetMeta();await activate("chain",true);
+   await exec(`UPDATE public.automation_flow_tenant_switches SET test_only=false,production_approved=true WHERE tenant_id='${A}';
+    INSERT INTO public.automation_flow_canary_accounts(tenant_id,channel_account_id,platform,approved_by)
+    VALUES('${A}','${ACC}','instagram','test-operator');`);
+   const c=await conv("9340001");const m1=await inbound(c,"mid.st.1");
+   assert.equal(await attemptDurableInstagram(sb,ev(c,m1,"mid.st.1",null)),"handled");
+   await outboxTick();
+   const m2=await inbound(c,"mid.st.2");
+   assert.equal(await attemptDurableInstagram(sb,ev(c,m2,"mid.st.2","prices")),"handled");
+   const runId=(await runsOf(c))[0].id;
+   const eff=()=>rows<{kind:string;status:string;cancel:string|null}>(`SELECT effect_kind AS kind,delivery_status AS status,cancel_reason AS cancel
+    FROM public.automation_flow_outbox WHERE run_id='${runId}' ORDER BY created_at,(payload->>'seq')::int`);
+   assert.deepEqual((await eff()).slice(2).map(e=>e.status),["pending","pending"],"'prices' message + delay planned, unsent");
+   assert.equal(meta.calls.length,2);
+   // Registry removed; the customer writes again and the AI path claims that newer event (and, below, delivers its answer).
+   await exec(`DELETE FROM public.automation_flow_canary_accounts WHERE tenant_id='${A}' AND platform='instagram';`);
+   const m3=await inbound(c,"mid.st.3");
+   assert.equal(await attemptDurableInstagram(sb,evText(c,m3,"mid.st.3","مرحبا")),"fallback");
+   const ai=await rows<{acquired:boolean;route:string;outgoing_message_id:string}>(
+    `SELECT acquired,route,outgoing_message_id FROM public.flow_claim_inbound('${A}','${ACC}','instagram','mid.st.3','${c}','${m3}',false)`,"service_role");
+   assert.deepEqual([ai[0].acquired,ai[0].route],[true,"legacy_ai"]);
+   // The AI answer to m3 was actually delivered: milan-api persistSent wrote the outbound row (id = the claim's outgoing id).
+   await exec(`INSERT INTO public.messages(id,tenant_id,conversation_id,direction,wa_message_id,body_encrypted,kind,is_auto)
+    VALUES('${ai[0].outgoing_message_id}','${A}','${c}','out','mid.ai.st.3','enc','answer',true);`);
+   await outboxTick();assert.equal(meta.calls.length,2,"held while unregistered");
+   assert.equal((await eff())[2].status,"pending");
+   // Re-registered: the stale 'prices' message must NOT go out after a newer AI answer that was DELIVERED.
+   await exec(`INSERT INTO public.automation_flow_canary_accounts(tenant_id,channel_account_id,platform,approved_by)
+    VALUES('${A}','${ACC}','instagram','test-operator');`);
+   const o=await outboxTick();assert.equal(o.body.status.settled??0,0,JSON.stringify(o.body));
+   assert.equal(meta.calls.length,2,"stale message never sent");
+   assert.deepEqual((await eff())[2],{kind:"message",status:"cancelled",cancel:"superseded"});
+   // A Flow message planned AFTER the AI's claim (the wake follow-up) is legitimate and goes out once.
+   await exec(`UPDATE public.automation_flow_runs SET wake_at=now()-interval '1 second' WHERE id='${runId}';`);
+   assert.equal((await runtimeTick()).body.committed,1);
+   await outboxTick();assert.equal(meta.calls.length,3);assert.equal(meta.calls[2].body.message.text,"هل تحتاج شيئاً آخر؟");
+   await outboxTick();assert.equal(meta.calls.length,3,"exactly once");
+   // Read failure of the ownership table HOLDS (never sends on uncertainty).
+   const c2=await conv("9340002");const k1=await inbound(c2,"mid.st.k1");
+   assert.equal(await attemptDurableInstagram(sb,ev(c2,k1,"mid.st.k1",null)),"handled");
+   failReads.add("automation_message_claims");
+   try{await outboxTick();assert.equal(meta.calls.length,3,"claims unreadable -> held");}finally{failReads.delete("automation_message_claims");}
+   assert.equal((await outboxTick()).body.status.settled,2);
+
+   // test_only tenants keep the previous behaviour: no registry, no supersession check.
+   await freshDb();resetMeta();await activate("chain",true);
+   assert.equal(await val(`SELECT count(*)::int FROM public.automation_flow_canary_accounts`),0);
+   const t1=await conv("9340003");const q1=await inbound(t1,"mid.st.t1");
+   assert.equal(await attemptDurableInstagram(sb,ev(t1,q1,"mid.st.t1",null)),"handled");
+   await outboxTick();
+   const q2=await inbound(t1,"mid.st.t2");
+   assert.equal(await attemptDurableInstagram(sb,ev(t1,q2,"mid.st.t2","prices")),"handled");
+   const q3=await inbound(t1,"mid.st.t3");
+   await exec(`SELECT * FROM public.flow_claim_inbound('${A}','${ACC}','instagram','mid.st.t3','${t1}','${q3}',false);`);
+   assert.equal(await val(`SELECT count(*)::int FROM public.automation_message_claims WHERE route='legacy_ai'`),1);
+   await outboxTick();assert.equal(meta.calls.length,3,"test_only: not superseded");
+   await exec(`UPDATE public.automation_flow_runs SET wake_at=now()-interval '1 second' WHERE conversation_id='${t1}';`);
+   const tw=await runtimeTick();assert.equal(tw.body.leased,1);assert.equal(tw.body.committed,1,"test_only wake unaffected by the registry");
+  });
+
+  await t.step("supersession needs DELIVERY EVIDENCE: a legacy_ai claim alone never cancels a Flow message; persisted outbound row or confirmed attempt supersedes; attempting holds; uncertain/failed proceed; read failures hold",async()=>{
+   const TEXT="هذه قائمة الأسعار";
+   // Production tenant, registered; a live session with one UNSENT Flow message ('prices' + delay) after a tap.
+   const setup=async(tag:string)=>{
+    await freshDb();resetMeta();await activate("chain",true);
+    await exec(`UPDATE public.automation_flow_tenant_switches SET test_only=false,production_approved=true WHERE tenant_id='${A}';
+     INSERT INTO public.automation_flow_canary_accounts(tenant_id,channel_account_id,platform,approved_by)
+     VALUES('${A}','${ACC}','instagram','test-operator');`);
+    const c=await conv("935"+tag);const m1=await inbound(c,"mid.ev."+tag+".1");
+    assert.equal(await attemptDurableInstagram(sb,ev(c,m1,"mid.ev."+tag+".1",null)),"handled");
+    await outboxTick();
+    const m2=await inbound(c,"mid.ev."+tag+".2");
+    assert.equal(await attemptDurableInstagram(sb,ev(c,m2,"mid.ev."+tag+".2","prices")),"handled");
+    assert.equal(meta.calls.length,2);
+    // A NEWER customer message is claimed by the AI route (claim row only, exactly what flow_claim_inbound does
+    // BEFORE any answer is generated).
+    const m3=await inbound(c,"mid.ev."+tag+".3");
+    const claim=(await rows<{claim_id:string;outgoing_message_id:string}>(
+     `SELECT claim_id,outgoing_message_id FROM public.flow_claim_inbound('${A}','${ACC}','instagram','mid.ev.${tag}.3','${c}','${m3}',false)`,"service_role"))[0];
+    const flowMsg=()=>rows<{status:string;cancel:string|null}>(`SELECT o.delivery_status AS status,o.cancel_reason AS cancel
+     FROM public.automation_flow_outbox o JOIN public.automation_flow_runs r ON r.tenant_id=o.tenant_id AND r.id=o.run_id
+     WHERE r.conversation_id='${c}' AND o.effect_kind='message' AND o.payload->>'text'=${lit(TEXT)}`).then(r=>r[0]);
+    const persistReply=()=>exec(`INSERT INTO public.messages(id,tenant_id,conversation_id,direction,wa_message_id,body_encrypted,kind,is_auto)
+     VALUES('${claim.outgoing_message_id}','${A}','${c}','out','mid.ai.${tag}','enc','answer',true);`);
+    const begin=()=>exec(`SELECT public.flow_begin_delivery('${claim.claim_id}','${"a".repeat(64)}');`);
+    const finish=(st:string)=>exec(`SELECT public.flow_finish_delivery('${claim.claim_id}','${st}',${st==="confirmed"?"'mid.ai.c'":"NULL"});`);
+    return {c,claim,flowMsg,persistReply,begin,finish};
+   };
+
+   // 1) CLAIM ONLY (empty AI answer / failed send / never delivered): the Flow message is NOT cancelled and is sent.
+   let x=await setup("1");
+   assert.deepEqual(await x.flowMsg(),{status:"pending",cancel:null});
+   await outboxTick();
+   assert.deepEqual(await x.flowMsg(),{status:"settled",cancel:null},"claim alone must not supersede");
+   assert.equal(meta.calls.length,3);assert.equal(meta.calls[2].body.message.text,TEXT);
+
+   // 2) claim + persisted outbound message with the claim's outgoing id: superseded, nothing sent.
+   x=await setup("2");await x.persistReply();
+   await outboxTick();
+   assert.deepEqual(await x.flowMsg(),{status:"cancelled",cancel:"superseded"});assert.equal(meta.calls.length,2);
+
+   // 3) claim + CONFIRMED delivery attempt (delivery tracking): superseded.
+   x=await setup("3");await x.begin();await x.finish("confirmed");
+   await outboxTick();
+   assert.deepEqual(await x.flowMsg(),{status:"cancelled",cancel:"superseded"});assert.equal(meta.calls.length,2);
+
+   // 4) attempt still ATTEMPTING: held (not cancelled, not sent); once confirmed it is superseded.
+   x=await setup("4");await x.begin();
+   await outboxTick();
+   assert.deepEqual(await x.flowMsg(),{status:"pending",cancel:null},"in flight: held");assert.equal(meta.calls.length,2);
+   await finish_ok(x);
+   async function finish_ok(y:typeof x){await y.finish("confirmed");}
+   await outboxTick();
+   assert.deepEqual(await x.flowMsg(),{status:"cancelled",cancel:"superseded"});assert.equal(meta.calls.length,2);
+
+   // 5) UNCERTAIN attempt (stored for send_failed / sent_unconfirmed / timeout): not delivery -> the Flow message goes out.
+   x=await setup("5");await x.begin();await x.finish("uncertain");
+   await outboxTick();
+   assert.deepEqual(await x.flowMsg(),{status:"settled",cancel:null});assert.equal(meta.calls.length,3);
+
+   // 6) READ FAILURE of any evidence source: held, never cancelled, never sent; after the read works the evidence decides.
+   for(const table of ["automation_message_claims","messages","automation_delivery_attempts"]){
+    x=await setup("6"+table.length);await x.persistReply();await x.begin();await x.finish("confirmed");
+    failReads.add(table);
+    try{
+     const r=await outboxTick();
+     assert.deepEqual(await x.flowMsg(),{status:"pending",cancel:null},table+": held on read failure "+JSON.stringify(r.body.status));
+     assert.equal(meta.calls.length,2,table+": nothing sent on uncertainty");
+    }finally{failReads.delete(table);}
+    await outboxTick();
+    assert.deepEqual(await x.flowMsg(),{status:"cancelled",cancel:"superseded"},table+": evidence decides once readable");
+   }
+   // (Public comment replies skip this guard by construction: pinned in flow-outbox-production-gate.test.ts.
+   //  test_only tenants never run it: covered by the test_only step above, where an AI claim does not hold or cancel.)
+  });
+
+  await t.step("registry removal: held pending work is bounded by the existing stale sweep and audited; test_only tenants never needed the registry",async()=>{
+   await freshDb();resetMeta();await activate("chain",true);
+   await exec(`UPDATE public.automation_flow_tenant_switches SET test_only=false,production_approved=true WHERE tenant_id='${A}';
+    INSERT INTO public.automation_flow_canary_accounts(tenant_id,channel_account_id,platform,approved_by)
+    VALUES('${A}','${ACC}','instagram','test-operator');`);
+   const c=await conv("9310001");const m1=await inbound(c,"mid.regs.1");
+   assert.equal(await attemptDurableInstagram(sb,ev(c,m1,"mid.regs.1",null)),"handled");
+   await exec(`DELETE FROM public.automation_flow_canary_accounts WHERE tenant_id='${A}' AND platform='instagram';`);
+   await outboxTick();assert.equal(meta.calls.length,0,"held while unregistered");
+   assert.deepEqual(await rows(`SELECT delivery_status,cancel_reason FROM public.automation_flow_outbox ORDER BY created_at,(payload->>'seq')::int`),
+    [{delivery_status:"pending",cancel_reason:null},{delivery_status:"pending",cancel_reason:null}]);
+   // Time passes beyond the stale bound: the existing sweep cancels (audited reason), nothing is ever sent late.
+   await exec(`UPDATE public.automation_flow_outbox SET created_at=now()-interval '5 hours';`);
+   await outboxTick();assert.equal(meta.calls.length,0);
+   assert.deepEqual(await rows(`SELECT delivery_status,cancel_reason FROM public.automation_flow_outbox ORDER BY created_at,(payload->>'seq')::int`),
+    [{delivery_status:"cancelled",cancel_reason:"stale"},{delivery_status:"cancelled",cancel_reason:"stale"}]);
+   // test_only tenant with NO registry row: sends as before (that mode never used the registry).
+   await freshDb();resetMeta();await activate("chain",true);
+   assert.equal(await val(`SELECT count(*)::int FROM public.automation_flow_canary_accounts`),0);
+   const c2=await conv("9310002");const t1=await inbound(c2,"mid.regs.t1");
+   assert.equal(await attemptDurableInstagram(sb,ev(c2,t1,"mid.regs.t1",null)),"handled");
+   assert.equal((await outboxTick()).body.status.settled,2);assert.equal(meta.calls.length,2);
+  });
+
   await t.step("multi-step chain: welcome -> button question -> tap -> answer -> delay -> wake -> follow-up; exact order, one send each, replays inert",async()=>{
    await freshDb();resetMeta();await activate("chain",true);
    const c=await conv("9100001");
@@ -1492,12 +1846,33 @@ Deno.test({name:"flow V3/V4 lifecycle integration (real handlers + throwaway Pos
     const dup=await psql(db,`SELECT it.inbound('${A}','${c}','mid.h.2');`);
     assert.equal(dup.ok,false);assert.equal(sqlError(dup.err).code,"23505");
     assert.equal((await runsOf(c)).length,1);assert.equal((await effectsOf(c)).length,6);
-    // Next inbound after the takeover: milan-api/index.ts returns at `if (conv.transferred)`
-    // BEFORE the durable/V2 routing (source order pinned), so no automated reply...
+    // Next inbound after the takeover: routeInbound (messageRouting.ts) stops at the human gate
+    // BEFORE the durable stage and BEFORE the exclusive AI/flow claim, so no automated reply.
+    // Behavioural check on the REAL router: neither stage is ever invoked for a transferred conversation.
+    {
+     const {routeInbound}=await import("../supabase/functions/milan-api/messageRouting.ts");
+     const called:string[]=[];
+     const decision=await routeInbound({
+      conversation:{transferred:true,autoPausedReason:"manual_takeover",humanAgentExpiresAtMs:null,
+       agentEnabled:true,autoReply:true,creditsRemaining:10,nowMs:Date.now()},
+      accountProven:true,eventClaimable:true,durableApplicable:true},
+      {resumeTakeover:async()=>{called.push("resume");},pauseForCredits:async()=>{called.push("pause");},
+       attemptDurable:async()=>{called.push("durable");return "fallback" as const;},
+       exclusive:async()=>{called.push("exclusive");return {route:"legacy_ai",outcome:"claimed"} as never;}});
+     assert.deepEqual(called,[],"human takeover: no stage may run");
+     assert.equal(decision.kind,"no_reply");assert.equal((decision as {owner:string}).owner,"human");
+    }
+    // Source-order pin on the new implementation: the human gate returns before the durable stage,
+    // and the durable stage runs before the exclusive claim; index.ts routes only through routeInbound.
+    const router=Deno.readTextFileSync(repo+"supabase/functions/milan-api/messageRouting.ts");
+    const gateStop=router.indexOf('if(gate.action==="stop")');
+    const durableStage=router.indexOf("await deps.attemptDurable()");
+    const exclusiveStage=router.indexOf("await deps.exclusive()");
+    assert.ok(gateStop>0&&gateStop<durableStage&&durableStage<exclusiveStage,"gate < durable < exclusive");
     const server=Deno.readTextFileSync(repo+"supabase/functions/milan-api/index.ts");
-    const takeoverReturn=server.indexOf("conversation transferred: ${conv.id}");
-    assert.ok(takeoverReturn>0&&takeoverReturn<server.indexOf("const durable=await attemptDurableInstagram(sb,{"));
-    assert.ok(takeoverReturn<server.indexOf("const outcome = await processExclusiveEvent({"));
+    assert.ok(server.includes("await routeInbound("),"index.ts routes through routeInbound");
+    assert.ok(server.includes("conversation transferred: ${conv.id}"),"takeover log still emitted for live_human_takeover");
+    assert.equal(server.split("await attemptDurableInstagram(sb,").length-1,1,"one durable call site, inside the router deps");
     // ...and even if a run were started anyway, its messages are skipped as human_takeover.
     const m4=await inbound(c,"mid.h.4");
     assert.equal(await attemptDurableInstagram(sb,evText(c,m4,"mid.h.4","still there?")),"handled");

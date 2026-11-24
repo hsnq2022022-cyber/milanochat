@@ -11,7 +11,8 @@ import type {FlowDocument} from "../../../src/flow/model.ts";
 // end are planned together (max 5 effects, seq-tagged) and committed at once.
 import {planUntilWait,seedFromEventKey} from "../../../src/flow/runtimeChain.ts";
 import {aiStepEnabled} from "../flow-outbox-worker/aiStep.ts";
-import {canWakeDurableRun,wakeEndReason,type WakeEligibility} from "./eligibility.ts";
+import {canWakeDurableRun,wakeEndReason,registryOnlyHold,type WakeEligibility} from "./eligibility.ts";
+import {durableRegistryStatus,registryRequired} from "../_shared/durableRegistry.ts";
 import {wakeMediaSendEnabled,wakeEffectsMediaAllowed,endWakeForDisallowedMedia,
  WAKE_MEDIA_END_REASON} from "./mediaGuard.ts";
 import {wakeMaxOverdueMinutes,wakeOverdue,endOverdueWake} from "./overdueGuard.ts";
@@ -66,7 +67,7 @@ Deno.serve(async(req)=>{
   console.error("[flow-worker] lease failed",{code:le?.code??"invalid_result"});
   return answer("unable to lease due runs",503);
  }
- let committed=0,blocked=0,cancelled=0;
+ let committed=0,blocked=0,cancelled=0,held=0;
  for(const item of leases){
   const tenantId=String(item.tenant_id??""),runId=String(item.run_id??"");
   const lease=String(item.lease_token??"");
@@ -107,6 +108,10 @@ Deno.serve(async(req)=>{
    ]);
    if([tenant,flags,account,conversation,activation].some(v=>v.error))
     throw Error("wake eligibility query failed");
+   // Operator registry (production mode only): a removed row HOLDS the run (see registryOnlyHold).
+   const registry=registryRequired(flags.data?.test_only)?
+    await durableRegistryStatus(sb,{tenantId,accountId:String(run.channel_account_id),platform:String(run.platform)}):
+    "registered";
    const nowMs=Date.now();
    const wake:WakeEligibility={
     runPlatform:run.platform,runStatus:run.run_status,
@@ -128,7 +133,8 @@ Deno.serve(async(req)=>{
     humanAgentExpiresAt:conversation.data?.human_agent_expires_at,
     humanPausedReason:conversation.data?.auto_paused_reason,
     activeRevision:activation.data?Number(activation.data.revision):null,
-    revisionIsActive:activation.data?.is_active
+    revisionIsActive:activation.data?.is_active,
+    registryRegistered:registry==="registered"
    };
    if(!canWakeDurableRun(wake,nowMs)){
     const reason=wakeEndReason(wake,nowMs);
@@ -142,6 +148,19 @@ Deno.serve(async(req)=>{
       continue;
      }
      console.error("[flow-worker] cancel failed",{tenantId,runId,code:ee?.code??"not_cancelled"});
+    }
+    // Registry hold (row removed after the lease, or the registry could not be read): release THIS
+    // lease so the run keeps its retry budget (attempts is counted per lease row) and stays sleeping.
+    // Anything else keeps the previous behaviour (blocked, lease expires, bounded by lease_exhausted).
+    if(!reason&&registryOnlyHold(wake,nowMs)){
+     const {error:releaseError}=await sb.from("automation_flow_run_leases").delete()
+      .eq("tenant_id",tenantId).eq("run_id",runId).eq("token",lease);
+     if(!releaseError){
+      held++;
+      console.warn("[flow-worker] wake held by registry",{tenantId,runId,registry});
+      continue;
+     }
+     console.error("[flow-worker] lease release failed",{tenantId,runId,code:releaseError.code??"unknown"});
     }
     throw Error("wake not eligible for current canary activation");
    }
@@ -208,7 +227,7 @@ Deno.serve(async(req)=>{
    });
   }
  }
- return new Response(JSON.stringify({leased:leases.length,committed,blocked,cancelled,
+ return new Response(JSON.stringify({leased:leases.length,committed,blocked,cancelled,held,
   expired:typeof expired==="number"?expired:0,sends:0}),
   {headers:{"content-type":"application/json"}});
 });

@@ -52,6 +52,7 @@
  */
 import {compareOutbox,effectSeq,type OrderRow} from "../flow-outbox-worker/effectOrder.ts";
 import {durableAccountAllowed} from "../_shared/durableAccounts.ts";
+import {durableRegistryStatus,registryRequired} from "../_shared/durableRegistry.ts";
 
 // deno-lint-ignore no-explicit-any
 type Query=any;
@@ -198,7 +199,7 @@ export async function runInternalEffects(sb:InternalDb,deps:InternalDeps):Promis
    const view=siblings.map(r=>local.has(r.id)?{...r,delivery_status:local.get(r.id)!}:r);
    if(internalHeld(effect,view)){report("held_order");continue;}
    const [sw,run,tenant]=await Promise.all([
-    sb.from("automation_flow_tenant_switches").select("enabled,production_approved")
+    sb.from("automation_flow_tenant_switches").select("enabled,production_approved,test_only")
      .eq("tenant_id",tenantId).maybeSingle(),
     sb.from("automation_flow_runs")
      .select("id,tenant_id,channel_account_id,platform,conversation_id,flow_key,publication_revision")
@@ -230,6 +231,11 @@ export async function runInternalEffects(sb:InternalDb,deps:InternalDeps):Promis
    if(activation.data?.is_active!==true){
     await end("cancelled","revision_inactive","skipped_revision_inactive");continue;
    }
+   // Operator registry (production mode): a removed row HOLDS the effect (never cancelled here;
+   // INTERNAL_STALE_MINUTES bounds it), exactly like a removed allowlist entry. A read error holds too.
+   if(registryRequired(sw.data?.test_only)&&
+      (await durableRegistryStatus(sb,{tenantId,accountId:String(a.id),platform:"instagram"}))!=="registered")
+    {report("blocked_registry");continue;}
    if(tenant.data.is_active!==true||a.is_active!==true||a.agent_enabled!==true||a.auto_reply!==true){
     report("paused");continue;
    }
