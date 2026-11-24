@@ -121,9 +121,13 @@ test("the actual HMAC-verified Instagram extractor passes button identity only t
  assert.match(server,/choiceId:selectedFlowChoice\(value\.message\)/);
  assert.match(server,/selectedChoiceId/);
  assert.match(server,/attemptDurableInstagram\(sb/);
- assert.match(server,/if\(durable==="handled"\)\{await resolvedAfterRedrive\(\);return;\}/);
- // unknown flow eligibility: kept retryable, never answered (inboundRoutingRetry.ts)
- assert.match(server,/if\(durable==="retry"\)return await keepRetryable\(String\(conv\.id\),inboundMessageId\);/);
+ // The decision lives in messageRouting.ts: a handled durable event is a Flow session (the AI claim path is
+ // never entered) and is resolved; unknown eligibility is kept retryable and never answered.
+ const routing=readFileSync("supabase/functions/milan-api/messageRouting.ts","utf8");
+ assert.match(routing,/if\(stage==="handled"\)return \{kind:"flow_session"/);
+ assert.match(routing,/if\(stage==="retry"\)return \{kind:"retry"/);
+ assert.match(server,/case "flow_session":\n\s+await resolvedAfterRedrive\(\);\n\s+return;/);
+ assert.match(server,/case "retry":[\s\S]*?return await keepRetryable\(String\(conv\.id\), inboundMessageId as string\);/);
 });
 
 // ---- Lifecycle: waiting runs never silence the conversation; one active run.
@@ -669,7 +673,7 @@ test("B1: provenance is the explicit flag; synthetic events (no Meta mid) never 
  // The IG call is wrapped in runBatchEvent(() => handleIncomingWebhookMessage(...)),
  // hence the extra closing paren; provenance argument is unchanged.
  assert.match(server,/msg\.choiceId,\n\s+providerEventIdGenuine\n\s+\)\)\);/);
- assert.match(server,/selectedChoiceId,providerEventIdGenuine:providerEventIdGenuine===true\n/);
+ assert.match(server,/selectedChoiceId, providerEventIdGenuine: providerEventIdGenuine === true,\n/);
  const ing=readFileSync("supabase/functions/milan-api/flowDurableIngress.ts","utf8");
  assert.match(ing,/e\.providerEventIdGenuine===true&&/);
  assert.doesNotMatch(ing,/ig_\\d|syntheticInstagramEventId/,"no format-based provenance");
@@ -678,7 +682,7 @@ test("ingress source: production canary uses only the separate claim function; V
  const src=readFileSync("supabase/functions/milan-api/flowDurableIngress.ts","utf8");
  assert.equal((src.match(/rpc\("flow_claim_inbound_durable"/g)??[]).length,1);
  assert.equal((src.match(/rpc\("flow_claim_inbound"/g)??[]).length,1);
- assert.match(src,/Deno\.env\.get\("FLOW_DURABLE_CANARY_ACCOUNT_ID"\)!==event\.accountId/);
+ assert.match(src,/!durableAccountAllowed\(Deno\.env\.get\("FLOW_DURABLE_CANARY_ACCOUNT_ID"\),event\.accountId\)/);
  const server=readFileSync("supabase/functions/milan-api/index.ts","utf8");
  assert.doesNotMatch(server,/flow_claim_inbound_durable/);
 });
@@ -1115,7 +1119,7 @@ test("typed answer: the customer's answer is never logged, even when the commit 
 });
 test("index.ts passes the inbound text to the durable path only (V2 call site keeps its own arguments)",()=>{
  const server=readFileSync("supabase/functions/milan-api/index.ts","utf8");
- assert.equal((server.match(/text:customerText,\n\s+selectedChoiceId,providerEventIdGenuine/g)??[]).length,1);
+ assert.equal((server.match(/text: customerText,\n\s+selectedChoiceId, providerEventIdGenuine/g)??[]).length,1);
  // V2 keeps its own arguments; the only additions are the durable ranking hook,
  // passed only while the durable ingress is configured for this account, and
  // the conversation-start signal (T4, conversationStart.ts) in both branches.

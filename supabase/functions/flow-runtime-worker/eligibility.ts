@@ -1,3 +1,4 @@
+import {durableAccountAllowed} from "../_shared/durableAccounts.ts";
 /** Fail-closed eligibility for one durable wake, independent of the lease RPC. */
 export type WakeEligibility={
   runPlatform:unknown;
@@ -55,7 +56,7 @@ export function canWakeDurableRun(v:WakeEligibility,nowMs:number):boolean{
     v.tenantSwitchEnabled!==true||
     (v.tenantTestOnly!==true&&v.tenantProductionApproved!==true))return false;
   if(typeof v.accountId!=="string"||!v.accountId||
-    v.canaryAccountId!==v.accountId||v.accountTenantMatches!==true||
+    !durableAccountAllowed(v.canaryAccountId,v.accountId)||v.accountTenantMatches!==true||
     v.accountActive!==true||v.agentEnabled!==true||v.autoReply!==true)return false;
   if(v.conversationTenantMatches!==true||v.conversationAccountMatches!==true)return false;
   return !humanTakeoverActive(v.humanTransferred,v.humanAgentExpiresAt,

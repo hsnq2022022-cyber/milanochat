@@ -4,6 +4,7 @@
  * Never calls Meta or charges: effects are stored for the separate Outbox.
  */
 import type {SupabaseClient} from "npm:@supabase/supabase-js@2";
+import {durableAccountAllowed} from "../_shared/durableAccounts.ts";
 import {createRuntimeState,type RuntimeState} from "../../../src/flow/runtimePlan.ts";
 import {planUntilWait,seedFromEventKey,MAX_CHAIN_EFFECTS,hash32,collectedFields,
  renderCollectedTemplate,type ChainPlan} from "../../../src/flow/runtimeChain.ts";
@@ -880,7 +881,7 @@ export async function durableWorkersStalled(db:Db,event:{tenantId:string;account
 export function durableIngressConfigured(accountId:string,platform:string):boolean{
  try{
   return Deno.env.get("FLOW_DURABLE_INGRESS_ENABLED")==="true"&&
-   Deno.env.get("FLOW_DURABLE_CANARY_ACCOUNT_ID")===accountId&&
+   durableAccountAllowed(Deno.env.get("FLOW_DURABLE_CANARY_ACCOUNT_ID"),accountId)&&
    (platform==="instagram"||(isMultichannel(platform)&&multichannelEnabled()));
  }catch{return false;}
 }
@@ -892,7 +893,7 @@ export async function attemptDurableInstagram(
  db:Db,event:DurableEvent
 ):Promise<Result>{
  if(Deno.env.get("FLOW_DURABLE_INGRESS_ENABLED")!=="true"||
-    Deno.env.get("FLOW_DURABLE_CANARY_ACCOUNT_ID")!==event.accountId||
+    !durableAccountAllowed(Deno.env.get("FLOW_DURABLE_CANARY_ACCOUNT_ID"),event.accountId)||
     !validEvent(event))return "fallback";
  try{
   const [g,s]=await Promise.all([

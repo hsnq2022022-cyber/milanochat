@@ -318,7 +318,7 @@ test("index.ts: history read between the conversation null-check and persist; fa
  assert.doesNotMatch(block,/insert\(|persistInboundOnce|keepRetryable/,"no write before/in the failure exit");
  // only channels whose events can reach a flow, and only with a proven account
  assert.match(fn,/if \(typeof account\?\.id === "string" && account\.id\.length > 0 &&\n\s+\(channel === "instagram" \|\| multichannelEnabled\(\) \|\| env\("FLOW_RUNTIME_MODE"\) === "message_only"\)\) \{/);
- assert.match(fn,/const durable=await attemptDurableInstagram\(sb,\{\n\s+conversationStart,\n\s+tenantId,/);
+ assert.match(fn,/const durable = await attemptDurableInstagram\(sb, \{\n\s+conversationStart,\n\s+tenantId, accountId: String\(account\.id\)/);
  assert.match(fn,/durableRanked\?\{durableDocument:\(d\)=>supportedDurableDocument\(d,channel\),conversationStart\}:\{conversationStart\}/);
  assert.equal(fn.split("readConversationStart(").length,2,"one read per event");
 });

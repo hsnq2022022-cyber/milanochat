@@ -75,7 +75,6 @@ test("gate blocked: saved_not_live with the saved revision, no activation RPC",a
   {name:"switches unreadable",s:server({failTables:["automation_flow_global_switch"]}),reason:"unavailable"},
   {name:"advanced not enabled",s:server({}),env:{},doc:delayFlowDoc(),reason:"not_enabled"},
   {name:"scope required",s:server({}),env:{...PROD_ENV,FLOW_MESSAGE_SCOPE_REQUIRED:"true"},reason:"settings_incomplete"},
-  {name:"unsupported block",s:server({}),doc:numberQuestionDoc(),reason:"unsupported_feature"},
  ];
  for(const c of cases){
   const r=await c.s.call(live(c.doc??v2Doc("HI")),"jwt-a",c.env??PROD_ENV);
@@ -88,11 +87,45 @@ test("gate blocked: saved_not_live with the saved revision, no activation RPC",a
  }
 });
 
-test("unsupported blocks never go live even when every flag is on",async()=>{
+test("unsupported shapes are REFUSED before any revision exists: 422, Arabic reasons, nothing saved or activated",async()=>{
+ // Previously saved as "saved_not_live: unsupported_feature". A shape no live engine runs is now rejected
+ // up front (src/flow/runtimeSupport.ts), even when every operator flag is on, and never creates a revision.
  const s=server({});
  const r=await s.call(live(numberQuestionDoc()),"jwt-a",{...PROD_ENV,FLOW_INTERNAL_ACTIONS_ENABLED:"true"});
- assert.equal(r.body.status,"saved_not_live");assert.equal(r.body.reason,"unsupported_feature");
- assert.ok(!s.log.some(l=>l.rpc==="flow_activate_revision"));
+ assert.equal(r.status,422);
+ assert.equal(r.body.ok,false);
+ assert.equal(r.body.code,"FLOW_RUNTIME_UNSUPPORTED");
+ assert.match(r.body.error,/لا يمكن نشر هذا التدفق/);
+ assert.match(r.body.error,/سؤال الأرقام غير مدعوم/);
+ assert.deepEqual(r.body.reasons,["FLOW_RUNTIME_UNSUPPORTED:number_question_not_supported"]);
+ assert.deepEqual(rpcs(s),[],"no revision, no activation");
+ assert.equal(s.pubs.length,0);assert.deepEqual(s.acts,[]);
+});
+test("the Arabic rejection never carries ids, env names or engine words",async()=>{
+ const s=server({});
+ const r=await s.call(live(numberQuestionDoc()),"jwt-a",{...PROD_ENV,FIELD_ENCRYPTION_KEY:"enc-SECRET-value-123"});
+ const text=JSON.stringify(r.body);
+ for(const bad of [/FLOW_(?!RUNTIME_UNSUPPORTED)/,/durable/i,/engine/i,/canary/i,/operator/i,/boom/,/enc-SECRET/,T.a,T.b,A.a,A.a2,USER.a,KEY])
+  assert.ok(typeof bad==="string"?!text.includes(bad):!bad.test(text),String(bad)+" in "+text);
+ // an untitled step is named by its sentence only, never by its internal id
+ const doc=numberQuestionDoc() as any;
+ const q=doc.nodes.find((n:any)=>n.data.kind==="question");q.data.title="";
+ const r2=await server({}).call(live(doc));
+ assert.ok(!JSON.stringify(r2.body).includes(q.id),"no node id in customer text");
+});
+test("plain publish refuses the same unsupported shapes with the same Arabic reasons",async()=>{
+ const s=server({});
+ const r=await s.call({action:"publish",accountId:A.a,flowKey:KEY,document:numberQuestionDoc()});
+ assert.equal(r.status,422);
+ assert.equal(r.body.code,"FLOW_RUNTIME_UNSUPPORTED");
+ assert.equal(s.pubs.length,0);
+});
+test("a document that is invalid for OTHER reasons keeps the generic 422 (no unsupported claim)",async()=>{
+ const s=server({});
+ const r=await s.call(live({version:3,name:"x",nodes:[],edges:[]}));
+ assert.equal(r.status,422);
+ assert.equal(r.body.code,undefined);
+ assert.deepEqual(rpcs(s),[]);
 });
 
 test("activation not confirmed: saved_not_live with that exact saved revision",async()=>{
@@ -172,8 +205,7 @@ test("customer fields never carry internal strings",async()=>{
  const bodies:any[]=[];
  bodies.push((await server({}).call(live(v2Doc("HI")),"jwt-a",env)).body);
  bodies.push((await server({}).call(live(delayFlowDoc(),A.a2),"jwt-a",env)).body);
- bodies.push((await server({}).call(live(numberQuestionDoc()))).body);
- bodies.push((await server({tenantSwitch:null}).call(live(v2Doc("HI")))).body);
+  bodies.push((await server({tenantSwitch:null}).call(live(v2Doc("HI")))).body);
  bodies.push((await server({activateRpc:()=>({data:null,error:{code:"P0001",message:"flow_activate_revision boom"}})}).call(live(v2Doc("HI")))).body);
  bodies.push((await server({accountPatch:{[A.a]:{agent_enabled:false}}}).call(live(v2Doc("HI")))).body);
  for(const body of bodies){
@@ -188,7 +220,7 @@ test("customer fields never carry internal strings",async()=>{
    assert.ok(typeof bad==="string"?!text.includes(bad):!bad.test(text),String(bad)+" in "+text);
  }
  assert.deepEqual([...new Set(bodies.map(b=>b.reason))].sort(),
-  ["account_paused","not_enabled","settings_incomplete","unavailable","unsupported_feature"]);
+  ["account_paused","not_enabled","settings_incomplete","unavailable"]);
  for(const m of Object.values(NOT_LIVE_MESSAGES))assert.ok(!/[A-Za-z0-9]/.test(m)&&m.length<90,m);
 });
 

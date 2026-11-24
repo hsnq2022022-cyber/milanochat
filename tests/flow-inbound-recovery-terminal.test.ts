@@ -307,21 +307,20 @@ test("index.ts wiring: four live no-reply exits mark (with their reason), live o
  const s=readFileSync("supabase/functions/milan-api/index.ts","utf8");
  const h=s.slice(s.indexOf("async function handleIncomingWebhookMessage("),s.indexOf("Deno.serve("));
  assert.match(h,/const liveNoReply = async \(reason: LiveNoReplyReason, conversationId: string, inboundId: string \| null\) => \{\n\s+if \(redrive \|\| !inboundId\) return;\n\s+await markLiveNoReply\(sb, \{ \.\.\.retryKey, conversationId: String\(conversationId\), inboundId \}, reason\);\n\s+\};/);
- const exits:Array<[RegExp,LiveNoReplyReason]>=[
-  [/if \(conv\.transferred\) \{\n\s+console\.log\([\s\S]*?conversation transferred: [^\n]*\n\s+\);\n\s+await liveNoReply\("live_human_takeover", conv\.id, inboundMessageId\);\n\s+await resolvedAfterRedrive\(\);\n\s+return;/,"live_human_takeover"],
-  [/if \(conv\.auto_paused_reason === "credits"\) \{\n\s+console\.log\([\s\S]*?paused \(credits\): [^\n]*\n\s+\);\n\s+await liveNoReply\("live_credits_paused", conv\.id, inboundMessageId\);\n\s+await resolvedAfterRedrive\(\);\n\s+return;/,"live_credits_paused"],
-  [/account\.auto_reply === false\) \{\n\s+console\.log\([\s\S]*?auto reply disabled for account [^\n]*\n\s+\);\n\s+await liveNoReply\("live_auto_reply_off", conv\.id, inboundMessageId\);\n\s+await resolvedAfterRedrive\(\);\n\s+return;/,"live_auto_reply_off"],
-  [/if \(credits <= 0\) \{[\s\S]*?no credits: [\s\S]*?\n\s+\);\n\s+await liveNoReply\("live_no_credits", conv\.id, inboundMessageId\);\n\s+await resolvedAfterRedrive\(\);\n\s+return;/,"live_no_credits"],
- ];
- for(const [re,r] of exits)assert.match(h,re,r);
- assert.equal((h.match(/await liveNoReply\(/g)??[]).length,4,"exactly the four deliberate no-reply exits");
+ // The four deliberate no-reply exits are decided by ONE pure gate (messageRouting.ts conversationGate), which names
+ // each with its own reason; index.ts maps the decision to a single marked exit (live only, before the return).
+ const routing=readFileSync("supabase/functions/milan-api/messageRouting.ts","utf8");
+ for(const reason of ["live_human_takeover","live_credits_paused","live_auto_reply_off","live_no_credits"])
+  assert.ok(routing.includes('reason:"'+reason+'"'),reason);
+ assert.match(h,/await liveNoReply\(decision\.reason, conv\.id, inboundMessageId\);\n\s+await resolvedAfterRedrive\(\);\n\s+return;/);
+ assert.equal((h.match(/await liveNoReply\(/g)??[]).length,1,"one marked exit, fed by the four routed no-reply reasons");
  assert.deepEqual([...LIVE_NO_REPLY_REASONS].sort(),["live_auto_reply_off","live_credits_paused","live_human_takeover","live_no_credits"]);
  // tenant missing / inactive exits are before the inbound insert -> nothing to discover
  const insert=h.indexOf("await persistInboundOnce(");
  assert.ok(h.indexOf("if (!tenant) {")>0&&h.indexOf("if (!tenant) {")<insert);
  assert.ok(h.indexOf("if (tenant.is_active === false) {")>0&&h.indexOf("if (tenant.is_active === false) {")<insert);
  // every marker call comes after the insert and before routing/claim (never changes the reply decision)
- const firstMark=h.indexOf("await liveNoReply(\""),lastMark=h.lastIndexOf("await liveNoReply(\"");
- assert.ok(firstMark>insert&&lastMark<h.indexOf("attemptDurableInstagram("));
+ const mark=h.indexOf("await liveNoReply(decision.reason");
+ assert.ok(mark>insert&&mark>h.indexOf("await routeInbound("),"marked only AFTER the routing decision said no-reply");
  assert.match(s,/import \{ inboundRecoveryEnabled, runInboundRecovery, recoveryLeaseActive, markLiveNoReply, type LiveNoReplyReason \} from "\.\/inboundRecovery\.ts";/);
 });

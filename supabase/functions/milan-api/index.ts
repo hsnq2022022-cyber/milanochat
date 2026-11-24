@@ -43,6 +43,8 @@ import * as cheerio from "npm:cheerio@1";
 import { flowShadowMayObserve } from "./flowShadowGate.ts";
 import { persistInboundOnce } from "./persistInboundOnce.ts";
 import { processExclusiveEvent } from "./exclusiveMessageClaim.ts";
+import { routeInbound } from "./messageRouting.ts";
+import {durableAccountAllowed} from "../_shared/durableAccounts.ts";
 import { recordRoutingFailure, markRoutingResolved, retryableEvent, webhookStatusFor,
   isRetryableOutcome, retryAttemptCap, runBatchEvent } from "./inboundRoutingRetry.ts";
 // B-3/B-4 opt-in recovery sweeper (default OFF) and its webhook-side lease check.
@@ -2059,89 +2061,70 @@ async function handleIncomingWebhookMessage(
   }
 
   /**
-   * المحادثة محولة لبشري — لا رد آلي.
+   * مسار واحد للقرار (messageRouting.ts). الأسبقية: موظف بشري > إيقاف/عدم أهلية الرد الآلي >
+   * جلسة تدفق قائمة > تدفق مطابق > الذكاء الاصطناعي. هذه الدالة تُمرّر الوقائع والعمليات فقط.
+   * One decision (messageRouting.ts): human takeover > automation paused/ineligible > existing Flow
+   * session > matching Flow trigger > AI. The exclusive DB claim below is the atomic owner of an event.
    */
-  /**
-   * انتهت مدة Human Agent (15 دقيقة) → أعد الرد الآلي تلقائياً.
-   */
-  if (
-    conv.transferred &&
-    conv.auto_paused_reason === "manual_takeover" &&
-    conv.human_agent_expires_at &&
-    new Date(conv.human_agent_expires_at).getTime() <= Date.now()
-  ) {
-    await sb
-      .from("conversations")
-      .update({
-        transferred: false,
-        auto_paused_reason: null,
-        human_agent_expires_at: null,
-      })
-      .eq("id", conv.id);
-
-    conv.transferred = false;
-    conv.auto_paused_reason = null;
-    conv.human_agent_expires_at = null;
-
-    console.log(
-      `[${channel}_webhook] human agent expired, auto reply resumed: ${conv.id}`
-    );
-  }
-
-  if (conv.transferred) {
-    console.log(
-      `[${channel}_webhook] conversation transferred: ${conv.id}`
-    );
-    await liveNoReply("live_human_takeover", conv.id, inboundMessageId);
-    await resolvedAfterRedrive();
-    return;
-  }
-
-  /**
-   * متوقفة بسبب الرصيد.
-   */
-  if (conv.auto_paused_reason === "credits") {
-    console.log(
-      `[${channel}_webhook] paused (credits): ${conv.id}`
-    );
-    await liveNoReply("live_credits_paused", conv.id, inboundMessageId);
-    await resolvedAfterRedrive();
-    return;
-  }
-
-  /**
-   * لا رد آلي إلا لو الوكيل مفعّل على الحساب.
-   */
-  if (account.agent_enabled === false ||
-      account.auto_reply === false) {
-    console.log(
-      `[${channel}_webhook] auto reply disabled for account ${account?.id}`
-    );
-    await liveNoReply("live_auto_reply_off", conv.id, inboundMessageId);
-    await resolvedAfterRedrive();
-    return;
-  }
-
-  const credits = Number(
-    tenant.credits_remaining ?? 0
-  );
-
-  if (credits <= 0) {
-    await sb
-      .from("conversations")
-      .update({
-        auto_paused_reason: "credits",
-      })
-      .eq("id", conv.id);
-
-    console.log(
-      `[${channel}_webhook] no credits: ${tenantId}`
-    );
-    await liveNoReply("live_no_credits", conv.id, inboundMessageId);
-    await resolvedAfterRedrive();
-    return;
-  }
-
+  const deliveryTracking=env("DELIVERY_TRACKING_V1_ENABLED")==="true";
+  // Several active flows: prepareSimpleFlowReply answers only the single
+  // deterministic winner (flowInboundSelection.ts) when it is a V2 flow. While
+  // the durable ingress is configured for this account, durable flows are
+  // ranked too, so a durable winner is never replaced by a lower V2 flow.
+  // No match -> null -> legacy AI (unchanged). A routing READ error makes
+  // processExclusiveEvent return "routing_unavailable": no claim, no reply.
+  const durableRanked=durableIngressConfigured(String(account.id),channel);
+  let claimedRoute: "legacy_ai" | "flow" | null = null;
+  const decision = await routeInbound(
+    {
+      conversation: {
+        transferred: conv.transferred,
+        autoPausedReason: conv.auto_paused_reason,
+        humanAgentExpiresAtMs: conv.human_agent_expires_at
+          ? new Date(conv.human_agent_expires_at).getTime()
+          : null,
+        agentEnabled: account.agent_enabled,
+        autoReply: account.auto_reply,
+        creditsRemaining: Number(tenant.credits_remaining ?? 0),
+        nowMs: Date.now(),
+      },
+      accountProven: typeof account?.id === "string" && account.id.length > 0,
+      // Events without a stable provider ID cannot be deduplicated reliably.
+      eventClaimable: !!externalMsgId && externalMsgId.length <= 256 && !!inboundMessageId,
+      durableApplicable:
+        channel === "instagram" ||
+        ((channel === "whatsapp" || channel === "facebook") && multichannelEnabled()),
+    },
+    {
+      // انتهت مدة Human Agent (15 دقيقة) → أعد الرد الآلي تلقائياً.
+      resumeTakeover: async () => {
+        await sb
+          .from("conversations")
+          .update({
+            transferred: false,
+            auto_paused_reason: null,
+            human_agent_expires_at: null,
+          })
+          .eq("id", conv.id);
+        conv.transferred = false;
+        conv.auto_paused_reason = null;
+        conv.human_agent_expires_at = null;
+        console.log(
+          `[${channel}_webhook] human agent expired, auto reply resumed: ${conv.id}`
+        );
+      },
+      pauseForCredits: async () => {
+        await sb
+          .from("conversations")
+          .update({
+            auto_paused_reason: "credits",
+          })
+          .eq("id", conv.id);
+        console.log(
+          `[${channel}_webhook] no credits: ${tenantId}`
+        );
+      },
+      afterGate: async () => {
   /**
    * تدفق آمن للمراقبة فقط: بدون إرسال أو تغيير على مسار AI.
    * No extra DB reads unless explicitly enabled by server environment.
@@ -2177,57 +2160,20 @@ async function handleIncomingWebhookMessage(
     }
   }
 
-  // No PROVEN channel account (e.g. a verified WhatsApp binding whose
-  // channel_accounts row could not be proven, see provenWhatsappAccount):
-  // flow_claim_inbound refuses a NULL account, so no claim and no reply are
-  // possible. Known terminal state, logged with a code (not a retry loop).
-  if (typeof account?.id !== "string" || account.id.length === 0) {
-    console.warn("[webhook-claim] no proven channel account; no auto-send", { code: "account_unproven" });
-    await resolvedAfterRedrive();
-    return;
-  }
-
-  // Events without a stable provider ID cannot be deduplicated reliably.
-  // Do not send an automated reply to an unclaimable event.
-  if (!externalMsgId || externalMsgId.length > 256 || !inboundMessageId) {
-    console.warn("[webhook-claim] missing persisted inbound/provider ID; no auto-send");
-    return;
-  }
-
-  // The exclusive DB claim is ALWAYS required for webhook auto-replies.
-  // The flow engine is an optional prepared message-only subset; any engine
-  // error or OFF switch resolves to legacy AI BEFORE choosing the route.
-  // The durable engine is strictly isolated to the operator-selected
-  // Instagram account and defaults OFF. No direct send is made in this path:
-  // the atomic Outbox and an authenticated worker own actual provider calls.
-  // FLOW_MULTICHANNEL_ENABLED (default OFF): WhatsApp / Facebook events may
-  // also try the durable path (same canary, claim and SQL re-checks).
-  // Flow eligibility UNKNOWN (switch/activation/publication READ error): no
-  // flow and no AI for this event; keep it retryable (inboundRoutingRetry.ts,
-  // migration 20261029340000) so the webhook answers 503 and the provider's
-  // redelivery re-drives it. Bounded: the last attempt marks it 'exhausted'
-  // (terminal, observable) and the webhook acknowledges.
-  if(channel==="instagram"||
-     ((channel==="whatsapp"||channel==="facebook")&&multichannelEnabled())){
-    const durable=await attemptDurableInstagram(sb,{
-      conversationStart,
-      tenantId,accountId:String(account.id),conversationId:String(conv.id),
-      inboundId:inboundMessageId,eventId:externalMsgId,platform:channel,
-      text:customerText,
-      selectedChoiceId,providerEventIdGenuine:providerEventIdGenuine===true
-    });
-    if(durable==="retry")return await keepRetryable(String(conv.id),inboundMessageId);
-    if(durable==="handled"){await resolvedAfterRedrive();return;}
-  }
-  const deliveryTracking=env("DELIVERY_TRACKING_V1_ENABLED")==="true";
-  // Several active flows: prepareSimpleFlowReply answers only the single
-  // deterministic winner (flowInboundSelection.ts) when it is a V2 flow. While
-  // the durable ingress is configured for this account, durable flows are
-  // ranked too, so a durable winner is never replaced by a lower V2 flow.
-  // No match -> null -> legacy AI (unchanged). A routing READ error makes
-  // processExclusiveEvent return "routing_unavailable": no claim, no reply.
-  const durableRanked=durableIngressConfigured(String(account.id),channel);
-  const outcome = await processExclusiveEvent({
+      },
+      attemptDurable: async () => {
+        const durable = await attemptDurableInstagram(sb, {
+          conversationStart,
+          tenantId, accountId: String(account.id), conversationId: String(conv.id),
+          inboundId: inboundMessageId as string, eventId: externalMsgId as string, platform: channel,
+          text: customerText,
+          selectedChoiceId, providerEventIdGenuine: providerEventIdGenuine === true,
+        });
+        return durable === "retry" ? "retry" : durable === "handled" ? "handled" : "fallback";
+      },
+      exclusive: async () => {
+        const outcome = await processExclusiveEvent({
+          onClaim: (c) => { claimedRoute = c.route; },
     prepareFlow: () => prepareSimpleFlowReply(
       sb, tenantId, String(account.id), channel, customerText,
       durableRanked?{durableDocument:(d)=>supportedDurableDocument(d,channel),conversationStart}:{conversationStart}
@@ -2366,19 +2312,53 @@ async function handleIncomingWebhookMessage(
       }
       return data;
     },
-  });
-  // No claim acquired (routing unknown, or the claim RPC failed / its commit
-  // is unknown) -> retryable: a retry re-claims (a committed claim answers
-  // "duplicate"), so it can never send twice. Every other outcome follows an
-  // ACQUIRED claim (the ownership proof: sent_*, send_failed, empty,
-  // delivery_unavailable) or a duplicate -> terminal, never re-sent.
-  if (isRetryableOutcome(outcome))
-    return await keepRetryable(String(conv.id), inboundMessageId);
-  await resolvedAfterRedrive();
-  if (outcome !== "sent_and_billed" && outcome !== "duplicate") {
-    console.warn("[webhook-claim] auto reply outcome:", outcome);
-  }
+        });
+        return { outcome, route: claimedRoute };
+      },
+    }
+  );
 
+  switch (decision.kind) {
+    case "no_reply": {
+      if (decision.reason === "account_unproven") {
+        // No PROVEN channel account (e.g. a WhatsApp binding without a proven channel_accounts row):
+        // flow_claim_inbound refuses a NULL account. Known terminal state, not a retry loop.
+        console.warn("[webhook-claim] no proven channel account; no auto-send", { code: "account_unproven" });
+        await resolvedAfterRedrive();
+        return;
+      }
+      if (decision.reason === "event_unclaimable") {
+        console.warn("[webhook-claim] missing persisted inbound/provider ID; no auto-send");
+        return;
+      }
+      console.log(
+        decision.reason === "live_human_takeover"
+          ? `[${channel}_webhook] conversation transferred: ${conv.id}`
+          : decision.reason === "live_credits_paused"
+          ? `[${channel}_webhook] paused (credits): ${conv.id}`
+          : decision.reason === "live_auto_reply_off"
+          ? `[${channel}_webhook] auto reply disabled for account ${account?.id}`
+          : `[${channel}_webhook] automation not eligible: ${decision.reason}`
+      );
+      await liveNoReply(decision.reason, conv.id, inboundMessageId);
+      await resolvedAfterRedrive();
+      return;
+    }
+    case "retry":
+      // Flow eligibility UNKNOWN (read error / unconfirmed claim): no flow and no AI; the event
+      // stays retryable. A retry re-claims (a committed claim answers "duplicate"), so it can never
+      // send twice (inboundRoutingRetry.ts, migration 20261029340000).
+      return await keepRetryable(String(conv.id), inboundMessageId as string);
+    case "flow_session":
+      await resolvedAfterRedrive();
+      return;
+    case "claimed":
+      await resolvedAfterRedrive();
+      if (decision.outcome !== "sent_and_billed" && decision.outcome !== "duplicate") {
+        console.warn("[webhook-claim] auto reply outcome:", decision.outcome);
+      }
+      return;
+  }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
@@ -3228,7 +3208,7 @@ const milanApiHandler = (async (req: Request) => {
 
             // Postbacks (flag ON only) reach the durable canary account only.
             if ("postback" in msg &&
-                String(account.id) !== env("FLOW_DURABLE_CANARY_ACCOUNT_ID")) {
+                !durableAccountAllowed(env("FLOW_DURABLE_CANARY_ACCOUNT_ID"), String(account.id))) {
               continue;
             }
 

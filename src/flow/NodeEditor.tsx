@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { CSSProperties } from "react";
 import { Plus, Trash2, Check, Copy, AlertTriangle, Sparkles, ChevronDown, ChevronUp } from "lucide-react";
+import { isRuntimeTriggerMode, unsupportedText } from "./runtimeSupport";
 import { LABELS, PUBLIC_REPLY_MAX, makeNode, outputs, canConnect, edgeFor, PLATFORM_LABELS, TRIGGER_OPTIONS, conversationStartScopeProblem, isMessageScope } from "./model";
 import ButtonActionEditor from "./ButtonActionEditor";
 import MessageBlocksEditor from "./MessageBlocksEditor";
@@ -115,8 +116,9 @@ export default function NodeEditor({node,onClose,language="ar",capabilityNotice=
         </select>
         <label className={section}>{t("event")}</label>
         <select className={input} aria-label={t("event")} value={d.triggerMode} onChange={e=>editTrigger({triggerMode:e.target.value as FlowData["triggerMode"]})}>
-          {TRIGGER_OPTIONS[d.platform].map(event=><option key={event.id} value={event.id}>{event.label}</option>)}
+          {TRIGGER_OPTIONS[d.platform].map(event=>{const ok=isRuntimeTriggerMode(event.id);return <option key={event.id} value={event.id} disabled={!ok}>{event.label+(ok?"":" — غير مدعوم بعد")}</option>;})}
         </select>
+        {!isRuntimeTriggerMode(d.triggerMode)&&<p data-testid="trigger-unsupported-note" className="mt-1 text-xs text-[#F5D99C]">{unsupportedText("trigger_not_supported")}</p>}
         {d.triggerMode==="comment"?<CommentTriggerForm d={d} edit={edit} t={t} nodeId={node.id}/>
           :<TriggerKeywordsEditor key={node.id+":"+d.triggerMode} mode={d.triggerMode} value={d.keywords} onChange={keywords=>edit({keywords})}/>}
         {d.triggerMode==="message"&&<>

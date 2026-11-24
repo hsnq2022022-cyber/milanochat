@@ -33,6 +33,8 @@ export type Dependencies={
  persistSent(messageId:string,text:string,providerMessageId:string):Promise<boolean>;
  debit(messageId:string):Promise<number>;
  delivery?:DeliveryHooks; // explicit phased rollout: OFF unless provided
+ /** Observes the committed claim (route + whether this call won). Never affects routing; errors ignored. */
+ onClaim?(c:Claimed):void;
 };
 
 /**
@@ -49,6 +51,7 @@ export async function processExclusiveEvent(d:Dependencies):Promise<Result>{
  try{c=await d.claim(Boolean(prepared));}catch{return "claim_failed";}
  if(!c||!["legacy_ai","flow"].includes(c.route)||typeof c.outgoing_message_id!=="string")
   return "claim_failed";
+ try{d.onClaim?.(c);}catch{/* observer only */}
  if(!c.acquired)return "duplicate";
  let reply:string|null;
  try{reply=c.route==="flow"&&prepared?prepared:await d.legacyAnswer();}

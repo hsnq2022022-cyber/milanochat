@@ -360,6 +360,15 @@ jobs:
           node --experimental-strip-types --test src/flow/runtimePlan.test.ts
           node --experimental-strip-types --test src/flow/aiMetricsGate.test.ts
           node --experimental-strip-types --test tests/wayl-contract.test.ts
+          # Flow/AI message ownership, durable rollout gates, editor-runtime parity
+          node --experimental-strip-types --test tests/flow-message-routing.test.ts
+          node --experimental-strip-types --test tests/flow-durable-accounts.test.ts
+          node --experimental-strip-types --test tests/flow-runtime-parity.test.ts
+          node --experimental-strip-types --test tests/flow-publish-live.test.ts
+          node --experimental-strip-types --test tests/flow-requirements.test.ts
+          node --experimental-strip-types --test tests/flow-capability-gating.test.ts
+          node --experimental-strip-types --test src/flow/model.test.ts
+          node --experimental-strip-types --test src/flow/simulatorEngine.test.ts
       - name: Build and typecheck real frontend
         run: |
           npm run typecheck
@@ -377,6 +386,11 @@ jobs:
         run: npx playwright install --with-deps chromium
       - name: Phone width and RTL/English UI
         run: npx playwright test -c playwright.config.ts tests/flow-mobile-locale.spec.ts
+      - name: Editor offers and previews only what the runtime can run (fake host, no real backend)
+        env:
+          VITE_SUPABASE_URL: http://mock.supabase.test
+          VITE_SUPABASE_ANON_KEY: fake-anon-key-not-real
+        run: npx playwright test -c playwright.config.ts --trace off tests/flow-runtime-support.spec.ts
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x

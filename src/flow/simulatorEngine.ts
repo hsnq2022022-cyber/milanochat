@@ -6,6 +6,7 @@
 import type { Choice, FlowData, FlowDocument, FlowNode } from "./model.ts";
 import { chooseWeightedPort, MAX_SIMULATOR_STEPS, normalizeArabicDigits, validCustomerInput } from "./simulation.ts";
 import { FIRST_NAME_FALLBACK, replacePlaceholders } from "./placeholders.ts";
+import { unsupportedByNode, unsupportedText } from "./runtimeSupport.ts";
 
 export type SimEvent =
   | { type: "bot"; text: string; image?: string; file?: string; retry?: boolean }
@@ -104,6 +105,9 @@ function run(ctx: SimContext, base: SimCursor, start: string | undefined, events
     return done("deadend");
   };
   if (!doc) { events.push({ type: "system", text: "التدفق المستهدف غير موجود.", tone: "warn" }); return done("stopped"); }
+  // Steps NO live engine can run (runtimeSupport.ts): the simulation stops there and says so,
+  // it never plays them as if they worked (same derivation as validation and publication).
+  const unrunnable = unsupportedByNode(doc);
   while (true) {
     if (!at) return deadEnd();
     if (stepCount >= MAX_SIMULATOR_STEPS) {
@@ -113,6 +117,12 @@ function run(ctx: SimContext, base: SimCursor, start: string | undefined, events
     const n = doc.nodes.find(item => item.id === at);
     if (!n) return deadEnd("خطوة غير موجودة في هذا التدفق.");
     stepCount++; visited.push(n.id);
+    const blockedBy = unrunnable.get(n.id);
+    if (blockedBy?.length) {
+      events.push({ type: "system", tone: "warn",
+        text: "⚠️ " + unsupportedText(blockedBy[0]) + " لن تُنفَّذ هذه الخطوة في التشغيل الفعلي، لذلك توقفت المحاكاة هنا." });
+      return done("stopped");
+    }
     const d = n.data, follow = (port: string) => { at = nextFor(doc, n.id, port); };
     switch (d.kind) {
       case "trigger": follow("next"); continue;
@@ -135,11 +145,8 @@ function run(ctx: SimContext, base: SimCursor, start: string | undefined, events
         events.push({ type: "system", text: (ACTION_NOTE[d.actionType] || ACTION_NOTE.tag)(value) });
         follow("next"); continue;
       }
-      case "request": {
-        // Never executed from the browser; the honest outcome is "not succeeded".
-        events.push({ type: "system", text: "طلب " + (d.requestMethod || "GET") + " لم يُنفَّذ: لم يُنفذ HTTP من المتصفح. اختير مسار الخطأ التجريبي.", tone: "warn" });
-        at = nextFor(doc, n.id, "error") ?? nextFor(doc, n.id, "success"); continue;
-      }
+      case "request": // unreachable: always stopped above as unsupported (never simulated)
+        return done("stopped");
       case "randomizer": {
         const port = chooseWeightedPort(d.options || [], ctx.seed ?? 42, stepCount);
         const label = d.options?.find(o => o.id === port)?.label;

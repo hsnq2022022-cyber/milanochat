@@ -50,7 +50,7 @@ test("functional: goto follows its actual target and end terminates",async({page
  await expect(sim).toContainText("✅ اكتملت المحاكاة");
 });
 
-test("functional: HTTP is explicitly NOT executed, and preview picks error path",async({page})=>{
+test("functional: HTTP is unsupported at runtime, so the preview stops there and never picks a path",async({page})=>{
  const a=start(),http=node("request","استدعاء تجريبي",300,{requestMethod:"GET",requestUrl:"https://example.org/api"});
  const ok=node("message","نجاح HTTP",600,{text:"نجح طلب HTTP الحقيقي"}),error=node("message","فشل HTTP",900,{text:"تم اختيار مسار الخطأ التجريبي"});
  const doc:FlowDocument={version:3,name:"HTTP لا ينفذ",nodes:[a,http,ok,error],
@@ -58,9 +58,11 @@ test("functional: HTTP is explicitly NOT executed, and preview picks error path"
  await load(page,doc);
  await page.getByRole("button",{name:"تجربة"}).click();
  const sim=page.getByTestId("flow-simulator");
- await expect(sim).toContainText("لم يُنفذ HTTP من المتصفح");
- await expect(sim).toContainText("تم اختيار مسار الخطأ التجريبي");
+ await expect(sim).toContainText("الطلب الخارجي غير مدعوم بعد");
+ await expect(sim).toContainText("توقفت المحاكاة هنا");
+ await expect(sim).not.toContainText("تم اختيار مسار الخطأ التجريبي");
  await expect(sim).not.toContainText("نجح طلب HTTP الحقيقي");
+ await expect(sim).not.toContainText("اكتملت المحاكاة");
 });
 
 for(const choice of [

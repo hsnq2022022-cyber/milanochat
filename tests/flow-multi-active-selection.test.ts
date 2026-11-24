@@ -264,9 +264,12 @@ const canary={...WORKERS_READY,FLOW_DURABLE_INGRESS_ENABLED:"true",FLOW_DURABLE_
 test("index.ts wiring matches the routed helper: durable first, then V2/AI with the same selection",()=>{
  const src=readFileSync("supabase/functions/milan-api/index.ts","utf8");
  const fn=src.slice(src.indexOf("async function handleIncomingWebhookMessage("),src.indexOf("المعالج الرئيسي"));
- const durableAt=fn.indexOf("attemptDurableInstagram(sb,{"),prepareAt=fn.indexOf("prepareFlow: () => prepareSimpleFlowReply(");
+ const durableAt=fn.indexOf("attemptDurableInstagram(sb, {"),prepareAt=fn.indexOf("prepareFlow: () => prepareSimpleFlowReply(");
  assert.ok(durableAt>0&&prepareAt>durableAt);
- assert.match(fn,/tenantId,accountId:String\(account\.id\),conversationId:String\(conv\.id\)/);
+ // ...and routeInbound itself consults the durable stage before the exclusive (V2/AI) claim.
+ const routing=readFileSync("supabase/functions/milan-api/messageRouting.ts","utf8");
+ assert.ok(routing.indexOf("deps.attemptDurable()")>0&&routing.indexOf("deps.attemptDurable()")<routing.indexOf("deps.exclusive()"));
+ assert.match(fn,/tenantId, accountId: String\(account\.id\), conversationId: String\(conv\.id\)/);
  assert.match(fn,/durableIngressConfigured\(String\(account\.id\),channel\)/);
  assert.match(fn,/const tenantId: string =\n\s+channel === "whatsapp"\n\s+\? account\.tenant_id\n\s+: account\.tenant_id;/);
 });

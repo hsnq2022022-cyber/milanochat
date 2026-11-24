@@ -6,6 +6,7 @@
  * worker), with the same production approval and exact canary account.
  * Test-only keeps legacy canaries.
  */
+import {durableAccountAllowed} from "../_shared/durableAccounts.ts";
 export function canDispatchOutbox(input:{
  globalEnabled:unknown;
  tenantEnabled:unknown;
@@ -38,5 +39,5 @@ export function canDispatchOutbox(input:{
  return input.testOnly===true||
    (productionPlatform&&input.productionApproved===true&&
     typeof input.accountId==="string"&&input.accountId.length>0&&
-    input.canaryAccountId===input.accountId);
+    durableAccountAllowed(input.canaryAccountId,input.accountId));
 }

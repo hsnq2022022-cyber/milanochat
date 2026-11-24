@@ -6,6 +6,7 @@ import {importFlow,isMessageScope,validateDocument,conversationStartScopeProblem
  FLOW_MESSAGE_SCOPE_NOT_IMMEDIATE,MESSAGE_SCOPE_NOT_IMMEDIATE_MSG} from "./model.ts";
 import type {FlowDocument,Platform} from "./model.ts";
 import {auditFlowPublication} from "./publicationGate.ts";
+import {unsupportedFindings,findingSentence,validateForRuntime} from "./runtimeSupport.ts";
 import type {FlowCapability} from "./publicationGate.ts";
 
 export type ProviderPlatform="instagram"|"facebook"|"whatsapp";
@@ -86,12 +87,38 @@ export function preparePublishedDocument(raw:unknown,accountPlatform:ProviderPla
   // trigger, which would silently turn it into a catch-all.
   if(conversationStartScopeProblem(parsed))return null;
   const doc=importFlow(parsed);
-  if(!doc||doc.version!==3||validateDocument(doc).some(x=>x.severity==="error"))
+  if(!doc||doc.version!==3||validateForRuntime(doc).some(x=>x.severity==="error"))
    return null;
   const starts=doc.nodes.filter(n=>n.data.kind==="trigger");
   if(starts.length!==1||providerPlatform(starts[0].data.platform)!==accountPlatform)
    return null;
   return doc;
+ }catch{return null;}
+}
+
+export const FLOW_RUNTIME_UNSUPPORTED="FLOW_RUNTIME_UNSUPPORTED";
+/** Most reasons quoted to the customer in one message (the rest stay in `reasons`). */
+const MAX_QUOTED_REASONS=3;
+/**
+ * PURE. A raw document that contains steps NO live engine runs (story/ad/live/referral
+ * triggers, HTTP request, number questions, unknown blocks, ...) -> the plain Arabic
+ * rejection the server returns (HTTP 422, code FLOW_RUNTIME_UNSUPPORTED) BEFORE any
+ * revision is created; otherwise null (other validation decides).
+ * Same derivation as the editor check chip and the simulator (runtimeSupport.ts).
+ * Arabic only, no ids, no engine names, no env names.
+ */
+export function runtimeUnsupportedRejection(raw:unknown):{code:string;message:string;reasons:string[]}|null{
+ try{
+  const doc=importFlow(JSON.parse(JSON.stringify(raw)));
+  if(!doc)return null;
+  const findings=unsupportedFindings(doc,{includeReported:true});
+  if(findings.length===0)return null;
+  // Titles only: an internal node id is never customer text.
+  const quoted=findings.slice(0,MAX_QUOTED_REASONS).map(findingSentence).join(" ؛ ");
+  const more=findings.length>MAX_QUOTED_REASONS?" (وخطوات أخرى)":"";
+  return {code:FLOW_RUNTIME_UNSUPPORTED,
+   message:"لا يمكن نشر هذا التدفق لأنه يحتوي على خطوات لا يدعمها التشغيل الفعلي: "+quoted+more,
+   reasons:[...new Set(findings.map(f=>"FLOW_RUNTIME_UNSUPPORTED:"+f.reason))]};
  }catch{return null;}
 }
 

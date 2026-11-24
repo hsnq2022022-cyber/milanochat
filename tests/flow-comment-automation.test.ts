@@ -249,7 +249,7 @@ test("flow-publication validates comment triggers at publish (422), after the do
   const src = readFileSync("supabase/functions/flow-publication/index.ts", "utf8");
   // publish and publish_live share validatePublishDocument, then createRevision.
   const validate = src.slice(src.indexOf("function validatePublishDocument("), src.indexOf("async function createRevision("));
-  const a = validate.indexOf('if(!doc)return fail(error("Flow document is invalid or targets another channel",422));');
+  const a = validate.indexOf('return fail(error("Flow document is invalid or targets another channel",422));');
   const b = validate.indexOf("if(documentCommentTriggerProblem(doc)!==null)");
   assert.ok(a > 0 && b > a, "comment trigger validated after the document check");
   const create = src.slice(src.indexOf("async function createRevision("), src.indexOf("const MAX_BODY_BYTES"));

@@ -1,4 +1,5 @@
 import {useCallback,useEffect,useRef,useState} from "react";
+import {unsupportedFindings,findingSentence} from "./runtimeSupport.ts";
 import {classifyPublishLive,PUBLISH_LIVE_TEXT,savedNotLiveText,type PublishLiveResult} from "./publishLiveResult.ts";
 import {classifyStopError,classifyStopReply,STOP_TEXT,type StopResult} from "./emergencyStop.ts";
 import type {FlowDocument} from "./model.ts";
@@ -250,6 +251,15 @@ export default function FlowPublicationPanel({flowKey,document,language,onClose,
  const publish=async()=>{
   // Synchronous guard: a rapid second click must not send a second request.
   if(publishInFlight.current||!accountId||busy||!isEditingLocalFlow)return;
+  // Steps no live engine runs are refused here too (the server refuses them with the same
+  // reasons); nothing is confirmed, requested or saved.
+  const unrunnable=unsupportedFindings(document,{includeReported:true});
+  if(unrunnable.length>0){
+   setNotice(en?"This flow has steps that cannot run yet. Fix the items in the check list, then publish again."
+    :"لا يمكن نشر التدفق لأنه يحتوي على خطوات لا يدعمها التشغيل الفعلي: "+
+      unrunnable.slice(0,3).map(findingSentence).join(" ؛ ")+(unrunnable.length>3?" (وخطوات أخرى)":""));
+   return;
+  }
   if(!window.confirm(en?PUBLISH_LIVE_TEXT.confirm.en:PUBLISH_LIVE_TEXT.confirm.ar))return;
   publishInFlight.current=true;
   setBusy(true);setNotice("");

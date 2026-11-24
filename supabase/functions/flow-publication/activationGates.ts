@@ -10,6 +10,7 @@
  * switches transactionally). On {ok:false} the caller returns `body` with
  * `status` unchanged. Thrown errors propagate to the caller's catch (503).
  */
+import {durableAccountAllowed} from "../_shared/durableAccounts.ts";
 import {
  publicationCanActivate,testCanaryArmed,productionActivationAuthorized,
  type ProviderPlatform,
@@ -139,7 +140,7 @@ export async function evaluateActivationGates(input:ActivationGateInput):Promise
  const durable=production&&scope.platform==="instagram"&&durableGraph&&
   env("FLOW_DURABLE_ACTIVATION_READY")==="true"&&
   env("FLOW_DURABLE_INGRESS_ENABLED")==="true"&&
-  env("FLOW_DURABLE_CANARY_ACCOUNT_ID")===scope.accountId&&
+  durableAccountAllowed(env("FLOW_DURABLE_CANARY_ACCOUNT_ID"),scope.accountId)&&
   env("FLOW_WORKERS_OPERATOR_RELEASE")==="production-canary-approved"&&
   env("FLOW_OUTBOX_SEND_ENABLED")==="true"&&
   env("FLOW_ATOMIC_CONSUME_READY")==="true"&&
@@ -160,7 +161,7 @@ export async function evaluateActivationGates(input:ActivationGateInput):Promise
  const commentFlow=commentGraph&&commentPlatformAuthorized&&
   env("FLOW_DURABLE_ACTIVATION_READY")==="true"&&
   env("FLOW_DURABLE_INGRESS_ENABLED")==="true"&&
-  env("FLOW_DURABLE_CANARY_ACCOUNT_ID")===scope.accountId&&
+  durableAccountAllowed(env("FLOW_DURABLE_CANARY_ACCOUNT_ID"),scope.accountId)&&
   env("FLOW_WORKERS_OPERATOR_RELEASE")==="production-canary-approved"&&
   env("FLOW_OUTBOX_SEND_ENABLED")==="true"&&
   env("FLOW_ATOMIC_CONSUME_READY")==="true"&&

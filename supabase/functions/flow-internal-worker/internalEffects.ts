@@ -51,6 +51,7 @@
  * Pure helpers have no Deno/npm imports (node --experimental-strip-types).
  */
 import {compareOutbox,effectSeq,type OrderRow} from "../flow-outbox-worker/effectOrder.ts";
+import {durableAccountAllowed} from "../_shared/durableAccounts.ts";
 
 // deno-lint-ignore no-explicit-any
 type Query=any;
@@ -225,7 +226,7 @@ export async function runInternalEffects(sb:InternalDb,deps:InternalDeps):Promis
    if(!record(a)||!record(c)||a.tenant_id!==tenantId||c.tenant_id!==tenantId||
       a.id!==r.channel_account_id||a.platform!=="instagram"||c.id!==r.conversation_id||
       c.account_id!==a.id){await end("cancelled","ineligible","skipped_ineligible");continue;}
-   if(a.id!==deps.canaryAccountId){report("blocked_canary");continue;}
+   if(!durableAccountAllowed(deps.canaryAccountId,a.id)){report("blocked_canary");continue;}
    if(activation.data?.is_active!==true){
     await end("cancelled","revision_inactive","skipped_revision_inactive");continue;
    }
