@@ -35,7 +35,8 @@ test("310000 is the newest migration; rollback exists",()=>{
  // 20261115120000_channel_accounts_hardening: independent security migration (channel_accounts grants/policies/index; no flow object).
  // 20261115130000_wayl_topup_atomic_grant: independent billing migration (new wayl_grant_topup_once(uuid,integer,text,jsonb) only; no flow object).
  // 20261115150000_flow_delivery_failure_info: additive, newest (nullable failure columns + CHECK on automation_flow_delivery_attempts, new flow_fail_outbox_delivery; redefines no existing function; requires 210000).
- for(const s of stamps)assert.ok(s<="20261029310000"||s==="20261029320000"||s==="20261029330000"||s==="20261029340000"||s==="20261029350000"||s==="20261029360000"||s==="20261115120000"||s==="20261115130000"||s==="20261115150000",s);
+// 20261123100000_flow_activation_generation: patches nine flow functions in place + adds two trigger functions/triggers and two columns (tests/flow-activation-generation.test.mjs); requires 20261029330000.
+ for(const s of stamps)assert.ok(s<="20261029310000"||s==="20261029320000"||s==="20261029330000"||s==="20261029340000"||s==="20261029350000"||s==="20261029360000"||s==="20261115120000"||s==="20261115130000"||s==="20261115150000"||s==="20261123100000",s);
  assert.ok(existsSync(RB));
 });
 test("migration and rollback: one bounded transaction, service_role-only, SECURITY DEFINER with empty search_path",()=>{

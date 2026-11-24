@@ -11,6 +11,7 @@ import type {FlowDocument} from "../../../src/flow/model.ts";
 // end are planned together (max 5 effects, seq-tagged) and committed at once.
 import {planUntilWait,seedFromEventKey} from "../../../src/flow/runtimeChain.ts";
 import {aiStepEnabled} from "../flow-outbox-worker/aiStep.ts";
+import {revisionLive} from "../_shared/activationGeneration.ts";
 import {canWakeDurableRun,wakeEndReason,type WakeEligibility} from "./eligibility.ts";
 import {wakeMediaSendEnabled,wakeEffectsMediaAllowed,endWakeForDisallowedMedia,
  WAKE_MEDIA_END_REASON} from "./mediaGuard.ts";
@@ -100,7 +101,7 @@ Deno.serve(async(req)=>{
      .select("tenant_id,account_id,transferred,auto_paused_reason,human_agent_expires_at")
      .eq("tenant_id",tenantId).eq("id",run.conversation_id).maybeSingle(),
     sb.from("automation_flow_activations")
-     .select("revision,is_active").eq("tenant_id",tenantId)
+     .select("revision,is_active,activation_generation").eq("tenant_id",tenantId)
      .eq("channel_account_id",run.channel_account_id)
      .eq("platform",run.platform).eq("flow_key",run.flow_key)
      .eq("revision",run.publication_revision).maybeSingle()
@@ -128,7 +129,8 @@ Deno.serve(async(req)=>{
     humanAgentExpiresAt:conversation.data?.human_agent_expires_at,
     humanPausedReason:conversation.data?.auto_paused_reason,
     activeRevision:activation.data?Number(activation.data.revision):null,
-    revisionIsActive:activation.data?.is_active
+    // Active AND on the generation this run was created under (20261123100000).
+    revisionIsActive:activation.data?revisionLive(activation.data,run):undefined
    };
    if(!canWakeDurableRun(wake,nowMs)){
     const reason=wakeEndReason(wake,nowMs);

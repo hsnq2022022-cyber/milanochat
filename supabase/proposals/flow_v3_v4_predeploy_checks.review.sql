@@ -425,6 +425,8 @@ vv AS (
    WHEN ver.h=ver.h130 THEN '20261029130000'
    -- 20261029230000 replaces the 150000 lease body (md5 of prosrc).
    WHEN ver.sig='flow_lease_due_runs(integer)' AND ver.h='130bba5dd3c48c1e16398d921e53c6af' THEN '20261029230000'
+   -- 20261123100000 (activation generations) patches the 230000 lease body (exact md5 of prosrc).
+   WHEN ver.sig='flow_lease_due_runs(integer)' AND ver.h='e17a10af729565b8f74118bbedd3b47f' THEN '20261123100000'
    ELSE 'unrecognized' END AS v
  FROM ver
 ),
@@ -532,17 +534,17 @@ SELECT section,item,status,tenant_id,n,ids,detail FROM (
   CASE
    WHEN vv.v='absent' AND vv.sig='flow_lease_due_runs(integer)' THEN 'MISSING: public.'||vv.sig
    WHEN vv.v='absent' AND s150.n=0 THEN 'ABSENT'
-   WHEN s150.n>0 AND vv.v NOT IN('20261029150000','20261029230000') THEN 'CONFLICT: public.'||vv.sig||' body'
-   WHEN s150.n=0 AND vv.v IN('20261029150000','20261029230000') THEN 'CONFLICT: public.'||vv.sig||' body'
+   WHEN s150.n>0 AND vv.v NOT IN('20261029150000','20261029230000','20261123100000') THEN 'CONFLICT: public.'||vv.sig||' body'
+   WHEN s150.n=0 AND vv.v IN('20261029150000','20261029230000','20261123100000') THEN 'CONFLICT: public.'||vv.sig||' body'
    WHEN vv.v='unrecognized' THEN 'CONFLICT: public.'||vv.sig||' body'
    ELSE 'OK' END,
   NULL,s150.n,NULL,
   format('installed_version=%s body_md5=%s; 150000 helper functions present=%s/2%s',vv.v,coalesce(vv.h,'-'),s150.n,
    CASE
-    WHEN s150.n>0 AND vv.v NOT IN('20261029150000','20261029230000') THEN '; body is not the 20261029150000 version while 150000 objects exist: '
+    WHEN s150.n>0 AND vv.v NOT IN('20261029150000','20261029230000','20261123100000') THEN '; body is not the 20261029150000 version while 150000 objects exist: '
      '20261029130000 was most likely re-applied after 20261029150000 (same ownership marker, so its preflight passes). '
      'Re-apply 20261029150000 (idempotent) to restore it; never re-apply 20261029130000 after 20261029150000'
-    WHEN s150.n=0 AND vv.v IN('20261029150000','20261029230000') THEN '; 20261029150000 body without its helper functions (partial rollback?): '
+    WHEN s150.n=0 AND vv.v IN('20261029150000','20261029230000','20261123100000') THEN '; 20261029150000 body without its helper functions (partial rollback?): '
      'run the 20261029150000 rollback or re-apply 20261029150000'
     WHEN vv.v='unrecognized' THEN '; body or marker matches no known migration version'
     ELSE '' END)
@@ -800,9 +802,16 @@ g230(sig,h230) AS (VALUES
  ('flow_resume_button_run(uuid,uuid,text,uuid,integer,text,text,integer,text,jsonb,timestamptz,jsonb)',
   '0d4917f27cece556b549c5ca0c7046a2')
 ),
+-- 20261123100000 (activation generations) body of flow_resume_button_run (normalized md5): accepted
+-- exactly like the 230000 body it patches; flow_begin_durable_run is not touched by that migration.
+ggen(sig,hgen) AS (VALUES
+ ('flow_resume_button_run(uuid,uuid,text,uuid,integer,text,text,integer,text,jsonb,timestamptz,jsonb)',
+  '20a3885337e1d340d32e03fc301d682c')
+),
 dr AS (
  SELECT f.sig,f.h,(SELECT g.h180 FROM g180 g WHERE g.sig=f.sig) AS h180,
-  (SELECT g.h230 FROM g230 g WHERE g.sig=f.sig) AS h230,p.oid,obj_description(p.oid,'pg_proc') AS marker,
+  (SELECT g.h230 FROM g230 g WHERE g.sig=f.sig) AS h230,
+  (SELECT g.hgen FROM ggen g WHERE g.sig=f.sig) AS hgen,p.oid,obj_description(p.oid,'pg_proc') AS marker,
   split_part(coalesce(obj_description(p.oid,'pg_proc'),''),' ',1)='CREATED_BY_20261029180000_FLOW_DURABLE_BUTTON_RUN_GUARDS' AS m180,
   md5(btrim(regexp_replace(p.prosrc,'[[:space:]]+',' ','g'))) AS ph,p.prosecdef,
   coalesce(array_to_string(p.proconfig,','),'') AS cfg,
@@ -881,10 +890,10 @@ pf190 AS (
 SELECT section,item,status,tenant_id,n,ids,detail FROM (
  SELECT 0 AS ord,'d_prerequisites'::text AS section,'durable_button_run:public.'||dr.sig AS item,
   CASE WHEN dr.oid IS NULL THEN 'ABSENT'
-   WHEN dr.ph IS DISTINCT FROM dr.h AND dr.ph IS DISTINCT FROM dr.h180 AND dr.ph IS DISTINCT FROM dr.h230
+   WHEN dr.ph IS DISTINCT FROM dr.h AND dr.ph IS DISTINCT FROM dr.h180 AND dr.ph IS DISTINCT FROM dr.h230 AND dr.ph IS DISTINCT FROM dr.hgen
     OR dr.prosecdef OR dr.cfg<>'search_path=""'
-    OR dr.m180 AND dr.ph IS DISTINCT FROM dr.h180 AND dr.ph IS DISTINCT FROM dr.h230
-    OR dr.ph=dr.h230 AND NOT dr.m180
+    OR dr.m180 AND dr.ph IS DISTINCT FROM dr.h180 AND dr.ph IS DISTINCT FROM dr.h230 AND dr.ph IS DISTINCT FROM dr.hgen
+    OR dr.ph IN(dr.h230,dr.hgen) AND NOT dr.m180
     THEN 'CONFLICT: public.'||dr.sig||' body'
    WHEN dr.overloads>0 THEN 'CONFLICT: public.'||split_part(dr.sig,'(',1)||' overload'
    WHEN dr.exposed THEN 'CONFLICT: public.'||dr.sig||' privileges'
@@ -899,14 +908,14 @@ SELECT section,item,status,tenant_id,n,ids,detail FROM (
      ELSE 'unknown' END,
     coalesce(dr.marker,'-'),dr.ph,
     CASE WHEN dr.ph=dr.h THEN '20261029125000' WHEN dr.ph=dr.h180 THEN '20261029180000'
-     WHEN dr.ph=dr.h230 THEN '20261029230000' ELSE 'unrecognized' END,
+     WHEN dr.ph=dr.h230 THEN '20261029230000' WHEN dr.ph=dr.hgen THEN '20261123100000' ELSE 'unrecognized' END,
     dr.prosecdef,dr.cfg,dr.exposed,dr.overloads,
-    CASE WHEN dr.ph IS DISTINCT FROM dr.h AND dr.ph IS DISTINCT FROM dr.h180 AND dr.ph IS DISTINCT FROM dr.h230
+    CASE WHEN dr.ph IS DISTINCT FROM dr.h AND dr.ph IS DISTINCT FROM dr.h180 AND dr.ph IS DISTINCT FROM dr.h230 AND dr.ph IS DISTINCT FROM dr.hgen
       OR dr.prosecdef OR dr.cfg<>'search_path=""'
       THEN '; not the reviewed definition: 20261029125000 refuses to overwrite it (and 20261029180000 refuses to replace it)'
-     WHEN dr.m180 AND dr.ph IS DISTINCT FROM dr.h180 AND dr.ph IS DISTINCT FROM dr.h230
+     WHEN dr.m180 AND dr.ph IS DISTINCT FROM dr.h180 AND dr.ph IS DISTINCT FROM dr.h230 AND dr.ph IS DISTINCT FROM dr.hgen
       THEN '; carries the 20261029180000 marker without its body: 20261029180000 and its rollback refuse'
-     WHEN dr.ph=dr.h230 AND NOT dr.m180
+     WHEN dr.ph IN(dr.h230,dr.hgen) AND NOT dr.m180
       THEN '; 20261029230000 body without the 20261029180000 marker: 20261029230000 and its rollback refuse'
      WHEN dr.overloads>0 THEN '; another overload exists: 20261029125000 refuses to install'
      WHEN dr.exposed THEN '; re-applying 20261029125000 restores service_role-only privileges'
@@ -922,18 +931,18 @@ SELECT section,item,status,tenant_id,n,ids,detail FROM (
  FROM dr
  UNION ALL
  SELECT 3,'d_prerequisites','durable_button_run_guards',
-  CASE WHEN count(*) FILTER(WHERE dr.m180 OR dr.ph IN(dr.h180,dr.h230))=0 THEN 'ABSENT'
-   WHEN count(*) FILTER(WHERE dr.m180 AND dr.ph IN(dr.h180,dr.h230))=2 THEN 'OK'
+  CASE WHEN count(*) FILTER(WHERE dr.m180 OR dr.ph IN(dr.h180,dr.h230,dr.hgen))=0 THEN 'ABSENT'
+   WHEN count(*) FILTER(WHERE dr.m180 AND dr.ph IN(dr.h180,dr.h230,dr.hgen))=2 THEN 'OK'
    ELSE 'CONFLICT: 20261029180000 objects' END,
   NULL,count(*) FILTER(WHERE dr.m180),NULL,
-  CASE WHEN count(*) FILTER(WHERE dr.m180 OR dr.ph IN(dr.h180,dr.h230))=0
+  CASE WHEN count(*) FILTER(WHERE dr.m180 OR dr.ph IN(dr.h180,dr.h230,dr.hgen))=0
     THEN '20261029180000 not applied: flow_resume_button_run does not re-check the account/tenant flags and neither function checks that the claim message belongs to the conversation'
    WHEN count(*) FILTER(WHERE dr.m180 AND dr.ph=dr.h180)=2
     THEN 'installed by 20261029180000 (both functions carry its marker and body); rollback: supabase/rollbacks/20261029180000_flow_durable_button_run_guards.rollback.sql FIRST'
-   WHEN count(*) FILTER(WHERE dr.m180 AND dr.ph IN(dr.h180,dr.h230))=2
-    THEN 'installed by 20261029180000 and replaced by 20261029230000 (both carry the 180000 marker; '||count(*) FILTER(WHERE dr.ph=dr.h230)||' of 2 have the 230000 body); rollback: 20261029230000 FIRST'
+   WHEN count(*) FILTER(WHERE dr.m180 AND dr.ph IN(dr.h180,dr.h230,dr.hgen))=2
+    THEN 'installed by 20261029180000 and replaced by 20261029230000 (both carry the 180000 marker; '||count(*) FILTER(WHERE dr.ph=dr.h230)||' of 2 have the 230000 body'||CASE WHEN count(*) FILTER(WHERE dr.ph=dr.hgen)>0 THEN ', '||count(*) FILTER(WHERE dr.ph=dr.hgen)||' its 20261123100000 successor' ELSE '' END||'); rollback: 20261029230000 FIRST'
    ELSE format('partial or inconsistent 20261029180000 state: %s of 2 functions carry its marker, %s of 2 have its body',
-    count(*) FILTER(WHERE dr.m180),count(*) FILTER(WHERE dr.ph IN(dr.h180,dr.h230))) END
+    count(*) FILTER(WHERE dr.m180),count(*) FILTER(WHERE dr.ph IN(dr.h180,dr.h230,dr.hgen))) END
  FROM dr
  UNION ALL
  SELECT 4,'d_prerequisites','preflight:20261029180000',
@@ -951,7 +960,7 @@ SELECT section,item,status,tenant_id,n,ids,detail FROM (
     THEN 'CONFLICT: public.flow_begin_durable_run_superseding(uuid,uuid,uuid,uuid,text,text,bigint,text,text,integer,text,jsonb,timestamptz,jsonb) body'
    WHEN sp.overloads>0 THEN 'CONFLICT: public.flow_begin_durable_run_superseding overload'
    WHEN sp.exposed OR NOT sp.svc THEN 'CONFLICT: public.flow_begin_durable_run_superseding(uuid,uuid,uuid,uuid,text,text,bigint,text,text,integer,text,jsonb,timestamptz,jsonb) privileges'
-   WHEN (SELECT count(*) FROM dr WHERE dr.m180 AND dr.ph IN(dr.h180,dr.h230))<>2
+   WHEN (SELECT count(*) FROM dr WHERE dr.m180 AND dr.ph IN(dr.h180,dr.h230,dr.hgen))<>2
     THEN 'CONFLICT: 20261029190000 without 20261029180000'
    ELSE 'OK' END,
   NULL,sp.overloads,NULL,
@@ -959,7 +968,7 @@ SELECT section,item,status,tenant_id,n,ids,detail FROM (
     THEN '20261029190000 not applied: the atomic supersede + start RPC is missing; a milan-api build that calls it fails closed on a new durable run (no reply from that path), older builds supersede before the start (audit B4)'
    ELSE format('marker=%s body_md5=%s security_definer=%s config=%s public_or_client_privilege=%s service_role=%s other_overloads=%s durable_button_run_guards_ok=%s; rollback (revert milan-api first): supabase/rollbacks/20261029190000_flow_begin_durable_run_superseding.rollback.sql FIRST, before 20261029180000',
     coalesce(sp.marker,'-'),sp.h,sp.prosecdef,sp.cfg,sp.exposed,sp.svc,sp.overloads,
-    (SELECT count(*) FROM dr WHERE dr.m180 AND dr.ph IN(dr.h180,dr.h230))=2) END
+    (SELECT count(*) FROM dr WHERE dr.m180 AND dr.ph IN(dr.h180,dr.h230,dr.hgen))=2) END
  FROM sp
  UNION ALL
  SELECT 6,'d_prerequisites','preflight:20261029190000',
@@ -1015,8 +1024,14 @@ mf230(sig,h230) AS (VALUES
  ('flow_commit_run_step(uuid,uuid,integer,text,text,integer,text,jsonb,timestamptz,jsonb,text,uuid)','f5b147309700470f8b9f410dda5a6df0'),
  ('flow_reserve_outbox_delivery(uuid,uuid)','4a8882ddd7ad430c4187db821cc3de99')
 ),
+-- 20261123100000 (activation generations) bodies (normalized md5), accepted like the 230000 bodies they patch.
+mfgen(sig,hgen) AS (VALUES
+ ('flow_commit_run_step(uuid,uuid,integer,text,text,integer,text,jsonb,timestamptz,jsonb,text,uuid)','322c3493e2db9a8909d121d3b943689c'),
+ ('flow_reserve_outbox_delivery(uuid,uuid)','faa04c8fae8d97038ab04d82d72bc718')
+),
 mfx AS (
- SELECT mf.*,(SELECT x.h230 FROM mf230 x WHERE x.sig=mf.sig) AS h230,p.oid,obj_description(p.oid,'pg_proc') AS m,
+ SELECT mf.*,(SELECT x.h230 FROM mf230 x WHERE x.sig=mf.sig) AS h230,
+  (SELECT x.hgen FROM mfgen x WHERE x.sig=mf.sig) AS hgen,p.oid,obj_description(p.oid,'pg_proc') AS m,
   md5(btrim(regexp_replace(p.prosrc,'[[:space:]]+',' ','g'))) AS ph,p.prosecdef,
   coalesce(array_to_string(p.proconfig,','),'') AS cfg,
   p.oid IS NOT NULL AND (p.proacl IS NULL OR EXISTS(SELECT 1 FROM unnest(p.proacl) e
@@ -1063,7 +1078,7 @@ mfs AS (
  SELECT mfx.*,
   CASE WHEN mfx.oid IS NULL THEN 'MISSING: public.'||mfx.sig
    WHEN mfx.m IS DISTINCT FROM mfx.marker THEN 'CONFLICT: public.'||mfx.sig
-   WHEN mfx.ph IS DISTINCT FROM mfx.h_old AND mfx.ph IS DISTINCT FROM mfx.h_new AND mfx.ph IS DISTINCT FROM mfx.h230
+   WHEN mfx.ph IS DISTINCT FROM mfx.h_old AND mfx.ph IS DISTINCT FROM mfx.h_new AND mfx.ph IS DISTINCT FROM mfx.h230 AND mfx.ph IS DISTINCT FROM mfx.hgen
     OR mfx.prosecdef OR mfx.cfg<>'search_path=""'
     THEN 'CONFLICT: public.'||mfx.sig||' body'
    WHEN mfx.overloads>0 THEN 'CONFLICT: public.'||split_part(mfx.sig,'(',1)||' overload'
@@ -1072,7 +1087,7 @@ mfs AS (
  FROM mfx
 ),
 mtot AS (
- SELECT (SELECT count(*) FROM mfs WHERE mfs.ph=mfs.h_new OR mfs.ph=mfs.h230) AS fn_new,
+ SELECT (SELECT count(*) FROM mfs WHERE mfs.ph=mfs.h_new OR mfs.ph=mfs.h230 OR mfs.ph=mfs.hgen) AS fn_new,
   (SELECT count(*) FROM mcs WHERE mcs.is_new) AS ck_new
 ),
 pf210 AS (
@@ -1115,7 +1130,7 @@ SELECT section,item,status,tenant_id,n,ids,detail FROM (
    ELSE format('marker=%s body_md5=%s body_version=%s security_definer=%s config=%s public_or_client_privilege=%s other_overloads=%s',
     coalesce(mfs.m,'-'),mfs.ph,
     CASE WHEN mfs.ph=mfs.h_new THEN '20261029210000' WHEN mfs.ph=mfs.h_old THEN mfs.v_old
-     WHEN mfs.ph=mfs.h230 THEN '20261029230000' ELSE 'unrecognized' END,
+     WHEN mfs.ph=mfs.h230 THEN '20261029230000' WHEN mfs.ph=mfs.hgen THEN '20261123100000' ELSE 'unrecognized' END,
     mfs.prosecdef,mfs.cfg,mfs.exposed,mfs.overloads) END AS detail
  FROM mfs
  UNION ALL
@@ -1178,6 +1193,9 @@ WITH
 sw AS (
  SELECT 'flow_skip_blocked_outbox(integer,integer)'::text AS sig,
   'dd51c2c354790475e1c840db4084caef'::text AS h_old,'dacdf7bb582a7d380651d478f47c6b97'::text AS h_new,
+  -- 20261123100000 (activation generations) body (normalized md5): the 220000 sweep plus the generation predicate
+  -- and the abandoned reply_comment pass; accepted like h_new.
+  'ee48d8bc62fb30a98a648f21ca504b6f'::text AS h_gen,
   p.oid,obj_description(p.oid,'pg_proc') AS m,
   md5(btrim(regexp_replace(p.prosrc,'[[:space:]]+',' ','g'))) AS ph,p.prosecdef,p.proisstrict,p.pronargdefaults,
   p.prorettype,p.proargnames,
@@ -1194,7 +1212,7 @@ sws AS (
  SELECT sw.*,
   CASE WHEN sw.oid IS NULL THEN 'MISSING: public.'||sw.sig
    WHEN sw.m IS DISTINCT FROM 'CREATED_BY_20261029130000_FLOW_RUN_LIFECYCLE' THEN 'CONFLICT: public.'||sw.sig
-   WHEN sw.ph IS DISTINCT FROM sw.h_old AND sw.ph IS DISTINCT FROM sw.h_new OR sw.prosecdef OR sw.proisstrict
+   WHEN sw.ph IS DISTINCT FROM sw.h_old AND sw.ph IS DISTINCT FROM sw.h_new AND sw.ph IS DISTINCT FROM sw.h_gen OR sw.prosecdef OR sw.proisstrict
     OR sw.cfg<>'search_path=""' OR sw.pronargdefaults<>2 OR sw.prorettype IS DISTINCT FROM 'integer'::regtype
     OR sw.proargnames IS DISTINCT FROM ARRAY['p_max_age_minutes','p_limit']
     THEN 'CONFLICT: public.'||sw.sig||' body'
@@ -1229,16 +1247,16 @@ SELECT section,item,status,tenant_id,n,ids,detail FROM (
   CASE WHEN sws.oid IS NULL THEN '20261029130000 not applied: 20261029220000 requires it'
    ELSE format('marker=%s body_md5=%s body_version=%s security_definer=%s config=%s public_or_client_privilege=%s other_overloads=%s',
     coalesce(sws.m,'-'),sws.ph,
-    CASE WHEN sws.ph=sws.h_new THEN '20261029220000' WHEN sws.ph=sws.h_old THEN '20261029130000' ELSE 'unrecognized' END,
+    CASE WHEN sws.ph=sws.h_new THEN '20261029220000' WHEN sws.ph=sws.h_gen THEN '20261123100000' WHEN sws.ph=sws.h_old THEN '20261029130000' ELSE 'unrecognized' END,
     sws.prosecdef,sws.cfg,sws.exposed,sws.overloads) END AS detail
  FROM sws
  UNION ALL
  SELECT 1,'d_prerequisites','media_stale_sweep',
   CASE WHEN sws.oid IS NULL OR sws.ph=sws.h_old THEN 'ABSENT'
-   WHEN sws.ph=sws.h_new THEN 'OK'
+   WHEN sws.ph IN(sws.h_new,sws.h_gen) THEN 'OK'
    ELSE 'CONFLICT: 20261029220000 objects' END,
   NULL,NULL,NULL,
-  CASE WHEN sws.oid IS NOT NULL AND sws.ph=sws.h_new
+  CASE WHEN sws.oid IS NOT NULL AND sws.ph IN(sws.h_new,sws.h_gen)
     THEN 'installed by 20261029220000 (flow_skip_blocked_outbox sweeps message_image effects like text); rollback: supabase/rollbacks/20261029220000_flow_media_stale_sweep.rollback.sql FIRST, before 20261029210000'
    WHEN sws.oid IS NULL OR sws.ph=sws.h_old
     THEN '20261029220000 not applied: unsent message_image effects are not swept (stale / takeover / ended run / inactive revision)'
@@ -1377,8 +1395,16 @@ mcf(sig,marker,prefix,h_old,h_new) AS (VALUES
  ('flow_reserve_outbox_delivery(uuid,uuid)',
   'CREATED_BY_20261028226000_FLOW_OUTBOX_DELIVERY',false,'1b7a6fe3f6a9ee97203d50d5e0e0baa7','4a8882ddd7ad430c4187db821cc3de99')
 ),
+-- 20261123100000 (activation generations) bodies (normalized md5) of the four patched functions among
+-- the seven: accepted like the 230000 body each one patches.
+mcg(sig,h_gen) AS (VALUES
+ ('flow_resume_button_run(uuid,uuid,text,uuid,integer,text,text,integer,text,jsonb,timestamptz,jsonb)','20a3885337e1d340d32e03fc301d682c'),
+ ('flow_lease_due_runs(integer)','3e6b8a13e02b6f1155fb96c8afe0ff59'),
+ ('flow_commit_run_step(uuid,uuid,integer,text,text,integer,text,jsonb,timestamptz,jsonb,text,uuid)','322c3493e2db9a8909d121d3b943689c'),
+ ('flow_reserve_outbox_delivery(uuid,uuid)','faa04c8fae8d97038ab04d82d72bc718')
+),
 mcfx AS (
- SELECT mcf.*,p.oid,
+ SELECT mcf.*,(SELECT g.h_gen FROM mcg g WHERE g.sig=mcf.sig) AS h_gen,p.oid,
   CASE WHEN mcf.prefix THEN split_part(coalesce(obj_description(p.oid,'pg_proc'),''),' ',1)
    ELSE obj_description(p.oid,'pg_proc') END AS m,
   md5(btrim(regexp_replace(p.prosrc,'[[:space:]]+',' ','g'))) AS ph,p.prosecdef,
@@ -1393,6 +1419,7 @@ mcfx AS (
 mcfs AS (
  SELECT mcfx.*,
   CASE WHEN mcfx.oid IS NULL THEN 'absent' WHEN mcfx.ph=mcfx.h_new THEN '20261029230000'
+   WHEN mcfx.ph=mcfx.h_gen THEN '20261123100000'
    WHEN mcfx.ph=mcfx.h_old THEN 'previous' ELSE 'unrecognized' END AS v,
   mcfx.oid IS NOT NULL AND mcfx.m IS NOT DISTINCT FROM mcfx.marker AND NOT mcfx.prosecdef
    AND mcfx.cfg='search_path=""' AND mcfx.overloads=0 AS sound
@@ -1411,8 +1438,8 @@ mcc AS (
   AND c.conname='automation_flow_canary_accounts_platform_chk' AND c.contype='c'
 ),
 mct AS (
- SELECT (SELECT count(*) FROM mcfs WHERE mcfs.v='20261029230000') AS fn_new,
-  (SELECT count(*) FROM mcfs WHERE mcfs.v='20261029230000' AND mcfs.sound AND NOT mcfs.exposed) AS fn_new_ok,
+ SELECT (SELECT count(*) FROM mcfs WHERE mcfs.v IN('20261029230000','20261123100000')) AS fn_new,
+  (SELECT count(*) FROM mcfs WHERE mcfs.v IN('20261029230000','20261123100000') AND mcfs.sound AND NOT mcfs.exposed) AS fn_new_ok,
   (SELECT string_agg(split_part(mcfs.sig,'(',1)||'='||mcfs.v,' ' ORDER BY mcfs.sig) FROM mcfs) AS versions,
   coalesce(mcc.n=1 AND mcc.def=mcc.def_new AND mcc.mk='CREATED_BY_20261029230000_FLOW_MULTICHANNEL_SUPPORT',false) AS ck_new,
   coalesce(mcc.def=mcc.def_new OR mcc.mk='CREATED_BY_20261029230000_FLOW_MULTICHANNEL_SUPPORT',false) AS ck_touched,
@@ -1430,11 +1457,11 @@ pf230 AS (
    AND obj_description(to_regclass('public.automation_flow_canary_accounts'),'pg_class') IS NOT DISTINCT FROM 'CREATED_BY_20261029170000_FLOW_CANARY_CLAIM_DURABLE'
    AND obj_description(to_regclass('public.automation_flow_canary_claims'),'pg_class') IS NOT DISTINCT FROM 'CREATED_BY_20261029170000_FLOW_CANARY_CLAIM_DURABLE'),
   ('20261029220000 body of flow_skip_blocked_outbox',
-   (SELECT md5(btrim(regexp_replace(p.prosrc,'[[:space:]]+',' ','g'))) FROM pg_catalog.pg_proc p
+   coalesce((SELECT md5(btrim(regexp_replace(p.prosrc,'[[:space:]]+',' ','g'))) FROM pg_catalog.pg_proc p
     WHERE p.oid=to_regprocedure('public.flow_skip_blocked_outbox(integer,integer)'))
-    IS NOT DISTINCT FROM 'dacdf7bb582a7d380651d478f47c6b97'),
+    IN('dacdf7bb582a7d380651d478f47c6b97','ee48d8bc62fb30a98a648f21ca504b6f'),false)),
   ('the seven replaced functions with their markers, attributes and the previous or 20261029230000 body',
-   (SELECT count(*) FROM mcfs WHERE mcfs.sound AND mcfs.v IN('previous','20261029230000'))=7),
+   (SELECT count(*) FROM mcfs WHERE mcfs.sound AND mcfs.v IN('previous','20261029230000','20261123100000'))=7),
   ('canary platform CHECK: the 20261029170000 definition, or the 20261029230000 definition with its marker',
    (SELECT mcc.n=1 AND (mcc.def=mcc.def_old AND mcc.mk IS DISTINCT FROM 'CREATED_BY_20261029230000_FLOW_MULTICHANNEL_SUPPORT'
      OR mcc.def=mcc.def_new AND mcc.mk='CREATED_BY_20261029230000_FLOW_MULTICHANNEL_SUPPORT') FROM mcc))
@@ -1747,7 +1774,8 @@ fx(sig,mig,marker,h,why) AS (VALUES
  ('flow_apply_internal_effect(uuid,uuid)','20261028228000','CREATED_BY_20261028228000_INTERNAL_ACTIONS',
   'fa8c86694f1c74dd10b1679b7ac0a237','test_only tenants; flow-internal-worker now writes the tables directly')),
 fc AS (
- SELECT fx.*,p.oid,obj_description(p.oid,'pg_proc') AS m,md5(p.prosrc) AS ph,p.prosecdef,
+ -- hgen: 20261123100000 (activation generations) body of flow_apply_internal_effect (exact md5 of prosrc).
+ SELECT fx.*,CASE WHEN fx.sig='flow_apply_internal_effect(uuid,uuid)' THEN '1cdecb73a8a58653148f3e6e9b10d558' END AS hgen,p.oid,obj_description(p.oid,'pg_proc') AS m,md5(p.prosrc) AS ph,p.prosecdef,
   coalesce(array_to_string(p.proconfig,','),'') AS cfg,
   p.oid IS NOT NULL AND (p.proacl IS NULL OR EXISTS(SELECT 1 FROM unnest(p.proacl) e
    WHERE e::text LIKE '=%' OR e::text LIKE 'anon=%' OR e::text LIKE 'authenticated=%')) AS exposed,
@@ -1875,7 +1903,7 @@ SELECT section,item,status,tenant_id,n,ids,detail FROM (
  SELECT 4,'g_staff_internal_actions','function:public.'||fc.sig,
   CASE WHEN fc.oid IS NULL THEN 'ABSENT'
    WHEN fc.m IS DISTINCT FROM fc.marker THEN 'CONFLICT: public.'||fc.sig
-   WHEN fc.ph IS DISTINCT FROM fc.h OR fc.prosecdef OR fc.cfg<>'search_path=""' THEN 'CONFLICT: public.'||fc.sig||' body'
+   WHEN fc.ph IS DISTINCT FROM fc.h AND fc.ph IS DISTINCT FROM fc.hgen OR fc.prosecdef OR fc.cfg<>'search_path=""' THEN 'CONFLICT: public.'||fc.sig||' body'
    WHEN fc.exposed OR NOT fc.svc_ok THEN 'CONFLICT: public.'||fc.sig||' privileges'
    ELSE 'OK' END,
   NULL,NULL,NULL,

@@ -38,7 +38,8 @@ test("AI retry migration is the newest migration and later than the lifecycle mi
   // 20261115120000_channel_accounts_hardening: independent security migration (channel_accounts grants/policies/index; no flow object).
   // 20261115130000_wayl_topup_atomic_grant: independent billing migration (new wayl_grant_topup_once(uuid,integer,text,jsonb) only; no flow object).
   // 20261115150000_flow_delivery_failure_info: additive, newest (nullable failure columns + CHECK on automation_flow_delivery_attempts, new flow_fail_outbox_delivery; redefines no existing function; requires 210000).
-  "20261029200000","20261029210000","20261029220000","20261029230000","20261029240000","20261029250000","20261029260000","20261029270000","20261029280000","20261029290000","20261029300000","20261029310000","20261029320000","20261029330000","20261029340000","20261029350000",/* 360000 inbound recovery: additive, new objects only, requires 340000 */"20261029360000","20261115120000","20261115130000","20261115150000"];
+// 20261123100000_flow_activation_generation: patches nine flow functions in place + adds two trigger functions/triggers and two columns (tests/flow-activation-generation.test.mjs); requires 20261029330000.
+  "20261029200000","20261029210000","20261029220000","20261029230000","20261029240000","20261029250000","20261029260000","20261029270000","20261029280000","20261029290000","20261029300000","20261029310000","20261029320000","20261029330000","20261029340000","20261029350000",/* 360000 inbound recovery: additive, new objects only, requires 340000 */"20261029360000","20261115120000","20261115130000","20261115150000","20261123100000"];
  for(const s of stamps)if(s!==mine&&!successors.includes(s))
   assert.ok(s<mine,`older migration ${s} must precede ${mine}`);
  assert.ok(existsSync(LIFECYCLE));

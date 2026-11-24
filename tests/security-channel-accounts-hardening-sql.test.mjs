@@ -46,7 +46,8 @@ test("20261115120000: newest migration, one bounded transaction each, no data ch
  // Only these enumerated later migrations may follow (no channel_accounts object):
  // 20261115130000_wayl_topup_atomic_grant: independent billing migration (new wayl_grant_topup_once(uuid,integer,text,jsonb) only; no flow object).
  // 20261115150000_flow_delivery_failure_info: additive, newest (nullable failure columns + CHECK on automation_flow_delivery_attempts, new flow_fail_outbox_delivery; redefines no existing function; requires 210000).
- for(const s of stamps)assert.ok(s<="20261115120000"||["20261115130000","20261115150000"].includes(s),s);
+// 20261123100000_flow_activation_generation: patches nine flow functions in place + adds two trigger functions/triggers and two columns (tests/flow-activation-generation.test.mjs); requires 20261029330000.
+ for(const s of stamps)assert.ok(s<="20261115120000"||["20261115130000","20261115150000","20261123100000"].includes(s),s);
  assert.ok(existsSync(RB));
  for(const f of [MIG,RB]){
   const s=src(f),code=noComments(s);
@@ -385,6 +386,11 @@ test("(j) postconditions: a left-behind privilege aborts the whole migration (mu
  assert.equal(val(db,SNAP),b);
 });
 
+// Every table privilege that exists on the server under test. PostgreSQL 17 added MAINTAIN (VACUUM,
+// ANALYZE, REINDEX, CLUSTER, REFRESH, LOCK TABLE); 16 does not have it. Both lists are exact.
+const TABLE_PRIVS=db=>(Number(val(db,"current_setting('server_version_num')"))>=170000
+ ?["DELETE","INSERT","MAINTAIN","REFERENCES","SELECT","TRIGGER","TRUNCATE","UPDATE"]
+ :["DELETE","INSERT","REFERENCES","SELECT","TRIGGER","TRUNCATE","UPDATE"]);
 test("(f) re-apply is a no-op; (g) rollback restores the exact live state, twice; re-apply after rollback",{skip},()=>{
  const db=fresh();
  const pre=val(db,SNAP);
@@ -392,12 +398,17 @@ test("(f) re-apply is a no-op; (g) rollback restores the exact live state, twice
  ok(db,{file:MIG},"apply");
  const post=val(db,SNAP);
  assert.notEqual(post,pre);
+ // REVOKE ALL covers every privilege of the server's version (MAINTAIN included on 17): no client role keeps any.
+ for(const role of ["anon","authenticated"])
+  for(const priv of TABLE_PRIVS(db).filter(p=>p!=="SELECT"))
+   assert.equal(val(db,`has_table_privilege('${role}','public.channel_accounts','${priv}')`),"f",`${role} has no table-level ${priv} after hardening`);
+ assert.equal(val(db,`has_table_privilege('anon','public.channel_accounts','SELECT')`),"f","anon has no SELECT");
  assert.match(val(db,`obj_description('public.${IDX}'::regclass,'pg_class')`),new RegExp(`^${MARK}\\|\\{`));
  ok(db,{file:MIG},"re-apply");
  assert.equal(val(db,SNAP),post,"re-apply is a no-op (grants, policies, index, recorded state)");
  ok(db,{file:RB},"rollback");
  assert.equal(val(db,SNAP),pre,"exact previous state");
- assert.equal(preAcl,["anon","authenticated"].flatMap(r=>["DELETE","INSERT","REFERENCES","SELECT","TRIGGER","TRUNCATE","UPDATE"].map(p=>`${r}=${p}`)).join(","),"live: every table privilege to anon and authenticated");
+ assert.equal(preAcl,["anon","authenticated"].flatMap(r=>TABLE_PRIVS(db).map(p=>`${r}=${p}`)).join(","),"live: every table privilege to anon and authenticated");
  assert.equal(clientAcl(db),preAcl);
  assert.equal(val(db,`to_regclass('public.${IDX}') IS NULL`),"t","index gone");
  assert.equal(val(db,`(SELECT cmd||':'||roles::text||':'||coalesce(with_check,'-') FROM pg_policies WHERE policyname='users manage their channel accounts')`),"ALL:{authenticated}:-");

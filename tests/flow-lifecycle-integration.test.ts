@@ -330,7 +330,8 @@ ALTER TABLE public.tenants ADD COLUMN is_active boolean NOT NULL DEFAULT true,
  ADD COLUMN business_name text NOT NULL DEFAULT 'Test Store';
 ALTER TABLE public.channel_accounts ADD COLUMN is_active boolean NOT NULL DEFAULT true,
  ADD COLUMN agent_enabled boolean NOT NULL DEFAULT true,ADD COLUMN auto_reply boolean NOT NULL DEFAULT true,
- ADD COLUMN external_id text,ADD COLUMN access_token_encrypted text;
+ ADD COLUMN external_id text,ADD COLUMN access_token_encrypted text,
+ ADD COLUMN status text DEFAULT 'active';
 ALTER TABLE public.conversations ADD COLUMN transferred boolean NOT NULL DEFAULT false,
  ADD COLUMN auto_paused_reason text,ADD COLUMN human_agent_expires_at timestamptz;
 ALTER TABLE public.messages ADD COLUMN body_encrypted text,ADD COLUMN external_message_id text;
@@ -425,7 +426,11 @@ const CHAIN=[
  "supabase/migrations/20261029330000_flow_claim_begin_durable_run.sql",
  // Retryable unknown flow eligibility (inboundRoutingRetry.ts) and durable keyword starts.
  "supabase/migrations/20261029340000_flow_inbound_routing_retry.sql",
- "supabase/migrations/20261029350000_flow_durable_keyword_start.sql"
+ "supabase/migrations/20261029350000_flow_durable_keyword_start.sql",
+ // Production-installed activate/deactivate bodies (not in any migration), then the
+ // activation-generation migration that patches them and the eligibility predicates.
+ "tests/sql/fixtures/installed-flow-activation-functions.sql",
+ "supabase/migrations/20261123100000_flow_activation_generation.sql"
 ];
 const repo=new URL("..",import.meta.url).pathname;
 let dbSeq=0;
@@ -486,6 +491,11 @@ Deno.test({name:"flow V3/V4 lifecycle integration (real handlers + throwaway Pos
    `-c listen_addresses='' -k ${dir} -p ${port} -c fsync=off`,"start"]);
   assert.ok(r.ok,r.out);
   started=true;
+  // Report the server the whole run used; PG_EXPECT_VERSION=17.6 pins it (production runs 17.6).
+  const serverVersion=(await psql("postgres","SHOW server_version;")).out.trim();
+  console.log("[lifecycle] PostgreSQL server_version="+serverVersion);
+  const expectVersion=Deno.env.get("PG_EXPECT_VERSION");
+  if(expectVersion)assert.ok(serverVersion.startsWith(expectVersion),`expected PostgreSQL ${expectVersion}, got ${serverVersion}`);
   await exec("CREATE DATABASE lifecycle_base;","postgres");
   await exec(Deno.readTextFileSync(repo+"tests/sql/fixtures/flow-live-shape-bootstrap.sql"),"lifecycle_base");
   for(const f of CHAIN)
@@ -1663,6 +1673,124 @@ Deno.test({name:"flow V3/V4 lifecycle integration (real handlers + throwaway Pos
     assert.equal(crossNote.ok,false);assert.equal(sqlError(crossNote.err).code,"23503");
     assert.equal(await val(`SELECT count(*)::int FROM public.flow_conversation_tags WHERE tenant_id='${B}'`),0);
    }finally{Deno.env.delete("FLOW_INTERNAL_ACTIONS_ENABLED");}
+  });
+
+  await t.step("activation generations (20261123100000): a same-revision off/on strands old awaiting, sleeping, pending and internal work in the real ingress and workers; new work after reactivation runs",async()=>{
+   // Off then on of the SAME revision with no worker tick in between: the exact hazard.
+   const flip=async(flow:string)=>{await activate(flow,false);await activate(flow,true);};
+   const gen=(flow:string)=>val<number>(`SELECT activation_generation::int FROM public.automation_flow_activations
+    WHERE tenant_id='${A}' AND channel_account_id='${ACC}' AND flow_key='${flow}'`);
+   const stamp=(runId:string)=>val<number|null>(`SELECT activation_generation::int FROM public.automation_flow_runs WHERE id='${runId}'`);
+
+   // (a) awaiting_input run + real durable ingress: the tap on the OLD question is not honoured.
+   await freshDb();resetMeta();await activate("buttons",true);
+   const c1=await conv("5000001");const m1=await inbound(c1,"mid.g.1");
+   assert.equal(await attemptDurableInstagram(sb,ev(c1,m1,"mid.g.1",null)),"handled");
+   await outboxTick();assert.equal(meta.calls.length,1,"the question was sent");
+   const g1=await gen("buttons");
+   assert.equal(await stamp((await runsOf(c1))[0].id),g1,"the run carries the generation it was created under");
+   await flip("buttons");
+   assert.equal(await gen("buttons"),g1+1,"genuine inactive->active is a new generation");
+   const tap1=await inbound(c1,"mid.g.1t");
+   assert.equal(await attemptDurableInstagram(sb,ev(c1,tap1,"mid.g.1t","prices")),"fallback");
+   assert.deepEqual((await runsOf(c1)).map(r=>[r.run_status,r.ended_reason]),[["blocked","revision_inactive"]]);
+   assert.equal((await effectsOf(c1)).length,1,"no branch effect was queued");
+   await outboxTick();assert.equal(meta.calls.length,1,"nothing else is sent");
+
+   // (b) sleeping run + real runtime worker: the old wake is not served; a NEW run is.
+   await freshDb();resetMeta();await activate("delay",true);
+   const c2=await conv("5000002");const m2=await inbound(c2,"mid.g.2");
+   assert.equal(await attemptDurableInstagram(sb,ev(c2,m2,"mid.g.2",null)),"handled");
+   const old2=(await runsOf(c2))[0];assert.equal(old2.run_status,"sleeping");
+   await exec(`UPDATE public.automation_flow_runs SET wake_at=now()-interval '1 second' WHERE id='${old2.id}';`);
+   await flip("delay");
+   let w=await runtimeTick();
+   assert.equal(w.status,200);assert.equal(w.body.committed,0,JSON.stringify(w.body));
+   assert.deepEqual((await runsOf(c2)).map(r=>[r.run_status,r.ended_reason]),[["blocked","revision_inactive"]]);
+   await outboxTick();assert.equal(meta.calls.length,0,"the old wake never sent its follow-up");
+   const c2b=await conv("5000003");const m2b=await inbound(c2b,"mid.g.2b");
+   assert.equal(await attemptDurableInstagram(sb,ev(c2b,m2b,"mid.g.2b",null)),"handled");
+   const new2=(await runsOf(c2b))[0];
+   assert.equal(await stamp(new2.id),await gen("delay"),"new work is stamped with the NEW generation");
+   await exec(`UPDATE public.automation_flow_runs SET wake_at=now()-interval '1 second' WHERE id='${new2.id}';`);
+   w=await runtimeTick();assert.equal(w.body.leased,1,JSON.stringify(w.body));assert.equal(w.body.committed,1);
+   await outboxTick();
+   assert.equal(meta.calls.length,1);assert.equal(meta.calls[0].body.message.text,"رد بعد الانتظار");
+
+   // (c) pending message effect of a run that already moved on + real outbox worker: never delivered.
+   await freshDb();resetMeta();await activate("buttons",true);
+   const c3=await conv("5000004");const m3=await inbound(c3,"mid.g.3");
+   assert.equal(await attemptDurableInstagram(sb,ev(c3,m3,"mid.g.3",null)),"handled");
+   await outboxTick();assert.equal(meta.calls.length,1);
+   const tap3=await inbound(c3,"mid.g.3t");
+   assert.equal(await attemptDurableInstagram(sb,ev(c3,tap3,"mid.g.3t","prices")),"handled");
+   const pending3=(await effectsOf(c3)).filter(e=>e.delivery_status==="pending");
+   assert.ok(pending3.length>=1,"the branch answer is queued");
+   await flip("buttons");
+   await outboxTick();
+   assert.equal(meta.calls.length,1,"the stale branch answer is never sent");
+   const after3=await effectsOf(c3);
+   for(const e of pending3){
+    const now=after3.find(x=>x.id===e.id)!;
+    assert.deepEqual([now.delivery_status,now.cancel_reason],["cancelled","revision_inactive"]);
+   }
+
+   // (d) pending INTERNAL effects (tag / notification / handoff): only the TypeScript worker
+   //     applies these, so its generation check is the guard. Nothing is applied.
+   await freshDb();resetMeta();await activate("handoff",true);
+   const {runInternalEffects}=await import("../supabase/functions/flow-internal-worker/internalEffects.ts");
+   const internalTick=()=>runInternalEffects(sb,{canaryAccountId:ACC});
+   Deno.env.set("FLOW_INTERNAL_ACTIONS_ENABLED","true");
+   try{
+    const c4=await conv("5000005");const m4=await inbound(c4,"mid.g.4");
+    assert.equal(await attemptDurableInstagram(sb,evText(c4,m4,"mid.g.4","hi")),"handled");
+    await outboxTick();
+    const m4b=await inbound(c4,"mid.g.4b");
+    assert.equal(await attemptDurableInstagram(sb,evText(c4,m4b,"mid.g.4b","Ali@Shop.Example")),"handled");
+    const internalOf=()=>rows<{effect_kind:string;delivery_status:string;cancel_reason:string|null}>(
+     `SELECT o.effect_kind,o.delivery_status,o.cancel_reason FROM public.automation_flow_outbox o
+      JOIN public.automation_flow_runs r ON r.tenant_id=o.tenant_id AND r.id=o.run_id
+      WHERE r.conversation_id='${c4}' AND o.effect_kind IN('tag','staff_notification','handoff') ORDER BY o.effect_kind`);
+    assert.deepEqual((await internalOf()).map(e=>e.delivery_status),["pending","pending","pending"]);
+    const sent=meta.calls.length;
+    await flip("handoff");
+    let it=await internalTick();
+    assert.equal(it.tag_applied??0,0,JSON.stringify(it));assert.equal(it.staff_notification_applied??0,0);
+    await outboxTick();      // sweeps the stale handoff message; internal pass follows
+    await internalTick();await internalTick();
+    assert.deepEqual((await internalOf()).map(e=>[e.effect_kind,e.delivery_status,e.cancel_reason]),[
+     ["handoff","cancelled","revision_inactive"],["staff_notification","cancelled","revision_inactive"],["tag","cancelled","revision_inactive"]]);
+    assert.equal(await val<number>(`SELECT count(*)::int FROM public.flow_conversation_tags WHERE conversation_id='${c4}'`),0);
+    assert.equal(await val<number>(`SELECT count(*)::int FROM public.flow_staff_notifications WHERE conversation_id='${c4}'`),0);
+    assert.deepEqual(await rows(`SELECT transferred,auto_paused_reason FROM public.conversations WHERE id='${c4}'`),
+     [{transferred:false,auto_paused_reason:null}],"no handoff happened");
+    assert.equal(meta.calls.length,sent,"no handoff message was sent");
+   }finally{Deno.env.delete("FLOW_INTERNAL_ACTIONS_ENABLED");}
+
+   // (e) an ABANDONED reply_comment (lease expired) of a stale generation: the real outbox tick
+   //     ends it 'uncertain' (delivery review), never sends it, and does not list it again.
+   await freshDb();resetMeta();await activate("buttons",true);
+   const c5=await conv("5000006");
+   await exec(`INSERT INTO public.automation_flow_event_receipts(tenant_id,channel_account_id,platform,provider_event_id)
+    VALUES('${A}','${ACC}','instagram','comment:5001');
+    INSERT INTO public.automation_flow_runs(tenant_id,flow_key,publication_revision,channel_account_id,platform,conversation_id,provider_event_id,current_node_id,run_status,step_count)
+    VALUES('${A}','buttons',1,'${ACC}','instagram','${c5}','comment:5001','start','completed',1);`);
+   const run5=await val<string>(`SELECT id FROM public.automation_flow_runs WHERE provider_event_id='comment:5001'`);
+   await exec(`INSERT INTO public.automation_flow_outbox(tenant_id,run_id,idempotency_key,effect_kind,payload,delivery_status,lease_token,lease_expires_at)
+    VALUES('${A}','${run5}','rc.g5','reply_comment','{"kind":"reply_comment","commentId":"5001","text":"thanks","seq":0}','leased',gen_random_uuid(),now()-interval '5 seconds');
+    INSERT INTO public.automation_comment_replies(tenant_id,channel_account_id,platform,comment_id,post_id,from_id,comment_text_encrypted,public_reply_text,flow_key,publication_revision,run_id,reply_status)
+    VALUES('${A}','${ACC}','instagram','5001','456','789','enc:v1:x','thanks','buttons',1,'${run5}','attempting');`);
+   const reply5=()=>rows<{delivery_status:string;reply_status:string;reply_error_code:string|null}>(
+    `SELECT o.delivery_status,cr.reply_status,cr.reply_error_code FROM public.automation_flow_outbox o
+     JOIN public.automation_comment_replies cr ON cr.run_id=o.run_id WHERE o.run_id='${run5}'`);
+   await flip("buttons");
+   await outboxTick();
+   assert.deepEqual(await reply5(),[{delivery_status:"uncertain",reply_status:"uncertain",reply_error_code:"abandoned_revision_inactive"}]);
+   assert.equal(meta.calls.length,0,"the abandoned stale reply is never sent");
+   const o5=await outboxTick();
+   assert.equal(meta.calls.length,0);
+   assert.deepEqual(await reply5(),[{delivery_status:"uncertain",reply_status:"uncertain",reply_error_code:"abandoned_revision_inactive"}],"stable");
+   assert.ok(!JSON.stringify(o5.body).includes("reply_comment_blocked"),"not re-listed as work every tick");
   });
 
   await t.step("worker endpoints refuse unauthenticated ticks before touching the database",async()=>{

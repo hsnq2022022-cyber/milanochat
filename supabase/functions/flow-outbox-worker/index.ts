@@ -35,6 +35,7 @@ import {permanentOutboxBlock,temporaryOutboxPause,humanTakeoverActive,OUTBOX_SCA
 import {compareOutbox,heldByEarlierEffect,statusAfterOutcome,ORDERED_KINDS,
  ORDER_SIBLING_LIMIT,type OrderRow} from "./effectOrder.ts";
 import {plainInputQuestion} from "./questionMode.ts";
+import {revisionLive} from "../_shared/activationGeneration.ts";
 import {instagramButtonTemplateProblem} from "./flowRichActions.ts";
 import {sendMultichannelMessage,multichannelPayloadProblem,classifyMultichannelFailure,
  type MultichannelFailure} from "./multichannelSend.ts";
@@ -198,7 +199,7 @@ Deno.serve(async req=>{
     // human_agent_migration.sql); selecting a missing column fails the query.
     sb.from("conversations").select("id,tenant_id,account_id,wa_chat_id,transferred,auto_paused_reason,human_agent_expires_at")
       .eq("tenant_id",effect.tenant_id).eq("id",run.conversation_id).maybeSingle(),
-    sb.from("automation_flow_activations").select("revision,is_active")
+    sb.from("automation_flow_activations").select("revision,is_active,activation_generation")
       .eq("tenant_id",effect.tenant_id)
       .eq("channel_account_id",run.channel_account_id)
       .eq("platform",run.platform).eq("flow_key",run.flow_key)
@@ -221,7 +222,9 @@ Deno.serve(async req=>{
     humanTransferred:conversation?.transferred,
     humanAgentExpiresAt:conversation?.human_agent_expires_at,
     humanPausedReason:conversation?.auto_paused_reason,
-    revisionActive:activationResult.data?.is_active
+    // Active, on the run's revision AND on the generation the run was created
+    // under (20261123100000): effects of an older generation are never sent.
+    revisionActive:activationResult.data?revisionLive(activationResult.data,run):undefined
    },Date.now());
    if(permanent){await skip(permanent);continue;}
    // auto_reply/agent_enabled off or tenant/account inactive: keep pending
@@ -249,7 +252,7 @@ Deno.serve(async req=>{
        accountActive:account.is_active,
        agentEnabled:account.agent_enabled,autoReply:account.auto_reply,
        tenantActive:tenant.is_active,credits:tenant.credits_remaining,
-       revisionActive:activationResult.data?.is_active,
+       revisionActive:activationResult.data?revisionLive(activationResult.data,run):undefined,
        humanTakeover:takeover,
        multichannelEnabled:env("FLOW_MULTICHANNEL_ENABLED")==="true"
       })){

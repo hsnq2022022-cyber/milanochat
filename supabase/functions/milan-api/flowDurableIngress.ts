@@ -21,6 +21,7 @@ import {multichannelCapabilityProblem,DOCUMENT_PLATFORM,type MultichannelPlatfor
 import {whatsappCtaProblem,facebookButtonTemplateProblem}
  from "../flow-outbox-worker/multichannelSend.ts";
 import {aiStepEnabled} from "../flow-outbox-worker/aiStep.ts";
+import {generationMatches} from "../_shared/activationGeneration.ts";
 
 type RecordValue=Record<string,unknown>;
 const record=(v:unknown):v is RecordValue=>!!v&&typeof v==="object"&&!Array.isArray(v);
@@ -926,7 +927,7 @@ export async function attemptDurableInstagram(
   // same key answers at most once (silent if the first copy claims first).
   if(prior==="redelivered")return "fallback";
   const waiting=await db.from("automation_flow_runs")
-   .select("id,tenant_id,channel_account_id,platform,conversation_id,provider_event_id,flow_key,publication_revision,current_node_id,run_status,step_count,variables,wake_at")
+   .select("id,tenant_id,channel_account_id,platform,conversation_id,provider_event_id,flow_key,publication_revision,current_node_id,run_status,step_count,variables,wake_at,activation_generation")
    .eq("tenant_id",event.tenantId).eq("channel_account_id",event.accountId)
    .eq("conversation_id",event.conversationId).eq("run_status","awaiting_input")
    .limit(2);
@@ -961,13 +962,16 @@ export async function attemptDurableInstagram(
      return cancelThenFallback(db,event.tenantId,run.id,"free_text");
    }
    const live=await db.from("automation_flow_activations")
-    .select("flow_key,revision,is_active").eq("tenant_id",event.tenantId)
+    .select("flow_key,revision,is_active,activation_generation").eq("tenant_id",event.tenantId)
     .eq("channel_account_id",event.accountId).eq("platform",event.platform)
     .eq("flow_key",run.flow_key).eq("revision",run.publication_revision)
     .eq("is_active",true).limit(2);
    if(live.error)return "retry";
+   // Active, on the run's revision AND on the generation the run was created
+   // under (20261123100000): a stale awaiting run is ended and V2 answers.
    if(!Array.isArray(live.data)||!live.data.some(a=>record(a)&&a.is_active===true&&
-      a.flow_key===run.flow_key&&Number(a.revision)===Number(run.publication_revision)))
+      a.flow_key===run.flow_key&&Number(a.revision)===Number(run.publication_revision)&&
+      generationMatches(run.activation_generation,a.activation_generation)))
     return cancelThenFallback(db,event.tenantId,run.id,"revision_inactive");
    if(!publication){
     publication=await readPublication();

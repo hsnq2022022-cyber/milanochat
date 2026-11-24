@@ -1,7 +1,7 @@
 import {test} from "node:test";
 import assert from "node:assert/strict";
 import {readFileSync} from "node:fs";
-import {loadFlowReview,mapAttempt,mapOutbox,mapRun,mapInternal,RUN_STATUSES,INTERNAL_EFFECT_KINDS,INTERNAL_VIEW_STATUSES} from "../supabase/functions/flow-delivery-review/review.ts";
+import {loadFlowReview,mapAttempt,mapOutbox,mapRun,mapInternal,RUN_STATUSES,INTERNAL_EFFECT_KINDS,INTERNAL_VIEW_STATUSES,EFFECT_KINDS} from "../supabase/functions/flow-delivery-review/review.ts";
 
 const T="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 type Call={table:string;ops:[string,unknown[]][]};
@@ -252,4 +252,22 @@ test("T6-S4: provider failures are an additive, tenant-scoped list of whiteliste
  assert.deepEqual(fq.ops.find(([o])=>o==="or")?.[1],["failure_class.not.is.null"]);
  const outB=await loadFlowReview(storeClient({automation_flow_delivery_attempts:attempts}).client,B);
  assert.deepEqual(outB.flowProviderFailures.map(f=>f.outbox_id),["q1"]);
+});
+
+test("every effect kind the outbox allows is returned with its kind and has a label in the panel (reply_comment, message_image)",()=>{
+ // The outbox CHECK list, from the migrations that widened it.
+ const check=readFileSync("supabase/migrations/20261029300000_comment_replies.sql","utf8").match(/effect_kind IN \(([^)]*)\)'\)/);
+ const allowed=check?[...check[1].matchAll(/''([a-z_]+)''/g)].map(x=>x[1]):[];
+ assert.ok(allowed.includes("reply_comment")&&allowed.includes("message_image"),"outbox CHECK list found");
+ assert.deepEqual([...EFFECT_KINDS].sort(),[...allowed].sort(),"the API accepts exactly the kinds the outbox allows");
+ for(const k of allowed){
+  const m=mapOutbox({id:"o1",run_id:"r1",effect_kind:k,delivery_status:"uncertain",attempts:1});
+  assert.equal(m?.effect_kind,k,k);
+ }
+ // An unknown kind still maps to null (and the panel shows its generic label).
+ assert.equal(mapOutbox({id:"o1",run_id:"r1",effect_kind:"brand_new_kind",delivery_status:"uncertain"})?.effect_kind,null);
+ const panel=readFileSync("src/pages/DeliveryReviewPanel.tsx","utf8");
+ const names=panel.slice(panel.indexOf("const effectKindNames"),panel.indexOf("const INTERNAL_KINDS"));
+ for(const k of allowed)assert.ok(new RegExp(`\\b${k}:"`).test(names),`panel label for ${k}`);
+ assert.ok(!names.includes("إجراء غير معروف"),"the generic label is only the fallback");
 });

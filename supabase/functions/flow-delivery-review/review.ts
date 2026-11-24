@@ -21,7 +21,10 @@ const ATTEMPT_STATUSES = ["attempting", "confirmed", "uncertain"];
 const REVIEW_STATUSES = ["none", "queued", "resolved"];
 const OUTBOX_STATUSES = ["pending", "retry_wait", "leased", "uncertain", "charge_pending", "settled",
   "billing_blocked", "dead_letter", "cancelled"];
-const EFFECT_KINDS = ["message", "question", "delay", "handoff", "tag", "untag", "staff_notification"];
+// Every effect_kind the outbox CHECK allows (20261029210000 added message_image, 20261029300000 reply_comment).
+// A kind missing here would be returned as null and the panel would show no kind at all.
+export const EFFECT_KINDS = ["message", "question", "delay", "handoff", "tag", "untag", "staff_notification",
+  "message_image", "reply_comment"];
 const PLATFORMS = ["instagram", "facebook", "whatsapp"];
 
 // Column lists come from supabase/migrations/20261028226000_flow_outbox_delivery_attempts.sql,

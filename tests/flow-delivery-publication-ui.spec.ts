@@ -169,6 +169,29 @@ test("delivery review labels internal effect kinds and statuses, unknown values 
   await expect(page.getByTestId("delivery-review-panel")).not.toContainText("brand_new_");
 });
 
+test("delivery review labels reply_comment and message_image effects; an unknown kind stays generic", async ({ page }) => {
+  // reply_comment (20261029300000) and message_image (20261029210000) used to reach the panel as a null kind
+  // (no kind shown at all); an abandoned stale reply_comment ends 'uncertain' and must be recognisable.
+  await setup(page, {
+    review: { ...EMPTY_REVIEW, flowFailures: [
+      { id: "k-reply", effect_kind: "reply_comment", delivery_status: "uncertain", attempts: 1, created_at: null, cancel_reason: null },
+      { id: "k-image", effect_kind: "message_image", delivery_status: "dead_letter", attempts: 1, created_at: null, cancel_reason: null },
+      { id: "k-new", effect_kind: "brand_new_kind", delivery_status: "uncertain", attempts: 1, created_at: null, cancel_reason: null },
+    ] },
+  });
+  await page.goto("/milanochat/#/settings");
+  const items = page.getByTestId("delivery-review-panel").getByRole("region", { name: "رسائل التدفقات الفاشلة أو غير المؤكدة" }).getByRole("listitem");
+  await expect(items).toHaveCount(3);
+  await expect(items.nth(0).getByTestId("flow-effect-kind")).toHaveText("رد على تعليق");
+  await expect(items.nth(0).getByTestId("flow-effect-kind")).toHaveAttribute("data-effect-kind", "reply_comment");
+  await expect(items.nth(1).getByTestId("flow-effect-kind")).toHaveText("رسالة بصورة");
+  await expect(items.nth(2).getByTestId("flow-effect-kind")).toHaveText("إجراء غير معروف");
+  // Provider kinds are not internal actions: no "internal action" prefix.
+  await expect(items.nth(0).getByTestId("flow-effect-kind")).not.toContainText("إجراء داخلي");
+  await expect(page.getByTestId("delivery-review-panel")).not.toContainText("reply_comment");
+  await expect(page.getByTestId("delivery-review-panel")).not.toContainText("brand_new_kind");
+});
+
 test("delivery review lists flowInternal rows with Arabic labels and status badges", async ({ page }) => {
   await setup(page, {
     review: { ...EMPTY_REVIEW, flowInternalAvailable: true, flowInternal: [

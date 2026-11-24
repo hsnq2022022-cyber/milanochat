@@ -27,7 +27,8 @@ const failureNames:Record<string,string>={
 // Effect kinds incl. internal actions (tag/untag/notify/handoff); unknown kinds show a generic label.
 const effectKindNames:Record<string,string>={
  message:"رسالة",question:"سؤال",delay:"تأخير",tag:"إضافة وسم",untag:"إزالة وسم",
- staff_notification:"إشعار للموظف",handoff:"تحويل لموظف"
+ staff_notification:"إشعار للموظف",handoff:"تحويل لموظف",
+ message_image:"رسالة بصورة",reply_comment:"رد على تعليق"
 };
 const INTERNAL_KINDS=["tag","untag","staff_notification","handoff"];
 const effectKindLabel=(k:string|null|undefined)=>k?(Object.prototype.hasOwnProperty.call(effectKindNames,k)?effectKindNames[k]:"إجراء غير معروف"):"";

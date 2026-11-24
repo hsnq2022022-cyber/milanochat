@@ -181,6 +181,29 @@ test("20261029220000: previous and stale-sweep body hashes embedded, equal to th
  assert.ok(blk.length>500);
  assert.doesNotMatch(blk,/\b(INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|GRANT|REVOKE|COMMENT ON)\b/);
 });
+test("20261123100000: the exact post-migration bodies are embedded, equal to the migration's pinned hashes; the checks still name no new column",()=>{
+ const GEN="supabase/migrations/20261123100000_flow_activation_generation.sql";
+ const m=readFileSync(GEN,"utf8");
+ const post=m.slice(m.indexOf("DO $checks$"));
+ const pinned=Object.fromEntries([...post.matchAll(/\('public\.([a-z_]+)\([^']*\)','([0-9a-f]{32})'\)/g)].map(x=>[x[1],x[2]]));
+ assert.equal(Object.keys(pinned).length,9);
+ // Raw md5(prosrc) comparisons: flow_lease_due_runs and flow_apply_internal_effect are the exact migration hashes.
+ for(const f of ["flow_lease_due_runs","flow_apply_internal_effect"])
+  assert.ok(script.includes(`'${pinned[f]}'`),`${f}: the migration's pinned body hash is embedded`);
+ // Whitespace-normalized md5 comparisons (different hash than the raw one; proven on a live database in
+ // tests/flow-activation-generation.test.mjs): six embedded constants, each used by a recognized-version branch.
+ const NORM={resume:"20a3885337e1d340d32e03fc301d682c",commit:"322c3493e2db9a8909d121d3b943689c",reserve:"faa04c8fae8d97038ab04d82d72bc718",
+  skip:"ee48d8bc62fb30a98a648f21ca504b6f",lease:"3e6b8a13e02b6f1155fb96c8afe0ff59"};
+ for(const [k,h] of Object.entries(NORM)){
+  assert.ok(script.includes(`'${h}'`),`${k}: normalized post-migration hash embedded`);
+  assert.notEqual(h,pinned[{resume:"flow_resume_button_run",commit:"flow_commit_run_step",reserve:"flow_reserve_outbox_delivery",skip:"flow_skip_blocked_outbox",lease:"flow_lease_due_runs"}[k]],`${k}: normalized differs from the raw prosrc hash`);
+ }
+ // Only exact hashes were added: no pattern, LIKE or prefix match on a body.
+ assert.doesNotMatch(noComments,/prosrc\s+(NOT\s+)?(LIKE|ILIKE|~)/i);
+ // The proposal runs on databases that do not have the migration: it must never name its columns.
+ assert.doesNotMatch(bare,/activation_generation/);
+ assert.ok(script.includes("20261123100000"));
+});
 test("20261029230000: previous and multichannel body hashes embedded, equal to the migration's and the rollback's",()=>{
  const md5=x=>createHash("md5").update(x).digest("hex");
  const norm=x=>x.replace(/[ \t\n\r\f\v]+/g," ").replace(/^ +| +$/g,"");

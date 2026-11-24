@@ -51,6 +51,7 @@
  * Pure helpers have no Deno/npm imports (node --experimental-strip-types).
  */
 import {compareOutbox,effectSeq,type OrderRow} from "../flow-outbox-worker/effectOrder.ts";
+import {revisionLive} from "../_shared/activationGeneration.ts";
 
 // deno-lint-ignore no-explicit-any
 type Query=any;
@@ -200,7 +201,7 @@ export async function runInternalEffects(sb:InternalDb,deps:InternalDeps):Promis
     sb.from("automation_flow_tenant_switches").select("enabled,production_approved")
      .eq("tenant_id",tenantId).maybeSingle(),
     sb.from("automation_flow_runs")
-     .select("id,tenant_id,channel_account_id,platform,conversation_id,flow_key,publication_revision")
+     .select("id,tenant_id,channel_account_id,platform,conversation_id,flow_key,publication_revision,activation_generation")
      .eq("tenant_id",tenantId).eq("id",String(effect.run_id)).maybeSingle(),
     sb.from("tenants").select("id,is_active,user_id").eq("id",tenantId).maybeSingle()
    ]);
@@ -215,7 +216,7 @@ export async function runInternalEffects(sb:InternalDb,deps:InternalDeps):Promis
      .eq("tenant_id",tenantId).eq("id",String(r.channel_account_id)).maybeSingle(),
     sb.from("conversations").select("id,tenant_id,account_id,transferred")
      .eq("tenant_id",tenantId).eq("id",String(r.conversation_id)).maybeSingle(),
-    sb.from("automation_flow_activations").select("revision,is_active")
+    sb.from("automation_flow_activations").select("revision,is_active,activation_generation")
      .eq("tenant_id",tenantId).eq("channel_account_id",String(r.channel_account_id))
      .eq("platform","instagram").eq("flow_key",String(r.flow_key))
      .eq("revision",r.publication_revision as number).eq("is_active",true).maybeSingle()
@@ -226,7 +227,9 @@ export async function runInternalEffects(sb:InternalDb,deps:InternalDeps):Promis
       a.id!==r.channel_account_id||a.platform!=="instagram"||c.id!==r.conversation_id||
       c.account_id!==a.id){await end("cancelled","ineligible","skipped_ineligible");continue;}
    if(a.id!==deps.canaryAccountId){report("blocked_canary");continue;}
-   if(activation.data?.is_active!==true){
+   // Active, on the run's revision AND on the generation the run was created
+   // under (20261123100000): an older generation's effect is ended, never applied.
+   if(!revisionLive(activation.data,r as {publication_revision?:unknown;activation_generation?:unknown})){
     await end("cancelled","revision_inactive","skipped_revision_inactive");continue;
    }
    if(tenant.data.is_active!==true||a.is_active!==true||a.agent_enabled!==true||a.auto_reply!==true){
