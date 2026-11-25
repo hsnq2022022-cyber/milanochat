@@ -31,6 +31,11 @@ BEGIN
  IF to_regclass('public.automation_inbound_routing_retries') IS NULL THEN
   RAISE EXCEPTION '20261029340000_flow_inbound_routing_retry not installed; nothing to roll back';
  END IF;
+ -- 20261029360000 (inbound recovery) reads this table in its lease function: strict reverse order is enforced.
+ IF to_regclass('public.automation_inbound_recovery') IS NOT NULL
+    OR to_regprocedure('public.flow_inbound_recovery_lease(integer,integer,integer,integer,integer,uuid)') IS NOT NULL THEN
+  RAISE EXCEPTION 'Refusing: roll back 20261029360000_flow_inbound_recovery first (it depends on public.automation_inbound_routing_retries)';
+ END IF;
  IF obj_description(to_regclass('public.automation_inbound_routing_retries'),'pg_class') IS DISTINCT FROM v_marker THEN
   RAISE EXCEPTION 'Refusing to drop unrecognized table public.automation_inbound_routing_retries';
  END IF;
