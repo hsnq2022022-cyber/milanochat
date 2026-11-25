@@ -31,7 +31,7 @@ jobs:
     env:
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
       SUPABASE_PROJECT_REF: nmhefwvhoholcjrbbila
-      EXPECTED_BASE: 9d35ca2bb4fc71529d174aacee124de221849dfa
+      EXPECTED_BASE: 55a3e58c7e6ecfea3e16cc56dda1b420c8c94225
     steps:
       - name: Checkout reviewed revision
         uses: actions/checkout@v4
