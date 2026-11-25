@@ -61,3 +61,12 @@ All ACTIVE. Order executed: publication (out of order, DB deps met) → internal
 
 ## 8. Exact next action
 Function deployment is complete. Remaining (read-only first): check post-deploy logs of the five functions and cron health; confirm the eight FLOW_* env values with the owner (cannot be read here); safe operational verification on a dedicated test tenant only. Activation Generation (`20261123100000`) stays NOT EXECUTED pending separate approval.
+
+## 9. Post-deployment operational audit (2026-11-25, read-only; VERIFIED unless noted)
+- Cron: exactly two jobs (`milanochat-flow-durable-wake-v1`, `milanochat-flow-outbox-v1`), active, `* * * * *`, 1440/1440 runs succeeded in 24h; no recovery cron. Each only POSTs when its `EXISTS` gate finds work, so most runs are no-ops. Queue empty.
+- New function versions (v38/v7/v33/v32/v138) have NOT yet served any non-probe traffic (only my unauthenticated 401 probes). Last real worker activity was pre-deploy (v31/v32 at 12:17-12:18Z: run completed, message delivered, provider id + confirmed attempt).
+- Dedicated test target exists: tenant switch enabled, `test_only=false`, `production_approved=true`; one canary account (instagram, note "Option B canary - disposable test account"); active flow `ig_live_welcome_20261029` rev 4. A new end-to-end test needs a human DM from that disposable account (NOT EXECUTED; no forged webhooks or synthetic records).
+- Anomalies explained: completed runs have no `ended_at` by design (only cancel/expire set it); 6 blocked runs = 5 `superseded` + 1 `revision_inactive` (expected); 5-6 `delay` outbox rows stay `pending` forever (outbox worker never processes `delay`; inert); 1 `uncertain` delivery (2026-11-15) has no provider id and no review — do not retry; unknown whether it reached the provider.
+- Decryption errors (2026-11-24 18:12Z, 18 lines) came from milan-api v137 (message-body read path), not Flow. v137 logged ciphertext prefixes; v138 source logs only a fixed code. Two matching legacy messages (Sep-Oct) found, no Flow link.
+- Env vars: values not readable with available access (shell token invalid; no connector lists secrets). Behavioral inference only: outbox send at 12:18Z implies WORKERS_OPERATOR_RELEASE=production-canary-approved, OUTBOX_SEND_ENABLED=true, DURABLE_SCHEDULER_ENABLED=true at that time.
+- Local: 280 flow tests pass (tests/flow-*.test.mjs).
