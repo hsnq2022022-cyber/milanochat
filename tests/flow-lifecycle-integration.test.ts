@@ -23,6 +23,7 @@ import {verifyMetaWebhookSignature} from "../supabase/functions/milan-api/metaSi
 import {persistInboundOnce} from "../supabase/functions/milan-api/persistInboundOnce.ts";
 import {loadFlowReview} from "../supabase/functions/flow-delivery-review/review.ts";
 import {durableRegistryStatus} from "../supabase/functions/_shared/durableRegistry.ts";
+import {runInboundRecovery,RECOVERY_MAX_ATTEMPTS} from "../supabase/functions/milan-api/inboundRecovery.ts";
 
 const A="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",B="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const ACC="11111111-1111-4111-8111-111111111111";
@@ -179,14 +180,35 @@ async function postgrest(req:Request):Promise<Response>{
 
 // --------------------------------------------------- external service mocks
 type MetaMode="ok"|"5xx"|"timeout"|"noid"|"400";
-const meta={plan:[] as MetaMode[],calls:[] as {url:string;auth:string|null;body:any}[],n:0};
+// Deterministic fault injection for the provider boundary (test-only; nothing in production code).
+//  {status,code?,subcode?}  Meta HTTP error with its error code
+//  {throw:"network"|"timeout"}  the request fails before any response (nothing accepted)
+//  {lost:true}  the provider ACCEPTED the message but the response never arrived (timeout after acceptance)
+//  {hang:true,accepted?}  the worker is "killed" mid-request: the response never comes back
+// Faults can be queued in order (meta.plan) or bound to a recipient (meta.faults) so the outcome of one
+// conversation never depends on the order in which the worker processes the batch.
+type MetaFault=MetaMode|{status:number;code?:number;subcode?:number}|{throw:"network"|"timeout"}|{lost:true}|{hang:true;accepted?:boolean};
+const meta={plan:[] as MetaFault[],faults:new Map<string,MetaFault>(),calls:[] as {url:string;auth:string|null;body:any}[],
+ n:0,accepted:0,hung:0};
 async function metaGraph(req:Request):Promise<Response>{
  const body=JSON.parse(await req.text());
  meta.calls.push({url:req.url,auth:req.headers.get("authorization"),body});
- const mode=meta.plan.shift()??"ok";
+ const mode:MetaFault=meta.faults.get(String(body.recipient?.id??""))??meta.plan.shift()??"ok";
+ if(typeof mode==="object"){
+  if("status" in mode)return new Response(JSON.stringify({error:{
+   ...(mode.code===undefined?{}:{code:mode.code}),...(mode.subcode===undefined?{}:{error_subcode:mode.subcode})}}),{status:mode.status});
+  if("throw" in mode){
+   if(mode.throw==="timeout")throw new DOMException("The signal has been aborted","TimeoutError");
+   throw new TypeError("connection reset by peer");
+  }
+  if("lost" in mode){meta.accepted++;throw new DOMException("The signal has been aborted","TimeoutError");}
+  meta.hung++;if(mode.accepted)meta.accepted++;
+  return await new Promise<Response>(()=>{});// never settles: the worker "died" here
+ }
  if(mode==="timeout")throw new DOMException("The signal has been aborted","TimeoutError");
  if(mode==="5xx")return new Response('{"error":{"code":2}}',{status:503});
  if(mode==="400")return new Response('{"error":{"code":100}}',{status:400});
+ meta.accepted++;
  if(mode==="noid")return pgResponse(200,{recipient_id:body.recipient?.id});
  return pgResponse(200,{recipient_id:body.recipient?.id,message_id:"mid.out."+(++meta.n)});
 }
@@ -431,6 +453,10 @@ const CHAIN=[
  // Retryable unknown flow eligibility (inboundRoutingRetry.ts) and durable keyword starts.
  "supabase/migrations/20261029340000_flow_inbound_routing_retry.sql",
  "supabase/migrations/20261029350000_flow_durable_keyword_start.sql",
+ // Opt-in inbound recovery (default OFF; production has it applied). Closing the gap between this chain and production.
+ "supabase/migrations/20261029360000_flow_inbound_recovery.sql",
+ // Durable provider-failure record + definite-refusal dead letter (production has it applied).
+ "supabase/migrations/20261115150000_flow_delivery_failure_info.sql",
  // Registry-blocked production runs are never leased (no attempt consumed) and are bounded by the stale sweep.
  "supabase/migrations/20261115160000_flow_registry_wake_hold.sql",
  // flow-publication RPCs and the rate window table (adopted unchanged on production).
@@ -459,7 +485,7 @@ const effectsOf=(c:string)=>rows<{id:string;effect_kind:string;delivery_status:s
   WHERE r.conversation_id='${c}' ORDER BY o.created_at,o.id`);
 const activate=(flow:string,on:boolean)=>exec(`UPDATE public.automation_flow_activations SET is_active=${on}
  WHERE tenant_id='${A}' AND channel_account_id='${ACC}' AND flow_key='${flow}';`);
-const resetMeta=()=>{meta.plan=[];meta.calls=[];};
+const resetMeta=()=>{meta.plan=[];meta.faults.clear();meta.calls=[];meta.accepted=0;meta.hung=0;};
 // Inbound text as milan-api/index.ts passes it (customerText) to the durable path.
 const evText=(conv:string,inbound:string,eventId:string,text:string,choice?:string|null)=>
  ({...ev(conv,inbound,eventId,choice),text});
@@ -885,7 +911,7 @@ Deno.test({name:"flow V3/V4 lifecycle integration (real handlers + throwaway Pos
    assert.equal(await val(`SELECT count(*) FROM public.automation_flow_outbox WHERE run_id='${runId}' AND idempotency_key='cc-once'`),1,"one effect row, never two");
   });
 
-  await t.step("provider 5xx / timeout / 2xx without id / 4xx -> uncertain, never resent, routed to human review",async()=>{
+  await t.step("provider 5xx / timeout / 2xx without id -> uncertain, never resent, routed to human review; a definite refusal (4xx + Meta code 100) -> dead_letter (production-shaped: 20261115150000 applied)",async()=>{
    await freshDb();resetMeta();await activate("buttons",true);
    const cs:string[]=[];
    for(const p of ["4000001","4000002","4000003","4000004"]){
@@ -894,19 +920,260 @@ Deno.test({name:"flow V3/V4 lifecycle integration (real handlers + throwaway Pos
    }
    meta.plan=["5xx","timeout","noid","400"];
    const o=await outboxTick();
-   assert.equal(o.body.status.uncertain,4,JSON.stringify(o.body));
+   assert.equal(o.status,200,JSON.stringify(o.body));
    assert.equal(meta.calls.length,4);
-   for(const c of cs){
+   for(const [i,c] of cs.entries()){
     const fx=await effectsOf(c);
-    assert.equal(fx[0].delivery_status,"uncertain");assert.equal(fx[0].provider_message_id,null);
-    assert.equal(await val(`SELECT status FROM public.automation_flow_delivery_attempts WHERE outbox_id='${fx[0].id}'`),"uncertain");
+    const refused=i===3;
+    assert.equal(fx[0].delivery_status,refused?"dead_letter":"uncertain");assert.equal(fx[0].provider_message_id,null);
+    assert.equal(await val(`SELECT status FROM public.automation_flow_delivery_attempts WHERE outbox_id='${fx[0].id}'`),refused?"rejected":"uncertain");
     assert.equal(await val(`SELECT count(*)::int FROM public.messages WHERE id='${fx[0].outgoing_message_id}'`),0);
    }
-   await outboxTick();assert.equal(meta.calls.length,4,"uncertain effects are never resent");
+   await outboxTick();assert.equal(meta.calls.length,4,"neither uncertain nor dead-lettered effects are ever resent");
    await exec(`UPDATE public.automation_flow_delivery_attempts SET uncertain_at=now()-interval '20 minutes',attempted_at=now()-interval '20 minutes';`);
-   assert.equal(await val(`SELECT public.flow_queue_outbox_human_review(15,100)`,"service_role"),4);
-   assert.equal(await val(`SELECT count(*)::int FROM public.automation_flow_delivery_attempts WHERE review_status='queued'`),4);
+   assert.equal(await val(`SELECT public.flow_queue_outbox_human_review(15,100)`,"service_role"),3,"only the uncertain ones need a human decision");
+   assert.equal(await val(`SELECT count(*)::int FROM public.automation_flow_delivery_attempts WHERE review_status='queued'`),3);
    await outboxTick();assert.equal(meta.calls.length,4);
+  });
+
+  // ===================== RELIABILITY / FAULT INJECTION (deterministic; test-only mocks, no production switches) =====================
+  await t.step("provider delivery state-transition matrix: every failure class lands in exactly one state, nothing is resent, the provider is never charged twice",async()=>{
+   await freshDb();resetMeta();await activate("buttons",true);
+   type Row={psid:string;fault:MetaFault;state:"settled"|"uncertain"|"dead_letter";klass:string|null;status:number|null;code:number|null;accepted:number};
+   const matrix:Row[]=[
+    {psid:"6100001",fault:"ok",state:"settled",klass:null,status:null,code:null,accepted:1},
+    {psid:"6100002",fault:{status:503,code:2},state:"uncertain",klass:"ambiguous",status:503,code:2,accepted:0},
+    {psid:"6100003",fault:{status:500},state:"uncertain",klass:"ambiguous",status:500,code:null,accepted:0},
+    {psid:"6100004",fault:{status:408},state:"uncertain",klass:"ambiguous",status:408,code:null,accepted:0},
+    {psid:"6100005",fault:{status:429,code:4},state:"uncertain",klass:"throttled",status:429,code:4,accepted:0},
+    {psid:"6100006",fault:{status:429},state:"uncertain",klass:"ambiguous",status:429,code:null,accepted:0},
+    {psid:"6100007",fault:{status:401,code:190},state:"uncertain",klass:"auth",status:401,code:190,accepted:0},
+    {psid:"6100008",fault:{status:403},state:"uncertain",klass:"auth",status:403,code:null,accepted:0},
+    {psid:"6100009",fault:{status:400,code:100},state:"dead_letter",klass:"rejected_invalid",status:400,code:100,accepted:0},
+    {psid:"6100010",fault:{status:429,code:100},state:"uncertain",klass:"rejected_invalid",status:429,code:100,accepted:0},
+    {psid:"6100011",fault:{status:400,code:131047},state:"uncertain",klass:"outside_window",status:400,code:131047,accepted:0},
+    {psid:"6100012",fault:{status:400,code:10,subcode:2018278},state:"uncertain",klass:"outside_window",status:400,code:10,accepted:0},
+    {psid:"6100013",fault:{status:400,code:10},state:"uncertain",klass:"permanent_other",status:400,code:10,accepted:0},
+    {psid:"6100014",fault:{status:400,code:999},state:"uncertain",klass:"ambiguous",status:400,code:999,accepted:0},
+    // no provider HTTP answer at all: no failure record, still never resent
+    {psid:"6100015",fault:{throw:"network"},state:"uncertain",klass:null,status:null,code:null,accepted:0},
+    {psid:"6100016",fault:{throw:"timeout"},state:"uncertain",klass:null,status:null,code:null,accepted:0},
+    // timeout AFTER the provider accepted: the worker cannot know; it must not resend (the customer already got it)
+    {psid:"6100017",fault:{lost:true},state:"uncertain",klass:null,status:null,code:null,accepted:1},
+    // 2xx but no message id: accepted, but unconfirmed
+    {psid:"6100018",fault:"noid",state:"uncertain",klass:null,status:null,code:null,accepted:1},
+   ];
+   const conv_of=new Map<string,string>();
+   for(const r of matrix){
+    const c=await conv(r.psid);const m=await inbound(c,"mid.m."+r.psid);
+    assert.equal(await attemptDurableInstagram(sb,ev(c,m,"mid.m."+r.psid,null)),"handled");
+    conv_of.set(r.psid,c);meta.faults.set(r.psid,r.fault);
+   }
+   // the worker sends a bounded batch per tick: tick until every effect has been attempted once
+   for(let i=0;i<6&&meta.calls.length<matrix.length;i++)await outboxTick();
+   assert.equal(meta.calls.length,matrix.length,"exactly one provider call per effect");
+   const check=async()=>{
+    for(const r of matrix){
+     const fx=(await effectsOf(conv_of.get(r.psid)!))[0];
+     assert.equal(fx.delivery_status,r.state,`${r.psid} ${JSON.stringify(r.fault)}`);
+     const att=(await rows<{status:string;failure_class:string|null;provider_http_status:number|null;provider_error_code:number|null;provider_message_id:string|null}>(
+      `SELECT status,failure_class,provider_http_status,provider_error_code,provider_message_id FROM public.automation_flow_delivery_attempts WHERE outbox_id='${fx.id}'`))[0];
+     assert.equal(att.status,r.state==="settled"?"confirmed":r.state==="dead_letter"?"rejected":"uncertain",`${r.psid} attempt`);
+     assert.equal(att.failure_class,r.klass,`${r.psid} class`);
+     assert.equal(att.provider_http_status,r.status,`${r.psid} http`);
+     assert.equal(att.provider_error_code,r.code,`${r.psid} code`);
+     assert.equal(r.state==="settled"?fx.provider_message_id!==null:fx.provider_message_id===null,true,`${r.psid} provider id`);
+     assert.equal(await val(`SELECT count(*)::int FROM public.messages WHERE id='${fx.outgoing_message_id}'`),r.state==="settled"?1:0,`${r.psid} outgoing message row`);
+    }
+   };
+   await check();
+   const acceptedAfterFirst=meta.accepted;
+   assert.equal(acceptedAfterFirst,matrix.reduce((s,r)=>s+r.accepted,0),"provider-side acceptances equal the modelled ones");
+   // repeated ticks, even after the retry/lease windows: no effect is ever sent again
+   for(let i=0;i<3;i++){await outboxTick();await runtimeTick();}
+   await exec(`UPDATE public.automation_flow_outbox SET retry_at=now()-interval '1 hour' WHERE retry_at IS NOT NULL;
+    UPDATE public.automation_flow_delivery_attempts SET attempted_at=now()-interval '2 hours',uncertain_at=now()-interval '2 hours' WHERE status IN('attempting','uncertain');`);
+   await outboxTick();
+   assert.equal(meta.calls.length,matrix.length,"no resend after retries, ticks or aged attempts");
+   assert.equal(meta.accepted,acceptedAfterFirst,"the provider never received a second copy of any message");
+   await check();
+  });
+
+  await t.step("worker killed mid-request: no resend while the lease is live; after expiry the attempt becomes uncertain (never resent), accepted-or-not",async()=>{
+   await freshDb();resetMeta();await activate("buttons",true);
+   const killed=[{psid:"6200001",accepted:false},{psid:"6200002",accepted:true}];
+   const cs=new Map<string,string>();
+   for(const k of killed){
+    const c=await conv(k.psid);const m=await inbound(c,"mid.k."+k.psid);
+    assert.equal(await attemptDurableInstagram(sb,ev(c,m,"mid.k."+k.psid,null)),"handled");
+    cs.set(k.psid,c);meta.faults.set(k.psid,{hang:true,accepted:k.accepted});
+   }
+   // The worker sends sequentially, so each "kill" strands exactly one in-flight request (its promise never settles).
+   for(const [i,k] of killed.entries()){
+    void outboxTick();// worker #(i+1): abandoned = process killed
+    for(let n=0;n<100&&meta.hung<i+1;n++)await new Promise(r=>setTimeout(r,50));
+    assert.equal(meta.hung,i+1,`worker ${i+1} is stuck inside its provider call`);
+    const fx=(await effectsOf(cs.get(k.psid)!))[0];
+    assert.equal(await val(`SELECT status FROM public.automation_flow_delivery_attempts WHERE outbox_id='${fx.id}'`),"attempting");
+   }
+   meta.faults.clear();
+   await outboxTick();await outboxTick();// a healthy worker while both leases are live
+   assert.equal(meta.calls.length,2,"a live lease is never taken over: no second provider call");
+   // Just expired (inside the 13 minute grace): a live invocation may still be finishing, so nothing is touched.
+   await exec(`UPDATE public.automation_flow_outbox SET lease_expires_at=now()-interval '1 minute' WHERE lease_expires_at IS NOT NULL;`);
+   await outboxTick();
+   for(const k of killed)assert.equal((await effectsOf(cs.get(k.psid)!))[0].delivery_status,"leased",`${k.psid} not reclaimed inside the grace window`);
+   assert.equal(meta.calls.length,2,"no provider call inside the grace window");
+   // Abandoned (expired beyond the grace): finished as uncertain, never reset to pending, never resent.
+   await exec(`UPDATE public.automation_flow_outbox SET lease_expires_at=now()-interval '14 minutes' WHERE lease_expires_at IS NOT NULL;
+    UPDATE public.automation_flow_delivery_attempts SET attempted_at=now()-interval '30 minutes' WHERE status='attempting';`);
+   await outboxTick();await outboxTick();
+   assert.equal(meta.calls.length,2,"after lease expiry the interrupted send is NOT repeated");
+   assert.equal(meta.accepted,1,"the provider holds exactly the one message that was accepted before its worker was killed");
+   for(const k of killed){
+    const fx=(await effectsOf(cs.get(k.psid)!))[0];
+    assert.equal(fx.delivery_status,"uncertain",`${k.psid} interrupted send is uncertain, not pending`);
+    assert.equal(await val(`SELECT status FROM public.automation_flow_delivery_attempts WHERE outbox_id='${fx.id}'`),"uncertain");
+   }
+  });
+
+  // ---- inbound recovery (production-shaped chain incl. 20261029360000). The REAL runInboundRecovery runs against the
+  // throwaway database; only the re-drive callback is the real durable ingress (what handleIncomingWebhookMessage reaches).
+  const recoverySetup=async(psids:string[],ageMinutes=10)=>{
+   // production's messages has these columns; the reduced live-shape fixture does not
+   await exec(`ALTER TABLE public.messages ADD COLUMN IF NOT EXISTS created_at timestamptz NOT NULL DEFAULT now(),
+    ADD COLUMN IF NOT EXISTS body_encrypted text;`);
+   await exec(`UPDATE public.tenants SET credits_remaining=100,is_active=true WHERE id='${A}';
+    -- opted in a day ago: history from BEFORE the opt-in is never replayed, newer abandoned events are
+    INSERT INTO public.automation_inbound_recovery_tenants(tenant_id,enabled,enabled_at,approved_by) VALUES('${A}',true,now()-interval '1 day','test')
+     ON CONFLICT (tenant_id) DO UPDATE SET enabled=true,enabled_at=now()-interval '1 day';`);
+   const out:{psid:string;c:string;m:string;mid:string}[]=[];
+   for(const psid of psids){
+    const c=await conv(psid);const mid="mid.rec."+psid;const m=await inbound(c,mid);
+    await exec(`UPDATE public.messages SET body_encrypted='enc:v1:test',created_at=now()-interval '${ageMinutes} minutes' WHERE id='${m}';`);
+    out.push({psid,c,m,mid});
+   }
+   return out;
+  };
+  const sweeper=(redrives:string[],verdict:(mid:string)=>"retry"|void=()=>undefined)=>runInboundRecovery(sb as never,{
+   decrypt:async()=>"hello",tenantId:A,
+   redrive:async(e)=>{
+    redrives.push(e.eventId);
+    const r=await attemptDurableInstagram(sb,ev(e.conversationId,e.inboundId,e.eventId,null));
+    return r==="retry"?"retry":verdict(e.eventId);
+   }});
+  const runCount=(c:string)=>val<number>(`SELECT count(*)::int FROM public.automation_flow_runs WHERE conversation_id='${c}'`);
+
+  await t.step("recovery: an abandoned inbound is re-driven exactly once even with two concurrent sweepers and a concurrent live redelivery; one run, one send each; later sweeps are inert",async()=>{
+   await freshDb();resetMeta();await activate("buttons",true);
+   const ev3=await recoverySetup(["7100001","7100002","7100003"]);
+   const redrives:string[]=[];
+   // sweepers #1 and #2 race over the same three events; for event 2 the live webhook is redelivered at the same moment
+   const live=attemptDurableInstagram(sb,ev(ev3[1].c,ev3[1].m,ev3[1].mid,null));
+   const [s1,s2,l]=await Promise.all([sweeper(redrives),sweeper(redrives),live]);
+   assert.ok(["handled","fallback"].includes(l)||l==="retry"||l===undefined,"live redelivery answered: "+String(l));
+   for(const e of ev3)assert.equal(await runCount(e.c),1,`${e.psid}: exactly one run (no duplicate Flow run)`);
+   for(const e of ev3){
+    const redriven=redrives.filter(x=>x===e.mid).length;
+    assert.ok(redriven<=1,`${e.mid} re-driven at most once by the two sweepers (was ${redriven})`);
+   }
+   assert.equal(redrives.length>=2&&redrives.length<=3,true,"the two live-claimed/unclaimed events were each processed by exactly one sweeper: "+JSON.stringify([s1,s2]));
+   for(let i=0;i<4&&meta.calls.length<3;i++)await outboxTick();
+   assert.equal(meta.calls.length,3,"one provider send per conversation");
+   assert.equal(meta.accepted,3);
+   // every event is now settled for recovery: later sweeps re-drive nothing and create nothing
+   await exec(`UPDATE public.automation_inbound_recovery SET next_attempt_at=now()-interval '1 second' WHERE status IN('waiting','leased');`);
+   const before=redrives.length;
+   await sweeper(redrives);await sweeper(redrives);
+   assert.equal(redrives.length,before,"no event is re-driven again");
+   for(const e of ev3)assert.equal(await runCount(e.c),1);
+   await outboxTick();await runtimeTick();assert.equal(meta.calls.length,3,"no extra send");
+   assert.equal(await val(`SELECT count(*)::int FROM public.automation_inbound_recovery WHERE status IN('waiting','leased')`),0,"nothing left in flight");
+  });
+
+  await t.step("recovery vs live work: a fresh inbound inside the grace window and an inbound whose lease is held by a live sweeper are never taken; an expired lease is reclaimed once",async()=>{
+   await freshDb();resetMeta();await activate("buttons",true);
+   const [fresh]=await recoverySetup(["7200001"],0);                 // arrived just now: its webhook may still be running
+   const redrives:string[]=[];
+   await sweeper(redrives);
+   assert.equal(redrives.length,0,"inside the grace window nothing is leased or re-driven");
+   assert.equal(await runCount(fresh.c),0);
+   await exec(`UPDATE public.messages SET created_at=now()-interval '10 minutes' WHERE id='${fresh.m}';`);
+   // sweeper "X" leases the event and crashes without finishing
+   const held=await rows<{lease_token:string}>(`SELECT lease_token FROM public.flow_inbound_recovery_lease(5,180,48,5,300,'${A}')`,"service_role");
+   assert.equal(held.length,1,"the aged event is leased");
+   await sweeper(redrives);
+   assert.equal(redrives.length,0,"a live lease is never reclaimed by another sweeper");
+   await exec(`UPDATE public.automation_inbound_recovery SET lease_expires_at=now()-interval '1 second' WHERE status='leased';`);
+   await sweeper(redrives);
+   assert.deepEqual(redrives,[fresh.mid],"after the lease expired the crashed sweeper's event is re-driven exactly once");
+   assert.equal(await runCount(fresh.c),1);
+   // the crashed sweeper wakes up with its stale token: it can neither finish nor re-open the event
+   assert.notEqual(await val(`SELECT public.flow_inbound_recovery_finish('${A}','${fresh.m}','${held[0].lease_token}','retry','late',5)`,"service_role"),"waiting");
+   await sweeper(redrives);assert.equal(redrives.length,1);
+  });
+
+  await t.step("recovery bounded: an unknown flow state is retried with backoff, then ends exhausted after the attempt cap; no run, no send, never leased again",async()=>{
+   await freshDb();resetMeta();await activate("buttons",true);
+   const [e]=await recoverySetup(["7300001"]);
+   const redrives:string[]=[];
+   const unknownState=()=>"retry" as const;
+   for(let i=0;i<RECOVERY_MAX_ATTEMPTS+3;i++){
+    await exec(`UPDATE public.automation_inbound_recovery SET next_attempt_at=now()-interval '1 second' WHERE status='waiting';`);
+    await runInboundRecovery(sb as never,{decrypt:async()=>"hello",tenantId:A,redrive:async(x)=>{redrives.push(x.eventId);return unknownState();}});
+   }
+   assert.equal(redrives.length,RECOVERY_MAX_ATTEMPTS,"exactly the capped number of attempts");
+   assert.equal(await val(`SELECT status FROM public.automation_inbound_recovery WHERE inbound_message_id='${e.m}'`),"exhausted");
+   assert.equal(await runCount(e.c),0);assert.equal(meta.calls.length,0);
+   await outboxTick();await runtimeTick();assert.equal(meta.calls.length,0,"an exhausted event never produces a send");
+  });
+
+  await t.step("publication while a run is executing: a newer PUBLISHED (not activated) revision never changes what the sleeping run sends (V2 isolation of non-canary accounts: see the production canary step)",async()=>{
+   await freshDb();resetMeta();await activate("delay",true);
+   const c=await conv("7400001");const m=await inbound(c,"mid.pub.1");
+   assert.equal(await attemptDurableInstagram(sb,ev(c,m,"mid.pub.1",null)),"handled");
+   const [run]=await runsOf(c);
+   const pinned=await val<number>(`SELECT publication_revision FROM public.automation_flow_runs WHERE id='${run.id}'`);
+   // publish revision N+1 with a different message text; the activation still points at revision N
+   await exec(`INSERT INTO public.automation_flow_publications(tenant_id,flow_key,revision,channel_account_id,platform,document,published_by)
+    SELECT tenant_id,flow_key,revision+1,channel_account_id,platform,replace(document::text,'رد بعد الانتظار','NEW REVISION TEXT')::jsonb,published_by
+    FROM public.automation_flow_publications WHERE tenant_id='${A}' AND flow_key='delay' AND revision=${pinned};`);
+   assert.equal(await val(`SELECT count(*)::int FROM public.automation_flow_publications WHERE tenant_id='${A}' AND flow_key='delay'`),2);
+   assert.equal(await val(`SELECT revision FROM public.automation_flow_activations WHERE tenant_id='${A}' AND flow_key='delay'`),pinned,"activation untouched by a publish");
+   await exec(`UPDATE public.automation_flow_runs SET wake_at=now()-interval '1 second' WHERE id='${run.id}';`);
+   const w=await runtimeTick();assert.equal(w.body.committed,1,JSON.stringify(w.body));
+   assert.equal(await val(`SELECT publication_revision FROM public.automation_flow_runs WHERE id='${run.id}'`),pinned,"the run keeps its pinned revision");
+   await outboxTick();
+   assert.equal(meta.calls.length,1);assert.equal(meta.calls[0].body.message.text,"رد بعد الانتظار","sent from the pinned revision, not from the newer publication");
+   assert.notEqual(meta.calls[0].body.message.text,"NEW REVISION TEXT");
+  });
+
+  await t.step("rollback order (production-shaped chain): rolling back 340000 while 360000 exists is REFUSED and changes nothing; the strict reverse order of the six applies",async()=>{
+   await freshDb();
+   const six=["20261029340000","20261029350000","20261029360000","20261115150000","20261115160000","20261115170000"];
+   const file=(v:string)=>repo+"supabase/rollbacks/"+[...Deno.readDirSync(repo+"supabase/rollbacks")].map(e=>e.name).find(n=>n.startsWith(v))!;
+   const FPSQL=`SELECT md5(coalesce(string_agg(x,E'\\n' ORDER BY x),'')) FROM (
+    SELECT 'f:'||p.oid::regprocedure::text||':'||md5(p.prosrc)||':'||coalesce(obj_description(p.oid,'pg_proc'),'') FROM pg_proc p WHERE p.pronamespace='public'::regnamespace
+    UNION ALL SELECT 'r:'||c.oid::regclass::text||':'||coalesce(obj_description(c.oid,'pg_class'),'') FROM pg_class c WHERE c.relnamespace='public'::regnamespace AND c.relkind IN('r','S')
+    UNION ALL SELECT 'k:'||conrelid::regclass::text||':'||conname FROM pg_constraint WHERE connamespace='public'::regnamespace) s(x)`;
+   const fp=async()=>(await psql(db,FPSQL)).out.trim();
+   const log:string[]=[];
+   // (1) the only real dependency among the six: 360000's lease function reads 340000's table
+   const before=await fp();
+   const bad=await psql(db,Deno.readTextFileSync(file(six[0])));
+   assert.equal(bad.ok,false,"rolling back 340000 while 360000 is installed must be refused");
+   assert.match(bad.err,/roll back 20261029360000_flow_inbound_recovery first/);
+   assert.equal(await fp(),before,"the refused rollback changed nothing");
+   await exec(`ALTER TABLE public.messages ADD COLUMN IF NOT EXISTS created_at timestamptz NOT NULL DEFAULT now(),ADD COLUMN IF NOT EXISTS body_encrypted text;`);
+   const stillWorks=await psql(db,`SELECT count(*) FROM public.flow_inbound_recovery_lease(1,180,48,5,300,NULL)`,"service_role");
+   assert.ok(stillWorks.ok,"recovery functions are intact: "+stillWorks.err);
+   // (2) the documented strict reverse order
+   for(const v of [...six].reverse()){
+    const r=await psql(db,Deno.readTextFileSync(file(v)));
+    log.push(v+":"+(r.ok?"ok":"REFUSED "+(r.err.match(/ERROR:[^\n]{0,140}/)??[""])[0]));
+   }
+   assert.deepEqual(log,[...six].reverse().map(v=>v+":ok"),"the documented order 170000 -> 160000 -> 150000 -> 360000 -> 350000 -> 340000 applies cleanly: "+log.join(" | "));
+   assert.equal(await val(`SELECT count(*)::int FROM pg_class WHERE relname IN('automation_inbound_routing_retries','automation_inbound_recovery')`),0,"fully rolled back");
   });
 
   await t.step("human takeover and revision deactivation mid-run end the run and skip its effects",async()=>{
