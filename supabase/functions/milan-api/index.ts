@@ -45,6 +45,7 @@ import { persistInboundOnce } from "./persistInboundOnce.ts";
 import { processExclusiveEvent } from "./exclusiveMessageClaim.ts";
 import { routeInbound } from "./messageRouting.ts";
 import {durableAccountAllowed} from "../_shared/durableAccounts.ts";
+import { invalidSignatureDiagnostics } from "./webhookDiagnostics.ts";
 import { recordRoutingFailure, markRoutingResolved, retryableEvent, webhookStatusFor,
   isRetryableOutcome, retryAttemptCap, runBatchEvent } from "./inboundRoutingRetry.ts";
 // B-3/B-4 opt-in recovery sweeper (default OFF) and its webhook-side lease check.
@@ -3054,6 +3055,19 @@ const milanApiHandler = (async (req: Request) => {
             console.error("[instagram_webhook] invalid page signature");
             return json({ error: "Invalid webhook signature" }, 401);
           }
+
+          // R2: fixed-field, payload-free diagnostics (webhookDiagnostics.ts).
+          // Never throws and never logs the signature, ids, text or secrets.
+          try {
+            console.warn(
+              "[instagram_webhook] invalid signature diagnostics",
+              invalidSignatureDiagnostics(
+                raw,
+                body,
+                req.headers.get("x-hub-signature-256")
+              )
+            );
+          } catch { /* diagnostics must never change the response */ }
 
           console.error(
             "[instagram_webhook] invalid signature — ignored"
