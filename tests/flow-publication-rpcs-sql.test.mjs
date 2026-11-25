@@ -11,7 +11,7 @@
 import {test,before,after} from "node:test";
 import assert from "node:assert/strict";
 import {readFileSync,existsSync,mkdtempSync,rmSync,chownSync,readdirSync} from "node:fs";
-import {spawnSync} from "node:child_process";
+import {spawnSync,spawn} from "node:child_process";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import {createHash} from "node:crypto";
@@ -239,6 +239,46 @@ test("live: SQL behaviour of publish, validation, activation gate, deactivation,
  assert.equal(q(db,`SELECT count(*) FROM public.flow_publication_rate_windows WHERE tenant_id='${B}' AND window_start<now()-interval '48 hours'`),"1","another tenant's rows are never touched");
 });
 
+// Real concurrency: separate PostgreSQL sessions (separate psql processes) race the publication RPCs.
+function psqlAsync(db,sql){
+ return new Promise((resolve)=>{
+  const a=["-X","-q","-t","-A","-F","\t","-v","ON_ERROR_STOP=1","-h",dir,"-p",String(port),"-U","postgres","-d",db];
+  const p=spawn(join(BIN,"psql"),a,{env:env()});let out="",err="";
+  p.stdout.on("data",d=>out+=d);p.stderr.on("data",d=>err+=d);
+  p.on("close",code=>resolve({status:code,stdout:out.trim(),stderr:err}));
+  p.stdin.end(sql);
+ });
+}
+test("live: concurrent publication (separate sessions) - unique gapless revisions, no lost or failed publish, tenants independent, activation row never corrupted",{skip},async()=>{
+ if(q("postgres","SELECT count(*) FROM pg_database WHERE datname='rpc_post'")==="0")buildBase();// reuse the cluster base of the previous live test
+ createDb("rpc_conc","rpc_post");
+ const db="rpc_conc";
+ // 8 sessions x 5 publishes of the SAME flow key at once (the tenant-row lock serializes revision allocation)
+ const calls=Array.from({length:5},()=>pub()).join(";");
+ const runs=await Promise.all(Array.from({length:8},()=>psqlAsync(db,calls)));
+ for(const r of runs)assert.equal(r.status,0,r.stderr);
+ const got=runs.flatMap(r=>r.stdout.split("\n").map(Number)).sort((a,b)=>a-b);
+ assert.deepEqual(got,Array.from({length:40},(_,i)=>i+1),"every publish succeeded with a distinct, gapless revision 1..40");
+ assert.equal(q(db,`SELECT count(*)||'|'||count(DISTINCT revision)||'|'||max(revision) FROM public.automation_flow_publications WHERE tenant_id='${A}' AND flow_key='welcome'`),"40|40|40");
+ // two tenants publishing at the same time never wait on / corrupt each other
+ const mix=await Promise.all([...Array.from({length:4},()=>psqlAsync(db,pub(A,IA,"instagram","k2"))),
+  ...Array.from({length:4},()=>psqlAsync(db,pub(B,FB,"facebook","k2",UB)))]);
+ for(const r of mix)assert.equal(r.status,0,r.stderr);
+ assert.equal(q(db,`SELECT tenant_id::text||':'||count(*)||':'||max(revision) FROM public.automation_flow_publications WHERE flow_key='k2' GROUP BY tenant_id ORDER BY 1`).split("\n").join(","),
+  `${A}:4:4,${B}:4:4`.split(",").join(","),"each tenant has its own 1..4");
+ // concurrent activations of different revisions + deactivations: no error, exactly one row, final state is one of the requested revisions
+ const ops=[...Array.from({length:6},(_,i)=>psqlAsync(db,act(A,IA,"instagram","welcome",i+1))),
+  ...Array.from({length:3},()=>psqlAsync(db,deact()))];
+ for(const r of await Promise.all(ops))assert.equal(r.status,0,r.stderr);
+ assert.equal(cnt(db,"automation_flow_activations"),1,"one activation row for the key, never duplicated");
+ const rev=Number(q(db,`SELECT revision FROM public.automation_flow_activations WHERE tenant_id='${A}' AND flow_key='welcome'`));
+ assert.ok(rev>=1&&rev<=6,"the active revision is one that was actually requested: "+rev);
+ // a publish concurrent with an activation of an older revision never changes the activated revision
+ q(db,act(A,IA,"instagram","welcome",3));
+ const race=await Promise.all([psqlAsync(db,pub()),psqlAsync(db,pub()),psqlAsync(db,act(A,IA,"instagram","welcome",3))]);
+ for(const r of race)assert.equal(r.status,0,r.stderr);
+ assert.equal(q(db,`SELECT revision||'|'||is_active FROM public.automation_flow_activations WHERE tenant_id='${A}' AND flow_key='welcome'`),"3|true","publishing newer revisions never moves the active revision");
+});
 test("live: grants, ownership, security mode, search_path and caller/signature agreement",{skip},()=>{
  if(!existsSync(join(dir,"data")))return;
  const db="rpc_post";
