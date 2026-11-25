@@ -24,27 +24,25 @@ Applied exactly as written in repo, verified by normalized-`prosrc` md5 hashes; 
 
 Rollbacks exist in `supabase/rollbacks/*.rollback.sql`; only strict reverse order 170000 → 160000 → 150000 → 360000 → 350000 → 340000. Cron stayed healthy; unauthenticated worker calls return 401.
 
-## 3. Edge Function deployment state
-| Function | Deployed version | sha256 prefix | Status |
-|---|---|---|---|
-| flow-publication | **v38** (was v37), sha `4a0beb1f…6d0bfe`, verify_jwt=true | | **VERIFIED deployed** via workflow run 45614509803 from `main` b075b057. Runtime behavior/logs **UNVERIFIED**. |
-| flow-internal-worker | v6 | 60eba6de | **BLOCKED / NOT EXECUTED** |
-| flow-outbox-worker | v32 | 6cbb5f6c | **BLOCKED / NOT EXECUTED** |
-| flow-runtime-worker | v31 | 945ed482 | **BLOCKED / NOT EXECUTED** |
-| milan-api | v137 | 4f2a0e99 | **BLOCKED / NOT EXECUTED** |
+## 3. Edge Function deployment state — ALL FIVE DEPLOYED (VERIFIED via list_edge_functions, 2026-11-25)
+| Function | Before | Now | sha256 (now) | verify_jwt | Run |
+|---|---|---|---|---|---|
+| flow-publication | v37 | **v38** | 4a0beb1f190dec3ec35cafb66e9c2ca112caefcd576e960be6c3c0089e6d0bfe | true | 45614509803 |
+| flow-internal-worker | v6 | **v7** | 782c6552d4d473608f3fe1735afb97ad4d1522c041ccbbce49334ec13a192ab9 | false | 45615826255 |
+| flow-outbox-worker | v32 | **v33** | e37d5c07154adcccf5cf19fbd8773566e3f0e90ea1a688abfb24decc7ec388ce | false | 45615910914 |
+| flow-runtime-worker | v31 | **v32** | 6d22c6619337af2098cef4343d6fd1e544e107cb5160858de0ec94cee98d0114 | false | 45616001417 |
+| milan-api | v137 | **v138** | e728e2a7dd428b29cdc1501c2200708a7196e15b6496263d4449b82f51233b3a | false | 45616074389 |
 
-Required order: flow-internal-worker → flow-outbox-worker → flow-runtime-worker → flow-publication (done, out of order; DB deps were satisfied) → milan-api. Remaining order: internal → outbox → runtime → milan-api. Verify each version (list_edge_functions: version up, hash changed, verify_jwt unchanged) before the next; stop on any failure.
+All ACTIVE. Order executed: publication (out of order, DB deps met) → internal → outbox → runtime → milan-api. Dry-runs (remote bundleOnly) passed for all four new workflows first. Runtime behavior/logs after deploy: UNVERIFIED.
 
-Expected verify_jwt: internal false, outbox false, runtime false, publication true, milan-api false.
+## 4. Token
+`SUPABASE_ACCESS_TOKEN` GitHub secret exists and works in Actions (VERIFIED by successful deploys). Value never seen. Not available in the Claude shell.
 
-## 4. Blocker
-`SUPABASE_ACCESS_TOKEN` exists as a GitHub Actions secret and was refreshed by the user (VERIFIED working: the publication workflow authenticated). Value never seen. It is NOT available in the Claude shell (Management API returns 401 there). No single-function workflow exists for the other four; inlining ~375k tokens through the MCP connector was judged unsafe.
-
-## 5. Existing deployment tooling
-- `scripts/deploy-functions.js --only <slug> [--dry-run]` — single-function deploy via Management API; needs `SUPABASE_ACCESS_TOKEN` + project ref.
-- `.github/workflows/deploy-flow-publication-manual.yml` — flow-publication only; input `confirm_release: deploy-flow-publication-reviewed`; requires `refs/heads/main`; protected environment.
-- `.github/workflows/deploy-functions.yml` — bulk deploy of unrelated functions. **Do not use.**
-- Newly created workflow files: **none** (NOT EXECUTED). No uncommitted deployment work existed.
+## 5. Deployment tooling
+- `scripts/deploy-functions.js --only <slug> [--dry-run]` (hard-coded verify_jwt map, post-deploy verify_jwt check).
+- `deploy-flow-publication-manual.yml` (CLI deploy, publication only).
+- NEW (commit 70c80cbc, VERIFIED working): `deploy-flow-internal-worker-manual.yml`, `deploy-flow-outbox-worker-manual.yml`, `deploy-flow-runtime-worker-manual.yml`, `deploy-milan-api-manual.yml`. Inputs `confirm_release: deploy-<slug>-reviewed` and `dry_run: true|false`; enforce repo, `refs/heads/main`, ancestor of b075b057, and `supabase/functions` + deploy script identical to b075b057; use the script. Note: they share a concurrency group, so a newer dispatch cancels a *pending* run.
+- `deploy-functions.yml` is bulk — never use.
 
 ## 6. Unverified
 - Edge env vars (names only; values unreadable): FLOW_DURABLE_SCHEDULER_ENABLED, FLOW_WORKERS_OPERATOR_RELEASE, FLOW_DURABLE_CANARY_ACCOUNT_ID, FLOW_WAKE_MAX_OVERDUE_MINUTES, FLOW_OUTBOX_SEND_ENABLED, FLOW_INTERNAL_ACTIONS_ENABLED, FLOW_DURABLE_INGRESS_ENABLED, FLOW_MULTICHANNEL_ENABLED; Vault/Edge key `flow_worker_service_role_key`.
@@ -62,6 +60,4 @@ Expected verify_jwt: internal false, outbox false, runtime false, publication tr
 - Sonnet only per user preference; no subagents; minimal tokens, no repeated audits.
 
 ## 8. Exact next action
-1. Deploy `flow-internal-worker` with `node scripts/deploy-functions.js --only flow-internal-worker --dry-run`, then without `--dry-run`, in an environment holding the token (or add a single-function manual workflow mirroring the publication one, merged to `main`, then dispatch it).
-2. Verify via `list_edge_functions` (expect version > 6, new hash, verify_jwt=false). Repeat for outbox (>32), runtime (>31), milan-api (>137).
-3. Then read-only checks of logs and cron, and safe operational verification on the dedicated test tenant only; produce a consolidated report.
+Function deployment is complete. Remaining (read-only first): check post-deploy logs of the five functions and cron health; confirm the eight FLOW_* env values with the owner (cannot be read here); safe operational verification on a dedicated test tenant only. Activation Generation (`20261123100000`) stays NOT EXECUTED pending separate approval.
