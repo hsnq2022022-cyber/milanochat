@@ -718,9 +718,9 @@ test("live PG: 150000 coverage, canonical takeover columns, 130000-after-150000 
     "function:public.flow_claim_inbound_durable(uuid,uuid,text,text,uuid,uuid)",
     `durable_button_run:public.${BEGIN_SIG}`,`durable_button_run:public.${RESUME_SIG}`,
     "durable_ingress_for_20261029170000","durable_button_run_guards",`superseding_begin:public.${SUPER_SIG}`,
-    "media_effects","media_stale_sweep","multichannel_support","registry_wake_hold"].includes(r.item)||
+    "media_effects","media_stale_sweep","multichannel_support","registry_wake_hold","publication_rpcs"].includes(r.item)||
    r.status==="INFO"&&["preflight:20261029180000","preflight:20261029190000","preflight:20261029210000",
-    "preflight:20261029220000","preflight:20261029230000","preflight:20261115160000"].includes(r.item),
+    "preflight:20261029220000","preflight:20261029230000","preflight:20261115160000","preflight:20261115170000"].includes(r.item),
    `${r.item}: ${r.status} ${r.detail}`);
  assert.equal(d(rows,"credits_pause").status,"ABSENT");
  assert.match(d(rows,"credits_pause").detail,/20261029160000 not applied/);
@@ -1499,4 +1499,56 @@ test("live PG: 20261115160000: predecessor state, apply, apply twice, attributes
  // and the migration can be applied again after a rollback
  ok("pdc_rwh_rb",{file:RWH},"re-apply after rollback");
  assert.equal(SNAPX("pdc_rwh_rb"),once);
+});
+
+// ===========================================================================
+// 20261115170000_flow_publication_rpcs: pins, absent / applied / tampered / rollback
+// ===========================================================================
+const PUB="supabase/migrations/20261115170000_flow_publication_rpcs.sql";
+const PUB_RB="supabase/rollbacks/20261115170000_flow_publication_rpcs.rollback.sql";
+const PUB_TAGS={publish:"0af572406d18d48d737d89fe4aa6b4db",activate:"3b11ae1b179956791b1d13a663b03b03",
+ deactivate:"c24977b58a9873b3946c25d186fad9d4",limit:"539eecaaa05b083eda3b402e5b8b2193"};
+
+test("20261115170000: the review pins equal the md5 of the migration bodies (which equal production) and its marker",()=>{
+ for(const [tag,h] of Object.entries(PUB_TAGS)){
+  assert.equal(md5x(normx(bodyOf(PUB,tag))),h,`${tag}: migration body is the verified production body`);
+  assert.ok(noComments.includes(`'${h}'`),`${tag}: pin embedded in the review`);
+ }
+ assert.ok(noComments.includes("CREATED_BY_20261115170000_FLOW_PUBLICATION_RPCS"));
+ assert.match(readFileSync(PUB_RB,"utf8"),/CREATED_BY_20261115170000_FLOW_PUBLICATION_RPCS/);
+ // the production approval gate is the live one, never test_only alone
+ assert.match(bodyOf(PUB,"activate"),/\(s\.test_only OR s\.production_approved\)/);
+});
+
+test("live PG: 20261115170000 publication_rpcs row: absent, applied, tampered, rolled back",{skip},()=>{
+ const d=(rs,item)=>one(rs,"d_prerequisites",item);
+ ok("postgres",{sql:`DO $r$ DECLARE n text; BEGIN
+  FOREACH n IN ARRAY ARRAY['anon','authenticated','service_role'] LOOP
+   IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname=n) THEN
+    EXECUTE format('CREATE ROLE %I NOLOGIN%s',n,CASE WHEN n='service_role' THEN ' BYPASSRLS' ELSE '' END);
+   END IF;
+  END LOOP; END $r$;`},"live-shape roles");
+ prepare("pdc_pub",{roles:false});
+ ok("pdc_pub",{sql:`ALTER TABLE public.tenants ADD COLUMN IF NOT EXISTS user_id uuid;
+  ALTER TABLE public.tenants ADD COLUMN IF NOT EXISTS is_active boolean NOT NULL DEFAULT true;
+  ALTER TABLE public.channel_accounts ADD COLUMN IF NOT EXISTS is_active boolean NOT NULL DEFAULT true,
+  ADD COLUMN IF NOT EXISTS agent_enabled boolean NOT NULL DEFAULT true,ADD COLUMN IF NOT EXISTS auto_reply boolean NOT NULL DEFAULT true;
+  ALTER TABLE public.automation_flow_tenant_switches ADD COLUMN IF NOT EXISTS production_approved boolean NOT NULL DEFAULT false;`},"columns");
+ let {rows}=assertReadOnlyRun("pdc_pub");
+ assert.equal(d(rows,"publication_rpcs").status,"ABSENT");
+ assert.equal(d(rows,"preflight:20261115170000").status,"OK",d(rows,"preflight:20261115170000").detail);
+ ok("pdc_pub",{file:PUB},"apply");
+ ({rows}=assertReadOnlyRun("pdc_pub"));
+ assert.equal(d(rows,"publication_rpcs").status,"OK",d(rows,"publication_rpcs").detail);
+ assert.match(d(rows,"publication_rpcs").detail,/4 created by 20261115170000/);
+ // tampering: an activation gate that ignores production_approved is a CONFLICT
+ ok("pdc_pub",{sql:`DO $t$ DECLARE s text; BEGIN
+  SELECT replace(pg_get_functiondef(p.oid),'(s.test_only OR s.production_approved)','s.test_only') INTO s
+   FROM pg_proc p WHERE p.oid=to_regprocedure('public.flow_activate_revision(uuid,uuid,text,text,bigint,uuid)');
+  EXECUTE s; END $t$;`},"tamper");
+ ({rows}=assertReadOnlyRun("pdc_pub"));
+ assert.match(d(rows,"publication_rpcs").status,/^CONFLICT/);
+ // the migration refuses the drifted body instead of overwriting it
+ const r=psql("pdc_pub",{file:PUB});
+ assert.notEqual(r.status,0,"drifted activate body is refused");
 });

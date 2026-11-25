@@ -432,7 +432,9 @@ const CHAIN=[
  "supabase/migrations/20261029340000_flow_inbound_routing_retry.sql",
  "supabase/migrations/20261029350000_flow_durable_keyword_start.sql",
  // Registry-blocked production runs are never leased (no attempt consumed) and are bounded by the stale sweep.
- "supabase/migrations/20261115160000_flow_registry_wake_hold.sql"
+ "supabase/migrations/20261115160000_flow_registry_wake_hold.sql",
+ // flow-publication RPCs and the rate window table (adopted unchanged on production).
+ "supabase/migrations/20261115170000_flow_publication_rpcs.sql"
 ];
 const repo=new URL("..",import.meta.url).pathname;
 let dbSeq=0;

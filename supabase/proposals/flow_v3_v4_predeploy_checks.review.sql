@@ -1579,6 +1579,123 @@ SELECT section,item,status,tenant_id,n,ids,detail FROM (
    ELSE 'unmet (normal until 20261029230000 is applied): '||(SELECT string_agg(label,'; ' ORDER BY label) FROM pf16) END
 ) x ORDER BY ord,item;
 
+-- (d) 20261115170000_flow_publication_rpcs (the four publication functions flow-publication calls, and
+-- their rate window table). Catalog only; the definitions pinned here are the ones READ FROM PRODUCTION
+-- (read only, 2026-11-25), so a production database reports OK before and after the migration.
+--  * publication_rpcs: OK = flow_publish_revision, flow_activate_revision, flow_deactivate_revision and
+--    flow_publication_rate_allow each exist once (no overload) with the verified body (md5 of the
+--    whitespace-normalized prosrc), plpgsql, not security definer, not strict, volatile,
+--    search_path='', the exact arguments and result, an empty marker or one of the two known markers,
+--    no PUBLIC/anon/authenticated privilege, AND flow_publication_rate_windows has the installed shape
+--    (columns, primary key, request_count check, row level security, known marker, no client privilege).
+--    ABSENT = none of the four functions and no rate table (not installed). CONFLICT = any other state
+--    (a different body, for example an activation gate that ignores production_approved; an extra
+--    overload; a missing or foreign object; a client privilege). detail lists every function as
+--    verified / absent / unrecognized and how many carry the migration marker (created by it, the
+--    rest were adopted).
+--  * preflight:20261115170000: its prerequisites (the installed tenant, account, switch, publication and
+--    activation tables and columns, including production_approved, and the activation unique key); INFO
+--    while unmet.
+-- ROLLBACK: rollbacks/20261115170000_flow_publication_rpcs.rollback.sql removes only objects carrying the
+-- migration marker; production objects (no marker) are never removed by it.
+WITH
+pbh(name,sig,args,res,h) AS (VALUES
+ ('flow_publish_revision','flow_publish_revision(uuid,uuid,text,text,uuid,jsonb)',
+  'p_tenant_id uuid, p_account_id uuid, p_platform text, p_flow_key text, p_actor_id uuid, p_document jsonb','bigint','0af572406d18d48d737d89fe4aa6b4db'),
+ ('flow_activate_revision','flow_activate_revision(uuid,uuid,text,text,bigint,uuid)',
+  'p_tenant_id uuid, p_account_id uuid, p_platform text, p_flow_key text, p_revision bigint, p_actor_id uuid','boolean','3b11ae1b179956791b1d13a663b03b03'),
+ ('flow_deactivate_revision','flow_deactivate_revision(uuid,uuid,text,text,uuid)',
+  'p_tenant_id uuid, p_account_id uuid, p_platform text, p_flow_key text, p_actor_id uuid','boolean','c24977b58a9873b3946c25d186fad9d4'),
+ ('flow_publication_rate_allow','flow_publication_rate_allow(uuid)','p_tenant_id uuid','boolean','539eecaaa05b083eda3b402e5b8b2193')
+),
+pbx AS (
+ SELECT pbh.*,p.oid,obj_description(p.oid,'pg_proc') AS m,
+  md5(btrim(regexp_replace(p.prosrc,'[[:space:]]+',' ','g'))) AS ph,
+  p.prosecdef,p.proisstrict,p.provolatile,
+  p.prolang=(SELECT l.oid FROM pg_catalog.pg_language l WHERE l.lanname='plpgsql') AS plp,
+  coalesce(array_to_string(p.proconfig,','),'') AS cfg,
+  pg_catalog.pg_get_function_arguments(p.oid) AS a,pg_catalog.pg_get_function_result(p.oid) AS r,
+  p.oid IS NOT NULL AND (p.proacl IS NULL OR EXISTS(SELECT 1 FROM unnest(p.proacl) e
+   WHERE e::text LIKE '=%' OR e::text LIKE 'anon=%' OR e::text LIKE 'authenticated=%')) AS exposed,
+  (SELECT count(*) FROM pg_catalog.pg_proc x
+   WHERE x.pronamespace='public'::regnamespace AND x.proname=pbh.name AND x.oid IS DISTINCT FROM p.oid) AS overloads
+ FROM pbh LEFT JOIN pg_catalog.pg_proc p ON p.oid=to_regprocedure('public.'||pbh.sig)
+),
+pbs AS (
+ SELECT pbx.*,
+  CASE WHEN pbx.oid IS NULL THEN 'absent' WHEN pbx.ph=pbx.h THEN 'verified' ELSE 'unrecognized' END AS v,
+  pbx.oid IS NOT NULL AND pbx.plp AND NOT pbx.prosecdef AND NOT pbx.proisstrict AND pbx.provolatile='v'
+   AND pbx.cfg='search_path=""' AND pbx.a=pbx.args AND pbx.r=pbx.res AND pbx.overloads=0
+   AND coalesce(pbx.m,'CREATED_BY_20261115170000_FLOW_PUBLICATION_RPCS')
+    IN('CREATED_BY_20261115170000_FLOW_PUBLICATION_RPCS','CREATED_BY_20261028200000_FLOW_PUBLICATION_RATE_LIMIT') AS sound
+ FROM pbx
+),
+pbt AS (
+ SELECT c.oid,
+  split_part(coalesce(obj_description(c.oid,'pg_class'),''),' ',1) AS m,
+  c.relrowsecurity AS rls,
+  (SELECT string_agg(a.attname||' '||format_type(a.atttypid,a.atttypmod)||CASE WHEN a.attnotnull THEN ' NN' ELSE '' END,',' ORDER BY a.attnum)
+   FROM pg_catalog.pg_attribute a WHERE a.attrelid=c.oid AND a.attnum>0 AND NOT a.attisdropped) AS shape,
+  EXISTS(SELECT 1 FROM pg_catalog.pg_constraint k WHERE k.conrelid=c.oid AND k.contype='p'
+   AND pg_catalog.pg_get_constraintdef(k.oid)='PRIMARY KEY (tenant_id, window_start)') AS pk,
+  EXISTS(SELECT 1 FROM pg_catalog.pg_constraint k WHERE k.conrelid=c.oid AND k.contype='c'
+   AND pg_catalog.pg_get_constraintdef(k.oid)='CHECK (((request_count >= 1) AND (request_count <= 30)))') AS chk,
+  (c.relacl IS NULL OR EXISTS(SELECT 1 FROM unnest(c.relacl) e
+   WHERE e::text LIKE '=%' OR e::text LIKE 'anon=%' OR e::text LIKE 'authenticated=%')) AS exposed
+ FROM (SELECT 1) one LEFT JOIN pg_catalog.pg_class c ON c.oid=to_regclass('public.flow_publication_rate_windows')
+),
+pbr AS (
+ SELECT pbt.oid IS NOT NULL AS present,
+  coalesce(pbt.oid IS NOT NULL AND pbt.rls AND pbt.pk AND pbt.chk AND NOT pbt.exposed
+   AND pbt.m IN('CREATED_BY_20261115170000_FLOW_PUBLICATION_RPCS','CREATED_BY_20261028200000_FLOW_PUBLICATION_RATE_LIMIT')
+   AND pbt.shape='tenant_id uuid NN,window_start timestamp with time zone NN,request_count integer NN',false) AS sound
+ FROM pbt
+),
+pbc AS (
+ SELECT (SELECT count(*) FROM pbs WHERE pbs.v<>'absent') AS fn_present,
+  (SELECT count(*) FROM pbs WHERE pbs.v='verified' AND pbs.sound AND NOT pbs.exposed) AS fn_ok,
+  (SELECT count(*) FROM pbs WHERE pbs.m='CREATED_BY_20261115170000_FLOW_PUBLICATION_RPCS') AS fn_created,
+  (SELECT string_agg(pbs.name||'='||pbs.v,' ' ORDER BY pbs.name) FROM pbs) AS versions,
+  pbr.present AS tbl_present,pbr.sound AS tbl_ok
+ FROM pbr
+),
+pf17 AS (
+ SELECT r.label FROM (VALUES
+  ('the installed tenant, account, switch, publication and activation columns the functions use (including production_approved)',
+   (SELECT count(*) FROM (VALUES ('tenants','user_id'),('tenants','is_active'),('channel_accounts','is_active'),
+     ('channel_accounts','agent_enabled'),('channel_accounts','auto_reply'),('automation_flow_global_switch','enabled'),
+     ('automation_flow_tenant_switches','test_only'),('automation_flow_tenant_switches','production_approved'),
+     ('automation_flow_publications','published_by'),('automation_flow_activations','updated_at')) c(t,col)
+    WHERE EXISTS(SELECT 1 FROM pg_catalog.pg_attribute a WHERE a.attrelid=to_regclass('public.'||c.t)
+     AND a.attname=c.col AND a.attnum>0 AND NOT a.attisdropped))=10),
+  ('the unique key (tenant_id, channel_account_id, platform, flow_key) on the activations table',
+   EXISTS(SELECT 1 FROM pg_catalog.pg_index i WHERE i.indrelid=to_regclass('public.automation_flow_activations') AND i.indisunique
+    AND (SELECT array_agg(a.attname::text ORDER BY k.ord) FROM unnest(i.indkey) WITH ORDINALITY k(attnum,ord)
+         JOIN pg_catalog.pg_attribute a ON a.attrelid=i.indrelid AND a.attnum=k.attnum)
+        =ARRAY['tenant_id','channel_account_id','platform','flow_key']))
+ ) r(label,ok) WHERE NOT r.ok
+)
+SELECT section,item,status,tenant_id,n,ids,detail FROM (
+ SELECT 0 AS ord,'d_prerequisites'::text AS section,'publication_rpcs'::text AS item,
+  CASE WHEN t.fn_ok=4 AND t.fn_present=4 AND t.tbl_ok THEN 'OK'
+   WHEN t.fn_present=0 AND NOT t.tbl_present THEN 'ABSENT'
+   ELSE 'CONFLICT: 20261115170000 objects' END AS status,
+  NULL::uuid AS tenant_id,t.fn_present AS n,NULL::text AS ids,
+  CASE WHEN t.fn_ok=4 AND t.fn_present=4 AND t.tbl_ok
+    THEN format('all four publication functions and the rate window table are the verified production definitions (%s created by 20261115170000, the rest adopted); the production approval gate is (test_only OR production_approved); rollback: supabase/rollbacks/20261115170000_flow_publication_rpcs.rollback.sql removes only what the migration created; %s',t.fn_created,t.versions)
+   WHEN t.fn_present=0 AND NOT t.tbl_present
+    THEN '20261115170000 not applied: flow-publication has no database functions to run; '||coalesce(t.versions,'-')
+   ELSE format('partial or inconsistent state: %s of 4 functions exist, %s verified with attributes and privileges intact, rate window table present=%s intact=%s; %s',
+    t.fn_present,t.fn_ok,t.tbl_present,t.tbl_ok,t.versions) END AS detail
+ FROM pbc t
+ UNION ALL
+ SELECT 1,'d_prerequisites','preflight:20261115170000',
+  CASE WHEN (SELECT count(*) FROM pf17)=0 THEN 'OK' ELSE 'INFO' END,
+  NULL,(SELECT count(*) FROM pf17),NULL,
+  CASE WHEN (SELECT count(*) FROM pf17)=0 THEN 'all 20261115170000 preflight requirements satisfied'
+   ELSE 'unmet (normal until the Flow runtime tables are installed): '||(SELECT string_agg(label,'; ' ORDER BY label) FROM pf17) END
+) x ORDER BY ord,item;
+
 -- ===========================================================================
 -- (e) Lock-impact estimators. Planner statistics only (no table scans).
 -- Each migration is ONE transaction: the AccessExclusive lock taken by its

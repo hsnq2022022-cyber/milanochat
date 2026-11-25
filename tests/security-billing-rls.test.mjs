@@ -32,7 +32,7 @@ test("240000/250000: newest migrations, one bounded transaction each, rollbacks 
  // 20261115120000_channel_accounts_hardening: independent security migration (channel_accounts grants/policies/index; no flow object).
  // 20261115130000_wayl_topup_atomic_grant: independent billing migration (new wayl_grant_topup_once(uuid,integer,text,jsonb) only; no flow object).
  // 20261115150000_flow_delivery_failure_info: additive, newest (nullable failure columns + CHECK on automation_flow_delivery_attempts, new flow_fail_outbox_delivery; redefines no existing function; requires 210000).
- for(const s of stamps)if(!["20261029240000","20261029250000","20261029260000","20261029270000","20261029280000","20261029290000","20261029300000","20261029310000","20261029320000","20261029330000","20261029340000","20261029350000",/* 360000 inbound recovery: additive, new objects only, requires 340000 */"20261029360000","20261115120000","20261115130000","20261115150000","20261115160000"].includes(s))assert.ok(s<"20261029240000",s);
+ for(const s of stamps)if(!["20261029240000","20261029250000","20261029260000","20261029270000","20261029280000","20261029290000","20261029300000","20261029310000","20261029320000","20261029330000","20261029340000","20261029350000",/* 360000 inbound recovery: additive, new objects only, requires 340000 */"20261029360000","20261115120000","20261115130000","20261115150000","20261115160000","20261115170000"].includes(s))assert.ok(s<"20261029240000",s);
  for(const f of [MIG,RB,RL,RL_RB]){
   const s=src(f),code=noComments(s);
   assert.match(s,/^BEGIN;\nSET LOCAL lock_timeout='3s';\nSET LOCAL statement_timeout='60s';\n/m,f);

@@ -170,6 +170,14 @@ jobs:
           grep -qx '# fail 0' "$RUNNER_TEMP/flow-superseding.tap"
           grep -qx '# cancelled 0' "$RUNNER_TEMP/flow-superseding.tap"
           grep -qx '# skipped 0' "$RUNNER_TEMP/flow-superseding.tap"
+      - name: Flow publication RPCs 20261115170000 in throwaway PG
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test --test-reporter=tap tests/flow-publication-rpcs-sql.test.mjs | tee "$RUNNER_TEMP/flow-publication-rpcs.tap"
+          grep -qx '# fail 0' "$RUNNER_TEMP/flow-publication-rpcs.tap"
+          grep -qx '# cancelled 0' "$RUNNER_TEMP/flow-publication-rpcs.tap"
+          grep -qx '# skipped 0' "$RUNNER_TEMP/flow-publication-rpcs.tap"
       - name: Predeploy checks in throwaway PG
         shell: bash
         run: |
