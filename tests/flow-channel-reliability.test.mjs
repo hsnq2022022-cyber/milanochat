@@ -17,6 +17,8 @@ import {normalizeCommentText,commentMatches,HIDDEN_FORMAT_CHARS as COMMENT_HIDDE
  from "../supabase/functions/milan-api/commentTrigger.ts";
 import {HIDDEN_FORMAT_CHARS as DM_HIDDEN,normalizeTriggerText}
  from "../supabase/functions/milan-api/triggerKeywords.ts";
+import {createStageTimer} from "../supabase/functions/milan-api/webhookTimings.ts";
+import {runBackgroundJobs} from "../supabase/functions/milan-api/backgroundWork.ts";
 
 const IDX=readFileSync("supabase/functions/milan-api/index.ts","utf8");
 const END_MARK="        return json({\n          received: true,\n        });\n";
@@ -34,11 +36,16 @@ const waLoop=new Function(stripTypeScriptTypes("async function __wa("+WA_PARAMS+
 // The profile-fetch token in the instagram_webhook loop is now decrypted with
 // the STRICT decryptAccessTokenStrict (tests/milan-token-decrypt-strict.test.ts),
 // no longer the lenient decryptField; same position, same fake.
+// R1: the loop now also uses the request timer, the end-of-total callback and the background runner
+// (profile enrichment is deferred; with no EdgeRuntime in this harness it runs inline, as before).
+// They are appended AFTER the original parameters, so every existing call site stays unchanged.
 const IG_PARAMS="body,sb,extractIgMessages,multichannelEnabled,normalizeMetaMessages,env,syntheticEventId,"+
  "retryableEvent,recoveryLeaseActive,runBatchEvent,handleIncomingWebhookMessage,decryptAccessTokenStrict,fetchSenderProfile,"+
- "commentAutomationEnabled,ingestSignedComments,encryptField,webhookStatusFor,json,console";
-const igLoop=new Function(stripTypeScriptTypes("async function __ig("+IG_PARAMS+"){\n"+
+ "commentAutomationEnabled,ingestSignedComments,encryptField,webhookStatusFor,json,console,"+
+ "timer,endTotal,runBackgroundJobs";
+const igLoopRaw=new Function(stripTypeScriptTypes("async function __ig("+IG_PARAMS+"){\n"+
  slice('case "instagram_webhook": {',"        // Per-event outcomes: any \"retry\"")+"}\n",{mode:"strip"})+"\nreturn __ig;")();
+const igLoop=(...args)=>igLoopRaw(...args,createStageTimer(),()=>{},runBackgroundJobs);
 
 const T1="11111111-1111-4111-8111-111111111111";
 const T2="22222222-2222-4222-8222-222222222222";
@@ -188,6 +195,39 @@ test("E4 Instagram/Facebook mixed batch: throwing event and throwing comment ing
  assert.deepEqual(handled,["m1","m2","m3"],"all DMs processed");
  assert.deepEqual(comments,["E1","E2"],"comment ingest of every entry ran");
  assert.equal(res.status,503);
+});
+// R1: sender-profile enrichment is best effort and runs AFTER the durable ingress decision / the response.
+async function igWithProfile({profile,waitUntil,outcome}){
+ const order=[];const {c}=cons();let work=null;
+ const db=fakeDb({tables:{channel_accounts:[{id:ACC1,tenant_id:T1,channel:"instagram",external_id:"E1",status:"active",
+  access_token_encrypted:"enc"}]}});
+ const prev=globalThis.EdgeRuntime;
+ if(waitUntil)globalThis.EdgeRuntime={waitUntil:(p)=>{work=p;}};else delete globalThis.EdgeRuntime;
+ try{
+  const res=await igLoop({object:"instagram",entry:[{id:"E1"}]},db,
+   ()=>[{senderId:"s1",recipientId:"r",text:"x",mid:"m1"}],()=>false,()=>[],()=>"",async()=>null,async()=>null,async()=>false,runBatchEvent,
+   async(_sb,_a,_c,_t,msgId)=>{order.push("handle:"+msgId);return outcome;},
+   async()=>"tok",async()=>{order.push("profile:start");return profile(order);},()=>false,
+   async()=>{},async(x)=>x,webhookStatusFor,(b,s=200)=>({json:b,status:s}),c);
+  order.push("response:"+res.status);
+  return {res,order,work:()=>work};
+ }finally{if(prev===undefined)delete globalThis.EdgeRuntime;else globalThis.EdgeRuntime=prev;}
+}
+test("R1 Instagram: the ingress handler is awaited BEFORE the profile fetch; a failing profile fetch never changes the 200",async()=>{
+ const r=await igWithProfile({profile:()=>{throw new Error("graph down");}});
+ assert.deepEqual(r.order,["handle:m1","profile:start","response:200"],"inline fallback keeps the old order");
+ assert.equal(r.res.status,200);
+});
+test("R1 Instagram: with EdgeRuntime.waitUntil the response does not wait for the profile fetch; a 'retry' outcome is still a 503",async()=>{
+ const slow=async(order)=>{await new Promise(r=>setTimeout(r,40));order.push("profile:done");return {name:null,avatar:null};};
+ const r=await igWithProfile({profile:slow,waitUntil:true});
+ assert.deepEqual(r.order,["handle:m1","profile:start","response:200"],"handler awaited first; response not blocked by the slow fetch");
+ await r.work();
+ assert.deepEqual(r.order,["handle:m1","profile:start","response:200","profile:done"],"the deferred job still completes");
+ const retry=await igWithProfile({profile:async()=>({name:null,avatar:null}),waitUntil:true,outcome:"retry"});
+ assert.equal(retry.res.status,503,"durable-eligibility uncertainty still answers 503 (Meta redelivers)");
+ assert.equal(retry.order[0],"handle:m1");
+ await retry.work();
 });
 test("E4 Instagram: the recovery sweeper's lease on a retrying event -> no concurrent re-drive, 503",async()=>{
  const handled=[];const {c}=cons();

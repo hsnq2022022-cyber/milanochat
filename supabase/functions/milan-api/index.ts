@@ -46,6 +46,8 @@ import { processExclusiveEvent } from "./exclusiveMessageClaim.ts";
 import { routeInbound } from "./messageRouting.ts";
 import {durableAccountAllowed} from "../_shared/durableAccounts.ts";
 import { invalidSignatureDiagnostics } from "./webhookDiagnostics.ts";
+import { createStageTimer, NOOP_STAGE_TIMER, type StageTimer } from "./webhookTimings.ts";
+import { runBackgroundJobs } from "./backgroundWork.ts";
 import { recordRoutingFailure, markRoutingResolved, retryableEvent, webhookStatusFor,
   isRetryableOutcome, retryAttemptCap, runBatchEvent } from "./inboundRoutingRetry.ts";
 // B-3/B-4 opt-in recovery sweeper (default OFF) and its webhook-side lease check.
@@ -1755,8 +1757,12 @@ async function fetchSenderProfile(opts: {
   channel: "instagram" | "facebook" | "whatsapp";
   senderId: string;
   token: string | null;
+  /** Hard deadline for the whole Graph request incl. body (default 3000 ms). */
+  timeoutMs?: number;
 }): Promise<{ name: string | null; avatar: string | null }> {
   const { channel, senderId, token } = opts;
+  const timeoutMs =
+    typeof opts.timeoutMs === "number" && opts.timeoutMs > 0 ? opts.timeoutMs : 3000;
 
   if (channel === "whatsapp" || !token || !senderId) {
     return { name: null, avatar: null };
@@ -1778,7 +1784,11 @@ async function fetchSenderProfile(opts: {
 
     // T5-S5: the token travels in the Authorization header, never in the URL
     // (same Bearer form as sendMeta / ../_shared/metaGraph.ts).
-    const res = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
+    // R1: strict deadline (covers headers AND body); a stall is a fixed "timeout" category.
+    const res = await fetch(url, {
+      headers: { authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
 
     if (!res.ok) {
       // سجل آمن: HTTP status + sanitized Meta error code فقط.
@@ -1859,8 +1869,11 @@ async function handleIncomingWebhookMessage(
   // Re-drive of an already persisted event whose flow lookup failed before
   // (inboundRoutingRetry.ts): the SAME inbound row and conversation are used,
   // nothing is inserted again. Only set by the duplicate pre-check below.
-  redrive?: { conversationId: string; inboundId: string }
+  redrive?: { conversationId: string; inboundId: string },
+  // R1: optional bounded stage timing (webhookTimings.ts); inert by default.
+  timer: StageTimer = NOOP_STAGE_TIMER
 ): Promise<"retry" | void> {
+  const endConversation = timer.start("conversation");
   const tenantId: string =
     channel === "whatsapp"
       ? account.tenant_id
@@ -2029,10 +2042,13 @@ async function handleIncomingWebhookMessage(
     }
   }
 
+  endConversation();
+
   /**
    * حفظ رسالة العميل الواردة.
    */
   let inboundMessageId: string | null = redrive ? redrive.inboundId : null;
+  const endPersist = timer.start("persist");
   const incomingResult = redrive ? "saved" : await persistInboundOnce(async () => {
     const response = await sb.from("messages").insert({
       conversation_id: conv.id,
@@ -2048,6 +2064,7 @@ async function handleIncomingWebhookMessage(
     }
     return response;
   });
+  endPersist();
 
   if (incomingResult !== "saved") {
     if (incomingResult === "duplicate") {
@@ -2076,6 +2093,7 @@ async function handleIncomingWebhookMessage(
   // processExclusiveEvent return "routing_unavailable": no claim, no reply.
   const durableRanked=durableIngressConfigured(String(account.id),channel);
   let claimedRoute: "legacy_ai" | "flow" | null = null;
+  const endRoute = timer.start("route");
   const decision = await routeInbound(
     {
       conversation: {
@@ -2163,6 +2181,7 @@ async function handleIncomingWebhookMessage(
 
       },
       attemptDurable: async () => {
+        const endDurable = timer.start("durable");
         const durable = await attemptDurableInstagram(sb, {
           conversationStart,
           tenantId, accountId: String(account.id), conversationId: String(conv.id),
@@ -2170,6 +2189,7 @@ async function handleIncomingWebhookMessage(
           text: customerText,
           selectedChoiceId, providerEventIdGenuine: providerEventIdGenuine === true,
         });
+        endDurable();
         return durable === "retry" ? "retry" : durable === "handled" ? "handled" : "fallback";
       },
       exclusive: async () => {
@@ -2318,6 +2338,7 @@ async function handleIncomingWebhookMessage(
       },
     }
   );
+  endRoute();
 
   switch (decision.kind) {
     case "no_reply": {
@@ -3022,6 +3043,10 @@ const milanApiHandler = (async (req: Request) => {
           );
         }
 
+        // R1: bounded per-stage timing for this request (webhookTimings.ts).
+        const timer = createStageTimer();
+        const endTotal = timer.start("total");
+
         if (
           body.object !== "instagram" &&
           body.object !== "page"
@@ -3040,12 +3065,14 @@ const milanApiHandler = (async (req: Request) => {
           return json({ error: "Webhook signing secret unavailable" }, 503);
         }
 
+        const endVerify = timer.start("verify");
         const sigOk = await verifyMetaSignature(
           raw,
           req.headers.get(
             "x-hub-signature-256"
           ) ?? ""
         );
+        endVerify();
 
         if (!sigOk) {
           // Facebook Page events (object "page"): a missing or bad signature
@@ -3092,6 +3119,9 @@ const milanApiHandler = (async (req: Request) => {
         // Per-event outcomes: any "retry" (flow eligibility unknown) answers 503
         // so the provider redelivers (inboundRoutingRetry.ts).
         const igOutcomes: unknown[] = [];
+        // R1: optional sender-profile enrichment, run AFTER the response
+        // (best effort) and never before the durable ingress decision.
+        const profileJobs: Array<() => Promise<unknown>> = [];
         for (const entry of body.entry ?? []) {
           const entryId = String(entry.id ?? "");
 
@@ -3134,6 +3164,7 @@ const milanApiHandler = (async (req: Request) => {
             // (non-active) match still stops at the "not active" skip below.
             let lookupFailed = false;
 
+            const endLookup = timer.start("lookup");
             for (const candidate of candidates) {
               if (body.object === "page") {
                 const { data: pageAccounts, error: pageLookupError } = await sb
@@ -3191,6 +3222,8 @@ const milanApiHandler = (async (req: Request) => {
                 break;
               }
             }
+
+            endLookup();
 
             if (lookupFailed) {
               console.warn(
@@ -3274,11 +3307,13 @@ const milanApiHandler = (async (req: Request) => {
                     igOutcomes.push("retry");
                     continue;
                   }
+                  const endRedriveHandle = timer.start("handle");
                   igOutcomes.push(await runBatchEvent(() => handleIncomingWebhookMessage(
                     sb, account, chatId, msg.text, msgId,
                     channel as "instagram" | "facebook",
-                    undefined, msg.choiceId, providerEventIdGenuine, pending
+                    undefined, msg.choiceId, providerEventIdGenuine, pending, timer
                   )));
+                  endRedriveHandle();
                   continue;
                 }
                 console.log(
@@ -3289,6 +3324,7 @@ const milanApiHandler = (async (req: Request) => {
             }
 
             // runBatchEvent: an event that throws never aborts the batch.
+            const endHandle = timer.start("handle");
             igOutcomes.push(await runBatchEvent(() => handleIncomingWebhookMessage(
               sb,
               account,
@@ -3300,13 +3336,20 @@ const milanApiHandler = (async (req: Request) => {
                 | "facebook",
               undefined,
               msg.choiceId,
-              providerEventIdGenuine
+              providerEventIdGenuine,
+              undefined,
+              timer
             )));
+            endHandle();
 
             /* ── جلب بيانات المرسل (اسم + صورة) وحفظها ──
                بعد اكتمال معالجة الرسالة حتى لا يمنع الفشل
                الاستقبالَ أو الردَّ الآلي. أي خطأ هنا يُبتلع
-               بأمان وتُكمل الحلقة بقية الرسائل. */
+               بأمان وتُكمل الحلقة بقية الرسائل.
+               R1: لا يعمل هنا بل بعد الرد على Meta (best effort)؛
+               قرار الاستقبال المتين اكتمل أعلاه ولا يعتمد عليه. */
+            profileJobs.push(async () => {
+            const profileT0 = performance.now();
             try {
               let senderToken: string | null = null;
 
@@ -3374,6 +3417,11 @@ const milanApiHandler = (async (req: Request) => {
                 { category: fetchErrorCategory(e) }
               );
             }
+            // R1: duration only (whole ms); no ids, names, tokens or text.
+            console.log("[instagram_webhook] profile_timing", {
+              ms: Math.min(Math.max(Math.round(performance.now() - profileT0), 0), 3_600_000),
+            });
+            });
           }
 
           // FLOW_COMMENT_AUTOMATION_ENABLED (default OFF; commentIngress.ts):
@@ -3390,7 +3438,33 @@ const milanApiHandler = (async (req: Request) => {
           }
         }
 
-        if (webhookStatusFor(igOutcomes) === 503) {
+        // R1: every durable ingress / routing decision above has been AWAITED.
+        // Only the optional profile enrichment is deferred (or awaited inline
+        // when EdgeRuntime.waitUntil is unavailable). The 503 decision is
+        // computed from the already-resolved outcomes and is unchanged.
+        const answerRetry = webhookStatusFor(igOutcomes) === 503;
+        const edgeRuntime = (globalThis as {
+          EdgeRuntime?: { waitUntil?: (p: Promise<unknown>) => void };
+        }).EdgeRuntime;
+        const profileMode = await runBackgroundJobs(
+          profileJobs,
+          edgeRuntime && typeof edgeRuntime.waitUntil === "function"
+            ? (p) => edgeRuntime.waitUntil!(p)
+            : null,
+        );
+        endTotal();
+        try {
+          const timings = timer.snapshot();
+          if (timings.handle !== undefined || (timings.total ?? 0) >= 1000) {
+            console.log("[instagram_webhook] stage_timings", {
+              ...timings,
+              profile_jobs: profileJobs.length,
+              profile_mode: profileMode,
+            });
+          }
+        } catch { /* timing diagnostics must never change the response */ }
+
+        if (answerRetry) {
           return json({ error: "Flow routing temporarily unavailable" }, 503);
         }
 
