@@ -1,7 +1,7 @@
 import {test} from "node:test";
 import assert from "node:assert/strict";
 import {readFileSync} from "node:fs";
-import {canWakeDurableRun,wakeEndReason,humanTakeoverActive,type WakeEligibility}
+import {canWakeDurableRun,registryOnlyHold,allowlistOnlyHold,ALLOWLIST_PARK_MINUTES,wakeEndReason,humanTakeoverActive,type WakeEligibility}
  from "../supabase/functions/flow-runtime-worker/eligibility.ts";
 
 const now=Date.parse("2026-10-29T18:00:00Z");
@@ -13,7 +13,7 @@ const safe:WakeEligibility={
  accountTenantMatches:true,accountActive:true,agentEnabled:true,
  autoReply:true,conversationTenantMatches:true,conversationAccountMatches:true,
  humanTransferred:false,humanAgentExpiresAt:null,humanPausedReason:null,
- activeRevision:4,revisionIsActive:true
+ activeRevision:4,revisionIsActive:true,registryRegistered:true
 };
 test("wake permitted only for the still-active canary revision",()=>{
  assert.equal(canWakeDurableRun(safe,now),true);
@@ -30,6 +30,13 @@ test("wake permitted only for the still-active canary revision",()=>{
  }
  assert.equal(canWakeDurableRun({...safe,tenantProductionApproved:false},now),false);
  assert.equal(canWakeDurableRun({...safe,tenantTestOnly:true,tenantProductionApproved:false},now),true);
+});
+test("registry membership: a removed/other row HOLDS the wake (never ends the run); test-only exempt",()=>{
+ for(const value of [false,undefined,"true",1,null])
+  assert.equal(canWakeDurableRun({...safe,registryRegistered:value},now),false,"registryRegistered="+String(value));
+ assert.equal(canWakeDurableRun({...safe,registryRegistered:false,tenantTestOnly:true,tenantProductionApproved:false},now),true);
+ // Operator gate, not a permanent condition: the run is kept sleeping (no end reason), like a removed canary.
+ assert.equal(wakeEndReason({...safe,registryRegistered:false},now),null);
 });
 // Canonical columns: transferred + human_agent_expires_at (+ auto_paused_reason),
 // same rule as milan-api's lazy expiry and flow_conversation_human_takeover.
@@ -279,4 +286,69 @@ test("worker source: image guard runs after planning, before any commit, and end
  assert.match(guardSrc,/import \{isAllowedFlowImageUrl\} from "\.\.\/flow-outbox-worker\/mediaPolicy\.ts";/);
  assert.match(guardSrc,/try\{return read\(\)==="true";\}catch\{return false;\}/);
  assert.match(workerSrc,/sends:0/);
+});
+
+test("registryOnlyHold: true ONLY when the registry is the sole blocker (lease is released, budget kept)",()=>{
+ // Registry missing / unreadable (anything but exactly true) with every other fact fine -> hold.
+ for(const value of [false,undefined,"true",1,null])
+  assert.equal(registryOnlyHold({...safe,registryRegistered:value},now),true,"registryRegistered="+String(value));
+ // Registered, or a test_only tenant (never needed it): not a registry hold.
+ assert.equal(registryOnlyHold(safe,now),false);
+ assert.equal(registryOnlyHold({...safe,registryRegistered:false,tenantTestOnly:true,tenantProductionApproved:false},now),false);
+ // Any OTHER refusal stays a normal failure (attempt consumed, lease_exhausted still bounds it), even if unregistered.
+ for(const [field,value] of [["canaryAccountId","another-account"],["globalEnabled",false],["tenantSwitchEnabled",false],
+  ["tenantProductionApproved",false],["accountActive",false],["humanTransferred",true],["accountTenantMatches",false],
+  ["runPlatform","facebook"],["revisionIsActive",false],["activeRevision",2]] as const)
+  assert.equal(registryOnlyHold({...safe,registryRegistered:false,[field]:value},now),false,field);
+ // Permanent end reasons keep priority: the worker evaluates wakeEndReason first.
+ assert.equal(wakeEndReason({...safe,registryRegistered:false,revisionIsActive:false},now),"revision_inactive");
+});
+test("worker wiring pins: registry hold releases the lease (no throw), other refusals still throw; SQL never leases blocked runs",()=>{
+ const w=readFileSync("supabase/functions/flow-runtime-worker/index.ts","utf8");
+ assert.match(w,/if\(!reason&&registryOnlyHold\(wake,nowMs\)\)\{[\s\S]*?\.from\("automation_flow_run_leases"\)\.delete\(\)[\s\S]*?\.eq\("token",lease\)[\s\S]*?held\+\+;[\s\S]*?continue;/);
+ assert.match(w,/throw Error\("wake not eligible for current canary activation"\)/);
+ assert.match(w,/JSON\.stringify\(\{leased:leases\.length,committed,blocked,cancelled,held,/);
+ const m=readFileSync("supabase/migrations/20261115160000_flow_registry_wake_hold.sql","utf8");
+ const lease=m.slice(m.indexOf("AS $lease$"));
+ assert.match(lease,/AND NOT public\.flow_registry_blocks_run\(run\.tenant_id,run\.channel_account_id,run\.platform\)/);
+ assert.match(m,/OR public\.flow_registry_blocks_run\(run\.tenant_id,run\.channel_account_id,run\.platform\)/,"stale sweep bounds it");
+ assert.match(m,/SELECT p_platform IN\('instagram','facebook'\)/,"whatsapp unchanged");
+});
+
+test("allowlistOnlyHold: true ONLY when the allowlist is the sole blocker; registry, errors and other refusals are not",()=>{
+ // Not in the allowlist (removed entry, another id, unset or malformed secret), everything else fine -> hold.
+ for(const secret of ["another-account",undefined,"",null,"same-account,,x","a b"])
+  assert.equal(allowlistOnlyHold({...safe,canaryAccountId:secret},now),true,"secret="+String(secret));
+ // Allowlisted: nothing to park.
+ assert.equal(allowlistOnlyHold(safe,now),false);
+ assert.equal(allowlistOnlyHold({...safe,canaryAccountId:"x,same-account"},now),false,"member of a list");
+ // Combined with the registry (production tenant, not registered or unreadable): NOT an allowlist-only hold.
+ for(const value of [false,undefined,"true",null])
+  assert.equal(allowlistOnlyHold({...safe,canaryAccountId:"other",registryRegistered:value},now),false,"registry="+String(value));
+ // Test-only tenants never needed the registry: allowlist-only hold still applies to them.
+ assert.equal(allowlistOnlyHold({...safe,canaryAccountId:"other",tenantTestOnly:true,tenantProductionApproved:false,registryRegistered:false},now),true);
+ // Every other refusal keeps the previous (failing) behaviour even when the allowlist also refuses.
+ for(const [field,value] of [["globalEnabled",false],["tenantSwitchEnabled",false],["tenantProductionApproved",false],
+  ["tenantActive",false],["accountActive",false],["agentEnabled",false],["autoReply",false],["humanTransferred",true],
+  ["accountTenantMatches",false],["conversationTenantMatches",false],["conversationAccountMatches",false],
+  ["runPlatform","facebook"],["runStatus","completed"],["revisionIsActive",false],["activeRevision",2],["runRevision",2]] as const)
+  assert.equal(allowlistOnlyHold({...safe,canaryAccountId:"other",[field]:value},now),false,field);
+ // A malformed account id can never be parked (it could not be allowlisted either).
+ for(const accountId of [undefined,"",null,"has space","x".repeat(65)])
+  assert.equal(allowlistOnlyHold({...safe,accountId,canaryAccountId:"other"},now),false,"accountId="+String(accountId));
+ // Permanent end reasons keep priority: the worker evaluates wakeEndReason first.
+ assert.equal(wakeEndReason({...safe,canaryAccountId:"other",revisionIsActive:false},now),"revision_inactive");
+ // The registry and allowlist classifiers never both claim a refusal.
+ for(const v of [{...safe,canaryAccountId:"other"},{...safe,registryRegistered:false},{...safe,canaryAccountId:"other",registryRegistered:false}])
+  assert.ok(!(allowlistOnlyHold(v,now)&&registryOnlyHold(v,now)));
+ assert.equal(ALLOWLIST_PARK_MINUTES,5,"park = the smallest valid overdue bound");
+});
+test("worker wiring pins: park only with a valid overdue bound, token-scoped, attempts reset, then the old failure",()=>{
+ const w=readFileSync("supabase/functions/flow-runtime-worker/index.ts","utf8");
+ assert.match(w,/const overdueMax=wakeMaxOverdueMinutes\(\(\)=>Deno\.env\.get\("FLOW_WAKE_MAX_OVERDUE_MINUTES"\)\);\n\s+if\(wakeOverdue\(run\.wake_at,Date\.now\(\),overdueMax\)\)\{/,"one parse of the bound, the guard runs BEFORE any eligibility check");
+ assert.match(w,/if\(!reason&&overdueMax!==null&&allowlistOnlyHold\(wake,nowMs\)\)\{[\s\S]*?\.update\(\{attempts:0,expires_at:new Date\(nowMs\+ALLOWLIST_PARK_MINUTES\*60000\)\.toISOString\(\)\}\)[\s\S]*?\.eq\("token",lease\)\.select\("run_id"\);[\s\S]*?parkedRows\.length===1[\s\S]*?parked\+\+;[\s\S]*?continue;/);
+ assert.match(w,/throw Error\("wake not eligible for current canary activation"\)/);
+ assert.ok(w.indexOf("registryOnlyHold(wake,nowMs)")<w.indexOf("allowlistOnlyHold(wake,nowMs)"),"registry hold is evaluated first");
+ assert.ok(w.indexOf("allowlistOnlyHold(wake,nowMs)")<w.indexOf('throw Error("wake not eligible'),"parking before the failing fallback");
+ assert.match(w,/JSON\.stringify\(\{leased:leases\.length,committed,blocked,cancelled,held,parked,/);
 });

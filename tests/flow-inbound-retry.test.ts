@@ -191,8 +191,12 @@ test("index.ts wiring: webhook 503 while retryable, re-drive only a 'retrying' d
  const src=readFileSync("supabase/functions/milan-api/index.ts","utf8");
  assert.equal((src.match(/webhookStatusFor\((ig|wa)Outcomes\) === 503/g)??[]).length,2);
  assert.equal((src.match(/const pending = await retryableEvent\(sb, \{/g)??[]).length,2);
- assert.match(src,/if\(durable==="retry"\)return await keepRetryable\(String\(conv\.id\),inboundMessageId\);/);
- assert.match(src,/if \(isRetryableOutcome\(outcome\)\)\n\s+return await keepRetryable\(String\(conv\.id\), inboundMessageId\);/);
+ // Both unknown-state exits (durable "retry" and an unconfirmed exclusive claim) are ONE routing decision
+ // (messageRouting.ts, kind "retry") that index.ts maps to keepRetryable, before any AI reply.
+ const routing=readFileSync("supabase/functions/milan-api/messageRouting.ts","utf8");
+ assert.match(routing,/if\(stage==="retry"\)return \{kind:"retry"/);
+ assert.match(routing,/if\(isRetryableOutcome\(run\.outcome\)\)return \{kind:"retry"/);
+ assert.match(src,/case "retry":[\s\S]*?return await keepRetryable\(String\(conv\.id\), inboundMessageId as string\);/);
  // B-5: no Meta mid -> attempt cap 1 (immediately 'exhausted', never a retryable 503)
  assert.match(src,/const syntheticEvent = channel !== "whatsapp" && providerEventIdGenuine !== true;/);
  assert.match(src,/\}, retryAttemptCap\(syntheticEvent\)\);/);
@@ -201,7 +205,9 @@ test("index.ts wiring: webhook 503 while retryable, re-drive only a 'retrying' d
  assert.match(src,/if \(convError\) \{\n\s+console\.error\(`\[\$\{channel\}_webhook\] conversation read failed`\);\n\s+return await unknownState\(\);/);
  // 8th exit: account_unproven (no proven channel account -> no auto-send); previously
  // this path ended as claim_failed. No reply is sent either way.
- assert.equal((src.match(/await resolvedAfterRedrive\(\);\n\s+return;/g)??[]).length,8,"tenant missing/inactive, conversation gone, transferred, credits (2), auto reply off, account_unproven");
+ // tenant missing, tenant inactive, conversation gone, account_unproven, the shared no-reply branch (takeover, credits
+ // pause, auto reply off, no credits: messageRouting.ts, one liveNoReply call) and the durable flow session.
+ assert.equal((src.match(/await resolvedAfterRedrive\(\);\n\s+return;/g)??[]).length,6);
  assert.match(src,/const incomingResult = redrive \? "saved" : await persistInboundOnce/);
  assert.match(src,/\.eq\("id", redrive\.conversationId\)\n\s+\.eq\("wa_chat_id", chatId\)/);
 });
@@ -343,7 +349,7 @@ test("channel text propagation (source): Instagram/Messenger msg.text and WhatsA
  assert.match(src,/waOutcomes\.push\(await runBatchEvent\(\(\) => handleIncomingWebhookMessage\(\n\s+sb,\n\s+account,\n\s+chatId,\n\s+durableReply && !text \? durableReply\.text : text,/);
  assert.match(src,/const binding = bindingIsVerified\(bindingRow\) \? bindingRow : null;/);
  // the router receives exactly customerText and the verified account scope
- assert.match(src,/inboundId:inboundMessageId,eventId:externalMsgId,platform:channel,\n\s+text:customerText,/);
+ assert.match(src,/inboundId: inboundMessageId as string, eventId: externalMsgId as string, platform: channel,\n\s+text: customerText,/);
  assert.match(src,/sb, tenantId, String\(account\.id\), channel, customerText,/);
 });
 test("channel gates (behaviour): Messenger/WhatsApp keyword flows stay gated; Instagram runs",async()=>{

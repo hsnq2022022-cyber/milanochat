@@ -95,7 +95,7 @@ test("existing unavailable block: badge on the card and a plain sentence in the 
   expect(operatorActionCalls(calls)).toEqual([]);
 });
 
-test("capabilities failure: nothing gated, no badge, no claim", async ({ page }) => {
+test("capabilities failure: nothing ACCOUNT-gated, no badge, no claim (only the structurally unsupported HTTP step stays unavailable)", async ({ page }) => {
   await preloadDelay(page);
   const calls = await mock(page, "fail");
   await page.goto("/milanochat/#/flows");
@@ -103,6 +103,10 @@ test("capabilities failure: nothing gated, no badge, no claim", async ({ page })
   await expect(page.locator('.fs-node[data-kind="delay"]')).toBeVisible();
   await expect(page.getByTestId("node-capability-badge")).toHaveCount(0);
   await page.getByRole("button", { name: "فتح إضافة خطوة" }).click();
-  await expect(page.getByTestId("add-step-menu").locator('[aria-disabled="true"]')).toHaveCount(0);
-  await expect(page.getByTestId("add-step-menu").locator('[data-testid^="pal-gate-"]')).toHaveCount(0);
+  // The HTTP request step is unsupported by EVERY engine, so it is unavailable whatever the capability
+  // report says (src/flow/runtimeSupport.ts); nothing else is gated when the report failed.
+  await expect(page.getByTestId("add-step-menu").locator('[aria-disabled="true"]')).toHaveCount(1);
+  await expect(page.getByTestId("pal-kind-request")).toHaveAttribute("aria-disabled", "true");
+  await expect(page.getByTestId("add-step-menu").locator('[data-testid^="pal-gate-"]')).toHaveCount(1);
+  await expect(page.getByTestId("pal-gate-request")).toBeVisible();
 });

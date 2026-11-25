@@ -225,7 +225,11 @@ test("statuses, receipts and echoes are never customer events (normalizer), so t
 });
 test("index.ts wiring: every multichannel path is behind multichannelEnabled(); Instagram call unchanged",()=>{
  const src=readFileSync("supabase/functions/milan-api/index.ts","utf8");
- assert.match(src,/if\(channel==="instagram"\|\|\n\s+\(\(channel==="whatsapp"\|\|channel==="facebook"\)&&multichannelEnabled\(\)\)\)\{\n\s+const durable=await attemptDurableInstagram\(/);
+ // The durable path is consulted only when applicable (routeInbound's durableApplicable): Instagram, or
+ // WhatsApp/Facebook behind multichannelEnabled(); messageRouting.ts never calls it otherwise.
+ assert.match(src,/durableApplicable:\n\s+channel === "instagram" \|\|\n\s+\(\(channel === "whatsapp" \|\| channel === "facebook"\) && multichannelEnabled\(\)\),/);
+ assert.match(readFileSync("supabase/functions/milan-api/messageRouting.ts","utf8"),/if\(input\.durableApplicable\)\{\n\s+const stage=await deps\.attemptDurable\(\);/);
+ assert.match(src,/const durable = await attemptDurableInstagram\(sb, \{/);
  const wa=src.slice(src.indexOf('case "whatsapp_webhook": {'),src.indexOf('case "instagram_webhook": {'));
  // Interactive replies only for the canary account and only with the flag; after the signature.
  assert.match(wa,/const durableReplies =\n\s+multichannelEnabled\(\) &&\n\s+typeof account\.id === "string" &&\n\s+account\.id === env\("FLOW_DURABLE_CANARY_ACCOUNT_ID"\)/);
@@ -236,7 +240,7 @@ test("index.ts wiring: every multichannel path is behind multichannelEnabled(); 
  const ig=src.slice(src.indexOf('case "instagram_webhook": {'),src.indexOf("default:",src.indexOf('case "instagram_webhook": {')));
  assert.match(ig,/const pagePostbacks =\n\s+body\.object === "page" && multichannelEnabled\(\)/);
  assert.ok(ig.indexOf("verifyMetaSignature(")<ig.indexOf("normalizeMetaMessages("));
- assert.match(ig,/if \("postback" in msg &&\n\s+String\(account\.id\) !== env\("FLOW_DURABLE_CANARY_ACCOUNT_ID"\)\) \{\n\s+continue;/);
+ assert.match(ig,/if \("postback" in msg &&\n\s+!durableAccountAllowed\(env\("FLOW_DURABLE_CANARY_ACCOUNT_ID"\), String\(account\.id\)\)\) \{\n\s+continue;/);
  assert.match(ig,/for \(const msg of \[\.\.\.msgs, \.\.\.pagePostbacks\]\) \{/);
 });
 test("capabilities: WhatsApp accepts text, <=3 reply buttons, ONE cta_url",()=>{

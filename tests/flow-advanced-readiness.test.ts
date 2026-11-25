@@ -48,7 +48,8 @@ test("server checks are owner-scoped, read-only, and do not expose secret values
  assert.match(body,/\.eq\("revision",revision\)\.maybeSingle\(\)/);
  assert.match(body,/return respond\(\{ok:true,readiness,candidateRevision:revision\?\?null\}\)/);
  assert.doesNotMatch(body,/\.insert\(|\.update\(|\.delete\(|sendProviderMessage|flow_activate_revision|flow_deactivate_revision/);
- assert.doesNotMatch(body,/env\("[^"]+"\)\s*[,}]/);
+ // An env value must never be returned as data; passing it INTO the boolean predicate durableAccountAllowed is fine.
+ assert.doesNotMatch(body,/(?<!durableAccountAllowed\()env\("[^"]+"\)\s*[,}]/);
  assert.match(ui,/data-testid="flow-readiness-report"/);
  assert.match(ui,/readiness\.candidateKind==="buttons"/);
  assert.match(ui,/readiness\.candidateKind==="delay"/);

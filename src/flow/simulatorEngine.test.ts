@@ -68,13 +68,13 @@ test("typed question validates, stores the variable and interpolates it",()=>{
   assert.equal(ok.cursor.status,"end");
 });
 
-test("condition yes/no, delay note with real unit, action and request are local",()=>{
+test("condition yes/no, delay note with real unit and action are local",()=>{
   const t=node("trigger"),a=node("action",{actionType:"set_field",actionValue:"tier=gold"});
   const cond=node("condition",{conditionField:"tier",operator:"equals",conditionValue:"GOLD"});
-  const dl=node("delay",{delayValue:4,delayUnit:"minutes"}),req=node("request",{requestUrl:"https://x.test"});
+  const dl=node("delay",{delayValue:4,delayUnit:"minutes"});
   const yes=node("message",{text:"نعم"}),no=node("message",{text:"لا"}),e=node("end");
-  const c=ctx(doc([t,a,cond,dl,req,yes,no,e],[link(t,"next",a),link(a,"next",cond),link(cond,"yes",dl),link(cond,"no",no),
-    link(dl,"next",req),link(req,"error",yes),link(yes,"next",e)]));
+  const c=ctx(doc([t,a,cond,dl,yes,no,e],[link(t,"next",a),link(a,"next",cond),link(cond,"yes",dl),link(cond,"no",no),
+    link(dl,"next",yes),link(yes,"next",e)]));
   const s=startSimulation(c);
   const delay=s.events.find(x=>x.type==="delay")!;
   assert.equal(delay.text,"⏳ ينتظر 4 دقائق…");
@@ -86,6 +86,34 @@ test("condition yes/no, delay note with real unit, action and request are local"
   assert.equal(delayText(2,"days"),"⏳ ينتظر يومين…");
 });
 
+test("an HTTP request step is never simulated: the run stops there and never completes",()=>{
+  // No live engine runs a request node; pretending it succeeded (or took an error path) was a lie.
+  const t=node("trigger"),req=node("request",{requestUrl:"https://x.test"});
+  const yes=node("message",{text:"نعم"}),e=node("end");
+  const c=ctx(doc([t,req,yes,e],[link(t,"next",req),link(req,"success",yes),link(req,"error",yes),link(yes,"next",e)]));
+  const s=startSimulation(c);
+  assert.equal(s.cursor.status,"stopped");
+  assert.ok(!texts(s.events).includes("نعم"));
+  assert.ok(!texts(s.events).includes(COMPLETED_TEXT));
+  assert.ok(s.events.some(x=>x.type==="system"&&x.tone==="warn"&&x.text.includes("الطلب الخارجي غير مدعوم")&&x.text.includes("لن تُنفَّذ")));
+});
+
+test("triggers no engine executes (story, ad, live, referral) stop the simulation before any message",()=>{
+  for(const mode of ["story","ad","live","referral"] as const){
+    const t=node("trigger",{triggerMode:mode}),m=node("message",{text:"أهلًا"}),e=node("end");
+    const s=startSimulation(ctx(doc([t,m,e],[link(t,"next",m),link(m,"next",e)])));
+    assert.equal(s.cursor.status,"stopped",mode);
+    assert.deepEqual(texts(s.events).filter(x=>x==="أهلًا"||x===COMPLETED_TEXT),[],mode);
+    assert.ok(s.events.some(x=>x.type==="system"&&x.text.includes("بداية الأتمتة غير مدعوم")),mode);
+  }
+  // Supported modes still run end to end.
+  for(const mode of ["message","keyword"] as const){
+    const t=node("trigger",{triggerMode:mode}),m=node("message",{text:"أهلًا"}),e=node("end");
+    const s=startSimulation(ctx(doc([t,m,e],[link(t,"next",m),link(m,"next",e)])));
+    assert.equal(s.cursor.status,"end",mode);
+  }
+});
+
 test("goto cycles stop at the step cap without claiming completion",()=>{
   const t=node("trigger"),g=node("goto",{},"g");g.data.gotoNode="g";
   const c=ctx(doc([t,g],[link(t,"next",g)]));
@@ -95,15 +123,18 @@ test("goto cycles stop at the step cap without claiming completion",()=>{
   assert.ok(!texts(s.events).includes(COMPLETED_TEXT));
 });
 
-test("collection blocks collect typed answers and resume the remaining blocks",()=>{
+test("a data-collection block inside a message is unsupported at runtime: the run stops, nothing is faked",()=>{
+  // Typed answers belong in a question step (supported); a collection BLOCK inside a message
+  // is refused by every live engine (content_blocks_not_supported).
   const t=node("trigger"),m=node("message",{text:"أهلًا",contentBlocks:[
     {id:"b1",type:"collection",text:"رقمك؟",field:"phone",inputMode:"phone"},
     {id:"b2",type:"text",text:"تم حفظ {{phone}}"}]}),e=node("end");
   const c=ctx(doc([t,m,e],[link(t,"next",m),link(m,"next",e)]));
   const s=startSimulation(c);
-  assert.deepEqual(texts(s.events),["أهلًا","رقمك؟"]);
-  const r=respond(c,s.cursor,{type:"text",text:"٠٧٧٠١٢٣٤٥٦٧"});
-  assert.deepEqual(texts(r.events),["٠٧٧٠١٢٣٤٥٦٧","تم حفظ 07701234567",COMPLETED_TEXT]);
+  assert.equal(s.cursor.status,"stopped");
+  assert.ok(!texts(s.events).includes("أهلًا"));
+  assert.ok(!texts(s.events).includes(COMPLETED_TEXT));
+  assert.ok(s.events.some(x=>x.type==="system"&&x.text.includes("المحتوى داخل الرسالة غير مدعوم")));
 });
 
 test("interpolate never leaves raw braces",()=>{

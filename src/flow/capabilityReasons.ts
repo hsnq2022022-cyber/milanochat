@@ -7,9 +7,11 @@
  */
 import {createContext,useContext} from "react";
 import {CAPABILITIES,nodeRequirements,type Availability,type Capability,type ProviderPlatform} from "./requirements.ts";
+import {UNSUPPORTED_TEXT} from "./runtimeSupport.ts";
 
 type Text={ar:string;en:string};
 export const REASON_TEXT:Record<string,Text>={
+ ...UNSUPPORTED_TEXT, // structural reasons: one shared source (runtimeSupport.ts)
  account_paused:{ar:"حسابك أو الرد التلقائي متوقف حاليًا، لذلك لن تعمل هذه الخطوة حتى يُعاد تشغيله.",en:"The account or auto reply is paused."},
  account_not_approved:{ar:"الردود الآلية غير مفعّلة لحسابك بعد. يمكنك الاستمرار في تصميم التدفق وحفظه.",en:"Automation is not approved for this account yet."},
  channel_not_supported:{ar:"هذه الخطوة غير متاحة على هذه القناة حاليًا.",en:"Not available on this channel."},
@@ -22,19 +24,6 @@ export const REASON_TEXT:Record<string,Text>={
  comments_not_enabled:{ar:"الرد على التعليقات غير متاح لحسابك حاليًا.",en:"Comment automation is not enabled."},
  not_supported:{ar:"هذه الخطوة غير مدعومة بعد، ولن تعمل بعد النشر.",en:"Not supported yet."},
  unavailable:{ar:"تعذر التحقق من الميزات المتاحة لحسابك الآن.",en:"Availability could not be checked."},
- malformed_document:{ar:"تعذر قراءة التدفق. راجع الخطوات ثم أعد المحاولة.",en:"The flow document is malformed."},
- unknown_block:{ar:"هذه الخطوة غير معروفة ولن تعمل.",en:"Unknown step."},
- trigger_not_supported:{ar:"هذا النوع من بداية الأتمتة غير مدعوم بعد.",en:"This trigger type is not supported yet."},
- trigger_channel_mismatch:{ar:"بداية الأتمتة مضبوطة على قناة مختلفة عن الحساب المختار.",en:"The trigger targets another channel."},
- pdf_not_supported:{ar:"إرسال ملفات PDF غير مدعوم بعد.",en:"PDF sending is not supported."},
- number_question_not_supported:{ar:"سؤال الأرقام غير مدعوم بعد. استخدم سؤالًا نصيًا بدلًا منه.",en:"Number questions are not supported."},
- http_request_not_supported:{ar:"الطلب الخارجي غير مدعوم بعد.",en:"HTTP requests are not supported."},
- content_blocks_not_supported:{ar:"هذا النوع من المحتوى داخل الرسالة غير مدعوم بعد.",en:"This content block is not supported."},
- legacy_image_not_supported:{ar:"طريقة إضافة الصورة هذه غير مدعومة. أضف الصورة كمحتوى داخل الرسالة.",en:"Use an image content block."},
- button_action_not_supported:{ar:"نوع إجراء هذا الزر غير مدعوم بعد.",en:"This button action is not supported."},
- mixed_buttons_not_supported:{ar:"لا يمكن الجمع بين أزرار الروابط وأزرار الاختيار في رسالة واحدة.",en:"Website and reply buttons cannot be mixed."},
- inbound_message_condition:{ar:"الشرط على نص رسالة العميل يعمل فقط في تدفق قصير: بداية ثم شرط ثم رسالتان.",en:"Inbound-text conditions only work in the short shape."},
- action_not_supported:{ar:"هذا الإجراء غير مدعوم بعد.",en:"This action is not supported."},
 };
 export function reasonText(code:string|null|undefined,en=false):string{
  const t=REASON_TEXT[code??""]??REASON_TEXT.unavailable;

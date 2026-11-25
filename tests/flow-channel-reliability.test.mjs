@@ -134,10 +134,14 @@ test("E1 webhook: none / ambiguous / other-tenant account -> stored without an i
 });
 test("E1 handler: a missing account id ends BEFORE the durable attempt and the claim (no 503 retry loop)",()=>{
  const h=IDX.slice(IDX.indexOf("async function handleIncomingWebhookMessage("),IDX.indexOf("Deno.serve("));
- const guard=h.indexOf('code: "account_unproven"');
- assert.ok(guard>0);
- assert.ok(guard<h.indexOf("attemptDurableInstagram(sb")&&guard<h.indexOf('sb.rpc("flow_claim_inbound"'));
- assert.match(h.slice(h.lastIndexOf("if (",guard),guard+80),/typeof account\?\.id !== "string"/);
+ // The proof of the account is a routing FACT (accountProven) checked by routeInbound BEFORE the durable stage and
+ // the exclusive claim; index.ts only reports it as a terminal, resolved exit (no 503 retry loop).
+ const routing=readFileSync("supabase/functions/milan-api/messageRouting.ts","utf8");
+ const proven=routing.indexOf("if(!input.accountProven)");
+ assert.ok(proven>0);
+ assert.ok(proven<routing.indexOf("deps.attemptDurable()")&&proven<routing.indexOf("deps.exclusive()"));
+ assert.match(h,/accountProven: typeof account\?\.id === "string" && account\.id\.length > 0,/);
+ assert.match(h,/decision\.reason === "account_unproven"\)\s*\{[\s\S]*?code: "account_unproven"[\s\S]*?await resolvedAfterRedrive\(\);\n\s+return;/);
 });
 
 // ================================================================== E4

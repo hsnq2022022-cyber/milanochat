@@ -83,7 +83,8 @@ test("capabilities: exact per-flag reasons, approvals, paused account, channels"
  const paused=avail(await server({accountPatch:{[A.a]:{auto_reply:false}}}).call({action:"capabilities",accountId:A.a,flowKey:"default"},"jwt-a",ALL_ON));
  assert.equal(paused.text,"account_paused");assert.equal(paused.delay,"account_paused");
  // Facebook Page: DM flows never production-authorized; comments only with both flags.
- const fb=server({accountPatch:{[A.a2]:{platform:"facebook"}}});
+ const fbReg=[{tenant_id:T.a,channel_account_id:A.a2,platform:"facebook"}]; // operator registry row (PK tenant+platform)
+ const fb=server({accountPatch:{[A.a2]:{platform:"facebook"}},registry:fbReg});
  const f1=avail(await fb.call({action:"capabilities",accountId:A.a2,flowKey:"default"},"jwt-a",ALL_ON));
  assert.equal(f1.text,"channel_not_supported");assert.equal(f1.delay,"channel_not_supported");
  assert.equal(f1.comment_trigger,"advanced_not_enabled","non-canary account");
@@ -91,7 +92,7 @@ test("capabilities: exact per-flag reasons, approvals, paused account, channels"
  assert.equal(f2.comment_trigger,"ok");
  const f3=avail(await fb.call({action:"capabilities",accountId:A.a2,flowKey:"default"},"jwt-a",{...ALL_ON,FLOW_DURABLE_CANARY_ACCOUNT_ID:A.a2,FLOW_MULTICHANNEL_ENABLED:undefined}));
  assert.equal(f3.comment_trigger,"comments_not_enabled");
- const wa=avail(await server({accountPatch:{[A.a2]:{platform:"whatsapp"}}}).call({action:"capabilities",accountId:A.a2,flowKey:"default"},"jwt-a",{...ALL_ON,FLOW_DURABLE_CANARY_ACCOUNT_ID:A.a2}));
+ const wa=avail(await server({accountPatch:{[A.a2]:{platform:"whatsapp"}},registry:[{tenant_id:T.a,channel_account_id:A.a2,platform:"whatsapp"}]}).call({action:"capabilities",accountId:A.a2,flowKey:"default"},"jwt-a",{...ALL_ON,FLOW_DURABLE_CANARY_ACCOUNT_ID:A.a2}));
  assert.equal(wa.comment_trigger,"channel_not_supported");assert.equal(wa.text,"channel_not_supported");
 });
 

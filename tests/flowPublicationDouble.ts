@@ -62,6 +62,8 @@ export const act=(tenant:string,account:string,flow_key:string,revision:number,i
 export const ACCOUNTS=[{id:A.a,tenant_id:T.a},{id:A.a2,tenant_id:T.a},{id:A.b,tenant_id:T.b}]
  .map(a=>({...a,platform:"instagram",is_active:true,agent_enabled:true,auto_reply:true}));
 
+/** Default registry: the first account of each tenant (PK tenant_id,platform: one per tenant). */
+const DEFAULT_REGISTRY=[{tenant_id:T.a,channel_account_id:A.a,platform:"instagram"},{tenant_id:T.b,channel_account_id:A.b,platform:"instagram"}];
 export function server(initial:{acts?:Act[];pubs?:Pub[];
  /** Tables whose reads return a database error. */
  failTables?:string[];
@@ -69,6 +71,12 @@ export function server(initial:{acts?:Act[];pubs?:Pub[];
  globalSwitch?:{enabled:boolean}|null;tenantSwitch?:{enabled:boolean;production_approved:boolean}|null;
  /** Channel account overrides by id (e.g. paused auto reply). */
  accountPatch?:Record<string,Record<string,unknown>>;
+ /**
+  * automation_flow_canary_accounts rows. Default: the first account of each tenant (A.a, A.b) is registered (so tests
+  * about other gates keep their meaning); pass [] for "no registry row". The real table is
+  * PRIMARY KEY (tenant_id,platform): pass one row per tenant to model it faithfully.
+  */
+ registry?:Array<{tenant_id:string;channel_account_id:string;platform:string}>;
  /** flow_publish_revision / flow_activate_revision overrides (default: stateful fakes). */
  publishRpc?:(args:any)=>{data:unknown;error:unknown};
  activateRpc?:(args:any)=>{data:unknown;error:unknown}}){
@@ -86,6 +94,10 @@ export function server(initial:{acts?:Act[];pubs?:Pub[];
     if(table==="channel_accounts")return ACCOUNTS.map(a=>({...a,...(initial.accountPatch?.[a.id]??{})})).filter(a=>(!("id" in f)||a.id===f.id)&&(!("tenant_id" in f)||a.tenant_id===f.tenant_id));
     if(table==="automation_flow_global_switch")return initial.globalSwitch===null?[]:[initial.globalSwitch??{enabled:true}];
     if(table==="automation_flow_tenant_switches")return initial.tenantSwitch===null?[]:[initial.tenantSwitch??{enabled:true,production_approved:true}];
+    if(table==="automation_flow_canary_accounts")
+     return (initial.registry??DEFAULT_REGISTRY)
+      .filter(r=>(!("tenant_id" in f)||r.tenant_id===f.tenant_id)&&(!("platform" in f)||r.platform===f.platform)&&
+       (!("channel_account_id" in f)||r.channel_account_id===f.channel_account_id));
     const m=(r:Row)=>(!("tenant_id" in f)||r.tenant===f.tenant_id)&&(!("channel_account_id" in f)||r.account===f.channel_account_id)&&
      (!("platform" in f)||r.platform===f.platform)&&(!("flow_key" in f)||r.flow_key===f.flow_key)&&(!("revision" in f)||r.revision===Number(f.revision));
     if(table==="automation_flow_activations")return acts.filter(a=>m(a)&&(!("is_active" in f)||a.is_active===f.is_active))

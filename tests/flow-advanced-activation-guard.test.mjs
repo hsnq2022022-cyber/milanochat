@@ -5,7 +5,7 @@ test("published advanced buttons and delays require separate, exact-account, rea
  const p=readFileSync("supabase/functions/flow-publication/activationGates.ts","utf8");
  assert.match(p,/env\("FLOW_DURABLE_ACTIVATION_READY"\)==="true"/);
  assert.match(p,/env\("FLOW_DURABLE_INGRESS_ENABLED"\)==="true"/);
- assert.match(p,/env\("FLOW_DURABLE_CANARY_ACCOUNT_ID"\)===scope\.accountId/);
+ assert.match(p,/durableAccountAllowed\(env\("FLOW_DURABLE_CANARY_ACCOUNT_ID"\),scope\.accountId\)/); // exact account, or an exact member of the operator allowlist
  assert.match(p,/const rawDocument:unknown=publication\.document/);
  assert.match(p,/supportedDurableDocument\(rawDocument\)/);
  assert.match(p,/if\(!durable\)\{/);

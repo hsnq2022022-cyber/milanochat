@@ -10,6 +10,7 @@
  * switches transactionally). On {ok:false} the caller returns `body` with
  * `status` unchanged. Thrown errors propagate to the caller's catch (503).
  */
+import {durableAccountAllowed} from "../_shared/durableAccounts.ts";
 import {
  publicationCanActivate,testCanaryArmed,productionActivationAuthorized,
  type ProviderPlatform,
@@ -21,6 +22,7 @@ import {simpleFlowDocumentSupported} from "../milan-api/flowPrepareMessage.ts";
 import {supportedDurableDocument,durableRuntimeNeeds,durableNeedsInternalActions}
  from "../milan-api/flowDurableIngress.ts";
 import {commentFlowPlan} from "../milan-api/commentTrigger.ts";
+import {durableRegistryStatus,registryFailure} from "./registryGate.ts";
 
 type Db={from:(table:string)=>any};
 
@@ -139,7 +141,7 @@ export async function evaluateActivationGates(input:ActivationGateInput):Promise
  const durable=production&&scope.platform==="instagram"&&durableGraph&&
   env("FLOW_DURABLE_ACTIVATION_READY")==="true"&&
   env("FLOW_DURABLE_INGRESS_ENABLED")==="true"&&
-  env("FLOW_DURABLE_CANARY_ACCOUNT_ID")===scope.accountId&&
+  durableAccountAllowed(env("FLOW_DURABLE_CANARY_ACCOUNT_ID"),scope.accountId)&&
   env("FLOW_WORKERS_OPERATOR_RELEASE")==="production-canary-approved"&&
   env("FLOW_OUTBOX_SEND_ENABLED")==="true"&&
   env("FLOW_ATOMIC_CONSUME_READY")==="true"&&
@@ -160,11 +162,18 @@ export async function evaluateActivationGates(input:ActivationGateInput):Promise
  const commentFlow=commentGraph&&commentPlatformAuthorized&&
   env("FLOW_DURABLE_ACTIVATION_READY")==="true"&&
   env("FLOW_DURABLE_INGRESS_ENABLED")==="true"&&
-  env("FLOW_DURABLE_CANARY_ACCOUNT_ID")===scope.accountId&&
+  durableAccountAllowed(env("FLOW_DURABLE_CANARY_ACCOUNT_ID"),scope.accountId)&&
   env("FLOW_WORKERS_OPERATOR_RELEASE")==="production-canary-approved"&&
   env("FLOW_OUTBOX_SEND_ENABLED")==="true"&&
   env("FLOW_ATOMIC_CONSUME_READY")==="true"&&
   env("FIELD_ENCRYPTION_KEY").length>0;
+ // Publication/runtime agreement: a flow that would run through the durable
+ // engine is reported live only when the operator registry also accepts this
+ // exact (tenant, account, platform), as flow_claim_inbound_durable requires.
+ // Otherwise it would show "live" while the AI keeps answering.
+ const registryProblem=(durable||commentFlow)?
+  registryFailure(await durableRegistryStatus(client,scope)):null;
+ if(registryProblem)return {ok:false,status:registryProblem.status,body:registryProblem.body};
  // A comment flow skips the DM gating below; the caller activates it.
  if(commentFlow)return {ok:true};
  // Not a comment flow: DM gating exactly as before (facebook/whatsapp DM

@@ -12,7 +12,7 @@
  * flags, credits, provider token), stay pending and the stale sweep
  * (flow_skip_blocked_outbox, OUTBOX_STALE_MINUTES) bounds how long they wait.
  */
-export type OutboxSkipReason="human_takeover"|"revision_inactive"|"ineligible";
+export type OutboxSkipReason="human_takeover"|"revision_inactive"|"ineligible"|"superseded";
 
 /**
  * Same rule as milan-api (lazy expiry ~index.ts:1672-1700) and the SQL helper
@@ -73,3 +73,37 @@ export function temporaryOutboxPause(v:Pick<OutboxSkipInput,
 export const OUTBOX_SCAN_LIMIT=50;
 export const OUTBOX_DISPATCH_LIMIT=10;
 export const OUTBOX_STALE_MINUTES=60;
+
+/**
+ * SUPERSESSION by a newer AI reply (production tenants, unsent Flow effects).
+ *
+ * A `legacy_ai` row in automation_message_claims only says the AI route was SELECTED and the event
+ * claimed. It is inserted by flow_claim_inbound BEFORE the answer is generated or sent and it is
+ * permanent (a webhook retry sees "duplicate"), so an empty answer, a failed or unconfirmed send or an
+ * unavailable delivery reservation all leave a claim and NO reply. A claim alone is therefore never
+ * proof; a Flow message is superseded only by DELIVERY EVIDENCE for that claim:
+ *   - a persisted outbound message whose id is the claim's outgoing_message_id (written by persistSent
+ *     only after the provider accepted the send), or
+ *   - its automation_delivery_attempts row with status 'confirmed' (delivery tracking enabled).
+ * 'attempting' = the send is in flight: HOLD. 'uncertain' (send_failed / sent_unconfirmed / timeout) is
+ * not delivery: proceed. An unknown status or a truncated claim list is unknown state: HOLD.
+ */
+export type NewerClaim={id:string;outgoingMessageId:string};
+export type SupersessionVerdict="supersede"|"hold"|"proceed";
+export function supersessionVerdict(i:{
+ claims:readonly NewerClaim[];
+ /** More newer claims exist than were read: the answer is unknown. */
+ truncated:boolean;
+ /** Ids of persisted direction='out' messages (read for the claims' outgoing_message_id values). */
+ persistedOutIds:ReadonlySet<string>;
+ /** claim id -> automation_delivery_attempts.status (absent = no attempt row). */
+ attempts:ReadonlyMap<string,string>;
+}):SupersessionVerdict{
+ let inFlightOrUnknown=i.truncated;
+ for(const c of i.claims){
+  const status=i.attempts.get(c.id);
+  if(i.persistedOutIds.has(c.outgoingMessageId)||status==="confirmed")return "supersede";
+  if(status!==undefined&&status!=="uncertain")inFlightOrUnknown=true; // 'attempting' or an unrecognised value
+ }
+ return inFlightOrUnknown?"hold":"proceed";
+}

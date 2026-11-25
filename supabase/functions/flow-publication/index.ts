@@ -7,7 +7,7 @@ import {createClient} from "npm:@supabase/supabase-js@2";
 import {
  preparePublishedDocument,productionActivationAuthorized,
  UUID_REGEX,VALID_FLOW_KEY,type ProviderPlatform,
- messageScopeActivationProblem,MESSAGE_SCOPE_PROBLEM_MESSAGES
+ messageScopeActivationProblem,MESSAGE_SCOPE_PROBLEM_MESSAGES,runtimeUnsupportedRejection
 } from "../../../src/flow/serverPublicationValidation.ts";
 import {flowNeedsMedia,parseCapabilities,mediaActivationAllowed} from "../../../src/flow/publicationGate.ts";
 import {evaluateFlowReadiness,documentHasCommentTrigger,readinessCandidate} from "./readiness.ts";
@@ -20,8 +20,11 @@ import {listActiveActivations,compareActivationOrder} from "../milan-api/flowInb
 import {capabilityAvailability} from "./capabilities.ts";
 import {aiStepEnabled} from "../flow-outbox-worker/aiStep.ts";
 import {evaluateActivationGates} from "./activationGates.ts";
+import {durableRegistryStatus,durableRuntimeAccepts,REGISTRY_MESSAGES} from "./registryGate.ts";
+import {activeFlowRuntimeNotes} from "./activeRuntimeStatus.ts";
+import {durableAccountAllowed} from "../_shared/durableAccounts.ts";
 import {deriveRequirements} from "../../../src/flow/requirements.ts";
-import {notLiveReason,savedNotLive} from "./publishLive.ts";
+import {notLiveReason,savedNotLive,registryCodeOf} from "./publishLive.ts";
 import {parseOperatorAllowlist,isOperator,isCustomerAction} from "./operatorAuth.ts";
 import type {FlowDocument} from "../../../src/flow/model.ts";
 
@@ -77,7 +80,13 @@ function validatePublishDocument(raw:unknown,platform:ProviderPlatform):
  if(rawKeywordProblem!==null)return fail(error(KEYWORD_PROBLEM_MESSAGES[rawKeywordProblem]??
   "Keyword trigger configuration is invalid",422));
  const doc=preparePublishedDocument(raw,platform);
- if(!doc)return fail(error("Flow document is invalid or targets another channel",422));
+ if(!doc){
+  // Steps no live engine runs: refused BEFORE any revision exists, with the plain
+  // Arabic reasons (src/flow/runtimeSupport.ts). Other invalid documents keep the generic 422.
+  const unrunnable=runtimeUnsupportedRejection(raw);
+  if(unrunnable!==null)return fail(respond({ok:false,error:unrunnable.message,code:unrunnable.code,reasons:unrunnable.reasons},422));
+  return fail(error("Flow document is invalid or targets another channel",422));
+ }
  // Comment trigger config (scope/post id/match type/keywords/public reply):
  // server-side validation. Other triggers: no new requirement.
  if(documentCommentTriggerProblem(doc)!==null)
@@ -261,6 +270,9 @@ export async function handleFlowPublication(req:Request,
      .select("enabled,production_approved").eq("tenant_id",scope.tenantId).maybeSingle()
    ]);
    if(globalSwitch.error||tenantSwitch.error)return error("Capabilities unavailable",503);
+   const allowlisted=durableAccountAllowed(env("FLOW_DURABLE_CANARY_ACCOUNT_ID"),scope.accountId);
+   const registry=allowlisted?await durableRegistryStatus(client,scope):"missing";
+   if(registry==="unavailable")return error("Capabilities unavailable",503);
    const switches=commentSwitches();
    const report=capabilityAvailability({platform:scope.platform,
     tenantActive:tenant.is_active===true,accountActive:account.is_active===true,
@@ -269,7 +281,7 @@ export async function handleFlowPublication(req:Request,
     productionApproved:tenantSwitch.data?.production_approved===true,
     activationReady:env("FLOW_DURABLE_ACTIVATION_READY")==="true",
     durableIngress:env("FLOW_DURABLE_INGRESS_ENABLED")==="true",
-    canaryMatched:env("FLOW_DURABLE_CANARY_ACCOUNT_ID")===scope.accountId,
+    canaryMatched:durableRuntimeAccepts(allowlisted,registry),
     operatorReleased:env("FLOW_WORKERS_OPERATOR_RELEASE")==="production-canary-approved",
     outboxEnabled:env("FLOW_OUTBOX_SEND_ENABLED")==="true",
     atomicDebitReady:env("FLOW_ATOMIC_CONSUME_READY")==="true",
@@ -305,6 +317,9 @@ export async function handleFlowPublication(req:Request,
    ]);
    if(global.error||tenantFlags.error||activated.error||credit.error)
     return error("Readiness check unavailable",503);
+   const allowlisted=durableAccountAllowed(env("FLOW_DURABLE_CANARY_ACCOUNT_ID"),scope.accountId);
+   const registry=allowlisted?await durableRegistryStatus(client,scope):"missing";
+   if(registry==="unavailable")return error("Readiness check unavailable",503);
    if((activated.data??[]).length>1)return error("Conflicting active revisions",409);
    const revision=requestedRevision??activated.data?.[0]?.revision;
    const candidate=typeof revision==="number"?
@@ -334,7 +349,7 @@ export async function handleFlowPublication(req:Request,
     activePublication:(activated.data??[]).length===1,
     durableIngress:env("FLOW_DURABLE_INGRESS_ENABLED")==="true",
     activationApproved:env("FLOW_DURABLE_ACTIVATION_READY")==="true",
-    canaryMatched:env("FLOW_DURABLE_CANARY_ACCOUNT_ID")===scope.accountId,
+    canaryMatched:durableRuntimeAccepts(allowlisted,registry),
     operatorReleased:env("FLOW_WORKERS_OPERATOR_RELEASE")==="production-canary-approved",
     schedulerEnabled:env("FLOW_DURABLE_SCHEDULER_ENABLED")==="true",
     outboxEnabled:env("FLOW_OUTBOX_SEND_ENABLED")==="true",
@@ -359,7 +374,11 @@ export async function handleFlowPublication(req:Request,
     activeRevision:typeof activeRow==="number"?activeRow:null,activeCheck:evaluated.checks.activeRevision,
     found:published!==undefined&&published!==null,durable:supported,
     v2:simpleFlowDocumentSupported(published,scope.platform),commentDocument:comment!==undefined,
-    candidateKind:evaluated.candidateKind})};
+    candidateKind:evaluated.candidateKind}),
+    // Additive: only for an allowlisted account, whether the operator registry
+    // (the runtime's own SQL gate) accepts it; Arabic reason when it does not.
+    ...(allowlisted?{registry:registry==="registered"?{status:registry}:
+     {status:registry,message:registry==="missing"||registry==="another_account"?REGISTRY_MESSAGES[registry]:undefined}}:{})};
    return respond({ok:true,readiness,candidateRevision:revision??null});
   }
 
@@ -386,8 +405,15 @@ export async function handleFlowPublication(req:Request,
     if(typeof item.flow_key==="string"&&VALID_FLOW_KEY.test(item.flow_key)&&
        !unique.has(item.flow_key))unique.set(item.flow_key,item.revision);
    }
-   const activeFlows=[...active].sort(compareActivationOrder)
-    .map(a=>({flow_key:a.flowKey,revision:a.revision}));
+   const ordered=[...active].sort(compareActivationOrder);
+   // Honest status: an active durable flow the runtime will not start is annotated (additive `runtime`).
+   const notes=await activeFlowRuntimeNotes(client,scope,ordered,
+    durableAccountAllowed(env("FLOW_DURABLE_CANARY_ACCOUNT_ID"),scope.accountId));
+   if(notes===null)return error("Flow catalog unavailable",503);
+   const activeFlows=ordered.map(a=>{
+    const runtime=notes.get(a.flowKey);
+    return runtime?{flow_key:a.flowKey,revision:a.revision,runtime}:{flow_key:a.flowKey,revision:a.revision};
+   });
    return respond({ok:true,flows:[...unique].map(([flowKey,latestRevision])=>({
     flowKey,latestRevision
    })),activeFlows,active:activeFlows[0]??null,truncated:(pubs.data??[]).length===500});
@@ -438,7 +464,8 @@ export async function handleFlowPublication(req:Request,
    if(!created.ok)return created.response;
    const revision=created.revision;
    if(!gate.ok||unsupported)
-    return respond(savedNotLive(revision,notLiveReason(gate.ok?null:gate,unsupported)));
+    return respond(savedNotLive(revision,notLiveReason(gate.ok?null:gate,unsupported),
+     unsupported?undefined:registryCodeOf(gate.ok?null:gate)));
    try{
     const {data:enabled,error:dbError}=await client.rpc("flow_activate_revision",{
      p_tenant_id:scope.tenantId,p_account_id:scope.accountId,

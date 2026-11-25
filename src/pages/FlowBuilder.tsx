@@ -20,7 +20,7 @@ import AiFlowAssistant from "../flow/AiFlowAssistant";
 import { FlowIssuesContext, SKIN_COLOR, SKIN_ICON, skinHint } from "../flow/skin";
 import type { NodeIssueSummary } from "../flow/skin";
 import { SHEET_HALF } from "../flow/useBottomSheet";
-import { KIND_LIST, LABELS, SAVE_KEY, canConnect, edgeFor, importFlow, makeNode, outputs, validateDocument } from "../flow/model";
+import { KIND_LIST, LABELS, SAVE_KEY, canConnect, edgeFor, importFlow, makeNode, outputs } from "../flow/model";
 import { useLayoutDirection } from "../flow/direction";
 import { arrangeFlow, cardSize, findOpenPosition } from "../flow/layout";
 import { useAddStepMenu } from "../flow/addMenu";
@@ -44,6 +44,7 @@ import { useOperatorStatus } from "../flow/useOperatorStatus";
 import { useFlowCapabilities } from "../flow/useFlowCapabilities";
 import { CapabilityGateContext, UNAVAILABLE_BADGE, accountNotice, blockGate, type Gate } from "../flow/capabilityReasons";
 import { commentTriggerProviderPlatform } from "../flow/serverPublicationValidation";
+import { staticUnsupportedReasons, unsupportedText, validateForRuntime } from "../flow/runtimeSupport";
 
 // لا تعرض أدوات الحفظ السحابي في الإنتاج قبل تجهيز الجدول والموافقة على النشر.
 const CLOUD_DRAFT_UI_ENABLED=(import.meta as ImportMeta & {env?:Record<string,string|undefined>}).env?.VITE_ENABLE_CLOUD_FLOW_DRAFTS==="true";
@@ -54,6 +55,12 @@ const nodeTypes={flowNode:AutomationNode};
 const edgeTypes={flowEdge:AutomationEdge};
 const btn="fs-btn fs-btn-ghost";
 type EdgeMenu={id:string;x:number;y:number}|null;
+
+/** Steps no live engine runs: unavailable for EVERY account, whatever the capability report says. */
+function structuralGate(data:FlowData,en:boolean):Gate|null{
+  const reason=staticUnsupportedReasons(data)[0];
+  return reason?{reason,text:unsupportedText(reason,en),capability:"unsupported_block"}:null;
+}
 
 function Editor(){
   const doc=useFlowStore(s=>s.doc),selectedId=useFlowStore(s=>s.selectedId);
@@ -98,7 +105,7 @@ function Editor(){
   const addRequest=useAddStepMenu(s=>s.request),openAdd=useAddStepMenu(s=>s.open),closeAdd=useAddStepMenu(s=>s.close);
   const input=useRef<HTMLInputElement>(null),clipboard=useRef<FlowNode|null>(null),reconnectOk=useRef(true),justReconnected=useRef(false);
   const instance=useReactFlow<FlowNode,FlowEdge>();
-  const issues=useMemo(()=>validateDocument(doc,flows),[doc,flows]);
+  const issues=useMemo(()=>validateForRuntime(doc,flows),[doc,flows]);
   const errors=useMemo(()=>issues.filter(issue=>issue.severity==="error"),[issues]);
   const warnings=useMemo(()=>issues.filter(issue=>issue.severity==="warning"),[issues]);
   const recovery=useMemo(()=>getLibraryRecoveryReport(),[]);
@@ -515,7 +522,7 @@ function Editor(){
               {KIND_LIST.filter(k=>k!=="trigger"||(!addRequest.source&&!doc.nodes.some(n=>n.data.kind==="trigger"))).map(kind=>{
                 const KindIcon=SKIN_ICON[kind],name=flowKindLabel(kind,language,LABELS[kind]);
                 // Unavailable for this account: shown disabled with a plain reason, never hidden.
-                const gate=blockGate(makeNode(kind,{x:0,y:0}).data,capabilityState,activation.accountId,language==="en");
+                const gate=structuralGate(makeNode(kind,{x:0,y:0}).data,language==="en")??blockGate(makeNode(kind,{x:0,y:0}).data,capabilityState,activation.accountId,language==="en");
                 return <button key={kind} type="button" aria-label={name+(gate?" — "+gate.text:"")} className="fs-pal-item"
                   data-testid={"pal-kind-"+kind} aria-disabled={gate?true:undefined} data-gated={gate?"true":undefined}
                   style={{"--c":SKIN_COLOR[kind],...(gate?{opacity:.55,cursor:"not-allowed"}:{})} as CSSProperties}
@@ -526,7 +533,7 @@ function Editor(){
                 </button>;})}
               {ACTION_PRESETS.map(p=>{
                 const ActIcon=SKIN_ICON.action,name=language==="ar"?p.ar:p.en;
-                const gate=blockGate(makeNode("action",{x:0,y:0},p.preset).data,capabilityState,activation.accountId,language==="en");
+                const gate=structuralGate(makeNode("action",{x:0,y:0},p.preset).data,language==="en")??blockGate(makeNode("action",{x:0,y:0},p.preset).data,capabilityState,activation.accountId,language==="en");
                 return <button key={p.id} type="button" aria-label={name+(gate?" — "+gate.text:"")} data-testid={"pal-preset-"+p.id} className="fs-pal-item"
                   aria-disabled={gate?true:undefined} data-gated={gate?"true":undefined}
                   style={{"--c":SKIN_COLOR.action,...(gate?{opacity:.55,cursor:"not-allowed"}:{})} as CSSProperties}

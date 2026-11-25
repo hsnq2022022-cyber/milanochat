@@ -541,6 +541,8 @@ function publicationClient(stored:unknown){
      table==="channel_accounts"?{id:A.a,tenant_id:T.a,platform:"instagram",is_active:true,agent_enabled:true,auto_reply:true}:
      table==="automation_flow_global_switch"?{enabled:true}:
      table==="automation_flow_tenant_switches"?{enabled:true,production_approved:true}:
+     // operator registry (publication/runtime agreement): this account is registered
+     table==="automation_flow_canary_accounts"?{channel_account_id:A.a}:
      table==="automation_flow_publications"?(stored===undefined?null:{document:stored}):null,error:null}),
     limit:async()=>({data:[],error:null})};
    return q;

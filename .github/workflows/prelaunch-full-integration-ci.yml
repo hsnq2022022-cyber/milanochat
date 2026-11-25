@@ -13,6 +13,7 @@ on:
       - "package.json"
       - "package-lock.json"
       - ".github/workflows/prelaunch-full-integration-ci.yml"
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:
@@ -170,6 +171,14 @@ jobs:
           grep -qx '# fail 0' "$RUNNER_TEMP/flow-superseding.tap"
           grep -qx '# cancelled 0' "$RUNNER_TEMP/flow-superseding.tap"
           grep -qx '# skipped 0' "$RUNNER_TEMP/flow-superseding.tap"
+      - name: Flow publication RPCs 20261115170000 in throwaway PG
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test --test-reporter=tap tests/flow-publication-rpcs-sql.test.mjs | tee "$RUNNER_TEMP/flow-publication-rpcs.tap"
+          grep -qx '# fail 0' "$RUNNER_TEMP/flow-publication-rpcs.tap"
+          grep -qx '# cancelled 0' "$RUNNER_TEMP/flow-publication-rpcs.tap"
+          grep -qx '# skipped 0' "$RUNNER_TEMP/flow-publication-rpcs.tap"
       - name: Predeploy checks in throwaway PG
         shell: bash
         run: |
@@ -210,6 +219,43 @@ jobs:
           grep -qx '# fail 0' "$RUNNER_TEMP/flow-multichannel-support.tap"
           grep -qx '# cancelled 0' "$RUNNER_TEMP/flow-multichannel-support.tap"
           grep -qx '# skipped 0' "$RUNNER_TEMP/flow-multichannel-support.tap"
+  flow-lifecycle-integration:
+    # Real handlers + real TypeScript against a THROWAWAY local PostgreSQL cluster
+    # (temp data dir, unix socket only; runner's own server binaries). Only Meta
+    # and OpenAI are mocked. No network, no secrets, no remote database. Its own
+    # job so it runs in parallel and never slows the other suites (about 1 minute).
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Flow lifecycle integration (all steps)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Success is read from Deno's structured JUnit report, not from its console summary text:
+          # the exit status must be 0, the report must exist with no failure/error/skipped entry, and
+          # the parent test plus at least MIN_STEPS steps must have really run (an ignored or
+          # silently skipped suite, e.g. no PostgreSQL server binaries, therefore fails the job).
+          deno test -A --node-modules-dir=auto --junit-path="$RUNNER_TEMP/lifecycle.xml" tests/flow-lifecycle-integration.test.ts
+          node -e '
+            const fs=require("fs");
+            const xml=fs.readFileSync(process.env.RUNNER_TEMP+"/lifecycle.xml","utf8");
+            const MIN_STEPS=32;
+            const bad=(xml.match(/<(failure|error|skipped)\b/g)||[]).length;
+            const cases=(xml.match(/<testcase\b/g)||[]).length;
+            const failures=/<testsuites [^>]*\bfailures="0"/.test(xml)&&/<testsuites [^>]*\berrors="0"/.test(xml);
+            const parent=/<testcase name="flow V3\/V4 lifecycle integration \(real handlers \+ throwaway PostgreSQL\)"/.test(xml);
+            console.log("junit: testcases="+cases+" bad="+bad+" failures0="+failures+" parent="+parent);
+            if(bad!==0||!failures||!parent||cases<MIN_STEPS+1){console.error("lifecycle suite did not run completely");process.exit(1);}
+          '
   staff-delivery-pg:
     runs-on: ubuntu-latest
     timeout-minutes: 18
@@ -360,6 +406,18 @@ jobs:
           node --experimental-strip-types --test src/flow/runtimePlan.test.ts
           node --experimental-strip-types --test src/flow/aiMetricsGate.test.ts
           node --experimental-strip-types --test tests/wayl-contract.test.ts
+          # Flow/AI message ownership, durable rollout gates, editor-runtime parity
+          node --experimental-strip-types --test tests/flow-message-routing.test.ts
+          node --experimental-strip-types --test tests/flow-durable-accounts.test.ts
+          node --experimental-strip-types --test tests/flow-runtime-parity.test.ts
+          node --experimental-strip-types --test tests/flow-registry-allowlist-agreement.test.ts
+          node --experimental-strip-types --test tests/flow-db-object-coverage.test.mjs
+          node --experimental-strip-types --test tests/flow-capabilities-action.test.ts
+          node --experimental-strip-types --test tests/flow-publish-live.test.ts
+          node --experimental-strip-types --test tests/flow-requirements.test.ts
+          node --experimental-strip-types --test tests/flow-capability-gating.test.ts
+          node --experimental-strip-types --test src/flow/model.test.ts
+          node --experimental-strip-types --test src/flow/simulatorEngine.test.ts
       - name: Build and typecheck real frontend
         run: |
           npm run typecheck
@@ -377,6 +435,11 @@ jobs:
         run: npx playwright install --with-deps chromium
       - name: Phone width and RTL/English UI
         run: npx playwright test -c playwright.config.ts tests/flow-mobile-locale.spec.ts
+      - name: Editor offers and previews only what the runtime can run (fake host, no real backend)
+        env:
+          VITE_SUPABASE_URL: http://mock.supabase.test
+          VITE_SUPABASE_ANON_KEY: fake-anon-key-not-real
+        run: npx playwright test -c playwright.config.ts --trace off tests/flow-runtime-support.spec.ts
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x

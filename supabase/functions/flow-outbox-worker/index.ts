@@ -29,6 +29,8 @@ import {resolveKnowledgeEffect,recoverKnowledgeCharge,AI_MAX_ATTEMPTS,AI_CLAIM_L
 import {escalateAiFailure} from "./aiEscalation.ts";
 import {executeOnce} from "./executeOnce.ts";
 import {canDispatchOutbox} from "./productionGate.ts";
+import {readSupersession} from "./supersession.ts";
+import {durableRegistryStatus,registryRequired} from "../_shared/durableRegistry.ts";
 import {confirmedOutboxMid,matchesPreviouslyPersistedReply} from "./confirmedSettlement.ts";
 import {permanentOutboxBlock,temporaryOutboxPause,humanTakeoverActive,OUTBOX_SCAN_LIMIT,
  OUTBOX_DISPATCH_LIMIT,OUTBOX_STALE_MINUTES,type OutboxSkipReason} from "./skipPolicy.ts";
@@ -233,6 +235,16 @@ Deno.serve(async req=>{
    if(pause){report("paused_"+pause);continue;}
    const takeover=humanTakeoverActive(conversation?.transferred,
     conversation?.human_agent_expires_at,conversation?.auto_paused_reason,Date.now());
+   // Registry membership is re-read per effect (same question as the SQL claim). test_only tenants
+   // never used the registry. A removed row or a read error HOLDS the effect (see canDispatchOutbox).
+   // charge_pending is the exception: the provider ALREADY accepted this exact message (a confirmed,
+   // unique delivery attempt), and the only code that can run for it below is persistence + billing
+   // recovery, never a send. The registry decides whether NEW work may start; it must not strand
+   // the bookkeeping of a message the customer already received. Every other gate still applies.
+   const recoveryOnly=effect.delivery_status==="charge_pending";
+   const registryOk=recoveryOnly||!registryRequired(sw?.test_only)||!account?true:
+    (await durableRegistryStatus(sb,{tenantId:String(tenant.id),accountId:String(account.id),
+     platform:String(run.platform)}))==="registered";
    // Defense in depth: the original full gate still decides every dispatch.
    if(!account||!conversation||
       account.tenant_id!==tenant.id||conversation.tenant_id!==tenant.id||
@@ -251,9 +263,22 @@ Deno.serve(async req=>{
        tenantActive:tenant.is_active,credits:tenant.credits_remaining,
        revisionActive:activationResult.data?.is_active,
        humanTakeover:takeover,
-       multichannelEnabled:env("FLOW_MULTICHANNEL_ENABLED")==="true"
+       multichannelEnabled:env("FLOW_MULTICHANNEL_ENABLED")==="true",
+       registryRegistered:registryOk
       })){
     report("blocked");continue;
+   }
+   // Supersession (production mode, effects not yet sent): a NEWER AI reply was actually DELIVERED in
+   // this conversation. A `legacy_ai` claim alone is NOT proof (it is made before the answer is
+   // generated or sent and stays after an empty answer or a failed send), so the verdict needs
+   // delivery evidence (supersession.ts / skipPolicy.ts supersessionVerdict): superseded = cancelled
+   // 'superseded' (audited, never resent); an in-flight send, a read error or unknown state HOLDS the
+   // effect; no evidence proceeds. Public comment replies are not part of the DM conversation order.
+   if(!recoveryOnly&&registryRequired(sw?.test_only)&&effect.effect_kind!=="reply_comment"){
+    const verdict=await readSupersession(sb,{tenantId:String(effect.tenant_id),
+     conversationId:String(conversation.id),effectCreatedAt:String(effect.created_at)});
+    if(verdict==="error"||verdict==="hold"){report("blocked");continue;}
+    if(verdict==="supersede"){await skip("superseded");continue;}
    }
    const recipientRaw=String(conversation.wa_chat_id??"");
    const expectedPrefix=account.platform==="facebook"?"facebook":account.platform;

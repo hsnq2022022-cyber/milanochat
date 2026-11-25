@@ -35,6 +35,7 @@
  *    "comment:<id>" (23505 -> duplicate).
  */
 import type {SupabaseClient} from "npm:@supabase/supabase-js@2";
+import {durableAccountAllowed} from "../_shared/durableAccounts.ts";
 import {normalizeMetaComments,commentFlowPlan,commentMatches,commentStartAgeOk,normalizeCommentText,
  type NormalizedComment,type CommentFlowPlan} from "./commentTrigger.ts";
 import {persistInboundOnce} from "./persistInboundOnce.ts";
@@ -194,7 +195,7 @@ export async function ingestSignedComments(db:Db,object:unknown,entry:unknown,de
   const account=await accountFor(db,object,entryId);
   if(!account){count("ineligible");return out;}
   // Same operator-selected canary as the durable DM path.
-  if(account.id!==deps.env("FLOW_DURABLE_CANARY_ACCOUNT_ID")){count("ineligible");return out;}
+  if(!durableAccountAllowed(deps.env("FLOW_DURABLE_CANARY_ACCOUNT_ID"),account.id)){count("ineligible");return out;}
   const own=new Set([entryId,account.external_id].filter(Boolean));
   const comments=fresh.filter(c=>!own.has(c.fromId));
   if(comments.length===0)return out;

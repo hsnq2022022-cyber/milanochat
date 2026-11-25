@@ -84,7 +84,7 @@ test("Instagram trigger can be changed to WhatsApp without touching live channel
   await expect(page.getByText(/لا يُنشئ ربط حساب جديدًا/)).toBeVisible();
 });
 
-test("a quick reply can jump to a second locally saved flow and run its preview",async({page})=>{
+test("a quick reply that jumps to another flow is saved locally, but unsupported at runtime: the preview stops and says so",async({page})=>{
   await page.goto("/milanochat/#/flows");
   await page.getByRole("button",{name:"إنشاء تدفق جديد"}).click();
   await page.getByRole("textbox",{name:"اسم التدفق"}).fill("فرع الأسعار");
@@ -99,16 +99,19 @@ test("a quick reply can jump to a second locally saved flow and run its preview"
   await page.getByRole("combobox",{name:"اختر تدفقًا آخر"}).selectOption(optionIds[1]);
   await page.getByRole("button",{name:"تم",exact:true}).first().click();
   await page.getByRole("button",{name:"تجربة"}).click();
-  await page.getByRole("button",{name:"العراق",exact:true}).click();
-  await expect(page.getByText("انتقال إلى التدفق: فرع الأسعار")).toBeVisible();
-  await expect(page.getByText("مرحباً! شلون نكدر نساعدك؟")).toBeVisible();
+  // A button that jumps to another flow is refused by every live engine: the preview stops at that step
+  // (it never pretends the jump ran) and the draft itself is still saved locally.
+  const simJump=page.getByTestId("flow-simulator");
+  await expect(simJump).toContainText("نوع إجراء هذا الزر غير مدعوم بعد");
+  await expect(simJump).toContainText("توقفت المحاكاة هنا");
+  await expect(page.getByText("انتقال إلى التدفق: فرع الأسعار")).toHaveCount(0);
   await page.getByRole("button",{name:"إغلاق المعاينة"}).click();
   await page.waitForTimeout(950);
   await page.reload();
   await expect(page.getByRole("combobox",{name:"اختيار التدفق"}).locator("option")).toHaveCount(2);
 });
 
-test("rich message content adds data collection blocks that survive preview",async({page})=>{
+test("rich message content adds data collection blocks, but they are unsupported at runtime: the preview stops and says so",async({page})=>{
   await page.goto("/milanochat/#/flows");
   await page.locator(".react-flow__node").nth(1).click();
   await expect(page.getByTestId("content-block-menu")).toBeVisible();
@@ -117,10 +120,12 @@ test("rich message content adds data collection blocks that survive preview",asy
   await page.getByRole("textbox",{name:"سؤال جمع البيانات"}).fill("شنو بريدك الإلكتروني؟");
   await page.getByRole("combobox",{name:"نوع البيانات"}).selectOption("email");
   await page.getByRole("button",{name:"تجربة"}).click();
-  await expect(page.getByText("شنو بريدك الإلكتروني؟")).toBeVisible();
-  await page.getByRole("textbox",{name:"إجابة العميل"}).fill("customer@example.com");
-  await page.getByRole("textbox",{name:"إجابة العميل"}).press("Enter");
-  await expect(page.getByText("customer@example.com")).toBeVisible();
+  // Data collection BLOCKS inside a message are refused by every live engine (a typed question step is the
+  // supported way): the preview stops there and never collects or "completes".
+  const simBlock=page.getByTestId("flow-simulator");
+  await expect(simBlock).toContainText("المحتوى داخل الرسالة غير مدعوم");
+  await expect(simBlock).toContainText("توقفت المحاكاة هنا");
+  await expect(simBlock).not.toContainText("اكتملت المحاكاة");
 });
 
 test("start from scratch opens a separate flow with only a trigger, preserving the original flow",async({page})=>{
@@ -354,7 +359,6 @@ test("typed questions expose a single optional next destination; old button rout
 for(const sample of [
  {mode:"email",bad:"invalid-email",good:"client@example.com"},
  {mode:"phone",bad:"123",good:"٠٧٧٠١٢٣٤٥٦٧"},
- {mode:"number",bad:"not-a-number",good:"۱۲۳"},
  {mode:"text",bad:"",good:"مرحبا"}
 ]){
  test("typed "+sample.mode+" rejects invalid input and continues on valid response",async({page})=>{
@@ -376,6 +380,20 @@ for(const sample of [
  });
 }
 
+test("typed number is unsupported at runtime: the preview stops with the plain reason (text, email and phone are the supported modes)",async({page})=>{
+ await page.goto("/milanochat/#/flows");
+ await page.locator(".react-flow__node").nth(2).click();
+ const panel=page.getByTestId("step-settings-panel");
+ await panel.getByRole("combobox",{name:"نوع الإجابة"}).selectOption("number");
+ await panel.getByRole("combobox",{name:"الخطوة التالية بعد الإجابة"}).selectOption({index:2});
+ await page.getByRole("button",{name:"تجربة"}).click();
+ const sim=page.getByTestId("flow-simulator");
+ await expect(sim).toContainText("سؤال الأرقام غير مدعوم بعد");
+ await expect(sim).toContainText("توقفت المحاكاة هنا");
+ await expect(sim).not.toContainText("اكتملت المحاكاة");
+ await expect(sim.getByRole("textbox",{name:"إجابة العميل"})).toBeDisabled();
+});
+
 async function addActionStep(page:import("@playwright/test").Page){
  await page.getByRole("button",{name:"فتح إضافة خطوة"}).click();
  await page.getByTestId("add-step-menu").getByRole("button",{name:"إجراء",exact:true}).click();
@@ -387,7 +405,6 @@ for(const kind of [
  {label:"إجراء",heading:"نوع الإجراء"},
  {label:"توزيع عشوائي",heading:"نسب التوزيع"},
  {label:"الانتقال لخطوة",heading:"الانتقال إلى خطوة"},
- {label:"طلب خارجي",heading:"طريقة طلب HTTP"},
  {label:"نهاية",heading:"تنهي المسار"}
 ]){
  test("audit: "+kind.label+" opens real editable settings",async({page})=>{
@@ -622,7 +639,7 @@ test("root cause: correct branch marker and absolutely no old valid-invalid card
  await expect(page.locator(".react-flow__node").nth(2).getByTestId("typed-question-next")).toHaveCount(0);
 });
 
-test("content block buttons actually change node preview and simulator",async({page})=>{
+test("content block buttons change the node preview; a text-only block list is unsupported at runtime so the simulator stops",async({page})=>{
  await page.goto("/milanochat/#/flows");
  await page.locator(".react-flow__node").nth(1).click();
  const editor=page.getByTestId("step-settings-panel");
@@ -632,10 +649,13 @@ test("content block buttons actually change node preview and simulator",async({p
  await block.getByRole("textbox",{name:"نص المكوّن"}).fill("تفاصيل كاملة للزبون");
  await expect(page.locator(".react-flow__node").nth(1)).toContainText("1 مكونات إضافية: نص");
  await page.getByRole("button",{name:"تجربة"}).click();
- await expect(page.getByTestId("flow-simulator")).toContainText("تفاصيل كاملة للزبون");
+ // A message whose content blocks are text only is refused by every live engine (an image block is
+ // required): the card updates, and the preview stops and says why instead of playing it.
+ await expect(page.getByTestId("flow-simulator")).toContainText("المحتوى داخل الرسالة غير مدعوم");
+ await expect(page.getByTestId("flow-simulator")).not.toContainText("تفاصيل كاملة للزبون");
 });
 
-test("collection controls genuinely update the canvas and do not ask twice for typed question",async({page})=>{
+test("collection controls genuinely update the canvas; a collection block is unsupported at runtime so the preview stops",async({page})=>{
  await page.goto("/milanochat/#/flows");
  await page.locator(".react-flow__node").nth(2).click();
  const editor=page.getByTestId("step-settings-panel");
@@ -652,14 +672,13 @@ test("collection controls genuinely update the canvas and do not ask twice for t
  await expect(page.locator(".react-flow__node").nth(2)).toContainText("جمع بيانات: بريد إلكتروني");
  await editor.getByRole("combobox",{name:"الخطوة التالية بعد الإجابة"}).selectOption({index:2});
  await page.getByRole("button",{name:"تجربة"}).click();
+ // A collection BLOCK is refused by every live engine: the preview stops at this step, asks nothing
+ // and accepts no input; the canvas controls above still genuinely update the draft.
  const sim=page.getByTestId("flow-simulator");
- const answer=sim.getByRole("textbox",{name:"إجابة العميل"});
- await answer.fill("customer@example.org");
- await answer.press("Enter");
- await expect(sim.getByText("تواصل ويانا لمعرفة الأسعار الحالية لخدمتك في العراق.")).toBeVisible();
- // Asked exactly once; after the answer the simulator no longer accepts input on this path.
- await expect(sim.getByText("أرسل بريدك الآن")).toHaveCount(1);
- await expect(answer).toBeDisabled();
+ await expect(sim).toContainText("المحتوى داخل الرسالة غير مدعوم");
+ await expect(sim).toContainText("توقفت المحاكاة هنا");
+ await expect(sim.getByText("أرسل بريدك الآن")).toHaveCount(0);
+ await expect(sim.getByRole("textbox",{name:"إجابة العميل"})).toBeDisabled();
 });
 
 test("image and delay blocks can be added, edited, reordered and removed",async({page})=>{

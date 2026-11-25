@@ -8,13 +8,19 @@ test("flow shadow is inserted after all legacy safety gates and before RAG",()=>
   const end=source.indexOf("/* ═══════════════════════════════════════════════════════════════",start+2);
   assert.ok(start>=0&&end>start);
   const handler=source.slice(start,end);
-  const takeover=handler.indexOf("if (conv.transferred)");
-  const noCredits=handler.indexOf("if (credits <= 0)");
+  // The legacy safety gates (takeover, credits pause, auto-reply off, no credits) are ONE function in
+  // messageRouting.ts that runs before the shadow hook (afterGate) and before any engine / RAG answer.
+  const routing=readFileSync("supabase/functions/milan-api/messageRouting.ts","utf8");
+  const gate=routing.indexOf("const gate=conversationGate(");
+  const afterGate=routing.indexOf("deps.afterGate");
+  assert.ok(gate>=0&&gate<afterGate&&afterGate<routing.indexOf("deps.attemptDurable()")&&afterGate<routing.indexOf("deps.exclusive()"));
+  assert.ok(routing.includes("if(transferred)return"),"the takeover gate is part of the same function");
   const shadow=handler.indexOf('if (env("FLOW_SHADOW_MODE") === "observe")');
+  const route=handler.indexOf("await routeInbound(");
+  const hook=handler.indexOf("afterGate: async () => {");
   const rag=handler.indexOf("await answerFromKnowledge(");
   const send=handler.indexOf("await sendMetaDirectMessage(");
-  assert.ok(takeover>=0&&takeover<noCredits);
-  assert.ok(noCredits<shadow&&shadow<rag&&rag<send);
+  assert.ok(route>=0&&route<hook&&hook<shadow&&shadow<rag&&rag<send);
   assert.match(source,/import \{ flowShadowMayObserve \} from "\.\/flowShadowGate\.ts";/);
   // Legacy provider sends and billing remain in the same code path.
   assert.match(handler,/await sendWa\(/);
