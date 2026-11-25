@@ -176,7 +176,8 @@ test("(f) success path unchanged: same URLs, parsed name/avatar, success log pre
   assert.deepEqual(r,b.want);
   assert.deepEqual(calls,[p.url]);
   // T5-S5: GET (no method/body), token only in the Authorization header.
-  assert.deepEqual(inits,[{headers:{authorization:`Bearer ${p.token}`}}]);
+  // R1: the same request plus a hard deadline signal; nothing else may change.
+  assert.deepEqual(inits.map((i:any)=>({...i,signal:i.signal instanceof AbortSignal})),[{headers:{authorization:`Bearer ${p.token}`},signal:true}]);
   assert.deepEqual(logs,[["log",["[fetchSenderProfile]",{senderId:SENDER,
    name:b.want.name?"present":"missing",avatar:b.want.avatar?"present":"missing"}]]]);
   const flat=rendered(logs);

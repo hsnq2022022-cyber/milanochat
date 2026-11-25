@@ -228,7 +228,9 @@ test("(b) milan-api fetchSenderProfile: 3 paths, URL without token, Bearer heade
     const r = await loadFsp(async (url: string, init?: RequestInit) => { calls.push({url, init}); return res({name: "N"}); }, quiet)(
       {channel: p.channel, senderId: "555", token: p.token});
     assert.deepEqual(r, {name: "N", avatar: null});
-    assert.deepEqual(calls, [{url: p.url, init: {headers: {authorization: `Bearer ${p.token}`}}}]);
+    // R1: same request plus a hard deadline signal (AbortSignal.timeout); nothing else changes.
+    assert.deepEqual(calls.map((c) => ({url: c.url, init: {...(c.init as object), signal: (c.init as RequestInit).signal instanceof AbortSignal}})),
+      [{url: p.url, init: {headers: {authorization: `Bearer ${p.token}`}, signal: true}}]);
   }
 });
 

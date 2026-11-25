@@ -72,7 +72,8 @@ const REPLY_CATCH_SRC=between("          /* فشل التوكن/المصادقة
 const UNRES_CATCH_SRC=between("              console.error(\n                \"[unresolved] send failed\"","            }\n          }\n        }\n\n        return json({");
 const TOP_CATCH_SRC=between("  } catch (e) {\n    // Stage 6: safe fields only","\n});");
 const MOYASAR_SRC=between("        if (!res.ok) {\n          // Stage 6: status + validated code only, never Moyasar's body.","        const inv: any");
-const PROFILE_CATCH_SRC=between("            } catch (e: unknown) {\n              // Stage 6: fixed category only","          // FLOW_COMMENT_AUTOMATION_ENABLED");
+// R1: the profile step now runs inside a deferred job; the slice ends at the first line after the catch.
+const PROFILE_CATCH_SRC=between("            } catch (e: unknown) {\n              // Stage 6: fixed category only","            // R1: duration only");
 
 function kit(o:{fetch:any,console:any,env?:Record<string,string>,waToken?:string}){
  const delays:number[]=[];
@@ -84,9 +85,8 @@ function kit(o:{fetch:any,console:any,env?:Record<string,string>,waToken?:string
   "\nfunction unresolvedCatch(e){\ntry{throw e;}catch (e) {\n"+UNRES_CATCH_SRC+"\n}\n}"+
   "\nfunction topCatch(e,action){\ntry{throw e;\n"+TOP_CATCH_SRC+"\n}"+
   "\nasync function moyasar(res){\n"+MOYASAR_SRC+"\nreturn null;}"+
-  // PROFILE_CATCH_SRC ends with the catch's "}" plus the enclosing block's
-  // "}", which closes profileStep.
-  "\nfunction profileStep(e){\ntry{throw e;\n"+PROFILE_CATCH_SRC+
+  // PROFILE_CATCH_SRC ends with the catch's "}"; the extra "}" closes profileStep.
+  "\nfunction profileStep(e){\ntry{throw e;\n"+PROFILE_CATCH_SRC+"\n}"+
 
   "")+"\nreturn {fetchRetry,embed,chatJSON,sendWa,sendMetaDirectMessage,ProviderHttpError,ProviderNetworkError,"+
   "WaAuthError,safeProviderCode,safeErrorLog,clientErrorMessage,replyCatch,unresolvedCatch,topCatch,moyasar,profileStep};";
