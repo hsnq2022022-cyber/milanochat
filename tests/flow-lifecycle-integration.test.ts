@@ -851,6 +851,40 @@ Deno.test({name:"flow V3/V4 lifecycle integration (real handlers + throwaway Pos
    await outboxTick();assert.equal(meta.calls.length,1,"exactly one send");
   });
 
+  await t.step("concurrent workers (real separate PostgreSQL sessions): due runs are never leased twice, nothing is lost, and a concurrent wake commits one effect set",async()=>{
+   await freshDb();resetMeta();await activate("delay",true);
+   const N=24;const ids:string[]=[];
+   for(let i=0;i<N;i++){
+    const c=await conv(String(3100000+i));const mid="mid.cc."+i;const m=await inbound(c,mid);
+    assert.equal(await attemptDurableInstagram(sb,ev(c,m,mid,null)),"handled");
+    ids.push((await runsOf(c))[0].id);
+   }
+   await exec(`UPDATE public.automation_flow_runs SET wake_at=now()-interval '1 second' WHERE id IN (${ids.map(i=>`'${i}'`).join(",")});`);
+   // 6 concurrent worker sessions, 3 lease rounds each (batch 6). Each statement is its own transaction.
+   const round=`SELECT '@@'||run_id||'|'||lease_token FROM public.flow_lease_due_runs(6);`;
+   const sessions=await Promise.all(Array.from({length:6},()=>psql(db,[round,round,round].join("\n"),"service_role")));
+   for(const s of sessions)assert.ok(s.ok,s.err);
+   const got=sessions.flatMap(s=>s.out.split("\n").filter(l=>l.startsWith("@@")).map(l=>l.slice(2).split("|")));
+   const leased=got.map(g=>g[0]);
+   assert.equal(new Set(leased).size,leased.length,"no run was leased twice by concurrent workers");
+   assert.ok(leased.every(id=>ids.includes(id)),"only due runs were leased");
+   // whatever the SKIP LOCKED scans skipped is picked up by the next tick: nothing is lost
+   const rest=await rows<{run_id:string}>(`SELECT run_id FROM public.flow_lease_due_runs(100)`,"service_role");
+   const all=[...leased,...rest.map(r=>r.run_id)];
+   assert.equal(new Set(all).size,N,"every due run was leased exactly once overall");
+   assert.deepEqual([...new Set(all)].sort(),[...ids].sort());
+   assert.equal(await val(`SELECT count(*)::int FROM public.automation_flow_run_leases WHERE attempts<>1`),0,"every lease was a first attempt");
+   // two workers commit the SAME wake with the SAME token at the same time: one commits, the other is refused
+   const [runId,token]=got[0];
+   const commit=`SELECT public.flow_commit_run_step('${A}','${runId}',2,'sleeping','later',3,'completed','{}'::jsonb,NULL,
+    '[{"kind":"message","idempotencyKey":"cc-once","payload":{"kind":"message","text":"once"}}]'::jsonb,'completed','${token}');`;
+   const pair=await Promise.all([psql(db,commit,"service_role"),psql(db,commit,"service_role")]);
+   for(const r of pair)assert.ok(r.ok,r.err);
+   const outs=pair.map(r=>r.out.trim()).sort();
+   assert.deepEqual(outs,["f","t"],"exactly one of two concurrent commits wins");
+   assert.equal(await val(`SELECT count(*) FROM public.automation_flow_outbox WHERE run_id='${runId}' AND idempotency_key='cc-once'`),1,"one effect row, never two");
+  });
+
   await t.step("provider 5xx / timeout / 2xx without id / 4xx -> uncertain, never resent, routed to human review",async()=>{
    await freshDb();resetMeta();await activate("buttons",true);
    const cs:string[]=[];
