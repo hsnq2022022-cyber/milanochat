@@ -13,7 +13,7 @@ const TOKEN = "FAKE_TOKEN_123";
 const REF = "abcdefghijklmnopqrst";
 
 const EXPECTED = {
-  "agent-prompt": false, "api": false, "channels": false, "conversation-previews": false,
+  "agent-prompt": false, "api": false, "channel-token-lifecycle": false, "channels": false, "conversation-previews": false,
   "create-payment": false, "flow-delivery-review": true, "flow-internal-worker": false,
   "flow-outbox-worker": false, "flow-publication": true, "flow-runtime-worker": false,
   "generate-flow": true, "img-proxy": false, "meta-auth": false, "milan-api": false,
@@ -70,11 +70,11 @@ const creds = {SUPABASE_PROJECT_REF: REF, SUPABASE_ACCESS_TOKEN: TOKEN};
 const noToken = (r) => assert.ok(!r.all.includes(TOKEN), "token leaked in output");
 const posts = () => requests.filter((q) => q.method === "POST");
 
-test("--list prints all 17 slugs with the verified verify_jwt map and makes no network call", async () => {
+test("--list prints all 18 slugs with the verified verify_jwt map and makes no network call", async () => {
   const r = await run(["--list"], creds);
   assert.equal(r.code, 0, r.all);
   const lines = r.stdout.trim().split("\n");
-  assert.equal(lines.length, 17);
+  assert.equal(lines.length, 18);
   for (const [slug, v] of Object.entries(EXPECTED)) {
     assert.ok(lines.some((l) => l.startsWith(`${slug}\tverify_jwt=${v}\t`)), `missing ${slug}=${v}`);
   }
@@ -153,6 +153,29 @@ test("verify_jwt=true functions deploy with verify_jwt true in metadata", async 
   const meta = JSON.parse(posts()[0].body.match(/name="metadata"\r\n\r\n([^\r]*)\r\n/)[1]);
   assert.equal(meta.verify_jwt, true);
   assert.equal(meta.name, "flow-publication");
+});
+
+test("channel-token-lifecycle: single-function dry-run, verify_jwt=false metadata, no bulk deploy", async () => {
+  const r = await run(["--only", "channel-token-lifecycle", "--dry-run"], creds);
+  assert.equal(r.code, 0, r.all);
+  noToken(r);
+  const p = posts();
+  assert.equal(p.length, 1);
+  assert.equal(p[0].query.slug, "channel-token-lifecycle");
+  assert.equal(p[0].query.bundleOnly, "1");
+  const meta = JSON.parse(p[0].body.match(/name="metadata"\r\n\r\n([^\r]*)\r\n/)[1]);
+  assert.equal(meta.verify_jwt, false);
+  assert.equal(meta.name, "channel-token-lifecycle");
+  // live verify_jwt=true would block JWT-less cron calls: the mismatch guard still aborts
+  routes.list = () => ({status: 200, body: JSON.stringify(liveList({"channel-token-lifecycle": true}))});
+  const m = await run(["--only", "channel-token-lifecycle"], creds);
+  assert.equal(m.code, 5, m.all);
+  assert.match(m.stderr, /ABORT: live verify_jwt for channel-token-lifecycle is true, expected false/);
+  // not yet live: the existing "missing from live list" guard still aborts (nothing is created implicitly)
+  routes.list = () => ({status: 200, body: JSON.stringify(liveList({"channel-token-lifecycle": undefined}))});
+  const n = await run(["--only", "channel-token-lifecycle"], creds);
+  assert.equal(n.code, 5, n.all);
+  assert.ok(posts().filter((q) => q.query.bundleOnly !== "1").length === 0);
 });
 
 test("dry-run with credentials only uses bundleOnly=1 and never persists", async () => {
