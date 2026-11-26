@@ -542,12 +542,17 @@ jobs:
             tests/security-widget-billing.test.ts
             tests/wayl-webhook-safety.test.ts
           )
-          fail=0
+          fail=0; failed=()
           for f in "${files[@]}"; do
             echo "::group::$f"
-            if ! node --experimental-strip-types --test "$f"; then echo "::error file=$f::suite failed"; fail=1; fi
+            log="$(mktemp)"
+            if node --experimental-strip-types --test "$f" > "$log" 2>&1; then cat "$log"; else cat "$log"; echo "::error file=$f::suite failed"; fail=1; failed+=("$f"); grep -E "^\s*(not ok|# fail|error:|  error:)" "$log" | head -12 > "$log.sum"; mv "$log.sum" "$log.$(basename "$f").sum"; fi
             echo "::endgroup::"
           done
+          if [ "$fail" -ne 0 ]; then
+            echo "FAILED SUITES (${#failed[@]}):"
+            for f in "${failed[@]}"; do echo " - $f"; cat "$(dirname "$log")"/*."$(basename "$f")".sum 2>/dev/null; done
+          fi
           exit $fail
       - name: SQL and contract suites (node --test, throwaway PostgreSQL)
         shell: bash
@@ -576,10 +581,15 @@ jobs:
             tests/security-wa-unverified-batch.test.mjs
             tests/wayl-topup-atomic-sql.test.mjs
           )
-          fail=0
+          fail=0; failed=()
           for f in "${files[@]}"; do
             echo "::group::$f"
-            if ! node --test "$f"; then echo "::error file=$f::suite failed"; fail=1; fi
+            log="$(mktemp)"
+            if node --test "$f" > "$log" 2>&1; then cat "$log"; else cat "$log"; echo "::error file=$f::suite failed"; fail=1; failed+=("$f"); grep -E "^\s*(not ok|# fail|error:|  error:)" "$log" | head -12 > "$log.sum"; mv "$log.sum" "$log.$(basename "$f").sum"; fi
             echo "::endgroup::"
           done
+          if [ "$fail" -ne 0 ]; then
+            echo "FAILED SUITES (${#failed[@]}):"
+            for f in "${failed[@]}"; do echo " - $f"; cat "$(dirname "$log")"/*."$(basename "$f")".sum 2>/dev/null; done
+          fi
           exit $fail
