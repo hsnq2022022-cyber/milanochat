@@ -319,7 +319,8 @@ test("wiring: outbox worker runs the executor after its message pass behind both
  assert.doesNotMatch(ex,/consume_flow_reply|flow_reserve_outbox_delivery|sendProviderMessage|credits_remaining|fetch\(/);
  const iw=readFileSync("supabase/functions/flow-internal-worker/index.ts","utf8");
  assert.match(iw,/if\(!internalActionsReleased\(k=>Deno\.env\.get\(k\)\)\)return reply\(423/);
- assert.match(iw,/req\.headers\.get\("authorization"\)!=="Bearer "\+key/);
+ // Constant-time shared check (flowWorkerAuth.ts), service key only (empty cron key): behaviour proven in flow-security-worker-auth.test.ts
+ assert.match(iw,/acceptsFlowWorkerBearer\(req\.headers\.get\("authorization"\),key,""\)/);
  assert.ok(iw.indexOf("internalActionsReleased(")<iw.indexOf("createClient("),"flags before any client");
 });
 
