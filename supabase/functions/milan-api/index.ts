@@ -65,6 +65,7 @@ import { ingestSignedComments, commentAutomationEnabled } from "./commentIngress
 import { readCommentActivity } from "./commentActivity.ts";
 import { commentActivityRules } from "./abuseGuards.ts";
 import { verifyMetaWebhookSignature } from "./metaSignature.ts";
+import { verifyTokenMatches } from "./verifyToken.ts";
 // T5-S4: request body size limits and input boundaries (bodyLimits.ts).
 import {
   bodyClassFor, bodyLimitFor, readBodyLimited, BODY_TOO_LARGE_MESSAGE, BODY_TOO_LARGE_LOG_TAG,
@@ -2711,8 +2712,7 @@ const milanApiHandler = (async (req: Request) => {
 
           if (
             mode === "subscribe" &&
-            expected &&
-            token === expected
+            verifyTokenMatches(token, expected)
           ) {
             return new Response(
               challenge ?? "",
@@ -3028,8 +3028,7 @@ const milanApiHandler = (async (req: Request) => {
 
           if (
             mode === "subscribe" &&
-            expected &&
-            token === expected
+            verifyTokenMatches(token, expected)
           ) {
             return new Response(
               challenge ?? "",

@@ -418,6 +418,8 @@ jobs:
           node --experimental-strip-types --test tests/flow-capability-gating.test.ts
           # R2 invalid-signature diagnostics: fixed fields only, no leakage (PR #206 tests were never run in CI)
           node --experimental-strip-types --test tests/webhook-diagnostics.test.ts
+          # R1 webhook latency: stage timings, profile deadline, deferred enrichment (PR #208 tests were never run in CI)
+          node --experimental-strip-types --test tests/webhook-ingress-r1.test.ts
           node --experimental-strip-types --test src/flow/model.test.ts
           node --experimental-strip-types --test src/flow/simulatorEngine.test.ts
       - name: Build and typecheck real frontend
