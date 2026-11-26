@@ -19,6 +19,7 @@
 //  DENO_DIR=<scratch>/deno-cache deno test -A --no-lock --node-modules-dir=none ...)
 import assert from "node:assert/strict";
 import {encryptMessageBody} from "../supabase/functions/flow-outbox-worker/deliveryCore.ts";
+import {OUTBOX_DISPATCH_LIMIT} from "../supabase/functions/flow-outbox-worker/skipPolicy.ts";
 import {verifyMetaWebhookSignature} from "../supabase/functions/milan-api/metaSignature.ts";
 import {persistInboundOnce} from "../supabase/functions/milan-api/persistInboundOnce.ts";
 import {loadFlowReview} from "../supabase/functions/flow-delivery-review/review.ts";
@@ -1313,6 +1314,65 @@ Deno.test({name:"flow V3/V4 lifecycle integration (real handlers + throwaway Pos
    await outboxTick();
    assert.equal(meta.calls.length,3);assert.equal(meta.calls[2].body.message.text,"تواصل معنا");
    assert.deepEqual((await effectsOf(cB)).map(e=>e.delivery_status),["settled","pending"]);
+  });
+
+  await t.step("outbox fairness: a paused tenant's large pending backlog cannot starve another tenant (scan window), and the dispatch cap is shared fairly",async()=>{
+   await freshDb();resetMeta();await activate("buttons",true);
+   const cB=await conv("6000002",B,ACCB),mB=await inbound(cB,"mid.fb.1",B);
+   // Tenant B: switched off, 60 OLDER pending effects (each on its own completed run, as a broadcast would leave).
+   await exec(`
+    INSERT INTO public.automation_message_claims(tenant_id,channel_account_id,platform,provider_event_id,conversation_id,inbound_message_id,route)
+    VALUES('${B}','${ACCB}','instagram','mid.fb.1','${cB}','${mB}','flow');
+    INSERT INTO public.automation_flow_event_receipts(tenant_id,channel_account_id,platform,provider_event_id)
+     SELECT '${B}','${ACCB}','instagram','mid.fb.'||g FROM generate_series(1,61) g;
+    INSERT INTO public.automation_flow_runs(tenant_id,flow_key,publication_revision,channel_account_id,platform,conversation_id,provider_event_id,current_node_id,run_status,step_count)
+     SELECT '${B}','bflow',1,'${ACCB}','instagram','${cB}','mid.fb.'||g,'yes','completed',2 FROM generate_series(2,61) g;
+    INSERT INTO public.automation_flow_outbox(tenant_id,run_id,idempotency_key,effect_kind,payload,created_at)
+     SELECT '${B}',r.id,'b-bulk-'||r.provider_event_id,'message','{"kind":"message","text":"B backlog"}'::jsonb,now()-interval '30 minutes'
+     FROM public.automation_flow_runs r WHERE r.tenant_id='${B}' AND r.provider_event_id LIKE 'mid.fb.%' AND r.provider_event_id<>'mid.fb.1';
+    UPDATE public.automation_flow_tenant_switches SET enabled=false WHERE tenant_id='${B}';`);
+   // Tenant A: a fresh, eligible, NEWER effect.
+   const cA=await conv("6000001");const mA=await inbound(cA,"mid.fa.1");
+   assert.equal(await attemptDurableInstagram(sb,ev(cA,mA,"mid.fa.1",null)),"handled");
+   const o=await outboxTick();
+   assert.equal(o.status,200,JSON.stringify(o.body));
+   assert.equal(meta.calls.filter(c=>c.body.recipient.id==="6000001").length,1,"tenant A is served although a paused tenant has 60 older pending effects");
+   assert.equal(meta.calls.filter(c=>c.body.recipient.id==="6000002").length,0,"the paused tenant's effects are never sent");
+   assert.equal(await val(`SELECT count(*)::int FROM public.automation_flow_outbox WHERE tenant_id='${B}' AND delivery_status='pending'`),60,"its backlog stays pending (not cancelled, not sent)");
+  });
+
+  await t.step("outbox capacity (measured): two active tenants with backlogs drain at the dispatch cap, shared fairly, every effect sent exactly once",async()=>{
+   await freshDb();resetMeta();await activate("buttons",true);
+   const cA=await conv("6100001"),cB=await conv("6100002",B,ACCB);
+   const mA=await inbound(cA,"mid.ca.1"),mB=await inbound(cB,"mid.cb.1",B);
+   const NA=100,NB=30;
+   const seedTenant=(tenant:string,acc:string,c:string,pfx:string,n:number,text:string,fk:string)=>`
+    INSERT INTO public.automation_flow_event_receipts(tenant_id,channel_account_id,platform,provider_event_id)
+     SELECT '${tenant}','${acc}','instagram','${pfx}'||g FROM generate_series(1,${n}) g;
+    INSERT INTO public.automation_message_claims(tenant_id,channel_account_id,platform,provider_event_id,conversation_id,inbound_message_id,route)
+     SELECT '${tenant}','${acc}','instagram','${pfx}'||g,'${c}',it.inbound('${tenant}','${c}','${pfx}in'||g),'flow' FROM generate_series(1,${n}) g;
+    INSERT INTO public.automation_flow_runs(tenant_id,flow_key,publication_revision,channel_account_id,platform,conversation_id,provider_event_id,current_node_id,run_status,step_count)
+     SELECT '${tenant}','${fk}',1,'${acc}','instagram','${c}','${pfx}'||g,'yes','completed',2 FROM generate_series(1,${n}) g;
+    INSERT INTO public.automation_flow_outbox(tenant_id,run_id,idempotency_key,effect_kind,payload)
+     SELECT '${tenant}',r.id,'${pfx}'||r.provider_event_id,'message','{"kind":"message","text":"${text}"}'::jsonb
+     FROM public.automation_flow_runs r WHERE r.tenant_id='${tenant}' AND r.provider_event_id LIKE '${pfx}%';`;
+   await exec(seedTenant(A,ACC,cA,"cap.a.",NA,"A bulk","buttons")+seedTenant(B,ACCB,cB,"cap.b.",NB,"B bulk","bflow"));
+   const per:Array<{a:number;b:number;ms:number}>=[];
+   for(let i=0;i<10;i++){
+    const before=meta.calls.length,t0=Date.now();
+    const o=await outboxTick();assert.equal(o.status,200,JSON.stringify(o.body));
+    const calls=meta.calls.slice(before);
+    per.push({a:calls.filter(c=>c.body.recipient.id==="6100001").length,b:calls.filter(c=>c.body.recipient.id==="6100002").length,ms:Date.now()-t0});
+    if(await val(`SELECT count(*)::int FROM public.automation_flow_outbox WHERE delivery_status IN('pending','leased','charge_pending') AND idempotency_key LIKE 'cap.%'`)===0)break;
+   }
+   console.log("CAPACITY per tick (sends A, sends B, ms): "+JSON.stringify(per)+" limit="+OUTBOX_DISPATCH_LIMIT);
+   const totalA=per.reduce((n,x)=>n+x.a,0),totalB=per.reduce((n,x)=>n+x.b,0);
+   assert.equal(totalA,NA,"every tenant-A effect sent exactly once");assert.equal(totalB,NB,"every tenant-B effect sent exactly once");
+   assert.equal(meta.calls.length,NA+NB,"the provider received exactly one request per effect (no duplicates)");
+   assert.equal(await val(`SELECT count(*)::int FROM public.automation_flow_outbox WHERE idempotency_key LIKE 'cap.%' AND delivery_status='settled'`),NA+NB);
+   for(const x of per.slice(0,-1))assert.equal(x.a+x.b,OUTBOX_DISPATCH_LIMIT,"each full tick dispatches exactly the cap: "+JSON.stringify(per));
+   assert.ok(per[0].a>=Math.floor(OUTBOX_DISPATCH_LIMIT/2)-1&&per[0].b>=Math.floor(OUTBOX_DISPATCH_LIMIT/2)-1,"both tenants share the first tick: "+JSON.stringify(per[0]));
+   assert.equal(per.length,Math.ceil((NA+NB)/OUTBOX_DISPATCH_LIMIT),"ticks to drain = ceil(effects / cap)");
   });
 
   await t.step("knowledge_ai effect: grounded answer is sent once; no_knowledge is cancelled without a send",async()=>{

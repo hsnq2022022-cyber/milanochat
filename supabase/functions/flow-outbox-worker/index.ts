@@ -32,6 +32,7 @@ import {canDispatchOutbox} from "./productionGate.ts";
 import {readSupersession} from "./supersession.ts";
 import {durableRegistryStatus,registryRequired} from "../_shared/durableRegistry.ts";
 import {confirmedOutboxMid,matchesPreviouslyPersistedReply} from "./confirmedSettlement.ts";
+import {interleaveByTenant,tenantsDominatingWindow,OUTBOX_SCAN_ROUNDS} from "./fairness.ts";
 import {permanentOutboxBlock,temporaryOutboxPause,humanTakeoverActive,OUTBOX_SCAN_LIMIT,
  OUTBOX_DISPATCH_LIMIT,OUTBOX_STALE_MINUTES,type OutboxSkipReason} from "./skipPolicy.ts";
 import {compareOutbox,heldByEarlierEffect,statusAfterOutcome,ORDERED_KINDS,
@@ -97,6 +98,24 @@ Deno.serve(async req=>{
   .in("delivery_status",["pending","charge_pending"]).in("effect_kind",["message","question","message_image"])
   .order("created_at",{ascending:true}).limit(OUTBOX_SCAN_LIMIT);
  if(listError)return json({error:"Outbox lookup failed"},503);
+ // Failure isolation: a saturated window is topped up (bounded rounds) with the oldest rows of tenants that do not
+ // dominate it, so a paused tenant's backlog cannot starve the others (fairness.ts). Only adds candidates; every
+ // gate below (switches, credit, takeover, ordering, reservation) still decides whether anything is sent.
+ const scanned=[...(listed??[])];
+ for(let round=1;round<OUTBOX_SCAN_ROUNDS&&scanned.length>=OUTBOX_SCAN_LIMIT*round;round++){
+  const dominating=tenantsDominatingWindow(scanned);
+  if(dominating.length===0)break;
+  let moreQuery=sb.from("automation_flow_outbox")
+   .select(OUTBOX_COLUMNS)
+   .in("delivery_status",["pending","charge_pending"]).in("effect_kind",["message","question","message_image"]);
+  for(const t of dominating)moreQuery=moreQuery.neq("tenant_id",t); // repeated neq = AND (PostgREST)
+  const {data:more,error:moreError}=await moreQuery.order("created_at",{ascending:true}).limit(OUTBOX_SCAN_LIMIT);
+  if(moreError){console.error("[outbox] fairness scan failed",{code:moreError.code});break;}
+  const have=new Set(scanned.map(r=>r.id));
+  const fresh=(more??[]).filter(r=>!have.has(r.id));
+  if(fresh.length===0)break;
+  scanned.push(...fresh);
+ }
  // retry_wait rows (knowledge_ai backoff) are read only once retry_at is due,
  // in a separate bounded query: a backed-off effect never occupies a scan slot
  // of newer effects. A failure here only delays retries; it never sends.
@@ -121,9 +140,9 @@ Deno.serve(async req=>{
   else replyRows=rr??[];
  }
  const seen=new Set<string>();
- const items=[...(listed??[]),...(retryListError?[]:dueRetries??[]),...(replyRows??[])]
+ const items=interleaveByTenant([...scanned,...(retryListError?[]:dueRetries??[]),...(replyRows??[])]
   .filter(e=>!seen.has(e.id)&&!!seen.add(e.id))
-  .sort(compareOutbox);
+  .sort(compareOutbox));
  // Per-run order (effectOrder.ts): ONE tenant-scoped query per tenant per tick
  // loads every provider effect of the candidate runs. Lookup error or a
  // truncated result holds that tenant's effects this tick (fail closed).

@@ -39,6 +39,16 @@ test("fail closed: missing, empty or ANY malformed entry invalidates the whole l
 test("the account id being checked must be a non-empty string",()=>{
  for(const id of [undefined,null,"",0,{},[A]])assert.equal(durableAccountAllowed(A,id),false);
 });
+test("the allowlist ceiling covers the first-100-customer rollout (200 real account ids) and stays fail-closed above it",()=>{
+ assert.equal(DURABLE_ACCOUNT_ALLOWLIST_MAX,200);
+ const uuid=(i:number)=>`aaaaaaaa-aaaa-4aaa-8aaa-${String(i).padStart(12,"0")}`;
+ const list=Array.from({length:200},(_,i)=>uuid(i)).join(",");
+ assert.ok(list.length<8000,"fits comfortably in one secret value");
+ assert.equal(parseDurableAccountAllowlist(list)?.size,200);
+ assert.equal(durableAccountAllowed(list,uuid(199)),true);
+ assert.equal(durableAccountAllowed(list,uuid(200)),false,"an account outside the list is never admitted");
+ assert.equal(parseDurableAccountAllowlist(list+","+uuid(200)),null,"201 entries invalidate the whole list");
+});
 test("the allowlist is bounded",()=>{
  const ok=Array.from({length:DURABLE_ACCOUNT_ALLOWLIST_MAX},(_,i)=>"acct-"+i).join(",");
  const tooMany=ok+",acct-extra";
