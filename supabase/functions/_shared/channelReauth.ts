@@ -31,3 +31,6 @@ export async function markNeedsReauth(db:Db,row:ReauthTarget,reason:ReauthReason
   return Array.isArray(data)&&data.length===1;
  }catch{return false;}
 }
+
+/** Spread into the OAuth reconnect upsert: a successful reconnect clears any stored needs_reauth reason. */
+export const RECONNECT_CLEARS={error_message:null};

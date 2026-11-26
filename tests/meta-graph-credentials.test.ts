@@ -312,7 +312,7 @@ test("(b) Instagram subscribed_apps: DM fields + comments, Bearer header, no tok
 test("(d) meta-auth: error paths log/return no error text, URL or Meta free text (only e.name / codes)", () => {
   assert.doesNotMatch(metaCode, /\be\.message\b|e\?\.message/, "no exception message anywhere");
   assert.doesNotMatch(metaCode, /console\.\w+\([^;]*,\s*e\s*\)/, "no raw error object logged");
-  assert.doesNotMatch(metaCode, /error_message|error\?\.message|JSON\.stringify\(sJson\)/, "no Meta free text logged");
+  assert.doesNotMatch(metaCode, /error_message(?!: null,)|error\?\.message|JSON\.stringify\(sJson\)/, "no Meta free text logged");
   assert.match(META, /console\.error\("\[meta-auth\]", e instanceof Error \? e\.name : "unknown"\);\n    return fail\("unknown"\);/);
   // Facebook callback catch unchanged (already name-only).
   assert.match(META, /console\.error\("\[meta-auth\] facebook", e instanceof Error \? e\.name : "unknown"\);\n    return fail\("unknown"\);/);
@@ -357,6 +357,9 @@ function credentialSites() {
 // Documented exceptions: Meta documents these token exchanges only as GET with
 // query params (no header / POST-body form relied on without live evidence).
 const QUERY_ALLOW = [
+  // Token lifecycle (documented only as GET with query params): the URL is never logged or returned.
+  "supabase/functions/channel-token-lifecycle/lifecycle.ts | const r=await getJson(d.fetch,`${IG_REFRESH}?grant_type=ig_refresh_token&access_token=${encodeURIComponent(token)}`);",
+  "supabase/functions/channel-token-lifecycle/lifecycle.ts | const r=await getJson(d.fetch,`${FB_DEBUG}?input_token=${encodeURIComponent(token)}&access_token=${app}`);",
   "supabase/functions/meta-auth/facebook.ts | `&client_secret=${encodeURIComponent(deps.appSecret)}` +",
   "supabase/functions/meta-auth/facebook.ts | `&client_secret=${encodeURIComponent(deps.appSecret)}&fb_exchange_token=${encodeURIComponent(shortToken)}`,",
   "supabase/functions/meta-auth/index.ts | `&client_secret=${encodeURIComponent(igSecret)}&access_token=${encodeURIComponent(shortToken)}`,",
