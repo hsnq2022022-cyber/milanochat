@@ -9,6 +9,44 @@ import StaffInboxPanel from "./StaffInboxPanel";
    الخطة غير متوفرة في حالة التطبيق حاليًا فتظهر «—». */
 type Summary = { tenantId: string; businessName: string; credits: number; openUnresolved: number };
 
+type CreditRow = { action: string; amount: number | null; balance_after: number | null; reason: string; created_at: string };
+const creditActionNames: Record<string, string> = { credit_grant: "شحن رصيد", credit_deduct: "خصم رصيد", activate: "تفعيل الحساب", suspend: "إيقاف الحساب" };
+
+/* حالة الحساب وسجل تعديلات الرصيد (قراءة فقط عبر RLS: صاحب الحساب يرى سجله فقط، دون هوية المشرف). */
+function CreditHistory({ sb, tenantId }: { sb: ReturnType<typeof getSupabase>; tenantId: string }) {
+  const [rows, setRows] = useState<CreditRow[] | null>(null);
+  const [active, setActive] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (!sb) return;
+    let alive = true;
+    Promise.all([
+      sb.from("tenants").select("is_active").eq("id", tenantId).maybeSingle(),
+      sb.from("tenant_admin_actions").select("action,amount,balance_after,reason,created_at").eq("tenant_id", tenantId).order("created_at", { ascending: false }).limit(20),
+    ]).then(([t, a]) => {
+      if (!alive) return;
+      setActive(typeof t.data?.is_active === "boolean" ? t.data.is_active : null);
+      setRows(a.error ? null : ((a.data ?? []) as CreditRow[]));
+    }).catch(() => alive && setRows(null));
+    return () => { alive = false; };
+  }, [sb, tenantId]);
+  return (
+    <div className="mt-3 text-sm" data-testid="settings-credit-history">
+      {active !== null && <p className="text-sage mb-2" data-testid="settings-account-status">حالة الحساب: <b className="text-bone">{active ? "مفعّل" : "غير مفعّل أو موقوف"}</b></p>}
+      {rows && rows.length > 0 && (
+        <ul>
+          {rows.map((r, i) => (
+            <li key={i} className="py-1.5 border-b border-verde/10 last:border-0">
+              <b>{creditActionNames[r.action] ?? r.action}</b>{r.amount != null && <> · {r.amount.toLocaleString("en")}</>}
+              <span className="block text-xs text-sage">{r.reason} · {new Date(r.created_at).toLocaleDateString("ar-IQ")}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {rows && rows.length === 0 && <p className="text-sage">لا توجد تعديلات يدوية على الرصيد بعد.</p>}
+    </div>
+  );
+}
+
 function Section({ id, testid, icon, title, desc, defaultOpen, children }: {
   id: string; testid: string; icon: ReactNode; title: string; desc: string; defaultOpen?: boolean; children: ReactNode;
 }) {
@@ -104,7 +142,6 @@ export default function Settings() {
   const errorBox = <p role="alert" className="text-sm text-oro py-3">تعذر تحميل البيانات. حاول مرة أخرى لاحقًا.</p>;
   const showReview = import.meta.env.VITE_ENABLE_DELIVERY_REVIEW !== "false";
   const credits = summary?.credits ?? 0;
-  const creditPct = Math.max(0, Math.min(100, (credits / 1000) * 100));
 
   return (
     <div className="min-h-screen bg-night text-bone font-body" dir="rtl">
@@ -135,17 +172,12 @@ export default function Settings() {
             <div className="bg-night/50 border border-verde/12 rounded-xl p-4">
               <p className="font-display font-bold text-3xl text-bone tabular-nums leading-none" data-testid="settings-credits">
                 {credits.toLocaleString("en")}
-                <span className="text-sm text-sage font-body font-normal ms-1.5">من 1,000</span>
+                <span className="text-sm text-sage font-body font-normal ms-1.5">رد متبقٍ</span>
               </p>
-              <div className="mt-3.5 flex gap-[3px]" aria-hidden="true">
-                {Array.from({ length: 25 }).map((_, i) => (
-                  <span
-                    key={i}
-                    className={`h-2 flex-1 rounded-full ${i < (creditPct / 100) * 25 ? (creditPct > 40 ? "bg-verde" : creditPct > 15 ? "bg-oro" : "bg-oro-soft") : "bg-moss"}`}
-                  />
-                ))}
-              </div>
-              <a href="#/dashboard?pay=1" data-testid="settings-topup" aria-label="اشحن الرصيد" className={`${linkCls} mt-4 w-full`}>اشحن الرصيد</a>
+              <CreditHistory sb={sb} tenantId={summary.tenantId} />
+              <p className="mt-4 text-sm text-sage" data-testid="settings-manual-topup">
+                شحن الرصيد وتفعيل الحساب يتمان يدويًا بعد تأكيد الدفع مع إدارة المنصة. بعد التأكيد يظهر الرصيد والتعديل في السجل أعلاه.
+              </p>
             </div>
           )}
         </Section>
