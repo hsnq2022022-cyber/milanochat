@@ -3,6 +3,7 @@
 // recorder, so every Supabase/Meta request the handler makes is observed. No network, no secrets.
 // Run: deno test -A --no-lock --node-modules-dir=none tests/flow-security-webhook-boundary.test.ts
 import {assert,assertEquals} from "jsr:@std/assert@1";
+import {verifyTokenMatches} from "../supabase/functions/milan-api/verifyToken.ts";
 
 const APP_SECRET="test-app-secret-not-real";
 const SUPABASE_URL="http://supabase.invalid";
@@ -29,7 +30,8 @@ globalThis.fetch=(async(input:Request|URL|string,init?:RequestInit)=>{
 }) as typeof fetch;
 
 const envMap:Record<string,string>={SUPABASE_URL,SUPABASE_SERVICE_ROLE_KEY:"service-role-test",
- INSTAGRAM_APP_SECRET:APP_SECRET,META_APP_SECRET:"",WHATSAPP_APP_SECRET:APP_SECRET};
+ INSTAGRAM_APP_SECRET:APP_SECRET,META_APP_SECRET:"",WHATSAPP_APP_SECRET:APP_SECRET,
+ WHATSAPP_VERIFY_TOKEN:"wa-verify-token-test",INSTAGRAM_VERIFY_TOKEN:"ig-verify-token-test",META_WEBHOOK_VERIFY_TOKEN:""};
 const realEnvGet=Deno.env.get.bind(Deno.env);
 Deno.env.get=((k:string)=>k in envMap?envMap[k]:realEnvGet(k)) as typeof Deno.env.get;
 let handler:((r:Request)=>Promise<Response>)|null=null;
@@ -60,7 +62,8 @@ const withLogs=async<T>(fn:()=>Promise<T>)=>{
  finally{console.error=o.e;console.warn=o.w;console.log=o.l;console.info=o.i;}
 };
 const reset=()=>{calls=[];accountRows=[];envMap.INSTAGRAM_APP_SECRET=APP_SECRET;envMap.META_APP_SECRET="";
- envMap.WHATSAPP_APP_SECRET=APP_SECRET;};
+ envMap.WHATSAPP_APP_SECRET=APP_SECRET;
+ envMap.WHATSAPP_VERIFY_TOKEN="wa-verify-token-test";envMap.INSTAGRAM_VERIFY_TOKEN="ig-verify-token-test";envMap.META_WEBHOOK_VERIFY_TOKEN="";};
 
 Deno.test("instagram: forged / missing / malformed signature is ignored and touches NO database",async()=>{
  const raw=igBody();
@@ -139,4 +142,67 @@ Deno.test("oversized and malformed bodies are rejected before any signature or d
  r=await post("instagram_webhook","{not json",await hmac(APP_SECRET,"{not json"));
  assertEquals(r.status,400);await r.body?.cancel();
  assertEquals(calls.length,0);
+});
+
+// ---------------------------------------------------------------- GET verify-token handshake
+const handshake=(action:string,q:Record<string,string|undefined>)=>{
+ const u=new URL(`${SUPABASE_URL}/functions/v1/milan-api`);
+ u.searchParams.set("action",action);
+ for(const [k,v] of Object.entries(q))if(v!==undefined)u.searchParams.set(k,v);
+ return handler!(new Request(u,{method:"GET"}));
+};
+const WA="wa-verify-token-test",IG="ig-verify-token-test";
+for(const [action,good] of [["whatsapp_webhook",WA],["instagram_webhook",IG]] as const){
+ Deno.test(`${action} GET handshake: exact token echoes the challenge (200); every other token is 403 Forbidden, no database access, no token in logs`,async()=>{
+  reset();
+  const ok=await handshake(action,{"hub.mode":"subscribe","hub.verify_token":good,"hub.challenge":"challenge-123"});
+  assertEquals(ok.status,200);assertEquals(await ok.text(),"challenge-123");
+  const bad:Array<[string,Record<string,string|undefined>]>=[
+   ["wrong same length",{"hub.verify_token":good.slice(0,-1)+"X"}],
+   ["prefix (shorter)",{"hub.verify_token":good.slice(0,-1)}],
+   ["extension (longer)",{"hub.verify_token":good+"x"}],
+   ["different case",{"hub.verify_token":good.toUpperCase()}],
+   ["empty",{"hub.verify_token":""}],
+   ["missing",{}],
+   ["whitespace padded",{"hub.verify_token":" "+good}],
+   ["unicode lookalike",{"hub.verify_token":good.replace("e","\u0435")}],
+   ["very long",{"hub.verify_token":"a".repeat(8000)}],
+   ["wrong mode",{"hub.mode":"unsubscribe","hub.verify_token":good}],
+   ["missing mode",{"hub.mode":undefined,"hub.verify_token":good}]];
+  for(const [name,q] of bad){
+   const {result,logs}=await withLogs(()=>handshake(action,{"hub.mode":"subscribe","hub.challenge":"c",...q}));
+   assertEquals(result.status,403,name);assertEquals(await result.text(),"Forbidden",name);
+   assert(!logs.includes(good),"configured token never logged: "+name);
+  }
+  assertEquals(calls.length,0,"the handshake never touches the database");
+ });
+ Deno.test(`${action} GET handshake: an unset configured token never matches (even an empty or missing presented token)`,async()=>{
+  reset();
+  envMap.WHATSAPP_VERIFY_TOKEN="";envMap.INSTAGRAM_VERIFY_TOKEN="";envMap.META_WEBHOOK_VERIFY_TOKEN="";
+  for(const t of ["","x",undefined]){
+   const r=await handshake(action,{"hub.mode":"subscribe","hub.verify_token":t,"hub.challenge":"c"});
+   assertEquals(r.status,403);assertEquals(await r.text(),"Forbidden");
+  }
+  reset();
+ });
+}
+Deno.test("instagram GET handshake keeps the META_WEBHOOK_VERIFY_TOKEN fallback; INSTAGRAM_VERIFY_TOKEN wins when both are set",async()=>{
+ reset();
+ envMap.INSTAGRAM_VERIFY_TOKEN="";envMap.META_WEBHOOK_VERIFY_TOKEN="meta-fallback-token";
+ let r=await handshake("instagram_webhook",{"hub.mode":"subscribe","hub.verify_token":"meta-fallback-token","hub.challenge":"fb"});
+ assertEquals([r.status,await r.text()],[200,"fb"]);
+ envMap.INSTAGRAM_VERIFY_TOKEN=IG;
+ r=await handshake("instagram_webhook",{"hub.mode":"subscribe","hub.verify_token":"meta-fallback-token","hub.challenge":"fb"});
+ assertEquals(r.status,403);await r.body?.cancel();
+ reset();
+});
+Deno.test("verifyTokenMatches: exact match only; null/undefined/empty/unequal-length inputs are false and never throw",()=>{
+ assert(verifyTokenMatches("abc","abc"));assert(verifyTokenMatches("é✓","é✓"));
+ for(const [a,b] of [["abc","abd"],["abc","ab"],["ab","abc"],["","abc"],["abc",""],["",""],[null,"abc"],[undefined,"abc"],["abc",null],["abc",undefined],[null,null],["a\u0000","a"]] as const)
+  assertEquals(verifyTokenMatches(a as string|null,b as string|null),false,JSON.stringify([a,b]));
+});
+Deno.test("regression guard: the handshake in milan-api/index.ts never compares the verify token with a plain ===",async()=>{
+ const src=await Deno.readTextFile(new URL("../supabase/functions/milan-api/index.ts",import.meta.url));
+ assert(!/token\s*===\s*expected/.test(src),"plain token comparison is back");
+ assertEquals((src.match(/verifyTokenMatches\(token, expected\)/g)??[]).length,2,"both Meta handshakes use verifyTokenMatches");
 });
