@@ -416,6 +416,8 @@ jobs:
           node --experimental-strip-types --test tests/flow-publish-live.test.ts
           node --experimental-strip-types --test tests/flow-requirements.test.ts
           node --experimental-strip-types --test tests/flow-capability-gating.test.ts
+          # R2 invalid-signature diagnostics: fixed fields only, no leakage (PR #206 tests were never run in CI)
+          node --experimental-strip-types --test tests/webhook-diagnostics.test.ts
           node --experimental-strip-types --test src/flow/model.test.ts
           node --experimental-strip-types --test src/flow/simulatorEngine.test.ts
       - name: Build and typecheck real frontend
@@ -460,3 +462,6 @@ jobs:
           deno test --allow-env --node-modules-dir=auto tests/flow-live-production-runtime.test.ts
           deno test --allow-env --node-modules-dir=auto tests/flow-staff-inbox-http.test.ts
           deno test --allow-env --node-modules-dir=auto tests/wayl-signature.test.ts
+          # Security boundary of the REAL milan-api webhook and worker handlers: fetch is replaced by a recorder (mocked,
+          # no network, no secrets); the handlers are imported dynamically, hence --allow-read.
+          deno test --allow-env --allow-read --node-modules-dir=auto tests/flow-security-webhook-boundary.test.ts tests/flow-security-worker-auth.test.ts
