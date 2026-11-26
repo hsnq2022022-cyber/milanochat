@@ -13,13 +13,14 @@
  */
 import {createClient} from "npm:@supabase/supabase-js@2";
 import {runInternalEffects,internalActionsReleased} from "./internalEffects.ts";
+import {acceptsFlowWorkerBearer} from "../flowWorkerAuth.ts";
 const env=(key:string)=>Deno.env.get(key)??"";
 const reply=(status:number,data:unknown)=>new Response(JSON.stringify(data),{
  status,headers:{"content-type":"application/json","cache-control":"no-store"}});
 Deno.serve(async req=>{
  if(req.method!=="POST")return reply(405,{error:"Method not allowed"});
  const key=env("SUPABASE_SERVICE_ROLE_KEY");
- if(!key||req.headers.get("authorization")!=="Bearer "+key)
+ if(!acceptsFlowWorkerBearer(req.headers.get("authorization"),key,""))
   return reply(401,{error:"Unauthorized"});
  if(!internalActionsReleased(k=>Deno.env.get(k)))return reply(423,{enabled:false});
  let body:unknown;
