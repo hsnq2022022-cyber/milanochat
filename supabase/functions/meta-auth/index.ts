@@ -255,6 +255,7 @@ Deno.serve(async (req: Request) => {
           ? prof.profile_picture_url
           : null,
         status: "active",
+        error_message: null, // reconnecting clears a previous needs_reauth reason
         is_active: true,
         access_token_encrypted: await encryptField(token),
         token_expires_at: new Date(Date.now() + expiresIn * 1000).toISOString(),

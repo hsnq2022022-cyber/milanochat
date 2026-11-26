@@ -63,6 +63,7 @@ export type FbPageRow = {
   display_name: string | null;
   avatar_url: string | null;
   status: "active";
+  error_message: null;
   is_active: true;
   access_token_encrypted: string;
   token_expires_at: string | null;
@@ -247,6 +248,7 @@ export async function linkFacebookPages(code: string, deps: FbLinkDeps): Promise
       display_name: typeof p?.name === "string" && p.name ? p.name : null,
       avatar_url: typeof pic === "string" && /^https:\/\//i.test(pic) ? pic : null,
       status: "active",
+      error_message: null, // reconnecting clears a previous needs_reauth reason
       is_active: true,
       access_token_encrypted: await deps.encryptField(pageToken),
       token_expires_at: pageTokenExpiresAt,
