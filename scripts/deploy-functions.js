@@ -30,10 +30,12 @@ const FUNCTIONS_DIR = resolve(REPO_ROOT, "supabase/functions");
 const DEFAULT_API_BASE = "https://api.supabase.com";
 const REQUEST_TIMEOUT_MS = 120000;
 
-// Verified verify_jwt settings of the LIVE project (17 functions). Do not edit without re-verifying live.
+// Verified verify_jwt settings of the LIVE project (17 functions) plus channel-token-lifecycle (not yet deployed live:
+// it authenticates itself with the worker Bearer contract, so verify_jwt must be false). Do not edit without re-verifying live.
 const VERIFY_JWT = Object.freeze({
   "agent-prompt": false,
   "api": false,
+  "channel-token-lifecycle": false,
   "channels": false,
   "conversation-previews": false,
   "create-payment": false,
