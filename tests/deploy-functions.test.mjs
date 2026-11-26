@@ -178,6 +178,90 @@ test("channel-token-lifecycle: single-function dry-run, verify_jwt=false metadat
   assert.ok(posts().filter((q) => q.query.bundleOnly !== "1").length === 0);
 });
 
+// ---- --first-deploy (scoped to channel-token-lifecycle; never a general missing-from-live bypass) ----
+const CTL = "channel-token-lifecycle";
+const absentThenLive = (jwtAfter = false) => {
+  let deployed = false;
+  routes.list = () => ({status: 200, body: JSON.stringify(deployed
+    ? liveList({[CTL]: jwtAfter})
+    : liveList({[CTL]: undefined}))});
+  routes.deploy = (url) => {
+    if (url.searchParams.get("bundleOnly") !== "1") deployed = true;
+    return {status: 201, body: JSON.stringify({id: "x", slug: url.searchParams.get("slug"), version: 1, verify_jwt: false})};
+  };
+};
+
+test("--first-deploy is refused for every slug except channel-token-lifecycle (no API call)", async () => {
+  for (const slug of Object.keys(EXPECTED).filter((s) => s !== CTL).concat(["not-a-function", "tenant-admin"])) {
+    const r = await run(["--only", slug, "--first-deploy"], creds);
+    assert.equal(r.code, 2, `${slug}: ${r.all}`);
+    noToken(r);
+  }
+  assert.equal(requests.length, 0);
+});
+
+test("--first-deploy needs exactly one --only target; no bulk or --list combination", async () => {
+  for (const args of [["--first-deploy"], ["--first-deploy", "--dry-run"], ["--only", CTL, "--only", "milan-api", "--first-deploy"],
+    ["--only", CTL, "--only", CTL, "--first-deploy"], ["--all", "--first-deploy"], ["--list", "--first-deploy"], ["--list", "--only", CTL, "--first-deploy"]]) {
+    const r = await run(args, creds);
+    assert.equal(r.code, 2, `${JSON.stringify(args)}: ${r.all}`);
+  }
+  assert.equal(requests.length, 0);
+});
+
+test("--first-deploy deploys only while absent live; sends verify_jwt=false and verifies it after", async () => {
+  absentThenLive(false);
+  const r = await run(["--only", CTL, "--first-deploy"], creds);
+  assert.equal(r.code, 0, r.all);
+  noToken(r);
+  const p = posts();
+  assert.equal(p.length, 1, "exactly one deploy call");
+  assert.equal(p[0].query.slug, CTL);
+  assert.equal(p[0].query.bundleOnly, undefined);
+  const meta = JSON.parse(p[0].body.match(/name="metadata"\r\n\r\n([^\r]*)\r\n/)[1]);
+  assert.equal(meta.verify_jwt, false);
+  assert.equal(meta.name, CTL);
+  assert.match(r.stdout, /First-deploy check OK/);
+  assert.match(r.stdout, /Post-deploy check OK: channel-token-lifecycle verify_jwt=false/);
+});
+
+test("--first-deploy post-deploy verify_jwt mismatch still fails", async () => {
+  absentThenLive(true);
+  const r = await run(["--only", CTL, "--first-deploy"], creds);
+  assert.equal(r.code, 5, r.all);
+  assert.match(r.stderr, /POST-DEPLOY: live verify_jwt for channel-token-lifecycle is true, expected false/);
+});
+
+test("--first-deploy refuses an already-live function and points to the normal path (no deploy call)", async () => {
+  for (const extra of [[], ["--dry-run"]]) {
+    const r = await run(["--only", CTL, "--first-deploy", ...extra], creds);
+    assert.equal(r.code, 5, r.all);
+    assert.match(r.stderr, /already live .* Use the normal path: --only channel-token-lifecycle/);
+  }
+  assert.equal(posts().length, 0);
+});
+
+test("--first-deploy --dry-run is bundleOnly and never persists", async () => {
+  absentThenLive(false);
+  const r = await run(["--only", CTL, "--first-deploy", "--dry-run"], creds);
+  assert.equal(r.code, 0, r.all);
+  const p = posts();
+  assert.equal(p.length, 1);
+  assert.equal(p[0].query.bundleOnly, "1");
+});
+
+test("without --first-deploy the missing-from-live guard still blocks channel-token-lifecycle and every other function", async () => {
+  for (const slug of [CTL, "milan-api", "flow-publication"]) {
+    routes.list = () => ({status: 200, body: JSON.stringify(liveList({[slug]: undefined}))});
+    for (const extra of [[], ["--dry-run"]]) {
+      const r = await run(["--only", slug, ...extra], creds);
+      assert.equal(r.code, 5, `${slug}: ${r.all}`);
+      assert.match(r.stderr, /not found in live project; refusing/);
+    }
+  }
+  assert.equal(posts().filter((q) => q.query.bundleOnly !== "1").length, 0);
+});
+
 test("dry-run with credentials only uses bundleOnly=1 and never persists", async () => {
   const r = await run(["--only", "generate-flow", "--dry-run"], creds);
   assert.equal(r.code, 0, r.all);

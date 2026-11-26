@@ -53,6 +53,10 @@ const VERIFY_JWT = Object.freeze({
   "wayl-webhook": false,
 });
 
+// --first-deploy is NOT a general bypass of the missing-from-live guard: it is limited to this fixed allowlist and
+// additionally REQUIRES the function to be absent from the live list (the inverse of the normal check).
+const FIRST_DEPLOY_SLUGS = Object.freeze(["channel-token-lifecycle"]);
+
 const EXIT = {OK: 0, UNEXPECTED: 1, USAGE: 2, CREDS: 3, API: 4, MISMATCH: 5};
 const SLUG_RE = /^[a-z0-9][a-z0-9_-]{0,62}$/;
 const REF_RE = /^[a-z0-9]{8,40}$/;
@@ -75,12 +79,13 @@ function usage() {
     "Usage:",
     "  node scripts/deploy-functions.js --list",
     "  node scripts/deploy-functions.js --only <slug> [--dry-run]",
+    "  node scripts/deploy-functions.js --only channel-token-lifecycle --first-deploy [--dry-run]   (only while absent live)",
     "Exactly one --only <slug> is required for deploy or dry-run. No bulk deploy.",
   ].join("\n");
 }
 
 function parseArgs(argv) {
-  const opts = {only: [], dryRun: false, list: false, help: false};
+  const opts = {only: [], dryRun: false, list: false, help: false, firstDeploy: false};
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--only") {
@@ -90,6 +95,7 @@ function parseArgs(argv) {
     } else if (a.startsWith("--only=")) {
       opts.only.push(a.slice("--only=".length));
     } else if (a === "--dry-run") opts.dryRun = true;
+    else if (a === "--first-deploy") opts.firstDeploy = true;
     else if (a === "--list") opts.list = true;
     else if (a === "--help" || a === "-h") opts.help = true;
     else throw new Fail(EXIT.USAGE, `Unknown argument: ${JSON.stringify(a)}`);
@@ -225,6 +231,16 @@ async function checkLive(ref, token, slug) {
   log(`Live check OK: ${slug} verify_jwt=${fn.verify_jwt} (version ${fn.version ?? "?"})`);
 }
 
+// First deployment of an allowlisted function that does not exist live yet. Refuses if it already exists.
+async function checkAbsentForFirstDeploy(ref, token, slug) {
+  const fn = await liveFunction(ref, token, slug);
+  if (fn) {
+    throw new Fail(EXIT.MISMATCH,
+      `${slug} is already live (version ${fn.version ?? "?"}); --first-deploy refused. Use the normal path: --only ${slug}`);
+  }
+  log(`First-deploy check OK: ${slug} is absent from the live function list.`);
+}
+
 async function deploy(ref, token, slug, bundle, bundleOnly) {
   const form = new FormData();
   form.append("metadata", JSON.stringify({
@@ -249,7 +265,7 @@ async function main() {
   if (opts.help) { log(usage()); return EXIT.OK; }
 
   if (opts.list) {
-    if (opts.only.length || opts.dryRun) throw new Fail(EXIT.USAGE, "--list cannot be combined with other flags");
+    if (opts.only.length || opts.dryRun || opts.firstDeploy) throw new Fail(EXIT.USAGE, "--list cannot be combined with other flags");
     for (const [slug, v] of Object.entries(VERIFY_JWT)) {
       const local = existsSync(resolve(FUNCTIONS_DIR, slug, "index.ts")) ? "local" : "no-local-source";
       log(`${slug}\tverify_jwt=${v}\t${local}`);
@@ -262,6 +278,9 @@ async function main() {
   }
   const slug = opts.only[0];
   validateSlug(slug);
+  if (opts.firstDeploy && !FIRST_DEPLOY_SLUGS.includes(slug)) {
+    throw new Fail(EXIT.USAGE, `--first-deploy is only allowed for: ${FIRST_DEPLOY_SLUGS.join(", ")} (got ${slug})`);
+  }
   const bundle = collectFiles(slug);
   log(`Bundle ${slug}: entrypoint ${bundle.entrypointPath}, ${bundle.files.length} file(s), verify_jwt=${VERIFY_JWT[slug]}`);
   for (const f of bundle.files) log(`  ${f.path}`);
@@ -274,7 +293,8 @@ async function main() {
     }
     requireCredentials(creds);
     apiBase();
-    await checkLive(creds.ref, creds.token, slug);
+    if (opts.firstDeploy) await checkAbsentForFirstDeploy(creds.ref, creds.token, slug);
+    else await checkLive(creds.ref, creds.token, slug);
     await deploy(creds.ref, creds.token, slug, bundle, true);
     log(`DRY RUN OK: ${slug} bundled remotely with bundleOnly=1 (not persisted).`);
     return EXIT.OK;
@@ -282,7 +302,8 @@ async function main() {
 
   requireCredentials(creds);
   apiBase();
-  await checkLive(creds.ref, creds.token, slug);
+  if (opts.firstDeploy) await checkAbsentForFirstDeploy(creds.ref, creds.token, slug);
+  else await checkLive(creds.ref, creds.token, slug);
   const out = await deploy(creds.ref, creds.token, slug, bundle, false);
   log(`Deployed ${slug} (version ${out.version ?? "?"}).`);
   const after = await liveFunction(creds.ref, creds.token, slug);
