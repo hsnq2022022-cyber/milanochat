@@ -43,6 +43,19 @@ export async function apiAuthFetch<T>(token: string, path: string, init?: Reques
   return dashSupabase<T>(token, path, init);
 }
 
+/** إدارة تجارية يدوية (دالة tenant-admin): للمشرفين المصرّح لهم فقط؛ التحقق من الصلاحية يتم في الخادم. */
+export async function tenantAdminFetch<T>(token: string, body: Record<string, unknown>): Promise<T> {
+  if (!token || token.split(".").length !== 3) throw new Error("يرجى تسجيل الدخول");
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/tenant-admin`, {
+    method: "POST",
+    headers: { "content-type": "application/json", apikey: SUPABASE_ANON, authorization: `Bearer ${token}` },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw Object.assign(new Error(String((data as { error?: string }).error ?? "تعذر تنفيذ الطلب")), { status: res.status, data });
+  return data as T;
+}
+
 /** شحن الرصيد بالدينار العراقي عبر Wayl (دالة topup-create). */
 async function topupSupabase(
   tenantId: string,

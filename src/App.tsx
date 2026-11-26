@@ -16,6 +16,7 @@ const Dashboard = lazy(() => import("./pages/Dashboard"));
 const Settings = lazy(() => import("./pages/Settings"));
 const Widgets = lazy(() => import("./pages/Widgets"));
 const FlowBuilder = lazy(() => import("./pages/FlowBuilder"));
+const AdminPanel = lazy(() => import("./pages/AdminPanel"));
 
 export default function App() {
   const [route, setRoute] = useState(() => window.location.hash);
@@ -30,6 +31,11 @@ export default function App() {
   if (route.startsWith("#/flows")) {
     /* محرر كامل الشاشة: Sidebar على سطح المكتب فقط؛ BottomNav مخفي كي لا يغطي لوحاته السفلية */
     return <AppShell hideBottomNav><FlowErrorBoundary><Suspense fallback={<div className="min-h-screen bg-night" />}><FlowBuilder /></Suspense></FlowErrorBoundary></AppShell>;
+  }
+
+  /* إدارة تجارية يدوية: #/admin — الصلاحية تُتحقق في الخادم؛ غير المشرفين يرون رسالة عدم صلاحية فقط. */
+  if (route.startsWith("#/admin")) {
+    return <AppShell hideBottomNav><RouteErrorBoundary key="admin"><Suspense fallback={<div className="min-h-screen bg-night" />}><AdminPanel /></Suspense></RouteErrorBoundary></AppShell>;
   }
 
   /* لوحة التحكم: #/dashboard */

@@ -443,7 +443,7 @@ jobs:
         env:
           VITE_SUPABASE_URL: http://mock.supabase.test
           VITE_SUPABASE_ANON_KEY: fake-anon-key-not-real
-        run: npx playwright test -c playwright.config.ts --trace off tests/flow-runtime-support.spec.ts
+        run: npx playwright test -c playwright.config.ts --trace off tests/flow-runtime-support.spec.ts tests/admin-panel.spec.ts tests/profile-nav.spec.ts
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
@@ -540,6 +540,7 @@ jobs:
             tests/security-wa-verification.test.ts
             tests/security-widget-abuse.test.ts
             tests/security-widget-billing.test.ts
+            tests/tenant-admin-handler.test.ts
             tests/wayl-webhook-safety.test.ts
           )
           fail=0; failed=()
@@ -579,6 +580,7 @@ jobs:
             tests/security-channel-accounts-hardening-sql.test.mjs
             tests/security-tenant-isolation-sql.test.mjs
             tests/security-wa-unverified-batch.test.mjs
+            tests/manual-credit-admin-sql.test.mjs
             tests/wayl-topup-atomic-sql.test.mjs
           )
           fail=0; failed=()
