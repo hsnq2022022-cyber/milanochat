@@ -2,6 +2,8 @@
  * لوحة تحكم إدارة ســوشـــيــــال — حقيقية عبر Supabase Auth + الخادم.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import ChannelTokenNotice from "../components/ChannelTokenNotice";
+import { channelTokenState } from "../lib/channelTokenState";
 import confetti from "canvas-confetti";
 import SafeAvatar from "../components/SafeAvatar";
 import CommentActivity from "../components/CommentActivity";
@@ -53,6 +55,12 @@ type MetaStatus = {
   configured: boolean;
   appReviewNote?: string;
   developersUrl?: string;
+};
+
+/** A connection counts as connected only while active AND its token is not expired. */
+const connectedOk = (a: { status?: string | null; tokenExpiresAt?: string | null; token_expires_at?: string | null }) => {
+  const st = channelTokenState({ status: a.status, tokenExpiresAt: a.tokenExpiresAt ?? a.token_expires_at }, Date.now()).state;
+  return st === "healthy" || st === "expiring";
 };
 
 const CHANNEL_STATUS_LABEL: Record<string, { text: string; cls: string }> = {
@@ -1796,9 +1804,9 @@ export default function Dashboard() {
                     <IconFacebook className="w-6 h-6 text-white" />
                   </div>
                   <span className={`text-[10px] font-bold px-2 py-1 rounded-full border ${
-                    fbAccounts.some((a) => a.status === "active") ? "bg-verde/10 text-verde border-verde/30" : "bg-moss text-sage border-verde/20"
+                    fbAccounts.some(connectedOk) ? "bg-verde/10 text-verde border-verde/30" : "bg-moss text-sage border-verde/20"
                   }`}>
-                    {fbAccounts.some((a) => a.status === "active") ? "متصل" : "غير متصل"}
+                    {fbAccounts.some(connectedOk) ? "متصل" : "غير متصل"}
                   </span>
                 </div>
                 <h3 className="font-display font-bold text-lg text-bone mb-1">Facebook Messenger</h3>
@@ -1806,10 +1814,11 @@ export default function Dashboard() {
                 {fbAccounts.length > 0 ? (
                   <ul className="space-y-1.5 mb-3">
                     {fbAccounts.map((a) => (
-                      <li key={a.id} className="flex items-center gap-2 bg-night/50 border border-verde/10 rounded-xl px-3 py-2">
+                      <li key={a.id} className="flex flex-wrap items-center gap-2 bg-night/50 border border-verde/10 rounded-xl px-3 py-2">
                         <SafeAvatar src={a.avatar_url} className="w-6 h-6 rounded-full object-cover" fallback={<span className="w-6 h-6 rounded-full bg-[#1877F2]/15 text-[#6ea3f5] flex items-center justify-center"><IconFacebook className="w-3.5 h-3.5" /></span>} />
                         <span className="text-[11.5px] text-bone font-semibold truncate flex-1">{a.display_name ?? a.external_id}</span>
                         <button onClick={() => openManageAccount(a)} className="text-[10px] font-bold text-oro hover:text-bone shrink-0">إدارة</button>
+                        <div className="basis-full"><ChannelTokenNotice status={a.status} tokenExpiresAt={a.tokenExpiresAt ?? a.token_expires_at} onReconnect={() => startMetaOAuth("facebook")} /></div>
                       </li>
                     ))}
                   </ul>
@@ -1828,9 +1837,9 @@ export default function Dashboard() {
                     <IconInstagram className="w-6 h-6 text-white" />
                   </div>
                   <span className={`text-[10px] font-bold px-2 py-1 rounded-full border ${
-                    igAccounts.some((a) => a.status === "active") ? "bg-verde/10 text-verde border-verde/30" : "bg-moss text-sage border-verde/20"
+                    igAccounts.some(connectedOk) ? "bg-verde/10 text-verde border-verde/30" : "bg-moss text-sage border-verde/20"
                   }`}>
-                    {igAccounts.some((a) => a.status === "active") ? "متصل" : "غير متصل"}
+                    {igAccounts.some(connectedOk) ? "متصل" : "غير متصل"}
                   </span>
                 </div>
                 <h3 className="font-display font-bold text-lg text-bone mb-1">Instagram DM</h3>
@@ -1853,6 +1862,7 @@ export default function Dashboard() {
                           <p className="text-[10px] text-verde">
                             {a.status === "active" ? "نشط" : a.status}
                           </p>
+                          <ChannelTokenNotice status={a.status} tokenExpiresAt={a.tokenExpiresAt ?? a.token_expires_at} onReconnect={() => startMetaOAuth("instagram")} />
                         </div>
                         <button
                           onClick={() => openManageAccount(a)}

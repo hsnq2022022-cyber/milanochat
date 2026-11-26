@@ -20,6 +20,7 @@
  * injected so node tests can exercise it.
  */
 
+import { RECONNECT_CLEARS } from "../_shared/channelReauth.ts";
 import { graphUrlWithoutToken, metaAuthHeaders } from "../_shared/metaGraph.ts";
 
 export const FB_GRAPH_HOST = "https://graph.facebook.com";
@@ -247,6 +248,7 @@ export async function linkFacebookPages(code: string, deps: FbLinkDeps): Promise
       display_name: typeof p?.name === "string" && p.name ? p.name : null,
       avatar_url: typeof pic === "string" && /^https:\/\//i.test(pic) ? pic : null,
       status: "active",
+      ...RECONNECT_CLEARS, // reconnecting clears a previous needs_reauth reason
       is_active: true,
       access_token_encrypted: await deps.encryptField(pageToken),
       token_expires_at: pageTokenExpiresAt,
