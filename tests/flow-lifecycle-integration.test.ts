@@ -1375,6 +1375,71 @@ Deno.test({name:"flow V3/V4 lifecycle integration (real handlers + throwaway Pos
    assert.equal(per.length,Math.ceil((NA+NB)/OUTBOX_DISPATCH_LIMIT),"ticks to drain = ceil(effects / cap)");
   });
 
+  await t.step("commercial acceptance (manual launch): no credit -> no reply; admin grant -> one reply, billed once; replay changes nothing; suspend pauses, reactivate resumes; other tenant untouched",async()=>{
+   await freshDb();resetMeta();await activate("buttons",true);
+   // The fixture's trimmed tenants table lacks activated_at, which production (and supabase/schema.sql) have.
+   await exec(`ALTER TABLE public.tenants ADD COLUMN IF NOT EXISTS activated_at timestamptz;`);
+   await exec(Deno.readTextFileSync(repo+"supabase/migrations/20261126100000_manual_credit_admin.sql"));
+   // The REAL billing function (production definition read from the live catalog, read-only, 2026-11-26); the rest of this
+   // suite uses a constant stub. Row lock, tenant-scoped message check, idempotent ledger, no ghost row when the tenant cannot pay.
+   await exec(`CREATE OR REPLACE FUNCTION public.consume_flow_reply(p_tenant_id uuid, p_message_id uuid) RETURNS integer
+    LANGUAGE plpgsql SECURITY DEFINER SET search_path TO '' AS $f$
+    DECLARE v_remaining integer;
+    BEGIN
+     IF p_tenant_id IS NULL OR p_message_id IS NULL THEN RETURN -3; END IF;
+     SELECT t.credits_remaining INTO v_remaining FROM public.tenants AS t WHERE t.id = p_tenant_id FOR UPDATE;
+     IF NOT FOUND THEN RETURN -3; END IF;
+     IF NOT EXISTS (SELECT 1 FROM public.messages AS m JOIN public.conversations AS c ON c.id = m.conversation_id AND c.tenant_id = m.tenant_id
+       WHERE m.id = p_message_id AND m.tenant_id = p_tenant_id AND m.direction = 'out') THEN RETURN -3; END IF;
+     IF EXISTS (SELECT 1 FROM public.reply_ledger AS l WHERE l.message_id = p_message_id AND l.tenant_id = p_tenant_id) THEN RETURN -2; END IF;
+     IF v_remaining <= 0 THEN RETURN -1; END IF;
+     UPDATE public.tenants SET credits_remaining = credits_remaining - 1 WHERE id = p_tenant_id AND credits_remaining > 0 RETURNING credits_remaining INTO v_remaining;
+     IF NOT FOUND THEN RAISE EXCEPTION 'credits vanished while tenant row is locked'; END IF;
+     INSERT INTO public.reply_ledger(tenant_id,message_id) VALUES (p_tenant_id,p_message_id);
+     RETURN v_remaining;
+    END $f$;
+    GRANT EXECUTE ON FUNCTION public.consume_flow_reply(uuid,uuid) TO service_role;`);
+   const OP="99999999-9999-4999-8999-999999999999";
+   const admin=async(sql:string)=>{const r=await psql(db,`SELECT (${sql})::text;`,"service_role");if(!r.ok)throw Error("admin SQL failed: "+r.err);return JSON.parse(r.out.trim());};
+   const credits=async(tenant:string)=>Number(await val(`SELECT credits_remaining FROM public.tenants WHERE id='${tenant}'`));
+   const bBefore=await credits(B);
+   await exec(`UPDATE public.tenants SET credits_remaining=0,is_active=true WHERE id='${A}';`);
+   const c=await conv("7000001");
+   const m1=await inbound(c,"mid.acc.1");
+   assert.equal(await attemptDurableInstagram(sb,ev(c,m1,"mid.acc.1",null)),"handled");
+   await outboxTick();
+   assert.equal(meta.calls.length,0,"no credit -> nothing is sent");
+   assert.equal(await credits(A),0);
+   const g=await admin(`public.admin_adjust_credits('${A}','${OP}',3,'payment confirmed outside the platform','key-acc-0001')`);
+   assert.deepEqual([g.ok,g.balance,g.duplicate],[true,3,false]);
+   await outboxTick();await outboxTick();
+   assert.equal(meta.calls.length,1,"after the grant the reply is sent exactly once");
+   assert.equal(await credits(A),2,"billed exactly one credit");
+   assert.equal(await val(`SELECT count(*)::int FROM public.reply_ledger WHERE tenant_id='${A}'`),1);
+   assert.equal((await effectsOf(c))[0].delivery_status,"settled");
+   const again=await admin(`public.admin_adjust_credits('${A}','${OP}',3,'payment confirmed outside the platform','key-acc-0001')`);
+   assert.deepEqual([again.ok,again.duplicate,again.balance],[true,true,3],"replayed grant reports the original result");
+   assert.equal(await credits(A),2,"a replay never grants twice");
+   // Suspend: a new customer message is not answered while the account is suspended; reactivation resumes it.
+   assert.equal((await admin(`public.admin_set_tenant_active('${A}','${OP}',false,'subscription ended','key-acc-0002')`)).ok,true);
+   const tap=await inbound(c,"mid.acc.2");
+   assert.equal(await attemptDurableInstagram(sb,ev(c,tap,"mid.acc.2","support")),"handled");
+   await outboxTick();
+   assert.equal(meta.calls.length,1,"a suspended account sends nothing");
+   assert.equal((await admin(`public.admin_set_tenant_active('${A}','${OP}',true,'renewed outside the platform','key-acc-0003')`)).ok,true);
+   await outboxTick();await outboxTick();
+   assert.equal(meta.calls.length,1,"a message received while suspended is not queued for later (inactive tenants are ignored at ingress)");
+   // After reactivation the NEXT customer message is answered, once, and billed once.
+   const c2=await conv("7000002"),m3=await inbound(c2,"mid.acc.3");
+   assert.equal(await attemptDurableInstagram(sb,ev(c2,m3,"mid.acc.3",null)),"handled");
+   await outboxTick();await outboxTick();
+   assert.equal(meta.calls.length,2,"reactivated: the next customer message is answered exactly once");
+   assert.equal(await credits(A),1,"two replies billed two credits in total (3 granted)");
+   assert.equal(await val(`SELECT string_agg(action,',' ORDER BY created_at,id) FROM public.tenant_admin_actions WHERE tenant_id='${A}'`),"credit_grant,suspend,activate");
+   assert.equal(await credits(B),bBefore,"the other tenant's balance is untouched");
+   assert.equal(await val(`SELECT count(*)::int FROM public.tenant_admin_actions WHERE tenant_id='${B}'`),0);
+  });
+
   await t.step("knowledge_ai effect: grounded answer is sent once; no_knowledge is cancelled without a send",async()=>{
    await freshDb();resetMeta();await activate("buttons",true);
    await exec(`INSERT INTO public.knowledge_sources VALUES('d0000000-0000-4000-8000-000000000001','${A}','indexed');
