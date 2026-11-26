@@ -243,6 +243,15 @@ test("privileges: clients cannot run the functions or write the ledger; an owner
  assert.equal(allowed(db,"service_role",`SELECT (public.admin_adjust_credits('${A}','${OP}',1,'service role grant','key-svc-00001')->>'ok');`,undefined,"service_role"),"true");
 });
 
+test("the migration refuses up front when a column it needs is missing (never fails later at runtime)",{skip},()=>{
+ for(const col of ["credits_remaining","is_active","activated_at"]){
+  const n="t"+(++nDb);ok("postgres",{sql:`CREATE DATABASE ${n} TEMPLATE base;`},n);
+  ok(n,{sql:`ALTER TABLE public.tenants DROP COLUMN ${col} CASCADE;`},"drop "+col);
+  const r=psql(n,{file:MIG});assert.notEqual(r.status,0,col);assert.match(r.stderr,/Refusing: public\.tenants\(credits_remaining,is_active,activated_at\) missing/,col);
+  assert.equal(val(n,`to_regclass('public.tenant_admin_actions') IS NULL`),"t","nothing was created");
+ }
+});
+
 test("apply twice is a no-op; rollback refused while the ledger has rows, works when empty, re-apply works; foreign objects are never touched",{skip},()=>{
  const db=fresh();
  const snap=()=>val(db,`SELECT md5(string_agg(x,',' ORDER BY x)) FROM (SELECT p.oid::regprocedure::text||md5(p.prosrc) x FROM pg_proc p WHERE p.pronamespace='public'::regnamespace AND p.proname LIKE 'admin_%' UNION ALL SELECT 't:'||relname||c.relrowsecurity FROM pg_class c WHERE relnamespace='public'::regnamespace AND relname='tenant_admin_actions') s`);

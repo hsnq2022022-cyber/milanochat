@@ -18,7 +18,8 @@ BEGIN
   IF to_regclass('public.tenants') IS NULL
      OR NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid='public.tenants'::regclass AND attname='credits_remaining' AND NOT attisdropped)
      OR NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid='public.tenants'::regclass AND attname='is_active' AND NOT attisdropped)
-  THEN RAISE EXCEPTION 'Refusing: public.tenants(credits_remaining,is_active) missing'; END IF;
+     OR NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid='public.tenants'::regclass AND attname='activated_at' AND NOT attisdropped)
+  THEN RAISE EXCEPTION 'Refusing: public.tenants(credits_remaining,is_active,activated_at) missing'; END IF;
   IF to_regclass('public.tenant_admin_actions') IS NOT NULL
      AND coalesce(obj_description(to_regclass('public.tenant_admin_actions'),'pg_class'),'')<>'CREATED_BY_20261126100000_MANUAL_CREDIT_ADMIN'
   THEN RAISE EXCEPTION 'Refusing: public.tenant_admin_actions exists and is not owned by this migration'; END IF;
