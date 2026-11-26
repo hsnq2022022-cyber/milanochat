@@ -397,7 +397,9 @@ test("(f) re-apply is a no-op; (g) rollback restores the exact live state, twice
  assert.equal(val(db,SNAP),post,"re-apply is a no-op (grants, policies, index, recorded state)");
  ok(db,{file:RB},"rollback");
  assert.equal(val(db,SNAP),pre,"exact previous state");
- assert.equal(preAcl,["anon","authenticated"].flatMap(r=>["DELETE","INSERT","REFERENCES","SELECT","TRIGGER","TRUNCATE","UPDATE"].map(p=>`${r}=${p}`)).join(","),"live: every table privilege to anon and authenticated");
+ // PostgreSQL 17 (production is 17.x) added the MAINTAIN table privilege; the exact-set assertion follows the server.
+ const tablePrivs=["DELETE","INSERT","REFERENCES","SELECT","TRIGGER","TRUNCATE","UPDATE",...(Number(val(db,"current_setting('server_version_num')"))>=170000?["MAINTAIN"]:[])].sort();
+ assert.equal(preAcl,["anon","authenticated"].flatMap(r=>tablePrivs.map(p=>`${r}=${p}`)).join(","),"live: every table privilege to anon and authenticated");
  assert.equal(clientAcl(db),preAcl);
  assert.equal(val(db,`to_regclass('public.${IDX}') IS NULL`),"t","index gone");
  assert.equal(val(db,`(SELECT cmd||':'||roles::text||':'||coalesce(with_check,'-') FROM pg_policies WHERE policyname='users manage their channel accounts')`),"ALL:{authenticated}:-");
