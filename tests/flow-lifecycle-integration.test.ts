@@ -1176,6 +1176,68 @@ Deno.test({name:"flow V3/V4 lifecycle integration (real handlers + throwaway Pos
    assert.equal(await val(`SELECT count(*)::int FROM pg_class WHERE relname IN('automation_inbound_routing_retries','automation_inbound_recovery')`),0,"fully rolled back");
   });
 
+  await t.step("rollback closure over the whole Flow chain: every out-of-order rollback is refused (nothing changed) or leaves no dangling SQL reference; the strict reverse order applies cleanly",async()=>{
+   // Every Flow migration of CHAIN that has a rollback file, run against the FULL installed chain
+   // (later migrations present). Pinned outcome: REFUSED rollbacks must change nothing; ACCEPTED
+   // ones are only allowed where no remaining function body references anything they dropped
+   // (the class of defect fixed for 340000 -> 360000). Derivation and evidence:
+   // docs/flow-rollback-dependency-matrix.md.
+   const ids=[...new Set(CHAIN.map(f=>f.match(/migrations\/(\d{14})_/)?.[1]).filter(Boolean))] as string[];
+   const rbFile=(v:string)=>[...Deno.readDirSync(repo+"supabase/rollbacks")].map(e=>e.name).find(n=>n.startsWith(v));
+   const withRb=ids.filter(v=>rbFile(v)!==undefined);
+   const REFUSED=["20261028225000","20261028226000","20261028227000","20261029125000","20261029130000","20261029140000",
+    "20261029150000","20261029160000","20261029170000","20261029180000","20261029190000","20261029210000","20261029220000",
+    "20261029230000","20261029340000"];
+   const ACCEPTED=["20261028224000","20261028228000","20261029300000","20261029330000","20261029350000","20261029360000",
+    "20261115150000","20261115160000","20261115170000"];
+   assert.deepEqual([...withRb].sort(),[...REFUSED,...ACCEPTED].sort(),"every chain rollback is classified in the matrix");
+   const NAMES=`SELECT coalesce(string_agg(x,',' ORDER BY x),'') FROM (SELECT 'f/'||p.proname||'/'||p.pronargs x FROM pg_proc p WHERE p.pronamespace='public'::regnamespace UNION ALL SELECT 't/'||c.relname FROM pg_class c WHERE c.relnamespace='public'::regnamespace AND c.relkind='r') s`;
+   const FPSQL=`SELECT md5(coalesce(string_agg(x,E'\\n' ORDER BY x),'')) FROM (
+    SELECT 'f:'||p.oid::regprocedure::text||':'||md5(p.prosrc) FROM pg_proc p WHERE p.pronamespace='public'::regnamespace
+    UNION ALL SELECT 'r:'||c.oid::regclass::text FROM pg_class c WHERE c.relnamespace='public'::regnamespace AND c.relkind IN('r','S')
+    UNION ALL SELECT 'k:'||conrelid::regclass::text||':'||conname FROM pg_constraint WHERE connamespace='public'::regnamespace) s(x)`;
+   const nameOf=(x:string)=>x.split("/")[x.startsWith("t/")?1:1];
+   const set=async()=>new Set((await psql(db,NAMES)).out.trim().split(",").filter(x=>x.includes("/")));
+   const dangling=async(dropped:string[])=>{
+    if(!dropped.length)return [] as string[];
+    const q=await psql(db,`SELECT p.proname||'->'||n FROM pg_proc p, unnest(ARRAY[${dropped.map(n=>`'${n}'`).join(",")}]) n
+     WHERE p.pronamespace='public'::regnamespace AND p.prokind='f' AND p.prosrc ~ ('\\m'||n||'\\M') ORDER BY 1`);
+    return q.out.split("\n").map(x=>x.trim()).filter(x=>x.includes("->"));
+   };
+   const outcome:string[]=[];
+   for(const v of withRb){
+    await freshDb();
+    const before=await set(),fp0=(await psql(db,FPSQL)).out.trim();
+    const r=await psql(db,Deno.readTextFileSync(repo+"supabase/rollbacks/"+rbFile(v)));
+    if(REFUSED.includes(v)){
+     assert.equal(r.ok,false,v+": out-of-order rollback must be refused while later migrations are installed");
+     assert.equal((await psql(db,FPSQL)).out.trim(),fp0,v+": the refused rollback changed nothing");
+     outcome.push(v+":refused");
+    }else{
+     assert.equal(r.ok,true,v+": expected to apply: "+r.err.slice(0,160));
+     const after=await set();
+     const gone=[...before].filter(x=>!after.has(x)).map(x=>x.split("/")[1]);
+     const dropped=[...new Set(gone)].filter(n=>![...after].some(a=>a.split("/")[1]===n));
+     assert.deepEqual(await dangling(dropped),[],v+": no remaining function references an object it dropped");
+     outcome.push(v+":accepted");
+    }
+   }
+   assert.equal(outcome.length,24);
+   // Detector self-test: the 340000 -> 360000 defect (table dropped under the recovery functions) is reported.
+   await freshDb();
+   await exec(`DROP TABLE public.automation_inbound_routing_retries CASCADE;`);
+   assert.ok((await dangling(["automation_inbound_routing_retries"])).some(x=>x.startsWith("flow_inbound_recovery_lease->")),
+    "the dangling-reference detector reports a dropped table still read by flow_inbound_recovery_lease");
+   // Valid sequence: the whole chain rolls back cleanly in strict reverse order.
+   await freshDb();
+   const rev:string[]=[];
+   for(const v of [...withRb].reverse()){
+    const r=await psql(db,Deno.readTextFileSync(repo+"supabase/rollbacks/"+rbFile(v)));
+    rev.push(v+":"+(r.ok?"ok":"REFUSED "+(r.err.match(/ERROR:[^\n]{0,120}/)??[""])[0]));
+   }
+   assert.deepEqual(rev,[...withRb].reverse().map(v=>v+":ok"),"strict reverse order applies cleanly: "+rev.join(" | "));
+  });
+
   await t.step("human takeover and revision deactivation mid-run end the run and skip its effects",async()=>{
    await freshDb();resetMeta();await activate("delay",true);
    const start=async(p:string)=>{const c=await conv(p);const m=await inbound(c,"mid.h."+p);
