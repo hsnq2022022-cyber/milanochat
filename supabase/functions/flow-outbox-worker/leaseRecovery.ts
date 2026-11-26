@@ -38,7 +38,8 @@ export const LEASE_RECOVERY_GRACE_MS=13*60_000;
  * OUTBOX_DISPATCH_LIMIT (10) reservations (one per dispatched effect), so 2x
  * that always outpaces creation while bounding the pass to 20 small RPCs.
  */
-export const LEASE_RECOVERY_LIMIT=20;
+/** 2 x OUTBOX_DISPATCH_LIMIT (skipPolicy.ts; pinned by flow-outbox-lease-recovery.test.ts). This module stays import-free. */
+export const LEASE_RECOVERY_LIMIT=80;
 export const LEASE_RECOVERY_COLUMNS="id,tenant_id,delivery_status,effect_kind,lease_expires_at";
 
 export type LeaseCandidate={id:string;tenantId:string;expiresMs:number};

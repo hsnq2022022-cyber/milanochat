@@ -71,7 +71,10 @@ export function temporaryOutboxPause(v:Pick<OutboxSkipInput,
 
 /** Bounded scan: skipped/blocked rows must not starve newer sendable rows. */
 export const OUTBOX_SCAN_LIMIT=50;
-export const OUTBOX_DISPATCH_LIMIT=10;
+/** Provider sends per tick (cron: once a minute). Measured on the throwaway PG chain (lifecycle step "outbox capacity"):
+ *  about 85 ms of server work per send, so a full tick is seconds, not minutes, and never overlaps the next tick.
+ *  Shared round-robin between tenants (fairness.ts). Sends stay sequential: per-run order and billing are unchanged. */
+export const OUTBOX_DISPATCH_LIMIT=40;
 export const OUTBOX_STALE_MINUTES=60;
 
 /**

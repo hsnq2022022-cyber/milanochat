@@ -513,6 +513,7 @@ jobs:
             tests/flow-multichannel-send.test.ts
             tests/flow-operator-auth.test.ts
             tests/flow-operator-ui.test.ts
+            tests/flow-outbox-fairness.test.ts
             tests/flow-outbox-lease-recovery.test.ts
             tests/flow-outbox-text-error-classification.test.ts
             tests/flow-placeholders-delivery.test.ts
