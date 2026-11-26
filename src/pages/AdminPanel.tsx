@@ -38,18 +38,22 @@ export default function AdminPanel() {
     });
   }, []);
 
-  const load = useCallback(async () => {
-    if (!token) return;
+  const load = useCallback(async (): Promise<Tenant[]> => {
+    if (!token) return [];
     const r = await tenantAdminFetch<{ tenants: Tenant[] }>(token, { action: "list_tenants", search, limit: 50 });
     setTenants(r.tenants);
+    return r.tenants;
   }, [token, search]);
   useEffect(() => { if (admin) load().catch(() => setMsg({ ok: false, text: "تعذر تحميل العملاء" })); }, [admin, load]);
 
+  const loadLedger = async (tenantId: string) => {
+    if (!token) return;
+    const r = await tenantAdminFetch<{ actions: Action[] }>(token, { action: "ledger", tenantId }).catch(() => null);
+    setLedger(r?.actions ?? []);
+  };
   const open = async (t: Tenant) => {
     setSel(t); setMsg(null); setPending(null);
-    if (!token) return;
-    const r = await tenantAdminFetch<{ actions: Action[] }>(token, { action: "ledger", tenantId: t.id }).catch(() => null);
-    setLedger(r?.actions ?? []);
+    await loadLedger(t.id);
   };
 
   const run = async (kind: "grant" | "deduct" | "activate" | "suspend") => {
@@ -66,9 +70,12 @@ export default function AdminPanel() {
         ? { action: "adjust_credits", tenantId: sel.id, delta: kind === "grant" ? n : -n, reason: reason.trim(), idempotencyKey: key }
         : { action: "set_active", tenantId: sel.id, active: kind === "activate", reason: reason.trim(), idempotencyKey: key };
       const r = await tenantAdminFetch<{ duplicate?: boolean; unchanged?: boolean }>(token, body);
-      setMsg({ ok: true, text: r.unchanged ? "الحالة كما هي دون تغيير" : r.duplicate ? "الطلب نُفّذ سابقًا ولم يتكرر" : "تم التنفيذ وتسجيله" });
       setPending(null); setAmount(""); setReason("");
-      await load(); await open({ ...sel });
+      // Refresh the list, the selected customer and the ledger WITHOUT clearing the confirmation (it is set last).
+      const fresh = (await load()).find((t) => t.id === sel.id);
+      if (fresh) setSel(fresh);
+      await loadLedger(sel.id);
+      setMsg({ ok: true, text: r.unchanged ? "الحالة كما هي دون تغيير" : r.duplicate ? "الطلب نُفّذ سابقًا ولم يتكرر" : "تم التنفيذ وتسجيله" });
     } catch (e) {
       const code = (e as { data?: { error?: string } }).data?.error ?? "";
       setMsg({ ok: false, text: errorNames[code] ?? "تعذر التنفيذ. يمكنك إعادة المحاولة بأمان؛ لن يتكرر التعديل." });
