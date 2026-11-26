@@ -30,7 +30,9 @@
  * entry (empty item, bad characters) invalidates the WHOLE list, so a typo can
  * never silently widen or half-apply the rollout.
  */
-export const DURABLE_ACCOUNT_ALLOWLIST_MAX=50;
+/** Staged rollout ceiling: room for ~100 customers with up to two channel accounts each (200 uuids = ~7.4 kB of secret).
+ *  Still fail-closed beyond it; each account additionally needs its operator-written registry row and tenant switches. */
+export const DURABLE_ACCOUNT_ALLOWLIST_MAX=200;
 const ENTRY=/^[A-Za-z0-9_-]{1,64}$/; // channel_accounts.id (uuid) fits; no whitespace, no wildcards
 
 /** The allowed ids, or null when the value is missing or malformed. */
