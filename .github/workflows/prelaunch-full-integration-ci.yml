@@ -467,3 +467,119 @@ jobs:
           # Security boundary of the REAL milan-api webhook and worker handlers: fetch is replaced by a recorder (mocked,
           # no network, no secrets); the handlers are imported dynamically, hence --allow-read.
           deno test --allow-env --allow-read --node-modules-dir=auto tests/flow-security-webhook-boundary.test.ts tests/flow-security-worker-auth.test.ts
+
+  journey-regression-suites:
+    # Customer-journey and tenant-isolation suites that no other job ran (74 files): account resolution,
+    # tenant/billing/WhatsApp-binding SQL isolation, claim tokens, tenant-creation limits, body limits,
+    # OAuth/SSRF/widget abuse, Meta/Instagram/Facebook normalisation, payments safety and the remaining
+    # Flow suites. Throwaway PostgreSQL only (runner binaries); no secrets, no network, no deploy.
+    # Every file runs and every failure is reported (no stop at the first).
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: TypeScript suites (node --experimental-strip-types)
+        shell: bash
+        run: |
+          set -uo pipefail
+          files=(
+            tests/api-db-test-auth.test.ts
+            tests/channels-oauth-url-scope.test.ts
+            tests/create-payment-safety.test.ts
+            tests/edge-cors-policy.test.ts
+            tests/edge-small-functions-error-leak.test.ts
+            tests/flow-activation-error-codes.test.ts
+            tests/flow-ai-step-escalation.test.ts
+            tests/flow-claim-readiness.test.ts
+            tests/flow-comment-automation.test.ts
+            tests/flow-conversation-start.test.ts
+            tests/flow-delivery-failure-persistence.test.ts
+            tests/flow-delivery-review-v3.test.ts
+            tests/flow-engine-version-selection.test.ts
+            tests/flow-inbound-recovery-terminal.test.ts
+            tests/flow-inbound-recovery.test.ts
+            tests/flow-inbound-retry.test.ts
+            tests/flow-internal-worker.test.ts
+            tests/flow-keyword-trigger.test.ts
+            tests/flow-message-scope-editor.test.ts
+            tests/flow-message-scope.test.ts
+            tests/flow-multi-active-selection.test.ts
+            tests/flow-multichannel-ingress.test.ts
+            tests/flow-multichannel-send.test.ts
+            tests/flow-operator-auth.test.ts
+            tests/flow-operator-ui.test.ts
+            tests/flow-outbox-lease-recovery.test.ts
+            tests/flow-outbox-text-error-classification.test.ts
+            tests/flow-placeholders-delivery.test.ts
+            tests/flow-publish-live-ui.test.ts
+            tests/flow-revision-selection.test.ts
+            tests/flow-supersession-evidence.test.ts
+            tests/generate-flow.test.ts
+            tests/instagram-redirect-uri-normalization.test.ts
+            tests/meta-auth-debug-operator.test.ts
+            tests/meta-auth-facebook.test.ts
+            tests/meta-comments-end-to-end.test.ts
+            tests/meta-graph-credentials.test.ts
+            tests/meta-normalize.test.ts
+            tests/milan-body-limits.test.ts
+            tests/milan-claim-token.test.ts
+            tests/milan-create-tenant-limit.test.ts
+            tests/milan-db-error-leak.test.ts
+            tests/milan-profile-fetch-log-safety.test.ts
+            tests/milan-provider-error-leak.test.ts
+            tests/milan-token-decrypt-strict.test.ts
+            tests/security-account-resolution.test.ts
+            tests/security-oauth-state.test.ts
+            tests/security-ssrf-guard.test.ts
+            tests/security-wa-binding.test.ts
+            tests/security-wa-verification.test.ts
+            tests/security-widget-abuse.test.ts
+            tests/security-widget-billing.test.ts
+            tests/wayl-webhook-safety.test.ts
+          )
+          fail=0
+          for f in "${files[@]}"; do
+            echo "::group::$f"
+            if ! node --experimental-strip-types --test "$f"; then echo "::error file=$f::suite failed"; fail=1; fi
+            echo "::endgroup::"
+          done
+          exit $fail
+      - name: SQL and contract suites (node --test, throwaway PostgreSQL)
+        shell: bash
+        run: |
+          set -uo pipefail
+          files=(
+            tests/deploy-functions.test.mjs
+            tests/flow-ai-generations-sql.test.mjs
+            tests/flow-canary-claim-durable.test.mjs
+            tests/flow-channel-reliability.test.mjs
+            tests/flow-claim-begin-durable-run.test.mjs
+            tests/flow-comment-replies-sql.test.mjs
+            tests/flow-credits-pause.test.mjs
+            tests/flow-delivery-failure-sql.test.mjs
+            tests/flow-durable-button-run.test.mjs
+            tests/flow-inbound-recovery-sql.test.mjs
+            tests/flow-inbound-recovery-terminal-sql.test.mjs
+            tests/flow-inbound-retry-keyword-start-sql.test.mjs
+            tests/flow-migration-safety.test.mjs
+            tests/flow-outbox-lease-recovery-sql.test.mjs
+            tests/flow-run-lifecycle.test.mjs
+            tests/flow-takeover-resume.test.mjs
+            tests/security-billing-rls.test.mjs
+            tests/security-channel-accounts-hardening-sql.test.mjs
+            tests/security-tenant-isolation-sql.test.mjs
+            tests/security-wa-unverified-batch.test.mjs
+            tests/wayl-topup-atomic-sql.test.mjs
+          )
+          fail=0
+          for f in "${files[@]}"; do
+            echo "::group::$f"
+            if ! node --test "$f"; then echo "::error file=$f::suite failed"; fail=1; fi
+            echo "::endgroup::"
+          done
+          exit $fail

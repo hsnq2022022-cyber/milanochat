@@ -236,9 +236,11 @@ test("sendToConversation: unverified binding -> not bound error; verified -> sen
 
 /* ═══════════════════════ Instagram / Page resolution ═══════════════════════ */
 const IG_CASE = IDX.indexOf('case "instagram_webhook": {');
+// R1 (PR #208) stage timer used by the sliced loop; same shape as webhookTimings.NOOP_STAGE_TIMER.
+const NOOP_TIMER = {start: () => () => {}};
 // The candidate loop + the drop checks, wrapped in a one-pass loop so their
 // `continue` statements mean "event dropped".
-const igResolve = compile("body,entryId,msg,sb,console",
+const igResolve = compile("body,entryId,msg,sb,console,timer",
   "for (const __once of [0]) {\n" +
   slice(IDX, "            const candidates = [", "            if (!account) {", IG_CASE) +
   "  return {account};\n}\nreturn {dropped: true};", "__igResolve");
@@ -249,7 +251,7 @@ async function runIg(object: string, rows: any[], errorIds: string[] = [], entry
   const db = fakeDb({rows: {channel_accounts: rows},
     errorOn: (_t, f) => errorIds.includes(String(f.external_id)) ? {code: "57014"} : null});
   const {logs, cons} = recorder();
-  const r = await igResolve({object}, entryId, {senderId: "9001", recipientId, text: "t", mid: "m"}, db, cons);
+  const r = await igResolve({object}, entryId, {senderId: "9001", recipientId, text: "t", mid: "m"}, db, cons, NOOP_TIMER);
   const flat = JSON.stringify(logs);
   for (const s of ["1700", "1800", "9001", TA, TB]) assert.ok(!flat.includes(s), `log leaks ${s}`);
   return {r, tried: db.queries.map((q) => q.filters.external_id), queries: db.queries, logs};
