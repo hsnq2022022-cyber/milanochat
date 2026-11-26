@@ -27,4 +27,4 @@ export async function handle(req:Request):Promise<Response>{
   decrypt:decryptAccountToken,encrypt:encryptMessageBody});
  return "checked" in out?reply(200,out):reply(503,out); // counts only: no ids, no tokens
 }
-if(import.meta.main)Deno.serve(handle);
+Deno.serve(handle); // unconditional: the module has no other top-level side effects and nothing in the repo imports it
