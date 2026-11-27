@@ -1904,7 +1904,11 @@ async function handleIncomingWebhookMessage(
   // nothing is inserted again. Only set by the duplicate pre-check below.
   redrive?: { conversationId: string; inboundId: string },
   // R1: optional bounded stage timing (webhookTimings.ts); inert by default.
-  timer: StageTimer = NOOP_STAGE_TIMER
+  timer: StageTimer = NOOP_STAGE_TIMER,
+  // Account needs reauthorization (status needs_reauth): the inbound message and its conversation are persisted
+  // through the SAME durable/idempotent path, then the handler returns BEFORE any routing: no AI, no flow, no claim,
+  // no durable run, no outbox effect, no provider request. Default false = unchanged behaviour.
+  persistOnly: boolean = false
 ): Promise<"retry" | void> {
   const endConversation = timer.start("conversation");
   const tenantId: string =
@@ -2120,6 +2124,15 @@ async function handleIncomingWebhookMessage(
       // whose response was lost is skipped as a duplicate, as before).
       return "retry";
     }
+    return;
+  }
+
+  if (persistOnly) {
+    // The inbound row is committed. Nothing below may run for an account that needs reauthorization: the routing
+    // decision, the exclusive claim, durable ingress and every reply path all end in an outbound send or in work
+    // that a worker would send later. A re-driven retryable event is resolved (known terminal outcome: no reply).
+    await resolvedAfterRedrive();
+    console.log(`[${channel}_webhook] inbound stored; account needs reauthorization — no reply`);
     return;
   }
 
@@ -3300,7 +3313,10 @@ const milanApiHandler = (async (req: Request) => {
               continue;
             }
 
-            if (account.status !== "active") {
+            // needs_reauth: the customer's message is still STORED (never lost while the owner reconnects) but is
+            // never answered; every other non-active status keeps the previous skip.
+            const persistOnly = account.status === "needs_reauth";
+            if (account.status !== "active" && !persistOnly) {
               console.warn(
                 `[instagram_webhook] account not active — skipped | status=${account.status}`
               );
@@ -3365,7 +3381,7 @@ const milanApiHandler = (async (req: Request) => {
                   igOutcomes.push(await runBatchEvent(() => handleIncomingWebhookMessage(
                     sb, account, chatId, msg.text, msgId,
                     channel as "instagram" | "facebook",
-                    undefined, msg.choiceId, providerEventIdGenuine, pending, timer
+                    undefined, msg.choiceId, providerEventIdGenuine, pending, timer, persistOnly
                   )));
                   endRedriveHandle();
                   continue;
@@ -3392,7 +3408,8 @@ const milanApiHandler = (async (req: Request) => {
               msg.choiceId,
               providerEventIdGenuine,
               undefined,
-              timer
+              timer,
+              persistOnly
             )));
             endHandle();
 
@@ -3403,6 +3420,7 @@ const milanApiHandler = (async (req: Request) => {
                R1: لا يعمل هنا بل بعد الرد على Meta (best effort)؛
                قرار الاستقبال المتين اكتمل أعلاه ولا يعتمد عليه. */
             profileJobs.push(async () => {
+            if (persistOnly) return; // the token is known to be unusable: no Graph request at all
             const profileT0 = performance.now();
             try {
               let senderToken: string | null = null;

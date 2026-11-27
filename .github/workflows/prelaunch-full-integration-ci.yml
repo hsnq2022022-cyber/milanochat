@@ -573,6 +573,7 @@ jobs:
             tests/flow-channel-reliability.test.mjs
             tests/flow-claim-begin-durable-run.test.mjs
             tests/webhook-malformed-batches.test.mjs
+            tests/webhook-needs-reauth-persist-only.test.mjs
             tests/flow-comment-replies-sql.test.mjs
             tests/flow-credits-pause.test.mjs
             tests/flow-delivery-failure-sql.test.mjs

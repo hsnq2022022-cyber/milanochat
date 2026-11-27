@@ -249,8 +249,11 @@ Deno.serve(async req=>{
    // auto_reply/agent_enabled off or tenant/account inactive: keep pending
    // (resumes when re-enabled; flow_skip_blocked_outbox cancels it as 'stale'
    // after OUTBOX_STALE_MINUTES). Never cancelled here.
+   // A channel that needs reauthorization (status needs_reauth, set after a confirmed Meta token failure) must not
+   // be sent to: the effect stays pending (never cancelled here) and resumes after the owner reconnects; the SQL
+   // staleness rule cancels it as 'stale' if that takes too long. Only needs_reauth is added to the old rule.
    const pause=temporaryOutboxPause({tenantActive:tenant.is_active,
-    accountActive:account?.is_active,agentEnabled:account?.agent_enabled,
+    accountActive:account?.status==="needs_reauth"?false:account?.is_active,agentEnabled:account?.agent_enabled,
     autoReply:account?.auto_reply});
    if(pause){report("paused_"+pause);continue;}
    const takeover=humanTakeoverActive(conversation?.transferred,
@@ -269,7 +272,7 @@ Deno.serve(async req=>{
    if(!account||!conversation||
       account.tenant_id!==tenant.id||conversation.tenant_id!==tenant.id||
       account.platform!==run.platform||
-      conversation.account_id!==account.id||account.is_active!==true||
+      conversation.account_id!==account.id||account.is_active!==true||account.status==="needs_reauth"||
       account.agent_enabled!==true||account.auto_reply!==true||
       !allowedChannel(String(account.platform))||
       takeover||

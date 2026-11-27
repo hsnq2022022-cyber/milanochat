@@ -270,10 +270,12 @@ test("IG: exactly one row for entry.id routes (unaffected), limit(2) + instagram
   assert.equal(y.r.account.tenant_id, TB);
   assert.deepEqual(y.tried, ["1700", "1800"]);
   // a non-active, non-disconnected single row (needs_reauth) is still returned
-  // here; the existing status gate drops it later
+  // here; the status gate below STORES its inbound messages without any reply
+  // (persistOnly, tests/webhook-needs-reauth-persist-only.test.mjs); every other
+  // non-active status is still dropped
   const z = await runIg("instagram", [igAcc("1700", TA, {status: "needs_reauth"})]);
   assert.equal(z.r.account.status, "needs_reauth");
-  assert.match(IDX.slice(IG_CASE), /if \(account\.status !== "active"\) \{/);
+  assert.match(IDX.slice(IG_CASE), /const persistOnly = account\.status === "needs_reauth";\n\s+if \(account\.status !== "active" && !persistOnly\) \{/);
   // a disconnected row is not a candidate at all: falls through to the recipient id
   const d = await runIg("instagram", [igAcc("1700", TA, {status: "disconnected"})]);
   assert.equal(d.r.account, null);
