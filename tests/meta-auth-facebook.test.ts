@@ -234,3 +234,32 @@ test("Page subscription: feed added to the DM fields; explicit refusal -> DM-onl
   assert.equal(unknown.r.ok, true);
   assert.deepEqual(unknown.fields, [["111", "messages,messaging_postbacks,feed"], ["222", "messages,messaging_postbacks,feed"]]);
 });
+
+test("Facebook reconnect: a needs_reauth page of THIS tenant is restored; other pages, other tenants and the stored token of others are untouched", async () => {
+  const TB = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+  const m = memDb();
+  const stale = (tenant: string, id: string, extra: Record<string, unknown> = {}) => ({
+    tenant_id: tenant, channel: "facebook", platform: "facebook", external_id: id, display_name: "old", avatar_url: null,
+    status: "needs_reauth", error_message: "password_changed", is_active: true, access_token_encrypted: "enc:v1:OLD",
+    token_expires_at: "2026-12-01T00:00:00.000Z", connected_at: "2026-10-01T00:00:00.000Z", updated_at: "2026-10-01T00:00:00.000Z", ...extra,
+  }) as unknown as FbPageRow;
+  m.rows.set(`${TA}|facebook|111`, stale(TA, "111"));
+  const otherPageSameTenant = stale(TA, "999", {status: "active", error_message: null});
+  const otherTenantSamePageId = stale(TB, "111");
+  m.rows.set(`${TA}|facebook|999`, otherPageSameTenant);
+  m.rows.set(`${TB}|facebook|111`, otherTenantSamePageId);
+  const g = graph({accounts: {data: [{id: "111", name: "Page One", access_token: P1TOK, tasks: ["MESSAGING"]}]}});
+  const logs = captureLogs();
+  let r;
+  try { r = await linkFacebookPages("CODE1", deps(g, m.db)); } finally { logs.restore(); }
+  assert.deepEqual(r, {ok: true, saved: 1, name: "Page One"});
+  const back = m.rows.get(`${TA}|facebook|111`)!;
+  assert.equal(back.status, "active");
+  assert.equal((back as any).error_message, null, "the previous reason is cleared");
+  assert.equal(back.token_expires_at, null, "long-lived: the stale expiry is gone");
+  assert.notEqual(back.access_token_encrypted, "enc:v1:OLD");
+  assert.ok(!JSON.stringify(back).includes(P1TOK), "stored encrypted, never the plain token");
+  assert.equal(m.rows.get(`${TA}|facebook|999`), otherPageSameTenant, "another page of the same tenant is untouched");
+  assert.equal(m.rows.get(`${TB}|facebook|111`), otherTenantSamePageId, "another tenant's row is untouched");
+  assert.equal((m.rows.get(`${TB}|facebook|111`) as any).status, "needs_reauth");
+});

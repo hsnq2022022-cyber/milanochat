@@ -45,6 +45,7 @@ import { persistInboundOnce } from "./persistInboundOnce.ts";
 import { processExclusiveEvent } from "./exclusiveMessageClaim.ts";
 import { routeInbound } from "./messageRouting.ts";
 import {durableAccountAllowed} from "../_shared/durableAccounts.ts";
+import {markNeedsReauth,classifyMetaTokenError} from "../_shared/channelReauth.ts";
 import { invalidSignatureDiagnostics } from "./webhookDiagnostics.ts";
 import { createStageTimer, NOOP_STAGE_TIMER, type StageTimer } from "./webhookTimings.ts";
 import { runBackgroundJobs } from "./backgroundWork.ts";
@@ -1065,6 +1066,7 @@ async function sendToConversation(
         .slice(1)
         .join(":"),
       text,
+      onFailure: (e) => noteMetaSendFailure(sb, account, tenantId, e),
     });
 
     return;
@@ -1624,12 +1626,40 @@ function extractIgMessages(entry: any): Array<{
  * إرسال رسالة مباشرة عبر Facebook/Instagram Graph API.
  * يدعم نوعي رموز Instagram (IG... و EAA...) كما في metaSend.ts.
  */
+/**
+ * A send to Meta failed. Only Meta's own confirmation that THIS token is unusable (OAuthException 190) marks the
+ * channel as needing reconnection (compare-and-swap on the token that was used, so a concurrent reconnect is never
+ * undone). Network errors, 5xx, 429, rate limits, permission/parameter errors and everything unknown change nothing.
+ * Best effort: never throws and never alters the caller's own error handling (no resend, no new delivery state).
+ */
+async function noteMetaSendFailure(
+  sb: SupabaseClient,
+  account: { id?: unknown; access_token_encrypted?: unknown } | null | undefined,
+  tenantId: unknown,
+  err: unknown,
+): Promise<void> {
+  try {
+    if (!(err instanceof ProviderHttpError)) return;
+    const code = typeof err.code === "number" ? err.code : null;
+    const verdict = classifyMetaTokenError(err.status, code, null);
+    if (verdict.kind !== "reauth") return;
+    if (!account || typeof account.id !== "string" || !account.id) return;
+    await markNeedsReauth(sb, {
+      id: account.id,
+      tenant_id: String(tenantId),
+      access_token_encrypted: typeof account.access_token_encrypted === "string" ? account.access_token_encrypted : null,
+    }, verdict.reason);
+  } catch { /* best effort */ }
+}
+
 async function sendMetaDirectMessage(opts: {
   channel: "instagram" | "facebook";
   externalId: string;
   token: string;
   recipientId: string;
   text: string;
+  /** Best-effort observer of a failed send (see noteMetaSendFailure); never changes the thrown error. */
+  onFailure?: (err: unknown) => Promise<void>;
 }): Promise<string|null> {
   const {
     channel,
@@ -1696,7 +1726,9 @@ async function sendMetaDirectMessage(opts: {
   });
 
   if (!res.ok) {
-    throw await providerHttpError(`${channel} send`, res);
+    const failure = await providerHttpError(`${channel} send`, res);
+    if (opts.onFailure) await opts.onFailure(failure);
+    throw failure;
   }
   return providerIdFromResponse(res,channel);
 }
@@ -2258,6 +2290,7 @@ async function handleIncomingWebhookMessage(
         token,
         recipientId: chatId.split(":").slice(1).join(":"),
         text,
+        onFailure: (e) => noteMetaSendFailure(sb, account, tenantId, e),
       });
       return {providerMessageId};
     },

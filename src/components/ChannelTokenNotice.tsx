@@ -1,11 +1,11 @@
 import {channelTokenNotice,channelTokenState} from "../lib/channelTokenState";
 
-type Props={status?:string|null;tokenExpiresAt?:string|null;onReconnect:()=>void;now?:number};
+type Props={status?:string|null;tokenExpiresAt?:string|null;reason?:string|null;onReconnect:()=>void;now?:number};
 
 /** Expiry / reauthorization notice for one channel account, with a visible reconnect action. Renders nothing when healthy. */
-export default function ChannelTokenNotice({status,tokenExpiresAt,onReconnect,now}:Props){
+export default function ChannelTokenNotice({status,tokenExpiresAt,reason,onReconnect,now}:Props){
  const info=channelTokenState({status,tokenExpiresAt},now??Date.now());
- const notice=channelTokenNotice(info);
+ const notice=channelTokenNotice(info,reason);
  if(!notice)return null;
  const err=notice.severity==="error";
  return (

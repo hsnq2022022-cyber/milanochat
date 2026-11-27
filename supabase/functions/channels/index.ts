@@ -3,6 +3,7 @@
 // Endpoints: /channels/accounts, /channels/summary, /channels/meta/status
 // ═══════════════════════════════════════════════════════════════════
 
+import { safeReauthReason } from "../_shared/channelReauth.ts";
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { issueOAuthState, oauthStateSecret, type IssueResult } from "../_shared/oauthState.ts";
 import { withCors, trustedCorsPolicy } from "../_shared/cors.ts";
@@ -142,6 +143,8 @@ function normalizeAccount(row: any) {
     handoffRules: row.handoff_rules ?? {},
     agentConfig: row.agent_config ?? {},
     tokenExpiresAt: row.token_expires_at ?? null,
+    // Closed enum only (never free text): why a needs_reauth channel must be reconnected.
+    needsReauthReason: row.status === "needs_reauth" ? safeReauthReason(row.error_message) : null,
     connectedAt: row.connected_at ?? null,
     createdAt: row.created_at ?? null,
     updatedAt: row.updated_at ?? null,

@@ -492,6 +492,7 @@ jobs:
             tests/api-db-test-auth.test.ts
             tests/channel-token-lifecycle.test.ts
             tests/channel-token-state.test.ts
+            tests/token-failure-handling.test.ts
             tests/channels-oauth-url-scope.test.ts
             tests/create-payment-safety.test.ts
             tests/edge-cors-policy.test.ts

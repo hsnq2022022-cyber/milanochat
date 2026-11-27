@@ -7,7 +7,7 @@ const FAKE_JWT = `${b64({ alg: "none" })}.${b64({ sub: "u1", exp: 4102444800, ro
 test.skip(!URL_.startsWith("http://mock."), "needs VITE_SUPABASE_URL=http://mock.supabase.test (fake host)");
 
 const day = 86_400_000;
-type Acc = { id: string; channel: string; platform: string; external_id: string; display_name: string; status: string; tokenExpiresAt: string | null };
+type Acc = { id: string; channel: string; platform: string; external_id: string; display_name: string; status: string; tokenExpiresAt: string | null; needsReauthReason?: string | null };
 const acc = (o: Partial<Acc> & Pick<Acc, "id" | "channel">): Acc => ({
   platform: o.channel, external_id: `ext-${o.id}`, display_name: `acct-${o.id}`, status: "active", tokenExpiresAt: null, ...o,
 });
@@ -76,4 +76,19 @@ test("a needs_reauth account is flagged as an error and the channel is not shown
   await expect(page.getByTestId("channel-token-notice")).toHaveAttribute("role", "alert");
   await expect(page.getByText("غير متصل").first()).toBeVisible();
   await expect(page.getByText("متصل", { exact: true })).toHaveCount(0);
+});
+
+test("a needs_reauth account shows the specific Arabic reason and a reconnect button; an unknown reason falls back to the generic text", async ({ page }) => {
+  await setup(page, [
+    acc({ id: "i1", channel: "instagram", status: "needs_reauth", needsReauthReason: "password_changed" }),
+    acc({ id: "f1", channel: "facebook", status: "needs_reauth", needsReauthReason: "<b>not-a-reason</b>" }),
+  ]);
+  await open(page);
+  const notices = page.getByTestId("channel-token-notice");
+  await expect(notices).toHaveCount(2);
+  // The Facebook card renders before the Instagram card.
+  await expect(notices.first()).toContainText("انتهى تفويض الربط أو أُلغي");
+  await expect(notices.first()).not.toContainText("not-a-reason");
+  await expect(notices.nth(1)).toContainText("كلمة مرور");
+  await expect(page.getByTestId("channel-token-reconnect")).toHaveCount(2);
 });

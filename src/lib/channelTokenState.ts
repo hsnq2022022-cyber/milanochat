@@ -51,9 +51,25 @@ export function instagramRefreshDecision(tokenExpiresAt:string|null|undefined,no
  return "due";
 }
 
-/** Short Arabic notice for the dashboard; null = nothing to show. */
-export function channelTokenNotice(i:TokenStateInfo):{text:string;severity:"warn"|"error"}|null{
- if(i.state==="needs_reauth")return {severity:"error",text:"انتهى تفويض الربط أو أُلغي. أعد ربط الحساب لاستئناف الردود."};
+/** Why a connection needs reconnecting (closed list, mirrors supabase/functions/_shared/channelReauth.ts). */
+export type NeedsReauthReason="token_expired"|"token_invalid"|"refresh_rejected"|"data_access_expired"|"token_missing"|
+ "password_changed"|"permission_revoked"|"checkpoint_required";
+const REASON_TEXT:Record<NeedsReauthReason,string>={
+ token_expired:"انتهت صلاحية ربط الحساب. أعد الربط لاستئناف الردود.",
+ data_access_expired:"انتهت صلاحية وصول التطبيق إلى بيانات الحساب. أعد الربط لتجديدها.",
+ password_changed:"تم تغيير كلمة مرور الحساب في Meta فانتهى الربط. أعد ربط الحساب لاستئناف الردود.",
+ permission_revoked:"تم سحب صلاحيات التطبيق من حسابك في Meta. أعد الربط ووافق على الصلاحيات المطلوبة.",
+ checkpoint_required:"تطلب Meta من حسابك إجراء أمان (تحقق أو تأكيد). أكمله من تطبيق Meta ثم أعد ربط الحساب.",
+ token_missing:"لا يوجد تفويض محفوظ لهذا الحساب. أعد ربط الحساب لاستئناف الردود.",
+ token_invalid:"انتهى تفويض الربط أو أُلغي. أعد ربط الحساب لاستئناف الردود.",
+ refresh_rejected:"انتهى تفويض الربط أو أُلغي. أعد ربط الحساب لاستئناف الردود.",
+};
+const GENERIC_REAUTH=REASON_TEXT.token_invalid;
+const isReason=(v:unknown):v is NeedsReauthReason=>typeof v==="string"&&Object.prototype.hasOwnProperty.call(REASON_TEXT,v);
+
+/** Short Arabic notice for the dashboard; null = nothing to show. `reason` only refines a needs_reauth notice. */
+export function channelTokenNotice(i:TokenStateInfo,reason?:string|null):{text:string;severity:"warn"|"error"}|null{
+ if(i.state==="needs_reauth")return {severity:"error",text:isReason(reason)?REASON_TEXT[reason]:GENERIC_REAUTH};
  if(i.state==="expired")return {severity:"error",text:"انتهت صلاحية ربط الحساب. أعد الربط لاستئناف الردود."};
  if(i.state==="expiring"){
   const d=Math.max(0,i.daysLeft??0);
