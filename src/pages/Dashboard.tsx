@@ -3,6 +3,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ChannelTokenNotice from "../components/ChannelTokenNotice";
+import { metaConnectErrorMessage, metaLegacyErrorMessage } from "../lib/metaConnectErrors";
 import { channelTokenState } from "../lib/channelTokenState";
 import confetti from "canvas-confetti";
 import SafeAvatar from "../components/SafeAvatar";
@@ -718,18 +719,9 @@ export default function Dashboard() {
     }
     const chErr = q.get("channel_error");
     if (chErr) {
-      const map: Record<string, string> = {
-        user_cancelled: "تم إلغاء الربط — لم تُمنح صلاحيات Meta.",
-        missing_params: "لم تكتمل بيانات العودة من Meta — أعد المحاولة.",
-        oauth_state: "انتهت صلاحية جلسة الربط — ابدأ الربط من جديد.",
-        "oauth_state:state_signature": "تعذر التحقق من جلسة الربط — أعد المحاولة.",
-        "oauth_state:state_expired": "انتهت صلاحية جلسة الربط.",
-        "oauth_state:state_reused": "تم استخدام جلسة الربط مسبقًا.",
-        oauth_token_exchange: "رفضت Meta تبادل الرمز — تحقق من Valid OAuth Redirect URI.",
-        config_redirect_uri: "إعداد PUBLIC_URL على الخادم غير صحيح.",
-      };
-      const decoded = decodeURIComponent(chErr);
-      showToast("فشل الربط: " + (map[decoded] ?? decoded));
+      let code = chErr;
+      try { code = decodeURIComponent(chErr); } catch { /* keep as is */ }
+      showToast("فشل الربط: " + metaConnectErrorMessage(code));
       window.history.replaceState({}, "", "#/dashboard");
     }
     if (q.get("connected") === "1") {
@@ -745,15 +737,7 @@ export default function Dashboard() {
     }
     const err = q.get("error");
     if (err) {
-      const map: Record<string, string> = {
-        oauth_missing: "لم يكتمل تفويض Meta.",
-        oauth_state: "انتهت صلاحية جلسة الربط.",
-        oauth_channel: "قناة غير معروفة.",
-        oauth_not_configured: "تطبيق Meta غير مُهيّأ.",
-        oauth_token: "رفضت Meta تبادل الرمز.",
-        oauth_failed: "حدث خطأ أثناء الربط.",
-      };
-      showToast(map[err] ?? "تعذر إتمام ربط Meta.");
+      showToast(metaLegacyErrorMessage(err));
       window.history.replaceState({}, "", "#/dashboard");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
