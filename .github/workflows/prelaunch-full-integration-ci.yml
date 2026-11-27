@@ -443,7 +443,7 @@ jobs:
         env:
           VITE_SUPABASE_URL: http://mock.supabase.test
           VITE_SUPABASE_ANON_KEY: fake-anon-key-not-real
-        run: npx playwright test -c playwright.config.ts --trace off tests/flow-runtime-support.spec.ts tests/admin-panel.spec.ts tests/profile-nav.spec.ts tests/channel-token-notice.spec.ts
+        run: npx playwright test -c playwright.config.ts --trace off tests/flow-runtime-support.spec.ts tests/admin-panel.spec.ts tests/profile-nav.spec.ts tests/channel-token-notice.spec.ts tests/meta-connect-error-toast.spec.ts
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
@@ -492,6 +492,7 @@ jobs:
             tests/api-db-test-auth.test.ts
             tests/channel-token-lifecycle.test.ts
             tests/channel-token-state.test.ts
+            tests/meta-connect-errors.test.ts
             tests/channels-oauth-url-scope.test.ts
             tests/create-payment-safety.test.ts
             tests/edge-cors-policy.test.ts
