@@ -44,6 +44,8 @@ type ChannelAccount = {
   agentConfig?: Record<string, unknown> | null;
   token_expires_at: string | null;
   tokenExpiresAt?: string | null;
+  /** Why a needs_reauth channel must be reconnected (closed list from the channels function). */
+  needsReauthReason?: string | null;
   created_at: string;
   createdAt?: string;
   updated_at: string;
@@ -1802,7 +1804,7 @@ export default function Dashboard() {
                         <SafeAvatar src={a.avatar_url} className="w-6 h-6 rounded-full object-cover" fallback={<span className="w-6 h-6 rounded-full bg-[#1877F2]/15 text-[#6ea3f5] flex items-center justify-center"><IconFacebook className="w-3.5 h-3.5" /></span>} />
                         <span className="text-[11.5px] text-bone font-semibold truncate flex-1">{a.display_name ?? a.external_id}</span>
                         <button onClick={() => openManageAccount(a)} className="text-[10px] font-bold text-oro hover:text-bone shrink-0">إدارة</button>
-                        <div className="basis-full"><ChannelTokenNotice status={a.status} tokenExpiresAt={a.tokenExpiresAt ?? a.token_expires_at} onReconnect={() => startMetaOAuth("facebook")} /></div>
+                        <div className="basis-full"><ChannelTokenNotice status={a.status} reason={a.needsReauthReason} tokenExpiresAt={a.tokenExpiresAt ?? a.token_expires_at} onReconnect={() => startMetaOAuth("facebook")} /></div>
                       </li>
                     ))}
                   </ul>
@@ -1846,7 +1848,7 @@ export default function Dashboard() {
                           <p className="text-[10px] text-verde">
                             {a.status === "active" ? "نشط" : a.status}
                           </p>
-                          <ChannelTokenNotice status={a.status} tokenExpiresAt={a.tokenExpiresAt ?? a.token_expires_at} onReconnect={() => startMetaOAuth("instagram")} />
+                          <ChannelTokenNotice status={a.status} reason={a.needsReauthReason} tokenExpiresAt={a.tokenExpiresAt ?? a.token_expires_at} onReconnect={() => startMetaOAuth("instagram")} />
                         </div>
                         <button
                           onClick={() => openManageAccount(a)}

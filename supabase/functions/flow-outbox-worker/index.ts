@@ -28,7 +28,7 @@ import {resolveKnowledgeEffect,recoverKnowledgeCharge,AI_MAX_ATTEMPTS,AI_CLAIM_L
  from "./knowledgeRetry.ts";
 import {escalateAiFailure} from "./aiEscalation.ts";
 import {executeOnce} from "./executeOnce.ts";
-import {isConfirmedTokenFailure,markNeedsReauth} from "../_shared/channelReauth.ts";
+import {reauthReasonForFailure,markNeedsReauth} from "../_shared/channelReauth.ts";
 import {canDispatchOutbox} from "./productionGate.ts";
 import {readSupersession} from "./supersession.ts";
 import {durableRegistryStatus,registryRequired} from "../_shared/durableRegistry.ts";
@@ -703,7 +703,7 @@ Deno.serve(async req=>{
      confirm:async(status,providerId)=>{
       // T6-S4: a provider HTTP failure is finished WITH its validated record.
       // Confirmed Meta code 190 only: persist needs_reauth (CAS on the token used). Best effort; never resends or alters settlement.
-      if(status==="uncertain"&&isConfirmedTokenFailure(failure.record))await markNeedsReauth(sb,{id:account.id,tenant_id:effect.tenant_id,access_token_encrypted:account.access_token_encrypted??null},"token_invalid");
+      {const reason=status==="uncertain"?reauthReasonForFailure(failure.record):null;if(reason)await markNeedsReauth(sb,{id:account.id,tenant_id:effect.tenant_id,access_token_encrypted:account.access_token_encrypted??null},reason);}
       if(status==="uncertain"&&failure.record){
        const failed=await finishFailure(sb,effect.tenant_id,effect.id,failure.record,imageUrl!==undefined);
        if(failed==="rejected"){if(imageUrl!==undefined)media.rejected=true;else failure.rejected=true;return true;}
@@ -757,7 +757,7 @@ Deno.serve(async req=>{
     confirm:async(status,providerId)=>{
      // T6-S4: a provider HTTP failure is finished WITH its validated record.
      // Confirmed Meta code 190 only: persist needs_reauth (CAS on the token used). Best effort; never resends or alters settlement.
-     if(status==="uncertain"&&isConfirmedTokenFailure(failure.record))await markNeedsReauth(sb,{id:account.id,tenant_id:effect.tenant_id,access_token_encrypted:account.access_token_encrypted??null},"token_invalid");
+     {const reason=status==="uncertain"?reauthReasonForFailure(failure.record):null;if(reason)await markNeedsReauth(sb,{id:account.id,tenant_id:effect.tenant_id,access_token_encrypted:account.access_token_encrypted??null},reason);}
      if(status==="uncertain"&&failure.record){
       const failed=await finishFailure(sb,effect.tenant_id,effect.id,failure.record,imageUrl!==undefined);
       if(failed==="rejected"){if(imageUrl!==undefined)media.rejected=true;else failure.rejected=true;return true;}
