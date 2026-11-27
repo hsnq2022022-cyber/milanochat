@@ -45,6 +45,7 @@ import { persistInboundOnce } from "./persistInboundOnce.ts";
 import { processExclusiveEvent } from "./exclusiveMessageClaim.ts";
 import { routeInbound } from "./messageRouting.ts";
 import {durableAccountAllowed} from "../_shared/durableAccounts.ts";
+import {markNeedsReauth,classifyMetaTokenError} from "../_shared/channelReauth.ts";
 import { invalidSignatureDiagnostics } from "./webhookDiagnostics.ts";
 import { createStageTimer, NOOP_STAGE_TIMER, type StageTimer } from "./webhookTimings.ts";
 import { runBackgroundJobs } from "./backgroundWork.ts";
@@ -1065,6 +1066,7 @@ async function sendToConversation(
         .slice(1)
         .join(":"),
       text,
+      onFailure: (e) => noteMetaSendFailure(sb, account, tenantId, e),
     });
 
     return;
@@ -1624,12 +1626,40 @@ function extractIgMessages(entry: any): Array<{
  * إرسال رسالة مباشرة عبر Facebook/Instagram Graph API.
  * يدعم نوعي رموز Instagram (IG... و EAA...) كما في metaSend.ts.
  */
+/**
+ * A send to Meta failed. Only Meta's own confirmation that THIS token is unusable (OAuthException 190) marks the
+ * channel as needing reconnection (compare-and-swap on the token that was used, so a concurrent reconnect is never
+ * undone). Network errors, 5xx, 429, rate limits, permission/parameter errors and everything unknown change nothing.
+ * Best effort: never throws and never alters the caller's own error handling (no resend, no new delivery state).
+ */
+async function noteMetaSendFailure(
+  sb: SupabaseClient,
+  account: { id?: unknown; access_token_encrypted?: unknown } | null | undefined,
+  tenantId: unknown,
+  err: unknown,
+): Promise<void> {
+  try {
+    if (!(err instanceof ProviderHttpError)) return;
+    const code = typeof err.code === "number" ? err.code : null;
+    const verdict = classifyMetaTokenError(err.status, code, null);
+    if (verdict.kind !== "reauth") return;
+    if (!account || typeof account.id !== "string" || !account.id) return;
+    await markNeedsReauth(sb, {
+      id: account.id,
+      tenant_id: String(tenantId),
+      access_token_encrypted: typeof account.access_token_encrypted === "string" ? account.access_token_encrypted : null,
+    }, verdict.reason);
+  } catch { /* best effort */ }
+}
+
 async function sendMetaDirectMessage(opts: {
   channel: "instagram" | "facebook";
   externalId: string;
   token: string;
   recipientId: string;
   text: string;
+  /** Best-effort observer of a failed send (see noteMetaSendFailure); never changes the thrown error. */
+  onFailure?: (err: unknown) => Promise<void>;
 }): Promise<string|null> {
   const {
     channel,
@@ -1696,7 +1726,9 @@ async function sendMetaDirectMessage(opts: {
   });
 
   if (!res.ok) {
-    throw await providerHttpError(`${channel} send`, res);
+    const failure = await providerHttpError(`${channel} send`, res);
+    if (opts.onFailure) await opts.onFailure(failure);
+    throw failure;
   }
   return providerIdFromResponse(res,channel);
 }
@@ -1872,7 +1904,11 @@ async function handleIncomingWebhookMessage(
   // nothing is inserted again. Only set by the duplicate pre-check below.
   redrive?: { conversationId: string; inboundId: string },
   // R1: optional bounded stage timing (webhookTimings.ts); inert by default.
-  timer: StageTimer = NOOP_STAGE_TIMER
+  timer: StageTimer = NOOP_STAGE_TIMER,
+  // Account needs reauthorization (status needs_reauth): the inbound message and its conversation are persisted
+  // through the SAME durable/idempotent path, then the handler returns BEFORE any routing: no AI, no flow, no claim,
+  // no durable run, no outbox effect, no provider request. Default false = unchanged behaviour.
+  persistOnly: boolean = false
 ): Promise<"retry" | void> {
   const endConversation = timer.start("conversation");
   const tenantId: string =
@@ -1925,6 +1961,29 @@ async function handleIncomingWebhookMessage(
     await markLiveNoReply(sb, { ...retryKey, conversationId: String(conversationId), inboundId }, reason);
   };
 
+  /**
+   * البحث عن conversation موجود أو إنشاؤه.
+   * PERF (webhook latency): this read needs only tenantId/chatId, so it is STARTED together with the tenant read
+   * (each Edge -> database round trip is several hundred ms cross-region) but is still awaited, and its result
+   * used, only after every tenant check below: a read never changes state, and every write stays after the checks.
+   */
+  const conversationRead = Promise.resolve(redrive
+    ? sb
+        .from("conversations")
+        .select("*")
+        .eq("tenant_id", tenantId)
+        .eq("id", redrive.conversationId)
+        .eq("wa_chat_id", chatId)
+        .maybeSingle()
+    : sb
+        .from("conversations")
+        .select("*")
+        .eq("tenant_id", tenantId)
+        .eq("wa_chat_id", chatId)
+        .maybeSingle());
+  // An early return below (tenant missing/inactive/unreadable) abandons this promise: never an unhandled rejection.
+  conversationRead.catch(() => {});
+
   const { data: tenant, error: tenantError } = await sb
     .from("tenants")
     .select("*")
@@ -1952,25 +2011,11 @@ async function handleIncomingWebhookMessage(
     return;
   }
 
-  /**
-   * البحث عن conversation موجود أو إنشاؤه.
-   */
-  const { data: existingConv, error: convError } = redrive
-    ? await sb
-        .from("conversations")
-        .select("*")
-        .eq("tenant_id", tenantId)
-        .eq("id", redrive.conversationId)
-        .eq("wa_chat_id", chatId)
-        .maybeSingle()
-    : await sb
-        .from("conversations")
-        .select("*")
-        .eq("tenant_id", tenantId)
-        .eq("wa_chat_id", chatId)
-        .maybeSingle();
+  /** المحادثة: انظر conversationRead أعلاه. */
+  const { data: existingConv, error: convError } = await conversationRead;
 
   let conv: any = existingConv;
+  let conversationTouch: Promise<unknown> | null = null;
 
   if (convError) {
     console.error(`[${channel}_webhook] conversation read failed`);
@@ -2004,13 +2049,15 @@ async function handleIncomingWebhookMessage(
 
     conv = newConv;
   } else {
-    await sb
+    // PERF: independent of the conversation-start read below; awaited before the inbound row is stored.
+    conversationTouch = Promise.resolve(sb
       .from("conversations")
       .update({
         last_message_at:
           new Date().toISOString(),
       })
-      .eq("id", conv.id);
+      .eq("id", conv.id));
+    conversationTouch.catch(() => {});
   }
 
   if (!conv) {
@@ -2043,6 +2090,7 @@ async function handleIncomingWebhookMessage(
     }
   }
 
+  if (conversationTouch) await conversationTouch;
   endConversation();
 
   /**
@@ -2076,6 +2124,15 @@ async function handleIncomingWebhookMessage(
       // whose response was lost is skipped as a duplicate, as before).
       return "retry";
     }
+    return;
+  }
+
+  if (persistOnly) {
+    // The inbound row is committed. Nothing below may run for an account that needs reauthorization: the routing
+    // decision, the exclusive claim, durable ingress and every reply path all end in an outbound send or in work
+    // that a worker would send later. A re-driven retryable event is resolved (known terminal outcome: no reply).
+    await resolvedAfterRedrive();
+    console.log(`[${channel}_webhook] inbound stored; account needs reauthorization — no reply`);
     return;
   }
 
@@ -2258,6 +2315,7 @@ async function handleIncomingWebhookMessage(
         token,
         recipientId: chatId.split(":").slice(1).join(":"),
         text,
+        onFailure: (e) => noteMetaSendFailure(sb, account, tenantId, e),
       });
       return {providerMessageId};
     },
@@ -2762,9 +2820,13 @@ const milanApiHandler = (async (req: Request) => {
 
         // Per-event outcomes: any "retry" (flow eligibility unknown) answers 503
         // so the provider redelivers (inboundRoutingRetry.ts).
+        // Malformed (but correctly signed) structure must never abort the batch: a non-array `entry` is an empty
+        // batch and every nested list below is iterated only when it really is an array, so one bad element can
+        // neither throw (HTTP 500 -> endless redelivery of the same batch) nor hide the valid events around it.
+        if (!Array.isArray(body.entry)) body.entry = [];
         const waOutcomes: unknown[] = [];
         for (const entry of body.entry ?? []) {
-          for (const change of entry?.changes ?? []) {
+          for (const change of Array.isArray(entry?.changes) ? entry.changes : []) {
             if (change?.field !== "messages") {
               continue;
             }
@@ -2881,15 +2943,15 @@ const milanApiHandler = (async (req: Request) => {
                 : null;
 
             const customerNameOf = (waId: string) => {
-              const c = (value.contacts ?? []).find(
-                (x: any) => x.wa_id === waId
+              const c = (Array.isArray(value.contacts) ? value.contacts : []).find(
+                (x: any) => x?.wa_id === waId
               );
               return c?.profile?.name
                 ? String(c.profile.name)
                 : null;
             };
 
-            for (const message of value.messages ?? []) {
+            for (const message of Array.isArray(value.messages) ? value.messages : []) {
               const from = String(message?.from ?? "");
 
               if (!from) {
@@ -3117,11 +3179,17 @@ const milanApiHandler = (async (req: Request) => {
 
         // Per-event outcomes: any "retry" (flow eligibility unknown) answers 503
         // so the provider redelivers (inboundRoutingRetry.ts).
+        // Malformed (but correctly signed) structure must never abort the batch: a non-array `entry` is an empty
+        // batch and every nested list below is iterated only when it really is an array, so one bad element can
+        // neither throw (HTTP 500 -> endless redelivery of the same batch) nor hide the valid events around it.
+        if (!Array.isArray(body.entry)) body.entry = [];
         const igOutcomes: unknown[] = [];
         // R1: optional sender-profile enrichment, run AFTER the response
         // (best effort) and never before the durable ingress decision.
         const profileJobs: Array<() => Promise<unknown>> = [];
         for (const entry of body.entry ?? []) {
+          // A null / non-object entry is skipped (it would throw below and abort the rest of the batch).
+          if (!entry || typeof entry !== "object") continue;
           const entryId = String(entry.id ?? "");
 
           const msgs = extractIgMessages(entry);
@@ -3245,7 +3313,10 @@ const milanApiHandler = (async (req: Request) => {
               continue;
             }
 
-            if (account.status !== "active") {
+            // needs_reauth: the customer's message is still STORED (never lost while the owner reconnects) but is
+            // never answered; every other non-active status keeps the previous skip.
+            const persistOnly = account.status === "needs_reauth";
+            if (account.status !== "active" && !persistOnly) {
               console.warn(
                 `[instagram_webhook] account not active — skipped | status=${account.status}`
               );
@@ -3310,7 +3381,7 @@ const milanApiHandler = (async (req: Request) => {
                   igOutcomes.push(await runBatchEvent(() => handleIncomingWebhookMessage(
                     sb, account, chatId, msg.text, msgId,
                     channel as "instagram" | "facebook",
-                    undefined, msg.choiceId, providerEventIdGenuine, pending, timer
+                    undefined, msg.choiceId, providerEventIdGenuine, pending, timer, persistOnly
                   )));
                   endRedriveHandle();
                   continue;
@@ -3337,7 +3408,8 @@ const milanApiHandler = (async (req: Request) => {
               msg.choiceId,
               providerEventIdGenuine,
               undefined,
-              timer
+              timer,
+              persistOnly
             )));
             endHandle();
 
@@ -3348,6 +3420,7 @@ const milanApiHandler = (async (req: Request) => {
                R1: لا يعمل هنا بل بعد الرد على Meta (best effort)؛
                قرار الاستقبال المتين اكتمل أعلاه ولا يعتمد عليه. */
             profileJobs.push(async () => {
+            if (persistOnly) return; // the token is known to be unusable: no Graph request at all
             const profileT0 = performance.now();
             try {
               let senderToken: string | null = null;

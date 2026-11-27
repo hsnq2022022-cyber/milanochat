@@ -672,7 +672,7 @@ test("B1: provenance is the explicit flag; synthetic events (no Meta mid) never 
  assert.equal((server.match(/const providerEventIdGenuine =\n\s+typeof msg\.mid === "string" && msg\.mid\.length > 0;/g)??[]).length,1);
  // The IG call is wrapped in runBatchEvent(() => handleIncomingWebhookMessage(...)),
  // hence the extra closing paren; provenance argument is unchanged.
- assert.match(server,/msg\.choiceId,\n\s+providerEventIdGenuine(?:,\n\s+undefined,\n\s+timer)?\n\s+\)\)\);/);
+ assert.match(server,/msg\.choiceId,\n\s+providerEventIdGenuine(?:,\n\s+undefined,\n\s+timer(?:,\n\s+persistOnly)?)?\n\s+\)\)\);/);
  assert.match(server,/selectedChoiceId, providerEventIdGenuine: providerEventIdGenuine === true,\n/);
  const ing=readFileSync("supabase/functions/milan-api/flowDurableIngress.ts","utf8");
  assert.match(ing,/e\.providerEventIdGenuine===true&&/);

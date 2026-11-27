@@ -270,10 +270,12 @@ test("IG: exactly one row for entry.id routes (unaffected), limit(2) + instagram
   assert.equal(y.r.account.tenant_id, TB);
   assert.deepEqual(y.tried, ["1700", "1800"]);
   // a non-active, non-disconnected single row (needs_reauth) is still returned
-  // here; the existing status gate drops it later
+  // here; the status gate below STORES its inbound messages without any reply
+  // (persistOnly, tests/webhook-needs-reauth-persist-only.test.mjs); every other
+  // non-active status is still dropped
   const z = await runIg("instagram", [igAcc("1700", TA, {status: "needs_reauth"})]);
   assert.equal(z.r.account.status, "needs_reauth");
-  assert.match(IDX.slice(IG_CASE), /if \(account\.status !== "active"\) \{/);
+  assert.match(IDX.slice(IG_CASE), /const persistOnly = account\.status === "needs_reauth";\n\s+if \(account\.status !== "active" && !persistOnly\) \{/);
   // a disconnected row is not a candidate at all: falls through to the recipient id
   const d = await runIg("instagram", [igAcc("1700", TA, {status: "disconnected"})]);
   assert.equal(d.r.account, null);
@@ -467,4 +469,20 @@ test("linkFacebookPages: an 'owned' upsert counts as already linked, never as db
     assert.deepEqual(await run(async (r) => r.external_id === "111" ? "owned" : true), {ok: true, saved: 1, name: "Two"});
     assert.deepEqual(await run(async () => false), {ok: false, code: "db_save_failed"});
   } finally { Object.assign(console, orig); }
+});
+
+test("meta-auth IG reconnect: a needs_reauth account is restored for exactly this tenant+account (status active, reason cleared, new encrypted token)", async () => {
+  const x = await link({});
+  assert.equal(x.r, "saved");
+  const row = x.ops.find((o) => o[1] === "upsert")![2];
+  assert.equal(row.tenant_id, TA);
+  assert.equal(row.channel, "instagram");
+  assert.equal(row.external_id, "1784");
+  assert.equal(row.status, "active");
+  assert.equal(row.error_message, null, "the previous needs_reauth reason is cleared");
+  assert.equal(row.access_token_encrypted, "enc:v1:x", "stored encrypted, never the plain token");
+  assert.ok(!JSON.stringify(row).includes("TOKEN_s3cr3t"));
+  // One upsert keyed by (tenant, channel, external_id): no update/delete/other write can touch another account.
+  assert.deepEqual(x.ops.filter((o) => o[1] === "upsert").map((o) => o[3]), [{onConflict: "tenant_id,channel,external_id"}]);
+  assert.ok(!x.ops.some((o) => o[1] === "update" || o[1] === "delete" || o[1] === "insert"));
 });

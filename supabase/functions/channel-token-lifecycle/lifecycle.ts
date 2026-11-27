@@ -14,7 +14,7 @@
  * (every write is filtered by id AND tenant_id).
  */
 import {instagramRefreshDecision} from "../../../src/lib/channelTokenState.ts";
-import {markNeedsReauth,type ReauthReason} from "../_shared/channelReauth.ts";
+import {markNeedsReauth,classifyMetaTokenError,type ReauthReason} from "../_shared/channelReauth.ts";
 
 // deno-lint-ignore no-explicit-any
 type Db={from:(table:string)=>any};
@@ -23,7 +23,7 @@ export type AccountRow={id:string;tenant_id:string;channel:string;external_id:st
 export type Deps={db:Db;fetch:typeof fetch;nowMs:()=>number;fieldKey:string;
  appId:string;appSecret:string;
  decrypt:(v:string,key:string)=>Promise<string>;encrypt:(v:string,key:string)=>Promise<string>};
-export type Outcome="refreshed"|"verified"|"corrected"|"needs_reauth"|"raced"|"transient"|"skipped"|"error";
+export type Outcome="refreshed"|"verified"|"corrected"|"needs_reauth"|"raced"|"transient"|"config_error"|"skipped"|"error";
 export type Summary=Record<Outcome,number>&{checked:number};
 
 const IG_REFRESH="https://graph.instagram.com/refresh_access_token";
@@ -39,10 +39,11 @@ async function getJson(f:typeof fetch,url:string):Promise<{status:number;body:un
   return {status:r.status,body};
  }catch{return null;} // network / timeout: no detail is logged (the URL carries the token)
 }
-const metaCode=(b:unknown):number|null=>{
- if(!rec(b)||!rec(b.error))return null;
- const c=b.error.code;return typeof c==="number"&&Number.isInteger(c)?c:null;
-};
+const int=(v:unknown):number|null=>typeof v==="number"&&Number.isInteger(v)?v:null;
+/** Meta error {code, error_subcode} from a response body (numbers only, nothing else is ever read or kept). */
+const metaError=(b:unknown):{code:number|null;subcode:number|null}=>
+ // Graph errors use error_subcode; the debug_token "error" object uses subcode.
+ rec(b)&&rec(b.error)?{code:int(b.error.code),subcode:int(b.error.error_subcode)??int(b.error.subcode)}:{code:null,subcode:null};
 
 async function casUpdate(db:Db,row:AccountRow,patch:Record<string,unknown>):Promise<boolean>{
  try{
@@ -75,8 +76,11 @@ async function instagram(d:Deps,row:AccountRow):Promise<Outcome>{
    token_expires_at:new Date(now+Math.floor(b.expires_in)*1000).toISOString(),error_message:null,updated_at:new Date(now).toISOString()});
   return ok?"refreshed":"raced"; // raced: the owner reconnected or another run already refreshed; nothing was overwritten
  }
- if(metaCode(b)===190)return reauth(d,row,"refresh_rejected"); // Meta confirms the token is invalid
- return "transient"; // any other refusal is not confirmation: keep the status, retry on the next run
+ // Meta's own verdict on THIS token decides; temporary / unknown failures never change the status.
+ const e=metaError(b),v=classifyMetaTokenError(r.status,e.code,e.subcode);
+ if(v.kind==="reauth")return reauth(d,row,v.reason==="token_invalid"?"refresh_rejected":v.reason);
+ if(v.kind==="config")return "config_error"; // permission / parameter problem of the app: reconnecting would not fix it
+ return "transient"; // retry on the next run
 }
 
 async function facebook(d:Deps,row:AccountRow):Promise<Outcome>{
@@ -87,10 +91,19 @@ async function facebook(d:Deps,row:AccountRow):Promise<Outcome>{
  const r=await getJson(d.fetch,`${FB_DEBUG}?input_token=${encodeURIComponent(token)}&access_token=${app}`);
  if(r===null||r.status>=500||r.status===429)return "transient";
  const data=rec(r.body)&&rec(r.body.data)?r.body.data:null;
- if(r.status!==200||!data||typeof data.is_valid!=="boolean")return "transient";
+ if(r.status!==200||!data||typeof data.is_valid!=="boolean"){
+  // An error answer here is about OUR app credentials / request (the customer token is only the input), so even
+  // code 190 never marks the account: it is an operator-visible configuration error, not a reconnect request.
+  const e=metaError(r.body);
+  return classifyMetaTokenError(r.status,e.code,e.subcode).kind==="temporary"||e.code===null?"transient":"config_error";
+ }
  // Never trust a verdict about some other asset than this account's Page.
  if(typeof data.profile_id==="string"&&row.external_id&&data.profile_id!==row.external_id)return "error";
- if(data.is_valid===false)return reauth(d,row,"token_invalid");
+ if(data.is_valid===false){
+  // data.error carries Meta's reason for THIS token (expired / password changed / permission removed / checkpoint).
+  const e=metaError(data),v=classifyMetaTokenError(400,e.code??190,e.subcode);
+  return reauth(d,row,v.kind==="reauth"?v.reason:"token_invalid");
+ }
  const sec=(v:unknown)=>typeof v==="number"&&Number.isFinite(v)&&v>0?v*1000:null;
  const deadlines=[sec(data.expires_at),sec(data.data_access_expires_at)].filter((x):x is number=>x!==null);
  const effective=deadlines.length?Math.min(...deadlines):null;
@@ -121,7 +134,7 @@ export async function runLifecycle(d:Deps):Promise<Summary|{error:string}>{
   .in("channel",["instagram","facebook"]).or("status.is.null,status.eq.active")
   .order("token_expires_at",{ascending:true,nullsFirst:false}).limit(MAX_ACCOUNTS_PER_RUN);
  if(error||!Array.isArray(data))return {error:"lookup_failed"};
- const s:Summary={checked:0,refreshed:0,verified:0,corrected:0,needs_reauth:0,raced:0,transient:0,skipped:0,error:0};
+ const s:Summary={checked:0,refreshed:0,verified:0,corrected:0,needs_reauth:0,raced:0,transient:0,config_error:0,skipped:0,error:0};
  const started=d.nowMs();
  for(const row of data as AccountRow[]){
   if(d.nowMs()-started>RUN_BUDGET_MS)break; // the rest is picked up by the next run (earliest expiry first)

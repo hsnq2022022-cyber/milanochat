@@ -28,7 +28,7 @@ import {resolveKnowledgeEffect,recoverKnowledgeCharge,AI_MAX_ATTEMPTS,AI_CLAIM_L
  from "./knowledgeRetry.ts";
 import {escalateAiFailure} from "./aiEscalation.ts";
 import {executeOnce} from "./executeOnce.ts";
-import {isConfirmedTokenFailure,markNeedsReauth} from "../_shared/channelReauth.ts";
+import {reauthReasonForFailure,markNeedsReauth} from "../_shared/channelReauth.ts";
 import {canDispatchOutbox} from "./productionGate.ts";
 import {readSupersession} from "./supersession.ts";
 import {durableRegistryStatus,registryRequired} from "../_shared/durableRegistry.ts";
@@ -249,8 +249,11 @@ Deno.serve(async req=>{
    // auto_reply/agent_enabled off or tenant/account inactive: keep pending
    // (resumes when re-enabled; flow_skip_blocked_outbox cancels it as 'stale'
    // after OUTBOX_STALE_MINUTES). Never cancelled here.
+   // A channel that needs reauthorization (status needs_reauth, set after a confirmed Meta token failure) must not
+   // be sent to: the effect stays pending (never cancelled here) and resumes after the owner reconnects; the SQL
+   // staleness rule cancels it as 'stale' if that takes too long. Only needs_reauth is added to the old rule.
    const pause=temporaryOutboxPause({tenantActive:tenant.is_active,
-    accountActive:account?.is_active,agentEnabled:account?.agent_enabled,
+    accountActive:account?.status==="needs_reauth"?false:account?.is_active,agentEnabled:account?.agent_enabled,
     autoReply:account?.auto_reply});
    if(pause){report("paused_"+pause);continue;}
    const takeover=humanTakeoverActive(conversation?.transferred,
@@ -269,7 +272,7 @@ Deno.serve(async req=>{
    if(!account||!conversation||
       account.tenant_id!==tenant.id||conversation.tenant_id!==tenant.id||
       account.platform!==run.platform||
-      conversation.account_id!==account.id||account.is_active!==true||
+      conversation.account_id!==account.id||account.is_active!==true||account.status==="needs_reauth"||
       account.agent_enabled!==true||account.auto_reply!==true||
       !allowedChannel(String(account.platform))||
       takeover||
@@ -703,7 +706,7 @@ Deno.serve(async req=>{
      confirm:async(status,providerId)=>{
       // T6-S4: a provider HTTP failure is finished WITH its validated record.
       // Confirmed Meta code 190 only: persist needs_reauth (CAS on the token used). Best effort; never resends or alters settlement.
-      if(status==="uncertain"&&isConfirmedTokenFailure(failure.record))await markNeedsReauth(sb,{id:account.id,tenant_id:effect.tenant_id,access_token_encrypted:account.access_token_encrypted??null},"token_invalid");
+      {const reason=status==="uncertain"?reauthReasonForFailure(failure.record):null;if(reason)await markNeedsReauth(sb,{id:account.id,tenant_id:effect.tenant_id,access_token_encrypted:account.access_token_encrypted??null},reason);}
       if(status==="uncertain"&&failure.record){
        const failed=await finishFailure(sb,effect.tenant_id,effect.id,failure.record,imageUrl!==undefined);
        if(failed==="rejected"){if(imageUrl!==undefined)media.rejected=true;else failure.rejected=true;return true;}
@@ -757,7 +760,7 @@ Deno.serve(async req=>{
     confirm:async(status,providerId)=>{
      // T6-S4: a provider HTTP failure is finished WITH its validated record.
      // Confirmed Meta code 190 only: persist needs_reauth (CAS on the token used). Best effort; never resends or alters settlement.
-     if(status==="uncertain"&&isConfirmedTokenFailure(failure.record))await markNeedsReauth(sb,{id:account.id,tenant_id:effect.tenant_id,access_token_encrypted:account.access_token_encrypted??null},"token_invalid");
+     {const reason=status==="uncertain"?reauthReasonForFailure(failure.record):null;if(reason)await markNeedsReauth(sb,{id:account.id,tenant_id:effect.tenant_id,access_token_encrypted:account.access_token_encrypted??null},reason);}
      if(status==="uncertain"&&failure.record){
       const failed=await finishFailure(sb,effect.tenant_id,effect.id,failure.record,imageUrl!==undefined);
       if(failed==="rejected"){if(imageUrl!==undefined)media.rejected=true;else failure.rejected=true;return true;}
