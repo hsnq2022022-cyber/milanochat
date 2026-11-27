@@ -1925,6 +1925,29 @@ async function handleIncomingWebhookMessage(
     await markLiveNoReply(sb, { ...retryKey, conversationId: String(conversationId), inboundId }, reason);
   };
 
+  /**
+   * البحث عن conversation موجود أو إنشاؤه.
+   * PERF (webhook latency): this read needs only tenantId/chatId, so it is STARTED together with the tenant read
+   * (each Edge -> database round trip is several hundred ms cross-region) but is still awaited, and its result
+   * used, only after every tenant check below: a read never changes state, and every write stays after the checks.
+   */
+  const conversationRead = Promise.resolve(redrive
+    ? sb
+        .from("conversations")
+        .select("*")
+        .eq("tenant_id", tenantId)
+        .eq("id", redrive.conversationId)
+        .eq("wa_chat_id", chatId)
+        .maybeSingle()
+    : sb
+        .from("conversations")
+        .select("*")
+        .eq("tenant_id", tenantId)
+        .eq("wa_chat_id", chatId)
+        .maybeSingle());
+  // An early return below (tenant missing/inactive/unreadable) abandons this promise: never an unhandled rejection.
+  conversationRead.catch(() => {});
+
   const { data: tenant, error: tenantError } = await sb
     .from("tenants")
     .select("*")
@@ -1952,25 +1975,11 @@ async function handleIncomingWebhookMessage(
     return;
   }
 
-  /**
-   * البحث عن conversation موجود أو إنشاؤه.
-   */
-  const { data: existingConv, error: convError } = redrive
-    ? await sb
-        .from("conversations")
-        .select("*")
-        .eq("tenant_id", tenantId)
-        .eq("id", redrive.conversationId)
-        .eq("wa_chat_id", chatId)
-        .maybeSingle()
-    : await sb
-        .from("conversations")
-        .select("*")
-        .eq("tenant_id", tenantId)
-        .eq("wa_chat_id", chatId)
-        .maybeSingle();
+  /** المحادثة: انظر conversationRead أعلاه. */
+  const { data: existingConv, error: convError } = await conversationRead;
 
   let conv: any = existingConv;
+  let conversationTouch: Promise<unknown> | null = null;
 
   if (convError) {
     console.error(`[${channel}_webhook] conversation read failed`);
@@ -2004,13 +2013,15 @@ async function handleIncomingWebhookMessage(
 
     conv = newConv;
   } else {
-    await sb
+    // PERF: independent of the conversation-start read below; awaited before the inbound row is stored.
+    conversationTouch = Promise.resolve(sb
       .from("conversations")
       .update({
         last_message_at:
           new Date().toISOString(),
       })
-      .eq("id", conv.id);
+      .eq("id", conv.id));
+    conversationTouch.catch(() => {});
   }
 
   if (!conv) {
@@ -2043,6 +2054,7 @@ async function handleIncomingWebhookMessage(
     }
   }
 
+  if (conversationTouch) await conversationTouch;
   endConversation();
 
   /**
