@@ -2762,9 +2762,13 @@ const milanApiHandler = (async (req: Request) => {
 
         // Per-event outcomes: any "retry" (flow eligibility unknown) answers 503
         // so the provider redelivers (inboundRoutingRetry.ts).
+        // Malformed (but correctly signed) structure must never abort the batch: a non-array `entry` is an empty
+        // batch and every nested list below is iterated only when it really is an array, so one bad element can
+        // neither throw (HTTP 500 -> endless redelivery of the same batch) nor hide the valid events around it.
+        if (!Array.isArray(body.entry)) body.entry = [];
         const waOutcomes: unknown[] = [];
         for (const entry of body.entry ?? []) {
-          for (const change of entry?.changes ?? []) {
+          for (const change of Array.isArray(entry?.changes) ? entry.changes : []) {
             if (change?.field !== "messages") {
               continue;
             }
@@ -2881,15 +2885,15 @@ const milanApiHandler = (async (req: Request) => {
                 : null;
 
             const customerNameOf = (waId: string) => {
-              const c = (value.contacts ?? []).find(
-                (x: any) => x.wa_id === waId
+              const c = (Array.isArray(value.contacts) ? value.contacts : []).find(
+                (x: any) => x?.wa_id === waId
               );
               return c?.profile?.name
                 ? String(c.profile.name)
                 : null;
             };
 
-            for (const message of value.messages ?? []) {
+            for (const message of Array.isArray(value.messages) ? value.messages : []) {
               const from = String(message?.from ?? "");
 
               if (!from) {
@@ -3117,11 +3121,17 @@ const milanApiHandler = (async (req: Request) => {
 
         // Per-event outcomes: any "retry" (flow eligibility unknown) answers 503
         // so the provider redelivers (inboundRoutingRetry.ts).
+        // Malformed (but correctly signed) structure must never abort the batch: a non-array `entry` is an empty
+        // batch and every nested list below is iterated only when it really is an array, so one bad element can
+        // neither throw (HTTP 500 -> endless redelivery of the same batch) nor hide the valid events around it.
+        if (!Array.isArray(body.entry)) body.entry = [];
         const igOutcomes: unknown[] = [];
         // R1: optional sender-profile enrichment, run AFTER the response
         // (best effort) and never before the durable ingress decision.
         const profileJobs: Array<() => Promise<unknown>> = [];
         for (const entry of body.entry ?? []) {
+          // A null / non-object entry is skipped (it would throw below and abort the rest of the batch).
+          if (!entry || typeof entry !== "object") continue;
           const entryId = String(entry.id ?? "");
 
           const msgs = extractIgMessages(entry);
